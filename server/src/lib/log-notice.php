@@ -117,7 +117,7 @@ function km_log_notice_trim(string $text): array
 /**
  * 受け取った JSON を検証して整える。
  *
- * @return array{label:string, host:string, status:string, text:string, exitCode:?int}
+ * @return array{label:string, host:string, status:string, text:string, exitCode:?int, important:bool}
  * @throws InvalidArgumentException 形が違うとき
  */
 function km_log_notice_parse(string $json): array
@@ -147,6 +147,11 @@ function km_log_notice_parse(string $json): array
         'status' => $status,
         'text' => (string) ($decoded['text'] ?? ''),
         'exitCode' => is_int($exit) ? $exit : (is_numeric($exit) ? (int) $exit : null),
+        /*
+         * 「重要」を付けるか(2026-09-25)。**true そのものだけ**を受ける —— "false" のような文字列や
+         * 1 を真と読むと、送る側の書き損じで全部に重要が付き、本当に見るべき 1 通が埋もれる。
+         */
+        'important' => ($decoded['important'] ?? false) === true,
     ];
 }
 
