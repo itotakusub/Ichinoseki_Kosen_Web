@@ -281,6 +281,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const routeTargetBtn = document.getElementById('km-route-target');
     let routeSteps = [];
     let routeStepIndex = 0;
+    // 「位置の更新」で地点を選んでもらっている最中か(下の「位置の更新」の節)
+    let pickingPosition = false;
 
     /**
      * 検索パネルの開閉。**スマホ専用ではなくなった**(以前は .hidden-mobile という名前で、
@@ -793,6 +795,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         marker.on('click', (e) => {
+            /*
+             * 「位置の更新」で地点を選んでもらっている最中(2026-09-25)。**選べる地点なら選択として受け取り、
+             * 詳細は開かない**(bindPopup が先に開くので、ここで閉じる)。選べない地点は、ふつうに詳細を出す。
+             */
+            if (typeof window.kmRoutePicking === 'function' && window.kmRoutePicking(id)) {
+                L.DomEvent.stopPropagation(e);
+                window.map.closePopup();
+                return;
+            }
             // 編集ツールが動いている間は、どのモードでもマーカーのクリックを
             // そちらへ渡す(移動・編集・削除でもマーカーを掴む必要があるため)。
             // stopPropagation で地図側のクリックには流さない
@@ -1655,7 +1666,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     if (routeCloseBtn) routeCloseBtn.addEventListener('click', clearRoute);
-    if (routeNextBtn) routeNextBtn.addEventListener('click', advanceRouteStep);
+    if (routeNextBtn) routeNextBtn.addEventListener('click', togglePositionPick);
     if (routeTargetBtn) routeTargetBtn.addEventListener('click', focusRouteTarget);
 
     floorBtns.forEach(btn => {
@@ -2370,7 +2381,10 @@ document.addEventListener('DOMContentLoaded', async () => {
              * **パネルと帯を避けて収める**(mapFitPadding は案内の帯も数える)。
              * 以前は四方 50px 固定で、出発・到着のピンが下の操作やシートの裏に潜った。
              */
-            window.map.fitBounds(pathBoundsGroup.getBounds(), mapFitPadding());
+            const padding = mapFitPadding();
+            // 出発・到着の吹き出しは点の**上へ 40px** 伸びる。そのぶん上を空けないとトップバーの裏に潜る
+            padding.paddingTopLeft = padding.paddingTopLeft.add([0, 48]);
+            window.map.fitBounds(pathBoundsGroup.getBounds(), padding);
         }
     }
 
@@ -2512,11 +2526,26 @@ document.addEventListener('DOMContentLoaded', async () => {
         const active = currentRoutePath !== null && routeSteps.length > 0;
         routeBar.hidden = !active;
         document.body.classList.toggle('km-route-active', active);
-        if (!active) return;
+        if (!active) {
+            stopPositionPick();
+            return;
+        }
+
+        // 位置を選んでもらっている間は、帯を「問いかけ」にする(下の togglePositionPick)
+        routeBar.classList.toggle('is-picking', pickingPosition);
+        if (routeNextBtn) routeNextBtn.textContent = pickingPosition ? 'やめる' : '位置の更新';
+        if (pickingPosition) {
+            routeBar.classList.remove('is-arrived');
+            if (routeNextBtn) routeNextBtn.hidden = false;
+            routeText.textContent = '現在見える部屋と合う名前のノードを選択してください';
+            routeSub.textContent = '地図の地点か、下の候補を押してください';
+            return;
+        }
 
         const arrived = routeStepIndex >= routeSteps.length;
         routeBar.classList.toggle('is-arrived', arrived);
-        if (routeNextBtn) routeNextBtn.hidden = arrived;
+        // 着いたあとも「位置の更新」は残す(違う所に居たと分かったら、そこから引き直せるように)
+        if (routeNextBtn) routeNextBtn.hidden = false;
 
         if (arrived) {
             const goal = graphData.nodes[routeSteps[routeSteps.length - 1].nodeId];
@@ -2527,7 +2556,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         const step = routeSteps[routeStepIndex];
         const node = graphData.nodes[step.nodeId];
-        routeText.textContent = `${routeNodeLabel(node)}に向かう`;
+        /*
+         * **今いる所が乗り継ぎの地点**(「位置の更新」で階段やエレベーターを選んだとき)。
+         * 「階段に向かう」では、もう着いている所へ向かえと言うことになる。行き先の階を言う。
+         */
+        const standingThere = step.kind === 'transfer' && currentRoutePath && step.nodeId === currentRoutePath[0];
+        routeText.textContent = standingThere
+            ? `${routeNodeLabel(node)}から ${floorLabelFor(step.nextFloor)} へ`
+            : `${routeNodeLabel(node)}に向かう`;
         const where = floorLabelFor(step.floor);
         const counter = `${routeStepIndex + 1}/${routeSteps.length}`;
         routeSub.textContent = step.kind === 'goal'
@@ -2535,23 +2571,139 @@ document.addEventListener('DOMContentLoaded', async () => {
             : `${counter} · ${where} · 着いたら ${floorLabelFor(step.nextFloor)} へ`;
     }
 
-    /**
-     * 「位置の更新」。**いま目指している所に着いた**として、次の区間へ進める。
+    /*
+     * ======== 位置の更新 ========(2026-09-25、利用者の指示で作り直した)
      *
-     * Website は現在地を測れない(アプリのように Wi-Fi で追えない)ので、
-     * 進めるのは利用者の合図。階が変わる所なら、行き先の階を開く ——
-     * 図が載ったところで applyFloorImage → drawPath が、その階の経路に収め直す。
+     * **Website は現在地を測れない**(アプリのように Wi-Fi で追えない)。そこで利用者に聞く ——
+     * 「現在見える部屋と合う名前のノードを選択してください」。
+     *
+     * 選ばれた地点を**新しい出発地にして、目的地まで引き直す**。案内の帯は、そこから次に目指す所に変わる。
+     * 目的地そのものが選ばれたら「到着しました」にする。
+     *
+     * 選び方は2つ:
+     *   - 地図の地点を押す(createNodeMarker の click が window.kmRoutePicking へ渡す)
+     *   - 帯の上に出す候補を押す(いま見えている範囲の、選べる地点。目指している所に近い順)
+     * 見えている階に居ないときのために、経路が通る階へ切り替えるボタンも並べる。
      */
-    function advanceRouteStep() {
-        if (routeStepIndex >= routeSteps.length) return;
-        const step = routeSteps[routeStepIndex];
-        routeStepIndex += 1;
+    const routePick = document.getElementById('km-route-pick');
+    const KM_ROUTE_PICK_LIMIT = 8;
+
+    function togglePositionPick() {
+        if (pickingPosition) {
+            stopPositionPick();
+            renderRouteBar();
+            return;
+        }
+        if (currentRoutePath === null) return;
+        pickingPosition = true;
+        window.kmRoutePicking = pickPosition;
         renderRouteBar();
-        if (step.kind === 'transfer' && step.nextFloor && floorImages[step.nextFloor]) {
-            changeFloor(step.nextFloor);
+        renderPickCandidates();
+    }
+
+    function stopPositionPick() {
+        pickingPosition = false;
+        window.kmRoutePicking = null;
+        if (routePick) {
+            routePick.hidden = true;
+            routePick.innerHTML = '';
+        }
+        if (routeBar) routeBar.classList.remove('is-picking');
+    }
+
+    /** 候補の地点。**いま見えている範囲**の選べる地点を、目指している所に近い順に。 */
+    function pickCandidates() {
+        const floor = String(window.currentFloor);
+        const bounds = window.map.getBounds().pad(0.1);
+        const step = routeSteps[Math.min(routeStepIndex, routeSteps.length - 1)];
+        const target = step ? graphData.nodes[step.nodeId] : null;
+        const center = target && String(target.floor) === floor
+            ? { x: target.x, y: target.y }
+            : { x: window.map.getCenter().lng, y: window.map.getCenter().lat };
+
+        return (nodesByFloor.get(floor) || [])
+            .filter(([, node]) => isRoutableNode(node) && bounds.contains([node.y, node.x]))
+            .map(([id, node]) => ({ id, node, d: Math.hypot(node.x - center.x, node.y - center.y) }))
+            .sort((a, b) => a.d - b.d)
+            .slice(0, KM_ROUTE_PICK_LIMIT);
+    }
+
+    function renderPickCandidates() {
+        if (!routePick || !pickingPosition) return;
+        routePick.innerHTML = '';
+        routePick.hidden = false;
+
+        const list = pickCandidates();
+        const chips = document.createElement('div');
+        chips.className = 'km-route-pick-list';
+        if (list.length === 0) {
+            const empty = document.createElement('p');
+            empty.className = 'km-route-pick-empty';
+            empty.textContent = 'この範囲に選べる地点がありません。地図を動かすか、階を切り替えてください。';
+            chips.appendChild(empty);
+        }
+        list.forEach(({ id, node }) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'km-route-pick-item';
+            // 名前は DB の値。textContent で入れる(エスケープ不要)
+            button.textContent = routeNodeLabel(node);
+            button.addEventListener('click', () => pickPosition(id));
+            chips.appendChild(button);
+        });
+        routePick.appendChild(chips);
+
+        // 経路が通る階のうち、いま見ていない階へ。上の階へ上がった直後などに使う
+        const floors = [];
+        (currentRoutePath || []).forEach((nodeId) => {
+            const f = String(graphData.nodes[nodeId].floor);
+            if (f !== String(window.currentFloor) && floors.indexOf(f) < 0 && floorImages[f]) floors.push(f);
+        });
+        if (floors.length > 0) {
+            const row = document.createElement('div');
+            row.className = 'km-route-pick-floors';
+            const label = document.createElement('span');
+            label.textContent = '別の階にいるとき:';
+            row.appendChild(label);
+            floors.forEach((f) => {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'km-route-pick-floor';
+                button.textContent = floorLabelFor(f);
+                button.addEventListener('click', () => changeFloor(f));
+                row.appendChild(button);
+            });
+            routePick.appendChild(row);
         }
     }
 
+    /**
+     * 地点が選ばれた。**選べない地点なら true を返さない**(地図の側では、ふつうに詳細が開く)。
+     * @returns {boolean} 受け取ったか
+     */
+    function pickPosition(nodeId) {
+        if (!pickingPosition) return false;
+        const node = graphData.nodes[nodeId];
+        if (!isRoutableNode(node)) return false;
+
+        stopPositionPick();
+        const goalId = currentRoutePath[currentRoutePath.length - 1];
+        if (nodeId === goalId) {
+            // 目的地に居る。引き直すものが無い
+            routeStepIndex = routeSteps.length;
+            renderRouteBar();
+            return true;
+        }
+        // 出発地を置き換えて、目的地まで引き直す(案内開始と同じ道を通す)
+        if (startInput) startInput.value = getLabelForNode(nodeId, node);
+        searchBtn.click();
+        return true;
+    }
+
+    // 地図を動かしたり階を変えたりしたら、候補を取り直す(見えている範囲が変わるので)
+    window.map.on('moveend', () => {
+        if (pickingPosition) renderPickCandidates();
+    });
     /** 帯の行き先を押したら、その地点を地図の真ん中に出す(別の階ならその階を開いてから)。 */
     function focusRouteTarget() {
         if (routeSteps.length === 0) return;

@@ -1249,12 +1249,22 @@ input[type="text"] {
 :root { --km-route-lift: 0px; }
 body.km-route-active { --km-route-lift: calc(var(--km-touch) + 20px); }
 
-.km-route-bar {
+/*
+ * 帯と「位置の更新」の候補を**縦に積む入れ物**。置き場所はここで決める ——
+ * 帯は問いかけのときに 2 行へ伸びるので、候補を帯の高さで決め打ちすると重なる(実測で重なった)。
+ */
+.km-route-dock {
     position: absolute;
     left: var(--km-edge);
     bottom: calc(var(--km-bottom) + var(--km-touch) + 8px);
     width: min(520px, calc(100% - var(--km-edge) * 2 - var(--km-rail-width) - 8px));
     z-index: 900;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.km-route-bar {
     display: flex;
     align-items: center;
     gap: 6px;
@@ -1331,6 +1341,59 @@ body.km-route-active { --km-route-lift: calc(var(--km-touch) + 20px); }
 }
 .km-route-next[hidden] { display: none; }
 .km-route-bar.is-arrived .km-route-text { color: var(--success); }
+/* 位置を選んでもらっている間。問いかけは折り返してよい(長い文を … で切ると読めない) */
+.km-route-bar.is-picking .km-route-text { white-space: normal; color: var(--primary); }
+.km-route-bar.is-picking .km-route-next { background: rgba(148, 163, 184, 0.25); color: var(--text); }
+
+/*
+ * 「位置の更新」の候補(2026-09-25)。**帯のすぐ上**に、帯と同じ幅で出す(.km-route-dock の中)。
+ * 候補が多いときは中で送る。
+ */
+.km-route-pick {
+    max-height: 38vh;
+    overflow-y: auto;
+
+    padding: 0.6rem;
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border);
+    background: var(--glass-heavy);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    box-shadow: var(--shadow-lg);
+    color: var(--text);
+    animation: km-route-in 0.2s ease;
+}
+.km-route-pick[hidden] { display: none; }
+.km-route-pick-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.km-route-pick-item,
+.km-route-pick-floor {
+    min-height: var(--km-touch);
+    padding: 0 0.9rem;
+    border-radius: 999px;
+    border: 1px solid var(--border-strong);
+    background: transparent;
+    color: var(--text);
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+.km-route-pick-item:hover,
+.km-route-pick-floor:hover { background: color-mix(in srgb, var(--primary) 10%, transparent); }
+.km-route-pick-empty { font-size: 0.85rem; color: var(--secondary); margin: 0.25rem; }
+.km-route-pick-floors {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid rgba(148, 163, 184, 0.3);
+    font-size: 0.8rem;
+    color: var(--secondary);
+}
+@media (prefers-reduced-motion: reduce) {
+    .km-route-pick { animation: none; }
+}
 
 /* 帯が出ている間、左下から出る面は帯の上へ */
 .km-tuning { margin-bottom: var(--km-route-lift); }

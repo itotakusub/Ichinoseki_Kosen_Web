@@ -5320,17 +5320,28 @@ function km_check_layout(): void
             && $routeBarPos < $routeClose && $routeClose < $routeTarget && $routeTarget < $routeNext
     );
     check_bool('ボタンの名前は「位置の更新」', str_contains($index, '>位置の更新</button>'));
+    /*
+     * 「位置の更新」は**今いる所を聞いて引き直す**(2026-09-25、利用者の指示)。
+     * 以前は「次の区間へ進む」だったが、Web は現在地を測れないので、見えている部屋の名前を選んでもらう。
+     */
+    check_bool('位置の更新は地点を選んでもらう', str_contains($appJs, '現在見える部屋と合う名前のノードを選択してください'));
+    check_bool('選んだ地点から引き直す', preg_match('/function pickPosition\(nodeId\).*?startInput\.value = getLabelForNode\(nodeId, node\).*?searchBtn\.click\(\)/s', $appJs) === 1);
+    check_bool('地図の地点を押しても選べる', str_contains($appJs, "window.kmRoutePicking(id)"));
+    check_bool('選べない地点は受け取らない', preg_match('/function pickPosition\(nodeId\).*?if \(!isRoutableNode\(node\)\) return false;/s', $appJs) === 1);
+    check_bool('次の区間へ進むだけの動きは残っていない', !str_contains($appJs, 'function advanceRouteStep'));
     // display:flex は hidden 属性に勝つ。隠したつもりの帯が地図を塞がないように
     check_bool('隠した帯は消える', preg_match('/\.km-route-bar\[hidden\]\s*\{\s*display:\s*none/', $css) === 1);
     /*
      * **ほかの操作を隠さない。** 右は階のレール(とその下のズーム)を避け、
      * 下は左下の操作ピルの上に置く。帯が出ている間、左下から出る面は帯の上へ逃げる。
      */
-    check_bool('帯は階のレールを避ける', preg_match('/\.km-route-bar\s*\{[^}]*var\(--km-rail-width\)/s', $css) === 1);
-    check_bool('帯は操作ピルの上', preg_match('/\.km-route-bar\s*\{[^}]*bottom:\s*calc\(var\(--km-bottom\) \+ var\(--km-touch\)/s', $css) === 1);
+    // 置き場所は帯と候補を積む入れ物(.km-route-dock)が決める。帯は問いかけで 2 行に伸びるので、候補と別々に置くと重なる
+    check_bool('帯は階のレールを避ける', preg_match('/\.km-route-dock\s*\{[^}]*var\(--km-rail-width\)/s', $css) === 1);
+    check_bool('帯は操作ピルの上', preg_match('/\.km-route-dock\s*\{[^}]*bottom:\s*calc\(var\(--km-bottom\) \+ var\(--km-touch\)/s', $css) === 1);
+    check_bool('候補は帯と同じ入れ物に積む', preg_match('/class="km-route-dock">\s*<div id="km-route-pick"/', $index) === 1);
     check_bool('表示調整は帯の上へ逃げる', str_contains($css, '.km-tuning { margin-bottom: var(--km-route-lift); }'));
     check_bool('収まりの計算が帯を数える', str_contains($appJs, "getElementById('km-route-bar')"));
-    check_bool('経路は帯とパネルを避けて収める', str_contains($appJs, 'fitBounds(pathBoundsGroup.getBounds(), mapFitPadding())'));
+    check_bool('経路は帯とパネルを避けて収める', str_contains($appJs, 'const padding = mapFitPadding();') && str_contains($appJs, 'fitBounds(pathBoundsGroup.getBounds(), padding)'));
 
     km_check_heading('layout: ダウンロード・設定は横から(2026-09-25)');
     check_bool('引き出しになっている', str_contains($index, 'id="info-panel" class="km-drawer'));
