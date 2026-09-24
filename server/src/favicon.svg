@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="KosenMap">
+  <!--
+    KosenMap のファビコン。
+
+    **外部から取ってこない。** CDN を使わない方針(docs/08-architecture.ipynb の §9)はここにも効く。
+    SVG にしてあるのは、1ファイルで全サイズに効き、テキストとして差分が読めるため。
+
+    色は地図の地点色に合わせてある(NodeRenderer の 0xFF2563EB / 0xFF10B981)。
+    ブラウザのタブは小さいので、形は「ピン1つ」だけに絞っている。
+  -->
+  <rect width="64" height="64" rx="14" fill="#2563EB"/>
+  <path d="M32 13c-8.3 0-15 6.6-15 14.7 0 10.6 13.2 22.3 13.8 22.8a1.9 1.9 0 0 0 2.4 0C33.8 50 47 38.3 47 27.7 47 19.6 40.3 13 32 13z"
+        fill="#FFFFFF"/>
+  <circle cx="32" cy="27.5" r="6.2" fill="#10B981"/>
+</svg>

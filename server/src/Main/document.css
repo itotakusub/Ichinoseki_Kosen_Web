@@ -1,0 +1,194 @@
+/* document.css
+ *
+ * 「縦に読む文書」のページ共通の見た目。faq.php / terms.php / privacy.php が使う。
+ *
+ * ## なぜ切り出したか
+ *
+ * Main/styles.css は**全画面の地図**を前提に body を `overflow:hidden` / `100vh` で
+ * 固定している。文書ページはそれを打ち消し、見出しと本文の体裁を足す必要がある。
+ * 同じ打ち消しを各ページの <style> に書いていたが、3ページ目を足す段で
+ * **同じ 60 行が3つ**になる。1つ増えるたびに全部直す形にはしない。
+ *
+ * 配色・角丸は styles.css の変数をそのまま使う(地図と地続きに見せる)。
+ * このファイルは styles.css の**後**に読むこと。
+ */
+
+/* 地図用の固定を打ち消す。styles.css 自体は触らない */
+body {
+    overflow: auto;
+    height: auto;
+    min-height: 100vh;
+    padding: 0 0 4rem;
+    /*
+     * **width も戻すこと。** styles.css は `width: 100vw` を指定している。
+     * 100vw は**縦スクロールバーの幅を含む**ので、縦に読む文書では body が
+     * 画面より 15px ほど広くなり、ページ全体が横にも動く(実測で確認)。
+     * 地図は overflow:hidden なので露見しなかった。
+     */
+    width: auto;
+}
+
+.km-doc-header {
+    background: var(--glass-heavy);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+    padding: 1rem 1.25rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    /* 長い文書では戻る導線が画面外へ行ってしまうので、上に貼り付ける */
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    flex-wrap: wrap;
+}
+
+.km-doc-header h1 {
+    font-size: var(--text-title);
+    font-weight: 700;
+    margin: 0;
+}
+
+.km-doc-nav {
+    margin-left: auto;
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+/*
+ * 行き先を選ぶだけの導線。Material3 の Outlined ボタンに寄せる。
+ * 高さは地図の側と同じ `--km-touch`(スマホで 48px)にする ——
+ * 文書ページだけ小さいと、同じ見た目のボタンで押しやすさが違うことになる。
+ */
+.km-doc-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: var(--km-touch);
+    color: var(--primary);
+    text-decoration: none;
+    font-size: 0.9rem;
+    font-weight: 600;
+    padding: 0.45rem 1.1rem;
+    border-radius: 999px;
+    border: 1px solid var(--primary);
+    white-space: nowrap;
+}
+
+.km-doc-link:hover {
+    background: var(--primary);
+    color: var(--on-primary);
+}
+
+.km-doc-main {
+    max-width: 46rem;
+    margin: 0 auto;
+    padding: 1.5rem 1.25rem;
+}
+
+.km-doc-updated {
+    color: var(--secondary);
+    font-size: 0.85rem;
+    margin: 0 0 1.5rem;
+}
+
+.km-doc-lead {
+    line-height: 1.8;
+    color: var(--text);
+    font-size: var(--text-body);
+    margin: 0 0 2rem;
+}
+
+/* 面はカード。**暗い配色では白のままにしない**(周りだけ暗くて札が光る) */
+.km-doc-section {
+    background: var(--glass-heavy);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+    padding: 1.25rem 1.35rem;
+    margin-bottom: 1rem;
+}
+
+.km-doc-section h2 {
+    font-size: var(--text-title);
+    font-weight: 700;
+    margin: 0 0 0.75rem;
+    color: var(--primary-dark);
+}
+
+.km-doc-section p {
+    line-height: 1.8;
+    font-size: var(--text-body);
+    color: var(--text);
+    margin: 0 0 0.75rem;
+}
+
+.km-doc-section p:last-child,
+.km-doc-section ul:last-child,
+.km-doc-section table:last-child {
+    margin-bottom: 0;
+}
+
+.km-doc-section ul {
+    margin: 0 0 0.75rem;
+    padding-left: 1.25rem;
+    line-height: 1.8;
+    font-size: var(--text-body);
+    color: var(--text);
+}
+
+/* 収集項目の一覧など。狭い画面でページごと横に流さないため、表だけを流す */
+.km-doc-scroll {
+    overflow-x: auto;
+    margin: 0 0 0.75rem;
+}
+
+.km-doc-table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 0.9rem;
+}
+
+.km-doc-table th,
+.km-doc-table td {
+    border: 1px solid var(--border-strong);
+    padding: 0.5rem 0.65rem;
+    text-align: left;
+    vertical-align: top;
+    line-height: 1.6;
+}
+
+.km-doc-table th {
+    background: color-mix(in srgb, var(--text) 6%, transparent);
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+/*
+ * 未記入の項目が残っているときの警告。
+ * **公開してよい状態かどうかを、読む人にも運営者にも隠さない。**
+ */
+.km-doc-warning {
+    background: #fef3c7;
+    border: 1px solid #f59e0b;
+    border-radius: var(--radius-md);
+    padding: 1rem 1.15rem;
+    margin: 0 0 1.5rem;
+    line-height: 1.8;
+    color: #78350f;
+}
+
+.km-doc-warning strong {
+    display: block;
+    margin-bottom: 0.35rem;
+}
+
+.km-doc-footer {
+    max-width: 46rem;
+    margin: 2rem auto 0;
+    padding: 0 1.25rem;
+    color: var(--secondary);
+    font-size: 0.85rem;
+    line-height: 1.8;
+}

@@ -1,0 +1,844 @@
+# /etc/nginx/templates/default.conf.template
+#
+# 公式 nginx イメージの起動時に envsubst で展開され、/etc/nginx/conf.d/default.conf になる。
+# **置換されるのは環境変数として定義されている名前だけ**なので、$remote_addr のような
+# nginx 自身の変数はそのまま残る(全部置換されると空になってしまうので、ここは重要)。
+#
+# 差し替えるもの(compose.yaml の reverse-proxy の environment を参照):
+#   ${KM_DOMAIN}   … server_name と外向きの URL に使うホスト名
+#   ${KM_APP_URL}  … 本体の URL(ログイン画面へ戻すときの行き先)
+#   ${KM_CERT} / ${KM_CERT_KEY} … 証明書のパス(mkcert → Let's Encrypt の差し替え点)
+#
+# 環境ごとに変わるものは include で外へ出してある(nginx/km/):
+#   allow-*.conf  … 管理系ポートに入れる送信元
+#   hsts-*.conf   … HSTS。**公的な証明書のときだけ**置く(見本は .conf.example)
+
+server_tokens off;
+
+# ---------------------------------------------------------------------------
+# 待ち時間(2026-09-14 の診断で追加)。**遅い相手に接続を握らせない。**
+#
+# nginx の既定はヘッダー・本文とも 60 秒、keepalive は 75 秒。1 バイトずつ送ってくる相手に
+# 1 分ずつ接続を握られ、その間 web へ渡せる本数も減る。
+#
+#   client_header_timeout     … 要求ヘッダーを受け取り終えるまで
+#   client_body_timeout       … 本文の**読み1回ごと**の待ち(総時間ではない。APK の 200MB も通る)
+#   send_timeout              … 応答の**書き1回ごと**の待ち(遅い回線でも進んでいれば切れない)
+#   reset_timedout_connection … 時間切れの接続を RST で閉じ、FIN_WAIT のまま残さない
+#
+# **keepalive_timeout はここに書かない。** 公式イメージの nginx.conf が http に
+# `keepalive_timeout 65;` を書いており、同じ http に並べると "is duplicate" で**起動しない。**
+# 各 server に 30s を書く(server の値が http の値に勝つ)。
+#
+# proxy_read_timeout(上流の応答待ち)の既定も 60 秒にする。以前は proxy-web.conf が
+# 全部 300 秒にしていたので、止まった PHP に 5 分ずつ接続を握られた。
+# 本当に長く待つものだけ location で 300 秒に戻す:
+#   /admin/downloads.php(APK の差し替え)・8281(phpMyAdmin のインポート)・6001(WebSocket)・3001/3002
+# 地図の取り込みと配信(/admin/map-sync.php・/admin/map-publish.php)は PHP が set_time_limit(120) を
+# 明示しているので、そちらに合わせて 180 秒にする(60 秒で切ると、PHP は最後まで書き込むのに画面だけ 504 になる)。
+# **PHP で set_time_limit を足したら、ここにも例外を足すこと。**
+# **proxy-web.conf に書き戻さないこと**(理由はあちらに書いてある)。
+# ---------------------------------------------------------------------------
+client_header_timeout 15s;
+client_body_timeout 30s;
+send_timeout 60s;
+reset_timedout_connection on;
+proxy_read_timeout 60s;
+
+# ---------------------------------------------------------------------------
+# 転送先は **upstream + resolve で書き、名前を動いている間も引き直す**(2026-09-14)。
+#
+# `proxy_pass http://logto:3001;` と直に書くと、nginx は**起動(reload)の時に1回だけ**名前を引き、
+# その IP を持ち続ける。コンテナを作り直すと IP が変わる(`up -d logto` や設定変更での再作成)ので、
+# nginx は居なくなった IP へ送り続けて `connect() failed (113: Host is unreachable)` → **502** になる。
+# 実際 2026-09-14 に Logto が 172.18.0.8 → .7 に変わり、サインイン(3001)が全部 502 になった
+# (nginx -s reload で戻った)。
+#
+# resolve を付けると、valid の間隔で Docker の内蔵 DNS(127.0.0.11)を引き直して IP を差し替える。
+# **proxy_pass は名前が upstream になるだけで URI の扱いは変わらない**(変数の proxy_pass と違って)。
+# 起動時に相手が居なくても nginx は起動し、居ない間は 502 を返す。zone は resolve に必須。
+#
+# **転送先を足すときも、ここに upstream を足して proxy_pass http://km_… と書く。**
+# Host は各 location が $http_host で渡しているので、upstream の名前が相手に見えることはない。
+# ---------------------------------------------------------------------------
+resolver 127.0.0.11 valid=10s ipv6=off;
+resolver_timeout 5s;
+
+upstream km_web {
+    zone km_up_web 64k;
+    server web:80 resolve;
+}
+upstream km_phpmyadmin {
+    zone km_up_phpmyadmin 64k;
+    server phpmyadmin:80 resolve;
+}
+upstream km_logto_core {
+    zone km_up_logto_core 64k;
+    server logto:3001 resolve;
+}
+upstream km_logto_console {
+    zone km_up_logto_console 64k;
+    server logto:3002 resolve;
+}
+upstream km_soketi {
+    zone km_up_soketi 64k;
+    server soketi:6001 resolve;
+}
+
+# ---------------------------------------------------------------------------
+# 転送量を減らす。**この設定が無いと地図ページが実用にならない。**
+#
+# 階の見取り図は SVG(= XML のテキスト)で、6枚で合計 2.7MB ある。無圧縮のままだと
+# モバイル回線で十数秒かかり、実際に「白いまま待たされる」と報告があった。
+# SVG は gzip でおおむね 1/5〜1/8 になる。
+#
+# **gzip_proxied any が要る。** この構成は静的ファイルも含めて全部 proxy_pass で
+# web(Apache)から取ってくるため、既定の off のままだと**何ひとつ圧縮されない**。
+#
+# text/html は gzip on の時点で常に対象になっている。gzip_types に書くと
+# 「duplicate MIME type "text/html"」の警告が出るので書かない。
+#
+# **JS は text/javascript と application/javascript の両方を書く。**
+# この構成の Apache は text/javascript で返してくる(実測)。application/… だけだと
+# 一致せず素通りする —— 実際、前段の Apache の mod_deflate が代わりに圧縮していたため
+# 「効いているように見えて nginx は何もしていない」状態が起きた。
+# ---------------------------------------------------------------------------
+gzip on;
+gzip_comp_level 5;
+gzip_min_length 1024;
+gzip_proxied any;
+gzip_vary on;
+gzip_types text/plain text/css text/javascript application/javascript application/json
+           image/svg+xml application/manifest+json;
+
+ssl_certificate ${KM_CERT};
+ssl_certificate_key ${KM_CERT_KEY};
+ssl_protocols TLSv1.2 TLSv1.3;
+# TLS 1.2 の暗号スイートを AEAD(GCM・ChaCha20)の ECDHE だけにする(2026-09-17)。
+# SSL Labs が CBC(AES-CBC-SHA/SHA256/SHA384・CAMELLIA-CBC)を WEAK と判定した(総合は A+)。
+# 既定のままだと ARIA・CAMELLIA・CCM まで受けていた。TLS 1.3 の 3 つはこの指定の影響を受けない。
+# 並びは Mozilla の intermediate と同じ。**RSA の行も残す**(証明書を RSA に替えても 1.2 が全滅しない)。
+# アプリは minSdk 29(Android 10。TLS 1.3 を話す)なので、ここで落ちる端末は無い。
+ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
+ssl_prefer_server_ciphers off;
+# 鍵交換の群。既定は ffdhe2048/3072・secp521r1・x448 まで並べていた。耐量子(X25519MLKEM768)を先頭に残し、
+# 使われない重いものを外す。**X25519MLKEM768 は nginx の像の OpenSSL が 3.5 以上のときだけ通る**(起動しなくなるので、像を古くしない)
+ssl_ecdh_curve X25519MLKEM768:X25519:prime256v1:secp384r1;
+ssl_session_cache shared:TLS:10m;
+ssl_session_timeout 1d;
+ssl_session_tickets off;
+
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+# CSP は **PHP 側(lib/csp.php)が送る**。nonce をリクエストごとに変える必要があり、
+# HTML を書き出す側と同じ値を共有しなければならないため、nginx では作れない。
+#
+# ただし画像・CSS・JS のような静的ファイルには PHP のヘッダーが付かない。
+# 応答に CSP が無いときだけ、控えめな既定をこちらで足す
+# (両方が付くとブラウザは**両方を適用**するので、素直に足すと二重になる)。
+map $upstream_http_content_security_policy $km_csp_fallback {
+    ''      "default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'";
+    default "";
+}
+
+# 本体の URL を nginx の変数にしておく。**include されるファイルは envsubst を通らない**ので、
+# ${KM_APP_URL} をそのまま書いても展開されない。ここで変数に移してから共有する。
+map $host $km_app_url {
+    default "${KM_APP_URL}";
+}
+
+# ---------------------------------------------------------------------------
+# **管理画面を別オリジンに置く**(2026-09-15。security-review-2026-09-14 §7 の 9)。
+#
+# KM_ADMIN_DOMAIN / KM_ADMIN_URL を .env で公開側と**違う名前**にしたときだけ効く。既定は公開側と同じで、
+# そのときは下の $km_host_role が single になり、今までと何も変わらない。
+#
+#   公開側のホスト(role=public) … /admin/ を管理用のホストへ 308
+#   管理用のホスト(role=admin)  … 管理画面に要るパスだけを返し、それ以外は公開側へ 308
+#
+# **server を分けない。** 443 の server は 1 つだけなので、どのホスト名で来てもここに入る(既定の server)。
+# 名前ごとに server を作ると、2 つが同じ名前のとき "conflicting server name" で片方が黙って無視される。
+# 公開側と管理用の名前が同じかどうかは envsubst では書き分けられないので、map で判定する。
+#
+# 管理用のホスト名は**証明書に入っていること**(host-cert.sh issue --also)と、**DNS が向いていること**。
+# Logto には管理用の callback.php とサインアウト後の URL も登録する(docs/12 §5)。
+# ---------------------------------------------------------------------------
+map $host $km_admin_url {
+    default "${KM_ADMIN_URL}";
+}
+
+map "${KM_ADMIN_URL}" $km_admin_split {
+    "${KM_APP_URL}"  0;
+    default          1;
+}
+
+map $host $km_on_admin_host {
+    "${KM_ADMIN_DOMAIN}"  1;
+    default               0;
+}
+
+map "$km_admin_split$km_on_admin_host" $km_host_role {
+    "11"     admin;
+    "10"     public;
+    default  single;
+}
+
+# 管理用のホストで返すパス。**管理画面が読むものを足したら、ここにも足すこと**(足さないと公開側へ飛ばされ、
+# Cookie の付かない相手から読むことになって、錠の内側の見取り図などが出なくなる)。
+#   /admin/            管理画面そのもの
+#   /sign-in.php 他    サインイン・サインアウト・戻り先
+#   /Main/ /vendor-web/ 地図エディタが読む JS・CSS(admin/map-editor.php)
+#   /api/map-data.php・floor-image.php … 地図エディタのデータと見取り図(管理者の印で錠を越える)
+#   /api/download.php  admin/downloads.php の「落とす」
+map "$km_host_role:$uri" $km_leave_admin_host {
+    "~^admin:/(admin/|Main/|vendor-web/|sign-in\.php$|sign-out\.php$|callback\.php$|favicon\.svg$|api/(map-data|floor-image|download)\.php$)"  0;
+    "~^admin:"   1;
+    default      0;
+}
+
+map "$km_host_role:$uri" $km_leave_public_host {
+    "~^public:/admin/"  1;
+    default             0;
+}
+
+# 総当たり・連投を入口で細らせる。**アプリ側の制限(問い合わせの30秒・氏名解除の8回)は
+# そのまま残す。** ここは「そこへ辿り着く回数」を抑える1枚目で、置き換えではない。
+#
+# ---------------------------------------------------------------------------
+# **数えるのは「書き込み」だけ。** 1.0.1 はメソッドを問わず数えていて、それが原因で
+# Logto の管理コンソールが動かなくなった(HAR の実測: 429 が36件、うち25件が
+# CORS プリフライトの OPTIONS。コンソールは起動時に20並列でリクエストする)。
+# 公開フォームも**開くだけ(GET)で枠を消費**していた。
+#
+# パス名で絞る手もあるが、Logto はバージョンでパスが変わる。**資格情報を試す行為は
+# 必ず POST/PUT** で、画面や API の読み取りは GET、プリフライトは OPTIONS ——
+# メソッドで分ける方が、取りこぼしも巻き添えも起きない。
+#
+# キーを空文字にすると nginx はそのリクエストに制限を適用しない。それを利用している。
+#
+# **この環境では per-IP が効かない点に注意。** Docker Desktop の publish が送信元を隠すため
+# 全員が 172.18.0.1 に見える(1.0.1 で実測)= 実質ひとつのバケツ。VPS(Linux)へ移れば
+# 本当の送信元が残る。それまでは「1人の通常操作が枠を使い切らない」側に倒しておく。
+# ---------------------------------------------------------------------------
+map $request_method $km_write_key {
+    GET      "";
+    HEAD     "";
+    OPTIONS  "";
+    default  $binary_remote_addr;   # POST / PUT / PATCH / DELETE
+}
+
+limit_req_zone $km_write_key zone=km_public:10m rate=12r/m;
+limit_req_zone $km_write_key zone=km_auth:10m rate=60r/m;
+# アプリのランキングへの記録。**学校の回線は1つの IP を大勢で共有する**ので広めにとる。
+# 1台から任意の語を連投されるのを細らせる1枚目で、本丸は lib/app-ranking.php の出どころの数え方
+limit_req_zone $km_write_key zone=km_app:10m rate=120r/m;
+limit_req_status 429;
+
+# ---------------------------------------------------------------------------
+# 未認証で重い口(2026-09-14 の診断で追加)。**こちらはメソッドを問わず数える。**
+#
+# 上の km_write_key は GET を数えないので、GET でも PHP が毎回働く口(APK の配信・見取り図・
+# 人数の集計・アカウント画像・地図のデータ)は、入口で一切絞られていなかった(server-ops 13)。
+# ここに挙げるのは**画面の資材ではなく API** で、Logto のコンソールのような起動時の並列読み取りとは
+# 違うので、GET を数えても上の 1.0.1 の巻き添えは起きない。
+#
+# 数字は**学校の NAT(1 つの IP を大勢で共有)**を考えた広め。1 台からの連打を細らせるのが目的で、
+# 教室でいっせいに開いて 429 が出るようなら、ここを上げる。
+# 校内 LAN(Docker Desktop)では全員が 1 つのバケツになる点は上の注記と同じ。
+limit_req_zone $binary_remote_addr zone=km_api:10m rate=240r/m;
+# アプリの地図の取得(/api/app-map.php)。1 回ごとにアクセスコードの照合と数 MB の応答を伴う。
+# 端末は起動時と手で取り直すときにしか呼ばないので狭くてよい。本丸は lib/map-rate-limit.php の失敗回数。
+limit_req_zone $binary_remote_addr zone=km_appmap:10m rate=30r/m;
+
+# 同時接続の上限(2026-09-14 の診断で追加)。1 つの送信元が同時に張れる本数。
+# **HTTP/2 では 1 本の中の同時リクエストが 1 つずつ数えられる**ので、443 は広めに取る(server ごとの値は各 server に)。
+# 返すのは既定の 503 ではなく 429 にする —— limit_req と揃え、ブラウザとアプリ側が「間隔を延ばす」合図として読めるように。
+limit_conn_zone $binary_remote_addr zone=km_conn:10m;
+limit_conn_status 429;
+
+# ブラウザの機能の許可(2026-09-14 の診断で追加)。443 の server と、add_header を書き直す location で共有する
+# (値を 3 か所に書き写すと、どれか1つだけ古くなる)。
+#
+# 公開地図も管理画面も、位置情報・カメラ・マイク・センサーを使っていない
+# (src を grep して navigator.geolocation / getUserMedia は 0 件。位置を測るのは Android アプリで、ブラウザではない)。
+# **使うページを作ったら、その機能だけ `(self)` に変えること。** `()` のままだと、呼んでも黙って拒否される。
+map $host $km_permissions_policy {
+    default "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()";
+}
+
+# Soketi(6001)へ WebSocket を張ってよい Origin(2026-09-14 の診断で追加。server-authz 4)。
+#
+# Soketi には許可する Origin を env で指定する口が無い(1.6.1 の dist/cli を実測)。そこで nginx で見る。
+# 正規の相手は管理画面(${KM_ADMIN_URL})のチャットと死活監視だけ。
+# **KM_APP_URL ではなく KM_ADMIN_URL**(2026-09-15)。別オリジンにしていなければ同じ値。
+# 両方を並べると、同じ値のときに map のキーが重なる。
+# Origin が空の接続は通す —— ブラウザ以外(Origin を送らない)を弾いても守りにならず、名乗りは自由に偽れる。
+# ここで防ぐのは「別のサイトのページから、見に来た管理者のブラウザに接続を張らせる」形だけ。
+# 購読の可否そのものは、これまでどおり chat-auth.php の署名が決める。
+map $http_origin $km_ws_origin_denied {
+    ""                 0;
+    "${KM_ADMIN_URL}"  0;
+    default            1;
+}
+
+# **クエリ文字列を書かない**アクセスログ。
+#
+# 既定の combined は `$request`(= メソッド + URI + クエリ)を丸ごと書く。
+# 確認コードを URL で受け取るページ(/verify.php?code=123456)にそれを使うと、
+# **まだ有効なコードがログファイルに残ってしまう**。`$uri` だけを書く形にして、
+# そのページにだけ適用する(他のページは従来どおり combined)。
+log_format km_no_query '$remote_addr - - [$time_local] "$request_method $uri $server_protocol" '
+                       '$status $body_bytes_sent "$http_referer" "$http_user_agent"';
+
+# HTTP:80 -> Webアプリ HTTPS
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${KM_DOMAIN};
+    # http の既定(公式イメージの 65 秒)より短く。理由はファイル先頭の「待ち時間」
+    keepalive_timeout 30s;
+
+    # Let's Encrypt の HTTP-01 チャレンジ。**308 の前に置く**こと
+    # (ここを通さないと証明書の取得も更新も失敗する)。certbot の webroot と対にする。
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+        default_type "text/plain";
+    }
+
+    location / {
+        return 308 ${KM_APP_URL}$request_uri;
+    }
+}
+
+# Webアプリ
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    # 地図ページは CSS/JS/画像で10ファイル以上を一度に取りに行く。HTTP/1.1 の
+    # 同時接続数(6本)で頭打ちになるので多重化する。
+    # **nginx 1.25.1 未満ではこの書き方が無い**(listen に http2 を付ける形)。
+    # compose.yaml は nginx:alpine を使っており、こちらの書き方でよい。
+    http2 on;
+    server_name ${KM_DOMAIN};
+
+    # 待ち時間と同時接続(2026-09-14 の診断で追加。理由はファイル先頭の「待ち時間」と km_conn の注記)。
+    # 100 本は学校の NAT を考えた広め(HTTP/2 では同時リクエストの数で数える)。
+    keepalive_timeout 30s;
+    limit_conn km_conn 100;
+
+    # 管理画面を別オリジンにしたときの振り分け(http の $km_host_role の注記)。
+    # server の直下の if は location を選ぶより前に評価されるので、下のどの location にも先んじて効く。
+    # 別オリジンにしていなければ、どちらも 0 のまま何もしない。
+    if ($km_leave_public_host) {
+        return 308 $km_admin_url$request_uri;
+    }
+    if ($km_leave_admin_host) {
+        return 308 $km_app_url$request_uri;
+    }
+
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+    # 値は http の map $km_permissions_policy にある
+    add_header Permissions-Policy $km_permissions_policy always;
+
+    # クリックジャッキング対策(1.0.0 のセキュリティ確認で追加)。
+    # frame-ancestors が新しい書き方だが、古いブラウザ向けに X-Frame-Options も併記する。
+    add_header X-Frame-Options SAMEORIGIN always;
+
+    # 1.0.1 で script-src / style-src を含む CSP を入れた。本体は PHP が送る(上の map を参照)。
+    add_header Content-Security-Policy $km_csp_fallback always;
+
+    # HSTS は公的な証明書のときだけ。ファイルが無ければ何も起きない
+    include /etc/nginx/km/hsts-*.conf;
+
+    # 本文の大きさ。**既定は小さく、要る場所だけ広げる。**
+    #
+    # 以前は APK の差し替えのために server 全体を 210m にしていた。そのため
+    # **無認証で /api/* へ 210MB を連投でき**、PHP が本文を一時ファイルへ落としてから
+    # スクリプトを起こすので、ディスクと帯域を消費させられた(security-review-2026-09-10 の 6)。
+    #
+    #   既定(公開ページ・/api/)… 3m   アカウント画像(2MB)が通る大きさ
+    #   /admin/                    … 12m  ファイル管理(10MB)
+    #   /admin/downloads.php       … 210m APK の差し替え(PHP 側は docker/php/99-uploads.ini)
+    client_max_body_size 3m;
+
+    # ---------------------------------------------------------------------
+    # **`.php` の後ろにパスを足した URL は通さない**(2026-09-14 の診断で追加。server-authz 0・critic 5)。
+    #
+    # Apache(mod_php)は既定で `/contact.php/x` を contact.php として実行する。一方ここの守りは
+    # 完全一致(`location = /contact.php`)や `\.php$` で書いてあるので、**`/x` を足すだけで
+    # 入口の回数制限と include 専用ファイルの 404 を素通りできた**(本番で `/contact.php/x` と
+    # `/logto-client.php/x` が 200)。`/admin/index.php/a.css` は下の静的資材の正規表現に当たり、
+    # PHP の応答に 30 日のキャッシュ指定まで付いた。
+    #
+    # 完全一致を全部 `(/|$)` の正規表現に書き換える手もあるが、正規表現は並び順を1つ誤るだけで穴に戻る。
+    # **ここで 1 本で落とす方が壊れにくい。** 正規表現の location は書いた順に評価されるので、
+    # **必ずこの server の正規表現の先頭に置くこと。** 奥の2枚目は Apache の AcceptPathInfo Off
+    # (docker/php/apache-km.conf)。このサイトは PATH_INFO を使っていない(src と Android を grep して 0 件)。
+    location ~* \.php/ {
+        return 404;
+    }
+
+    # 依存ライブラリとそのバージョンを外から読めないようにする。
+    # 正規表現の location は前方一致の location より先に評価されるため、下の location / は変わらない。
+    location ~ ^/(composer\.(json|lock)|package(-lock)?\.json)$ {
+        return 404;
+    }
+
+    # 管理画面の内部インクルード(_inc配下)を直接叩かせない。
+    # PHP 側でも定数チェックで塞いでいるが、経路の手前でも落とす。
+    location ~ ^/admin/_ {
+        return 404;
+    }
+
+    # PHP の include 専用ディレクトリ(エンドポイントではない)。/api/ だけは公開する。
+    #
+    # uploads も同じ扱い。src/ はドキュメントルートなので、素直に置くとアップロードされた
+    # .php が実行されてしまう。ここで直接配信を塞ぎ、実体は PHP 経由でだけ出す。
+    #
+    # cache は logto_guard.php が JWKS を置く先(0700 で作り、ファイルは 0600)。
+    # 中身は Logto の公開鍵なので読まれても困らないが、素の JSON を配信する意味も無い。
+    #
+    # **vendor も塞ぐ**(composer の依存)。`/vendor/composer/installed.json` で依存の版が
+    # 読めていた(security-review-2026-09-10 の持ち越し。2026-09-14 に本番で 200 を確認)。
+    # `vendor-web/`(Leaflet)と `admin/vendor/`(AdminLTE)は**ブラウザが読む資材なので塞がない**
+    # —— この正規表現は `/vendor/` で始まるものにしか当たらない。
+    location ~ ^/(lib|config|scripts|uploads|cache|vendor)/ {
+        return 404;
+    }
+
+    # ---------------------------------------------------------------------
+    # 見取り図の直リンクを塞ぐ。
+    #
+    # `Main/Picture/*.svg` は静的ファイルなので、ここが無いと nginx がそのまま配る。
+    # つまり **パスさえ分かればパスワード無しで図面が取れる**。ノードを隠しても
+    # 図面が取れるなら隠したことにならないので、経路を1本に絞る。
+    #
+    # 正しい取り方は `/api/floor-image.php?floor=<階ID>`。あちらは
+    # lib/map-access.php の km_map_view_unlocked() を見てから配る。
+    #
+    # **この2つは必ず一緒に配ること。** nginx だけ入れると図面が出なくなり、
+    # PHP だけ入れると直リンクが残って塞いだことにならない。
+    #
+    # 下の「静的資材を長くキャッシュ」(location ~* \.(svg|…)$)より **前** に置く。
+    # 正規表現の location は書いた順で最初に一致したものが勝つ。
+    location ~ ^/Main/Picture/ {
+        return 404;
+    }
+
+    # ドキュメントルート直下にある **include 専用** のファイル(1.0.0 のセキュリティ確認で追加)。
+    # 単体で叩く意味は無く、特に logto-client.php は呼ばれるたびに Logto へ discovery を取りに行く。
+    #
+    # ここに載せてはいけないもの(単体で叩く正当なエンドポイント):
+    #   index.php / faq.php / contact.php / terms.php / privacy.php / account.php
+    #   sign-in.php / sign-out.php / callback.php
+    #   logto_me.php … Android 向け。Bearer トークンで認証する API
+    #
+    # **terms.php / privacy.php は必ず誰でも開けること。** 規約とポリシーが読めない
+    # 状態は、それ自体が問題になる(アプリストアの審査でも見られる)。
+    #
+    # 末尾は `(/|$)`(2026-09-14)。`\.php$` だと `/logto-client.php/x` が当たらず実行されていた。
+    # 上の `.php/` の 404 が先に効くので重ねがけだが、あちらを誰かが外しても穴に戻らないよう揃えておく。
+    location ~ ^/(api_bootstrap|logto_config(\.example)?|logto_guard|logto-client)\.php(/|$) {
+        return 404;
+    }
+
+    # 未認証で重い API(2026-09-14 の診断で追加。ゾーンの注記は http の km_api)。
+    # **メソッドを問わず数える。** 見取り図・APK・人数・アカウント画像・地図のデータは GET でも PHP が毎回働く。
+    # 静的資材の正規表現とは重ならない(こちらは `.php` で終わる)ので、並び順はここでよい。
+    location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data)|logto_me)\.php$ {
+        limit_req zone=km_api burst=120 nodelay;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+
+    # ---------------------------------------------------------------------
+    # 自前の静的資材を長めにキャッシュさせる。
+    #
+    # これが無いと、再訪のたびに階の見取り図6枚それぞれで条件付きGET(304)の
+    # 往復が発生する。本文は返らないが、モバイルでは往復そのものが効く。
+    #
+    # **この location は上の「404を返す3つ」より後ろに置くこと。** 正規表現の
+    # location は書いた順に評価して最初に一致したものが勝つので、前に置くと
+    # /lib/… の .php 以外(万一置かれたもの)が404を素通りしてしまう。
+    #
+    # ★ ここで add_header を1つでも書くと、server ブロックの add_header は
+    #   **すべて継承されなくなる**(nginx の仕様。/verify.php の location と同じ罠)。
+    #   必要なものを全部書き直す。
+    #
+    # 差し替えても反映されるよう、URL 側に版を付けてある:
+    #   CSS/JS  … km_public_asset()(lib/assets.php)が ?v=<mtime> を付ける
+    #   階の画像 … index.php が同じ関数を通した版付きURLを埋め込む
+    # ---------------------------------------------------------------------
+    location ~* \.(svg|css|js|png|woff2?)$ {
+        add_header X-Content-Type-Options nosniff always;
+        add_header Referrer-Policy strict-origin-when-cross-origin always;
+        add_header Permissions-Policy $km_permissions_policy always;
+        add_header X-Frame-Options SAMEORIGIN always;
+        add_header Content-Security-Policy $km_csp_fallback always;
+        include /etc/nginx/km/hsts-*.conf;
+
+        # ★ ここだけ always を付けない。always はエラー応答にもヘッダーを付けるため、
+        #   付けると **404 が30日キャッシュされる**。配備の入れ替わりざまに見取り図を
+        #   取りに来た利用者が、1か月「その階だけ出ない」状態に固定されてしまう。
+        #   always 無しなら 200/301/304 などの成功系にだけ付く(nginx の既定)。
+        add_header Cache-Control "public, max-age=2592000";
+
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+
+    # 総当たりされると困る3つだけ、入口でも回数を絞る。
+    # burst を持たせているのは、正規の利用者が数回続けて押しても弾かれないようにするため。
+    location = /contact.php {
+        limit_req zone=km_public burst=5 nodelay;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+
+    location = /api/map-unlock.php {
+        limit_req zone=km_public burst=5 nodelay;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+
+    location = /admin/login.php {
+        limit_req zone=km_auth burst=20 nodelay;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+
+    # 確認コードの橋渡しページ。**URL にコードが乗るのでログには残さない**
+    # (上の km_no_query は $uri だけを書く)。
+    location = /verify.php {
+        access_log /var/log/nginx/access.log km_no_query;
+
+        # **ここで add_header を1つでも書くと、server ブロックの add_header は
+        # すべて継承されなくなる**(nginx の仕様)。必要なものを全部書き直す。
+        #
+        # Referrer-Policy だけ no-referrer に強める。URL に確認コードが入るので、
+        # どこへも参照元として渡さない。**同じヘッダーが複数あると後勝ちになる**ため、
+        # PHP 側(verify.php)と同じ値にしてある — 食い違うと弱い方が採用される。
+        add_header X-Content-Type-Options nosniff always;
+        add_header X-Frame-Options SAMEORIGIN always;
+        add_header Referrer-Policy no-referrer always;
+        add_header Permissions-Policy $km_permissions_policy always;
+        add_header Content-Security-Policy $km_csp_fallback always;
+        include /etc/nginx/km/hsts-*.conf;
+
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+
+    # 管理画面はファイル管理(10MB)の分だけ広げる。
+    # **`^~` を付けないこと** —— 付けると上の正規表現(`^/admin/_` の 404、静的資材)が効かなくなる
+    location /admin/ {
+        client_max_body_size 12m;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+
+    # APK の差し替えだけ 210m(PHP 側は docker/php/99-uploads.ini と揃えてある)
+    location = /admin/downloads.php {
+        client_max_body_size 210m;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+        # 200MB を受け取り終えてから PHP が保存を始めるので、応答まで 60 秒を超えうる(2026-09-14)。
+        # proxy-web.conf には書かない —— 同じ location に 2 回書くと起動しない
+        proxy_read_timeout 300s;
+    }
+
+    # 地図の取り込み(map-sync.php)とアプリへの配信(map-publish.php)。**PHP が set_time_limit(120) で
+    # 長く動く**ので、上流の応答待ちを 180 秒にする(2026-09-14 の見直しで追加)。
+    # http の既定 60 秒のままだと、地点が数百ある取り込みで nginx だけが先に 504 を返し、
+    # PHP は裏で最後まで書き込む —— 失敗に見えて押し直すと、同じ取り込みが二度走る。
+    # 本文の上限は /admin/ と同じ 12m(イベント用の JSON は 10MB まで)。`=` なので /admin/ の設定は継承されない
+    location = /admin/map-sync.php {
+        client_max_body_size 12m;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+        proxy_read_timeout 180s;
+    }
+
+    location = /admin/map-publish.php {
+        client_max_body_size 12m;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+        proxy_read_timeout 180s;
+    }
+
+    # アプリのランキングへの記録(POST だけ数える。取得の GET は数えない)
+    location = /api/app-ranking.php {
+        limit_req zone=km_app burst=60 nodelay;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+
+    # アプリの地図の取得(2026-09-14 の診断で追加。ゾーンの注記は http の km_appmap)。
+    # 以前は location / に入り、入口では何も絞られていなかった(critic 0)
+    location = /api/app-map.php {
+        limit_req zone=km_appmap burst=30 nodelay;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+
+    # OIDC のコールバック。**URL に認可コードが乗るのでログには残さない**(2026-09-14 に追加。server-ops 16)。
+    # 以前は location / に入り、既定の combined 形式で `?code=…&state=…` ごと記録していた。
+    # verify.php と違って add_header は書かない(server の add_header をそのまま継承させる)。
+    location = /callback.php {
+        access_log /var/log/nginx/access.log km_no_query;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+
+    location / {
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+}
+
+# phpMyAdmin
+server {
+    listen 8281 ssl;
+    listen [::]:8281 ssl;
+    server_name ${KM_DOMAIN};
+    # 待ち時間と同時接続(2026-09-14。管理系は使うのが数人なので 50 本で足りる)
+    keepalive_timeout 30s;
+    limit_conn km_conn 50;
+
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy same-origin always;
+    # 他のサイトの枠に入れさせない(security-review-2026-09-10 の 16)。
+    # **frame-ancestors だけを足す** —— 中身の CSP は相手(phpMyAdmin / Mailpit)が決めるので触らない。
+    # CSP は複数あると全部が効く(厳しい側になる)ので、相手の設定を緩めることはない。
+    # 3001(Logto)には付けない: Logto が自分で frame-ancestors(Console の 3002 を含む)を送っており、
+    # こちらで 'self' だけに絞ると Console のサインイン画面の下見が壊れる(2026-09-14 に実測)
+    add_header Content-Security-Policy "frame-ancestors 'self'" always;
+    include /etc/nginx/km/hsts-*.conf;
+
+    # 1枚目: 送信元の制限
+    include /etc/nginx/km/allow-*.conf;
+
+    location / {
+        # 2枚目: Logto のログイン。gate.php が 204/401 を返すだけの薄い判定
+        auth_request /__km_gate;
+        error_page 401 = @km_login;
+        # 1枚目(allow-*.conf)で断った相手には 403 のページも返さず、接続を切る(@km_hide は gate-location.conf)
+        error_page 403 = @km_hide;
+
+        proxy_pass http://km_phpmyadmin;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-Host $http_host;
+        proxy_set_header X-Forwarded-Port 8281;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+        proxy_hide_header X-Powered-By;
+        proxy_read_timeout 300s;
+        client_max_body_size 128m;
+    }
+
+    include /etc/nginx/km/gate-location.conf;
+}
+
+# Logto Core(認証エンドポイント)
+#
+# **ここにはゲートを掛けない。** ログインそのものの入口で、塞ぐと誰もログインできなくなる
+# (ゲートの判定自体が Logto のセッションに依っているので、鶏と卵になる)。
+# 代わりに入口のレート制限だけ掛ける。
+server {
+    listen 3001 ssl;
+    listen [::]:3001 ssl;
+    server_name ${KM_DOMAIN};
+    # 待ち時間と同時接続(2026-09-14)。サインインの入口で、学校の NAT から大勢が来るので 443 と同じ 100 本
+    keepalive_timeout 30s;
+    limit_conn km_conn 100;
+
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+    include /etc/nginx/km/hsts-*.conf;
+
+    location / {
+        # 書き込み(サインインの送信・トークン交換)だけを数える。
+        # コンソールの読み取りとプリフライトは対象外 —— ここを数えていたせいで
+        # 管理コンソールが 429 だらけになり、サインイン画面の資材まで落ちていた。
+        limit_req zone=km_auth burst=30 nodelay;
+
+        proxy_pass http://km_logto_core;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-Host $http_host;
+        proxy_set_header X-Forwarded-Port 3001;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Real-IP $remote_addr;
+        # **利用者が付けた X-Forwarded-For を足さずに、実際の送信元だけで置き換える**(2026-09-14。server-ops 7)。
+        # Logto は TRUST_PROXY_HEADER=1 で XFF の左端を送信元として監査ログやレート判定に使う。
+        # 以前の $proxy_add_x_forwarded_for は相手の値の後ろに付け足すので、左端を自由に偽れた。
+        # 前段に別のプロキシは無い(nginx が入口)ので、$remote_addr 1 つで正しい。
+        proxy_set_header X-Forwarded-For $remote_addr;
+
+        # **Logto 自身の HSTS を消す**(2026-09-14)。Logto は `includeSubDomains` 付きの HSTS を送っており
+        # (本番で実測)、nginx の hsts-enable.conf と二重になったうえ、あちらで**わざと付けていない**
+        # includeSubDomains が効いてしまっていた(理由は hsts-enable.conf.example)。HSTS は nginx の 1 本だけにする。
+        proxy_hide_header Strict-Transport-Security;
+
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_read_timeout 300s;
+    }
+}
+
+# Logto Admin Console
+server {
+    listen 3002 ssl;
+    listen [::]:3002 ssl;
+    server_name ${KM_DOMAIN};
+    # 待ち時間と同時接続(2026-09-14。管理系は 50 本)
+    keepalive_timeout 30s;
+    limit_conn km_conn 50;
+
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+    include /etc/nginx/km/hsts-*.conf;
+
+    include /etc/nginx/km/allow-*.conf;
+
+    location / {
+        auth_request /__km_gate;
+        error_page 401 = @km_login;
+        # 1枚目(allow-*.conf)で断った相手には 403 のページも返さず、接続を切る(@km_hide は gate-location.conf)
+        error_page 403 = @km_hide;
+
+        proxy_pass http://km_logto_console;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-Host $http_host;
+        proxy_set_header X-Forwarded-Port 3002;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Real-IP $remote_addr;
+        # 3001 と同じ理由で、送信元だけに置き換える(2026-09-14。server-ops 7)
+        proxy_set_header X-Forwarded-For $remote_addr;
+        # 3001 と同じ理由で、Logto の includeSubDomains 付き HSTS を消す(2026-09-14)
+        proxy_hide_header Strict-Transport-Security;
+
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_read_timeout 300s;
+    }
+
+    include /etc/nginx/km/gate-location.conf;
+}
+
+# Soketi
+#
+# **ここにもゲートを掛けない。** ブラウザが直接 WebSocket を張る先で、購読の可否は
+# 9443 側の chat-auth.php(CSRF 検証 + チャンネル許可リスト)が署名で決めている。
+server {
+    listen 6001 ssl;
+    listen [::]:6001 ssl;
+    server_name ${KM_DOMAIN};
+    # 待ち時間と同時接続(2026-09-14。server-ops 3)。WebSocket は 1 本を長く張るので、1 つの送信元に 50 本まで。
+    # keepalive_timeout は Upgrade したあとの接続には効かない(そちらは下の proxy_read_timeout)。
+    keepalive_timeout 30s;
+    limit_conn km_conn 50;
+
+    # 管理画面以外のページから張られた接続を断る(2026-09-14。map $km_ws_origin_denied の注記を参照)。
+    # **管理画面を別の名前(localhost など)で開くとチャットが「未接続」になる。** そのときは ${KM_APP_URL} で開く。
+    if ($km_ws_origin_denied) {
+        return 403;
+    }
+
+    # **配信の HTTP API(/apps/…)を外に出さない**(2026-09-15)。
+    # ブラウザが使うのは WebSocket の /app/<key> だけで、/apps/<id>/events などは PHP が
+    # コンテナの中から soketi:6001 へ直に叩く(lib/soketi.php)。署名は Soketi が見るが、
+    # **時刻の古い署名も通る**(2026-09-15 に使い捨てで実測)—— 一度漏れた署名付きの要求を
+    # 外から何度でも投げ直せる。使わない口は入口で閉じる。
+    location ^~ /apps/ {
+        return 404;
+    }
+
+    location / {
+        proxy_pass http://km_soketi;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-Host $http_host;
+        proxy_set_header X-Forwarded-Port 6001;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+        proxy_buffering off;
+    }
+}
+
+# Mailpit(開発用のメール受け皿)
+#
+# 受信したメールは**誰の宛先でも読めてしまう**ので、インターネットに出す前提では
+# 必ずゲートの内側に置く。SMTP(1025)はコンテナ内部だけで、外へは出していない。
+server {
+    listen 8025 ssl;
+    listen [::]:8025 ssl;
+    server_name ${KM_DOMAIN};
+    # 待ち時間と同時接続(2026-09-14。管理系は 50 本)
+    keepalive_timeout 30s;
+    limit_conn km_conn 50;
+
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy same-origin always;
+    # 他のサイトの枠に入れさせない(security-review-2026-09-10 の 16)。
+    # **frame-ancestors だけを足す** —— 中身の CSP は相手(phpMyAdmin / Mailpit)が決めるので触らない。
+    # CSP は複数あると全部が効く(厳しい側になる)ので、相手の設定を緩めることはない。
+    # 3001(Logto)には付けない: Logto が自分で frame-ancestors(Console の 3002 を含む)を送っており、
+    # こちらで 'self' だけに絞ると Console のサインイン画面の下見が壊れる(2026-09-14 に実測)
+    add_header Content-Security-Policy "frame-ancestors 'self'" always;
+    include /etc/nginx/km/hsts-*.conf;
+
+    include /etc/nginx/km/allow-*.conf;
+
+    location / {
+        auth_request /__km_gate;
+        error_page 401 = @km_login;
+        # 1枚目(allow-*.conf)で断った相手には 403 のページも返さず、接続を切る(@km_hide は gate-location.conf)
+        error_page 403 = @km_hide;
+
+        # **Mailpit が居なくても nginx が起動できるようにする**(2026-09-14。本番では Mailpit を起動しない)。
+        # `proxy_pass http://mailpit:8025;` と直に書くと、nginx は起動時に名前を引き、
+        # 引けなければ "host not found in upstream" で**起動そのものに失敗する** —— 443 まで巻き添えで止まる。
+        # 変数に入れると、名前はリクエストの時に Docker の内蔵 DNS(127.0.0.11)で引くようになる。
+        # 居なければ 502 を返すだけ。変数の proxy_pass は URI を書き換えないので、渡るパスは今までと同じ。
+        # (resolver は http に1本だけ書いてある。他の転送先は upstream + resolve —— 冒頭の注記)
+        set $km_mailpit_upstream http://mailpit:8025;
+        proxy_pass $km_mailpit_upstream;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-Host $http_host;
+        proxy_set_header X-Forwarded-Port 8025;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+        # Mailpit の画面は受信を WebSocket でライブ更新するので、Soketi と同じ扱いが要る
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+
+        proxy_hide_header X-Powered-By;
+        # proxy_read_timeout は http の既定 60 秒のまま(2026-09-14 に 300s を外した)。
+        # 長く待つ理由のある口ではない。画面のライブ更新が切れても、Mailpit の画面が張り直す
+    }
+
+    include /etc/nginx/km/gate-location.conf;
+}
