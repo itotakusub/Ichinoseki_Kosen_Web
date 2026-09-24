@@ -1,0 +1,767 @@
+# **名前で本番とテストを見分けられるようにする(2026-09-07)。**
+#
+# ここは長く `name: Test` で、コンテナ名も `dev-*` だった。
+# 校内 LAN の検証機と本番(ito4.jp)が **`docker ps` の出力で完全に同じ顔**になり、
+# 「テスト環境を止めて」という依頼で**公開中のサイトを止めかけた。**
+# そのとき本番は 2 時間で 28 か所から使われていた。
+#
+# 名前は、間違えたときに何が起きるかで選ぶ。`dev-mariadb` を消すのと
+# `km-mariadb` を消すのとでは、手が止まる確率が違う。
+#
+# **ボリュームの実体名は `test_` のまま**にしてある(下の volumes: の注記を読むこと)。
+name: kosenmap
+
+services:
+  # ================================================================
+  # **コンテナごとの上限**(2026-09-14 の診断で追加。各サービスの security_opt / mem_limit / pids_limit)。
+  #
+  # それまでどのサービスにも上限が無く、1 つの暴走(PHP のメモリ・Soketi の接続・fork の連鎖)が
+  # **ホスト全体(RAM 2GB)を道連れにできた。** 本番の使用量(2026-09-14 の実測)の 2〜4 倍を目安に置く:
+  #   logto 254M → 512m / mariadb 133M → 512m / postgres 45M → 256m / web 58M → 384m /
+  #   nginx 10M → 128m / soketi 54M → 256m / phpmyadmin 51M → 256m / mailpit 23M → 128m
+  #   (mailserver 192m と certbot 128m は compose.vps.yaml)
+  # 合計は RAM を超えるが、これは「全員が同時に上限まで使う」ことを想定した枠ではなく、
+  # **1 つが暴れたときに他を巻き込まない**ための天井。
+  #
+  # no-new-privileges は、setuid のプログラムを実行して権限を上げる道を塞ぐ。
+  # root で起動してから一般利用者へ下りる(Apache・nginx・gosu)のは妨げない。
+  # **mailserver には付けない** —— postfix の postdrop が setgid で動くので、送信が止まる。
+  #
+  # ここ(compose.yaml)に書けば compose.vps.yaml にもそのまま効く(上書きしていないため)。
+  # ================================================================
+  #
+  # ================================================================
+  # **多層防御の底上げ**(2026-09-15。security-review-2026-09-14 §7 の 9)
+  #
+  # 1. **ネットワークを分けた**(下の networks:)。以前は全員が devnet 1 つに居て、
+  #    web が破られると MariaDB にも Postgres(Logto の DB)にも mailserver にも直接届いた。
+  #      edge   … nginx と、nginx が転送する相手(web・logto・phpmyadmin・soketi・mailpit)
+  #      appdb  … MariaDB と、それを使う web・phpmyadmin だけ。**internal**(外へ出られない)
+  #      authdb … Postgres と Logto だけ。**internal**
+  #      mail   … 送信サーバーと、送る側(web・logto)。外へ配送するので internal にしない
+  #    appdb の範囲を固定したので、MariaDB の利用者を `'Main'@'172.30.2.%'` のように**この網からだけ**にできる。
+  # 2. **read_only**: コンテナの中身(イメージ)を書き換えられないようにする。書く場所は tmpfs と
+  #    ボリュームだけ。**付けていないのは phpmyadmin と mailserver だけ**で、理由はそれぞれに書いた。
+  # 3. **cap_drop: ALL**: root の特権を全部落とし、起動に要るもの(利用者の切り替え・持ち主の変更・
+  #    1024 未満のポート)だけ cap_add で戻す。
+  # 4. **全イメージを digest で固定**: 2026-09-15 に動いていた中身そのものを指す。
+  #    上げるときは scripts/check-updates.sh --pins の行で置き換える(タグに戻さない)。
+  # 5. **src を読み取り専用で渡す**(web の volumes)。PHP が書くのは uploads・cache と設定 2 つだけ。
+  #
+  # **これらは互いに独立していない。** read_only と cap_drop は、足りないと**起動しないか、
+  # 起動しても一部の操作だけ失敗する**。変えるときは検証機で up → 各画面の操作 → check.php まで通すこと。
+  # ================================================================
+  postgres:
+    # 2026-09-15 に動いていた中身。**タグも残す**(`名前:タグ@digest`)—— 動くのは digest で、
+    # タグは scripts/check-updates.sh が「固定した digest より新しい修正版が出たか」を読むため
+    image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
+    container_name: km-postgres
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    pids_limit: 200
+    # 書くのはデータのボリュームとソケットの置き場だけ
+    read_only: true
+    tmpfs:
+      - /var/run/postgresql
+      - /tmp
+    # 起動スクリプトがデータの持ち主を postgres に揃え(CHOWN・FOWNER・DAC_OVERRIDE)、
+    # su-exec で postgres へ下りる(SETUID・SETGID)
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    expose:
+      - "5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    # **Logto だけが届く網**(ファイル先頭の「多層防御の底上げ」の 1)
+    networks:
+      - authdb
+
+  logto:
+    # **版を固定する。`latest` に戻さないこと。**
+    #
+    # `latest` のままだと、`docker compose pull` を叩いた次の `up -d` で
+    # **誰も決めないまま版が上がる**。Logto は起動時に DB の移行を走らせるので、
+    # 失敗したときに戻す手段はバックアップからの復元しかない。
+    # そのうえ Logto は管理画面のゲートそのもの(auth_request)で、
+    # **落ちると直しに行く手段ごと失われる**(2026-08-28 に実際に起きた)。
+    #
+    # 上げ方は scripts/check-updates.sh と docs/plan.md の第7段を見ること。
+    # **上げる前に必ず backup-data.ps1 を実行する。**
+    #
+    # 1.43.0 を digest でも固定する(2026-09-15)。**タグは付け替えられる** —— 同じ 1.43.0 の名前で
+    # 中身が差し替わっても、移行が走る Logto では気付いたときには戻せない。
+    # **タグは消さない。** check-updates.sh はタグから版番号を読んで「新しい版が出たか」を見る
+    # (digest だけにすると hex を版番号として読み、毎日「新しい版があります」と言い続ける)。
+    image: ghcr.io/logto-io/logto:1.43.0@sha256:41196a1fadbff35eae337965321c57946936755066bd92625ccf8a5b65d4b1be
+    container_name: km-logto
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    # 起動時に db seed と移行を走らせるので、他より少し広めに取る
+    mem_limit: 512m
+    pids_limit: 256
+    # イメージの中で書くのは 3 か所だけ(2026-09-15 に本番の DB の写しで起動して確かめた):
+    #   /etc/logto/packages/cli/alteration-scripts … 起動時の `db seed` が移行スクリプトを**毎回ここへ写す**
+    #                                                (無いと EROFS で起動しない。中身は packages/schemas から作り直される)
+    #   /root/.npm                                 … npm の実行記録(失敗時の「A complete log of this run…」)
+    #   /tmp
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /root/.npm
+      - /etc/logto/packages/cli/alteration-scripts
+    # 1024 未満のポートを使わず、利用者も切り替えない(node が root のまま動く)ので、戻す特権は無い
+    cap_drop:
+      - ALL
+    entrypoint: ["sh", "-c", "npm run cli db seed -- --swe && npm start"]
+    environment:
+      # **SUPERUSER でない利用者で繋ぐ**(2026-09-15。security-review-2026-09-14 §7 の 3)。
+      #
+      # 以前は Postgres の初期利用者(POSTGRES_USER = SUPERUSER)で繋いでいた。Logto に SQL を
+      # 差し込める穴が 1 つ出れば、`COPY … PROGRAM` でコンテナの中でコマンドまで走らせられた。
+      # LOGTO_DB_USER は Logto のテーブルの持ち主にしただけの利用者(作り方は docs/12 の §3)。
+      #
+      # **LOGTO_DB_USER が .env に無ければ、今までどおり POSTGRES_USER で繋ぐ。** 利用者を作る前に
+      # この compose を配っても止まらないようにするため。作ったら .env に 2 つ足して `up -d logto`。
+      # パスワードは URL にそのまま入るので、**英数字だけ**で作ること(docs/12 のセルは hex で作る)。
+      DB_URL: postgres://${LOGTO_DB_USER:-${POSTGRES_USER}}:${LOGTO_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/${POSTGRES_DB}
+      # **`${…:-既定}` で書く。** 直書きだと .env で上書きできず、別のホストへ
+      # 移したときに **Logto が旧ホストの URL でトークンを発行し続ける**。
+      # 既定値は現行の校内 LAN そのままなので、.env に足さなければ挙動は変わらない。
+      ENDPOINT: ${LOGTO_ENDPOINT:-https://192.168.3.29:3001}
+      ADMIN_ENDPOINT: ${LOGTO_ADMIN_ENDPOINT:-https://192.168.3.29:3002}
+      TRUST_PROXY_HEADER: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # /api/status は 204 を返す軽い経路(認証も DB の重い問い合わせも伴わない)。
+    # **起動に時間がかかる** —— 初回は db seed を流すので start_period を長めに取る。
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3001/api/status"]
+      start_period: 90s
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    # edge … nginx から / authdb … 自分の DB へ / mail … 確認コードのメールを mailserver へ
+    networks:
+      - edge
+      - authdb
+      - mail
+
+  mariadb:
+    # 2026-09-15 に動いていた中身(タグを残す理由は postgres と同じ)
+    image: mariadb:11.4@sha256:80494b9810694179889f7281ec44ca928241df577159c0356a1070e2e94616a1
+    container_name: km-mariadb
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    pids_limit: 200
+    read_only: true
+    tmpfs:
+      - /run/mysqld
+      - /tmp
+    # 起動スクリプトがデータの持ち主を mysql に揃えてから gosu で mysql へ下りる
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
+      MARIADB_DATABASE: ${MARIADB_DATABASE}
+      MARIADB_USER: ${MARIADB_USER}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD}
+      # 既存ボリュームで欠落しているhealthcheckユーザーと設定を再生成する。
+      MARIADB_AUTO_UPGRADE: "1"
+    # **3306 は publish しない**(2026-09-15)。以前は校内 LAN 用に `192.168.3.29:3306:3306` を出していたが、
+    # 校内 LAN の構成はもう使っていない(VPS は compose.vps.yaml で空にしていた)。そのうえ MariaDB は
+    # internal の appdb にしか居ないので、publish しても外からは届かない —— 書いておく意味が無い。
+    command:
+      - mariadbd
+      # NOW() が日本時間の壁時計を書くようにする。既定は system_time_zone = UTC で、
+      # PHP 側(date.timezone)と食い違うと保存と表示で 9 時間ずれる。
+      # タイムゾーン名テーブルはこのイメージにロード済みなので名前で指定できる。
+      # **既存の datetime は UTC で入っているので、この変更を入れる前に
+      # Old/migrate-timezone-to-jst.php を一度だけ実行すること。**
+      - --default-time-zone=Asia/Tokyo
+      - --ssl=ON
+      - --ssl-cert=/etc/mysql/tls/mariadb-server.pem
+      - --ssl-key=/etc/mysql/tls/mariadb-server-key.pem
+      - --ssl-ca=/etc/mysql/tls/rootCA.pem
+      - --tls-version=TLSv1.2,TLSv1.3
+      - --bind-address=0.0.0.0
+      # **LOAD DATA LOCAL を受け付けない**(2026-09-14 の診断で追加。本番は local_infile=1 だった)。
+      # アプリは LOAD DATA も INTO OUTFILE も使っていない(grep 0 件)。SQL を差し込まれたときに
+      # クライアント側のファイルを読ませる道を、使っていないのに開けておく理由が無い。
+      - --local-infile=0
+      # 同時接続の上限。既定の 151 のままだと、Apache のワーカー(150)が全部 DB を握ったうえに
+      # phpMyAdmin・バックアップ・healthcheck が入る余地が無い。メモリの上限(512m)の中に収まる数に絞る。
+      # **グローバルの max_statement_time は設定しない** —— mysqldump のバックアップまで途中で止まる。
+      # 長い SQL の打ち切りは PHP 側(lib/db.php が Web のときだけ SESSION に 15 秒)で掛ける。
+      - --max-connections=120
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - ./certs/mariadb-server.pem:/etc/mysql/tls/mariadb-server.pem:ro
+      - ./certs/mariadb-server-key.pem:/etc/mysql/tls/mariadb-server-key.pem:ro
+      - ./certs/rootCA.pem:/etc/mysql/tls/rootCA.pem:ro
+    healthcheck:
+      # 公式イメージが生成する /var/lib/mysql/.my-healthcheck.cnf を使用する。
+      # rootパスワードを引数で渡さない。
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      start_period: 60s
+      start_interval: 5s
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    # **web と phpmyadmin だけが届く網。** 利用者の Host を `172.30.2.%` に絞る前提(docs/12 の §2)
+    networks:
+      - appdb
+
+  phpmyadmin:
+    # 2026-09-15 に動いていた中身(タグを残す理由は postgres と同じ)
+    image: phpmyadmin:5.2.3-apache@sha256:3a8a8d6b5289091f959ba0293f21163b3a2fc5741991a53de70b3497fe8d31db
+    container_name: km-phpmyadmin
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    pids_limit: 200
+    # **read_only にしない。** イメージの起動スクリプトが /etc/phpmyadmin/config.secret.inc.php(Cookie の暗号鍵)と
+    # /usr/local/etc/php/conf.d/phpmyadmin-misc.ini(UPLOAD_LIMIT)を**毎回その場で書く**。
+    # tmpfs で覆うと、同じ場所にあるイメージの設定(config.inc.php・拡張の ini)まで消える。
+    # 代わりに特権を落とす: Apache が 80 番で待ち(NET_BIND_SERVICE)、www-data へ下り(SETUID・SETGID)、
+    # 子に合図を送り(KILL)、セッションの置き場の持ち主を揃える(CHOWN・FOWNER・DAC_OVERRIDE)
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - KILL
+      - NET_BIND_SERVICE
+      - SETGID
+      - SETUID
+    environment:
+      # 画面に出る日時とログを日本時間にそろえる
+      TZ: Asia/Tokyo
+      # root でのログインを一時的に許すときだけ .env に 1(docker/phpmyadmin/config.user.inc.php)。
+      # **普段は空 = 禁止。** 2026-09-14 まではイメージの既定で root も空パスワードも通っていた(server-ops 12)
+      KM_PMA_ALLOW_ROOT: ${KM_PMA_ALLOW_ROOT:-}
+      PMA_HOST: mariadb
+      PMA_PORT: "3306"
+      PMA_SSL: "1"
+      PMA_SSL_VERIFY: "1"
+      PMA_SSL_CA: /certs/rootCA.pem
+      PMA_ABSOLUTE_URI: ${PMA_ABSOLUTE_URI:-https://192.168.3.29:8281/}
+      UPLOAD_LIMIT: 128M
+      HIDE_PHP_VERSION: "true"
+    volumes:
+      - ./certs/rootCA.pem:/certs/rootCA.pem:ro
+      - phpmyadmin_sessions:/sessions
+      # root と空パスワードのログインを断ち、ログインの寿命を 30 分にする(2026-09-14)。
+      # compose.vps.yaml は phpmyadmin の volumes を上書きしていないので、VPS にもこのまま効く
+      - ./docker/phpmyadmin/config.user.inc.php:/etc/phpmyadmin/config.user.inc.php:ro
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1/"]
+      start_period: 30s
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    # edge … nginx から / appdb … MariaDB へ
+    networks:
+      - edge
+      - appdb
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    container_name: km-php-apache
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 384m
+    pids_limit: 200
+    # イメージの中へは書かない。書くのは tmpfs(PHP のセッション・一時ファイル・合成した CA・Apache の pid)と、
+    # 下の volumes で書けるようにした src の一部だけ。
+    # **PHP のセッションは /tmp にある** —— web を作り直すと全員が一度ログアウトされる(以前もコンテナを
+    # 作り直せば同じだった)。容量は tmpfs の分だけ mem_limit を食うので上限を付ける
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+      - /var/run/apache2
+      - /var/lock/apache2
+    # Apache が 80 番で待ち(NET_BIND_SERVICE)、www-data へ下り(SETUID・SETGID)、子に合図を送る(KILL)。
+    # CHOWN・FOWNER・DAC_OVERRIDE は Apache が起動時に pid とロックの置き場を用意するため
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - KILL
+      - NET_BIND_SERVICE
+      - SETGID
+      - SETUID
+    environment:
+      # Apache のログや date コマンド用。**PHP はこれを見ない**ので、PHP の時刻は
+      # docker/php/99-timezone.ini の date.timezone が本体(下の volumes を参照)。
+      TZ: Asia/Tokyo
+      MARIADB_HOST: mariadb
+      MARIADB_PORT: "3306"
+      MARIADB_DATABASE: ${MARIADB_DATABASE}
+      MARIADB_USER: ${MARIADB_USER}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD}
+      # **POSTGRES_* は渡さない**(2026-09-14 に外した。server-ops 0)。
+      # 以前はここで Logto の DB(Postgres)の資格情報を渡していたが、PHP は Postgres を一度も使わない
+      # (src を grep して 0 件)。しかもその利用者は Postgres の SUPERUSER(本番で実測)で、
+      # web が 1 つ破られると認証基盤の DB まで同じ手で届いた。**使わない鍵は持たせない。**
+      # **ここが直書きだと .env の APP_URL がまったく効かない。**
+      # lib/site.php は APP_URL を正本にしているのに、compose がそれを渡さず
+      # 旧ホストの値で固定していた。結果、別のホストへ移すと
+      # 管理画面が「認証の設定が未完了」(503)になる —— 公開ページは動くので
+      # 移行がほぼ終わったように見えてから気付くことになる(192.168.3.98 で実際に踏んだ)。
+      LOGTO_ENDPOINT: ${LOGTO_ENDPOINT:-https://192.168.3.29:3001}
+      APP_URL: ${APP_URL:-https://192.168.3.29:9443}
+      # 管理画面の URL(2026-09-15。lib/site.php の km_site_admin_parts)。**既定は APP_URL と同じ = 別オリジンにしない。**
+      # reverse-proxy の KM_ADMIN_URL と同じ値にすること
+      ADMIN_URL: ${ADMIN_URL:-${APP_URL:-https://192.168.3.29:9443}}
+      LOGTO_APP_ID: ${LOGTO_APP_ID}
+      LOGTO_APP_SECRET: ${LOGTO_APP_SECRET}
+      CURL_CA_BUNDLE: /tmp/combined-ca.pem
+      SSL_CERT_FILE: /tmp/combined-ca.pem
+      # admin/chat.php (Soketi) が pusher-php-server 経由でチャンネル認可・メッセージ配信を
+      # 行うために必要。soketi サービスと同じ .env の値をそのまま渡す(秘密鍵の追加作成は不要)。
+      SOKETI_APP_ID: ${SOKETI_APP_ID}
+      SOKETI_APP_KEY: ${SOKETI_APP_KEY}
+      SOKETI_APP_SECRET: ${SOKETI_APP_SECRET}
+      SOKETI_HOST: soketi
+      SOKETI_PORT: "6001"
+      # admin/users.php が Logto Management API でユーザー一覧を取るための m2m アプリ。
+      # Logto Console で「Machine-to-Machine」として作成し、**Logto Management API の
+      # ロールを割り当てておく**こと(未割り当てだとトークンは取れても API が 403 になる)。
+      # 値が .env 経由で入らない場合は config/logto-m2m.local.php でも設定できる。
+      LOGTO_M2M_APP_ID: ${LOGTO_M2M_APP_ID}
+      LOGTO_M2M_APP_SECRET: ${LOGTO_M2M_APP_SECRET}
+      # api/app-stats.php(人数集計)が使う読み取り専用の m2m アプリ。
+      # **あちらは未ログインでも叩ける口**なので、書き込みできる上の資格情報とは分ける。
+      # Logto Console で read:user と read:organization だけを与えること。
+      # 空なら上の LOGTO_M2M_* に落ちる。片方だけ入れると例外で止まる。
+      LOGTO_M2M_READONLY_APP_ID: ${LOGTO_M2M_READONLY_APP_ID:-}
+      LOGTO_M2M_READONLY_APP_SECRET: ${LOGTO_M2M_READONLY_APP_SECRET:-}
+      # 公開の問い合わせフォーム(src/contact.php)の reCAPTCHA(チェックボックス型)。
+      # **クラシック版と Enterprise 版で必要な値が違う**(lib/recaptcha.php が置かれた値で判断する):
+      #   Enterprise … SITE_KEY + PROJECT_ID + API_KEY   (assessments API)
+      #   クラシック  … SITE_KEY + SECRET_KEY            (siteverify)
+      # SITE_KEY と PROJECT_ID はブラウザに出る/秘密でない値。**SECRET_KEY と API_KEY は秘密**で
+      # サーバー側だけで使う。値が入らない場合は config/recaptcha.local.php でも設定できる。
+      # **Google 側で「ドメイン(オリジン)の検証」を外しておくこと**
+      # (このサイトは IP アドレスで動いており、ドメイン欄に登録できないため)。
+      # API キーは reCAPTCHA Enterprise API だけに制限しておくこと。
+      RECAPTCHA_SITE_KEY: ${RECAPTCHA_SITE_KEY}
+      RECAPTCHA_PROJECT_ID: ${RECAPTCHA_PROJECT_ID}
+      RECAPTCHA_API_KEY: ${RECAPTCHA_API_KEY}
+      RECAPTCHA_SECRET_KEY: ${RECAPTCHA_SECRET_KEY}
+      # メール送信。**既定は Mailpit**(開発用の受け皿。認証も TLS も要らず、
+      # 受け取ったメールを実際には配送しない)。
+      #
+      # 本番で外部へ送るときは **.env で差し替えるだけ**。コードは変えなくてよい。
+      # lib/mailer.php が「利用者名が空なら認証しない / 暗号化が空なら平文」と
+      # 解釈するので、下の4つを足さなければ従来どおり Mailpit へ落ちる。
+      MAIL_HOST: ${MAIL_HOST:-mailpit}
+      MAIL_PORT: ${MAIL_PORT:-1025}
+      MAIL_FROM: ${MAIL_FROM:-kosenmap@example.test}
+      MAIL_FROM_NAME: ${MAIL_FROM_NAME:-KosenMap}
+      MAIL_ADMIN_TO: ${MAIL_ADMIN_TO:-admin@example.test}
+      # 認証つき送信用。**空なら認証しない**(Mailpit の要件)
+      MAIL_USERNAME: ${MAIL_USERNAME:-}
+      MAIL_PASSWORD: ${MAIL_PASSWORD:-}
+      # tls(STARTTLS/587) / ssl(SMTPS/465) / 空(平文)
+      MAIL_ENCRYPTION: ${MAIL_ENCRYPTION:-}
+      # CSP を「報告だけ」にする(lib/csp.php)。**普段は空 = 強制。** 試すときだけ .env に 1。
+      # 以前は compose が渡しておらず、.env に書いても効かなかった(security-review-2026-09-10 の 21)
+      KM_CSP_REPORT_ONLY: ${KM_CSP_REPORT_ONLY:-}
+      # Logto の webhook(User.Deleted)の署名鍵。lib/logto-webhook.php が getenv で読む。
+      # **2026-09-14 まで渡していなかった**(server-ops 1)。.env に書いてあっても届かず、
+      # 署名の検証が毎回失敗して、Logto 側で消したアカウントの後片付けが一度も動いていなかった。
+      # KM_CSP_REPORT_ONLY と同じ種類の漏れ —— **lib が getenv する名前は、ここに書くまで効かない。**
+      LOGTO_WEBHOOK_SIGNING_KEY: ${LOGTO_WEBHOOK_SIGNING_KEY:-}
+      # Logto の API リソース識別子 = アクセストークンの audience(2026-09-14 に追加)。
+      # logto-client.php と admin/_inc/bootstrap.php は LOGTO_API_RESOURCE を、logto_config.php は
+      # KOSENMAP_LOGTO_AUDIENCE を読む。**同じ値を両方に渡す。**
+      #
+      # 以前は渡しておらず、PHP が APP_URL + /api を既定として使っていた。値はそれと同じなので挙動は変わらない。
+      # 分けた理由は、**ドメインを変えてもこの値は変えてはいけない**から —— Logto Console に登録した
+      # リソースの名前で、変わるとトークンの audience が合わず、管理画面にも Android の管理版にも入れなくなる。
+      LOGTO_API_RESOURCE: ${KM_API_RESOURCE:-https://192.168.3.29:9443/api}
+      KOSENMAP_LOGTO_AUDIENCE: ${KM_API_RESOURCE:-https://192.168.3.29:9443/api}
+      # 教職員の権限(Logto の組織。docs/15-staff-org.ipynb・lib/staff-org.php。2026-09-18)。
+      # **組織 ID が空なら、この機能は無いものとして動く**(付けない・判定しない)。秘密ではない
+      KM_LOGTO_ORG_ID: ${KM_LOGTO_ORG_ID:-}
+      KM_LOGTO_STAFF_ORG_ROLE: ${KM_LOGTO_STAFF_ORG_ROLE:-Kosen_Member}
+      KM_LOGTO_STAFF_SCOPE: ${KM_LOGTO_STAFF_SCOPE:-staff:normal:access}
+    volumes:
+      # **src は読み取り専用で渡す**(2026-09-15。security-review-2026-09-14 §7 の 9)。
+      #
+      # 以前は src 全体を書ける形で渡していた。PHP に穴が 1 つあれば、**PHP ファイルそのものを書き換えて
+      # 居座れた**(次に誰かが開いたときに実行される)。PHP が本当に書く場所だけを下で書けるようにする:
+      #   uploads/                   … ファイル管理・アカウント画像・APK・アプリへ配る地図
+      #   cache/                     … Logto の JWKS・Management API のトークン・失敗ロックの予備
+      #   config/app-map.local.php   … アクセスコード(admin/map-publish.php が書く)
+      #   config/map-access.local.php … 地図の錠(admin/map-settings.php が書く)
+      # 設定の 2 つは**ファイル単位**で渡す。config/ ごと書けると db.local.php なども書き換えられるため。
+      # lib はディレクトリに書けないとき、一時ファイル + rename をやめて直に書く(lib/app-map.php)。
+      #
+      # **この 4 つはホスト側に先に在ること。** 無いと Docker が**ディレクトリを作ってしまう**
+      # (設定がディレクトリになり、保存が必ず失敗する)。host-setup.sh が作る。
+      # **compose.vps.yaml の web の volumes にも同じものを書くこと**(あちらは `!override`)。
+      - ./src:/var/www/html:ro
+      - ./src/uploads:/var/www/html/uploads
+      - ./src/cache:/var/www/html/cache
+      - ./src/config/app-map.local.php:/var/www/html/config/app-map.local.php
+      - ./src/config/map-access.local.php:/var/www/html/config/map-access.local.php
+      - ./certs/rootCA.pem:/etc/ssl/certs/mariadb-rootCA.pem:ro
+
+      # mkcert のルート CA。**certs/rootCA.pem と同一のファイル**(SHA256 が一致することを
+      # 確認済み)なので、プロジェクトの中を指す。以前は mkcert の既定の置き場所
+      # (利用者のホームディレクトリ配下)を**絶対パスで**書いており、
+      # 別の機械へ持っていくとその1行だけで起動しなくなっていた。
+      - type: bind
+        source: ./certs/rootCA.pem
+        target: /etc/ssl/localca/rootCA.pem
+        read_only: true
+      - type: bind
+        source: ./docker/php/99-local-ca.ini
+        target: /usr/local/etc/php/conf.d/99-local-ca.ini
+        read_only: true
+      - type: bind
+        source: ./docker/php/99-timezone.ini
+        target: /usr/local/etc/php/conf.d/99-timezone.ini
+        read_only: true
+      - type: bind
+        source: ./docker/php/99-uploads.ini
+        target: /usr/local/etc/php/conf.d/99-uploads.ini
+        read_only: true
+      - type: bind
+        source: ./docker/php/99-errors.ini
+        target: /usr/local/etc/php/conf.d/99-errors.ini
+        read_only: true
+      # 実行時間・待ち時間・セッションの受け付け方(2026-09-14)。
+      # **compose.vps.yaml の web の volumes にも同じものを書くこと** —— あちらは `!override` で丸ごと置き換える
+      - type: bind
+        source: ./docker/php/99-limits.ini
+        target: /usr/local/etc/php/conf.d/99-limits.ini
+        read_only: true
+      # PATH_INFO を断つ(AcceptPathInfo Off)と Apache の Timeout 60(2026-09-14。中身はファイルの注記)。
+      # conf-enabled へ直接置く —— apache2.conf が末尾でここを読むので、先頭の Timeout 300 に勝つ
+      - type: bind
+        source: ./docker/php/apache-km.conf
+        target: /etc/apache2/conf-enabled/km.conf
+        read_only: true
+      - type: bind
+        source: ./docker/php/start-with-local-ca.sh
+        target: /usr/local/bin/start-with-local-ca.sh
+        read_only: true
+    # **postgres は待たない**(2026-09-15)。PHP は Postgres を使わず、網も分けたので届きもしない
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    # **verify.php を見る。** 地図データを読む / と違い DB を触らず、実測 1ms で返る。
+    # 静的ファイルではなく PHP を叩くのは、**Apache は生きているが PHP が死んでいる**
+    # 状態を見逃さないため。
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1/verify.php"]
+      start_period: 30s
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    # edge … nginx から・Logto の公開 URL と reCAPTCHA へ出る / appdb … MariaDB / mail … 問い合わせの通知を送る
+    networks:
+      - edge
+      - appdb
+      - mail
+    command:
+      - sh
+      - /usr/local/bin/start-with-local-ca.sh
+
+  reverse-proxy:
+    # **digest で固定する(2026-09-07 時点の nginx:alpine)。**
+    #
+    # `nginx:alpine` は動くタグで、**同じタグのまま中身が入れ替わる。**
+    # 実際 2026-09-09 の check-updates.sh で「中身が入れ替わっています」と出た ——
+    # つまり誰も何も決めていないのに、次の `up -d` で入れ替わる状態だった。
+    # ここは**サイトの入口**なので、入れ替わって壊れると全部止まる。
+    #
+    # 上げるときは scripts/check-updates.sh --pins が出す行で置き換える。
+    # **タグに戻さないこと。**
+    image: nginx@sha256:db35bfc6b2951e7f8a72db5db120288c127ffaeeb4a6d4b95a26fead017d5913
+    container_name: km-nginx-proxy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    pids_limit: 200
+    # 書くのは tmpfs だけ:
+    #   /etc/nginx/conf.d  … 起動時にテンプレートを展開した先(**conf.d を直接 mount しない**注記は下の volumes)
+    #   /var/cache/nginx   … 本文の一時ファイル・プロキシの一時ファイル
+    #   /run               … nginx.pid(/var/run はここへのリンク)
+    read_only: true
+    tmpfs:
+      - /etc/nginx/conf.d
+      - /var/cache/nginx
+      - /run
+      - /tmp
+    # 80・443 で待ち(NET_BIND_SERVICE)、nginx 利用者へ下り(SETUID・SETGID)、worker に合図を送る(KILL)。
+    # CHOWN・DAC_OVERRIDE はキャッシュの置き場を nginx の持ち物にするため
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - KILL
+      - NET_BIND_SERVICE
+      - SETGID
+      - SETUID
+    environment:
+      # アクセスログ・エラーログのタイムスタンプを日本時間にする。
+      # 障害時に人が最初に読むログなので、ここが UTC だと web 側のログと突き合わせづらい。
+      TZ: Asia/Tokyo
+      # nginx の設定は nginx/default.conf.template を envsubst で展開して作る。
+      # **VPS + 独自ドメインへ移すときに触るのはこの4つだけ**(.env に置く)。
+      # 既定値は現行の校内 LAN 構成そのままなので、.env に何も足さなければ挙動は変わらない。
+      KM_DOMAIN: ${KM_DOMAIN:-192.168.3.29}
+      KM_APP_URL: ${KM_APP_URL:-https://192.168.3.29:9443}
+      KM_APP_PORT: ${KM_APP_PORT:-9443}
+      KM_CERT: ${KM_CERT:-/etc/nginx/certs/192.168.3.29.pem}
+      KM_CERT_KEY: ${KM_CERT_KEY:-/etc/nginx/certs/192.168.3.29-key.pem}
+      # 管理画面を別オリジンに置くときの名前(2026-09-15。nginx/default.conf.template の $km_host_role)。
+      # **既定は公開側と同じ = 別オリジンにしない。** web の ADMIN_URL と同じ値にすること
+      KM_ADMIN_DOMAIN: ${KM_ADMIN_DOMAIN:-${KM_DOMAIN:-192.168.3.29}}
+      KM_ADMIN_URL: ${KM_ADMIN_URL:-${KM_APP_URL:-https://192.168.3.29:9443}}
+    ports:
+      - "192.168.3.29:8080:80"
+      - "192.168.3.29:9443:443"
+      - "192.168.3.29:8281:8281"
+      - "192.168.3.29:3001:3001"
+      - "192.168.3.29:3002:3002"
+      - "192.168.3.29:6001:6001"
+      - "192.168.3.29:8025:8025"
+    volumes:
+      # テンプレートは起動時に envsubst で /etc/nginx/conf.d/default.conf へ展開される。
+      # **conf.d を直接 mount してはいけない**(read-only だと展開先を作れず起動に失敗する)。
+      - ./nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+      # 環境ごとに変わる断片(送信元の許可・HSTS・共通のプロキシ設定)
+      - ./nginx/km:/etc/nginx/km:ro
+      - ./certs/192.168.3.29.pem:/etc/nginx/certs/192.168.3.29.pem:ro
+      - ./certs/192.168.3.29-key.pem:/etc/nginx/certs/192.168.3.29-key.pem:ro
+    depends_on:
+      web:
+        condition: service_started
+      phpmyadmin:
+        condition: service_started
+      logto:
+        condition: service_started
+      soketi:
+        condition: service_started
+      mailpit:
+        condition: service_started
+    # 上の depends_on は **service_started のまま**にしてある。
+    # service_healthy に変えると、どれか1つが健全にならない限り nginx が上がらず、
+    # **証明書の更新(ACME)や公開ページまで巻き添えで止まる**。入口は先に立てる。
+    #
+    # 自身の 80 番は HTTPS への 308 を返す。curl -f は 3xx では失敗しないので、
+    # 「nginx が設定を読めて待ち受けている」ことの確認になる
+    # (設定が壊れていれば起動自体ができない)。
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1/"]
+      start_period: 20s
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    # **edge だけ。** DB の網(appdb・authdb)にも mail にも居ない —— 入口が破られても DB へは直接届かない
+    networks:
+      - edge
+
+  soketi:
+    build:
+      context: ./docker/soketi
+    container_name: km-soketi
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    pids_limit: 200
+    # 書くのは /tmp(pm2 の置き場。Dockerfile の PM2_HOME)だけ。node 利用者で動き、特権は要らない
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    environment:
+      # DEBUG=1 はアプリ鍵・secretをログへ出力するため無効化。
+      SOKETI_DEBUG: "0"
+      SOKETI_DEFAULT_APP_ID: ${SOKETI_APP_ID}
+      SOKETI_DEFAULT_APP_KEY: ${SOKETI_APP_KEY}
+      SOKETI_DEFAULT_APP_SECRET: ${SOKETI_APP_SECRET}
+      SOKETI_METRICS_ENABLED: "1"
+      SOKETI_METRICS_SERVER_PORT: "9601"
+      # ---------------------------------------------------------------
+      # 入口の上限(2026-09-14 の診断で追加。server-ops 3・server-authz 4)。
+      #
+      # 6001 はインターネットに公開していて、接続に要る app key はブラウザに出る値なので守りにならない。
+      # それまで上限が 1 つも無く、接続を大量に張られるとメモリと記述子を使い切って
+      # 管理画面のチャットと死活監視の配信が止まった。名前は本番の soketi 1.6.1 の dist/cli から実測したもの。
+      #
+      #   MAX_CONNS                 … アプリ全体の同時接続。使うのは管理画面を開いている数人
+      #   MAX_BACKEND_EVENTS_PER_SEC … PHP(chat-send・health-check)からの配信。1 秒に数件で足りる
+      #   MAX_CLIENT_EVENTS_PER_SEC … ブラウザからのイベント(下で無効にしているので、実質の二重の歯止め)
+      #   MAX_READ_REQ_PER_SEC      … HTTP API の読み取り(チャンネルの一覧など)
+      SOKETI_DEFAULT_APP_MAX_CONNS: "300"
+      SOKETI_DEFAULT_APP_MAX_BACKEND_EVENTS_PER_SEC: "50"
+      SOKETI_DEFAULT_APP_MAX_CLIENT_EVENTS_PER_SEC: "5"
+      SOKETI_DEFAULT_APP_MAX_READ_REQ_PER_SEC: "20"
+      # **ブラウザ同士の `client-` イベントを受け付けない。** 配信は全部 PHP から trigger している
+      # (src を grep して、ブラウザ側の channel.trigger と `client-` の名前は 0 件)。
+      # 使っていないのに開けておくと、購読できた相手がほかの管理者の画面へ任意のイベントを流せる。
+      SOKETI_DEFAULT_APP_ENABLE_CLIENT_MESSAGES: "false"
+    expose:
+      - "6001"
+      - "9601"
+    # **このイメージには curl も wget も入っていない**(node だけ)。
+    # そのため HTTP の確認も node で書く。6001 のルートは 200 を返す。
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('http').get({host:'127.0.0.1',port:6001,path:'/'},r=>process.exit(r.statusCode<400?0:1)).on('error',()=>process.exit(1))"
+      start_period: 20s
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    # **edge だけ。** 届くのは nginx(ブラウザの WebSocket)と web(配信)
+    networks:
+      - edge
+
+  mailpit:
+    # digest で固定する(2026-09-07 時点の axllent/mailpit:latest)。
+    # `latest` のままだと次の `up -d` で中身が入れ替わる。
+    # 上げるときは scripts/check-updates.sh --pins が出す行で置き換える
+    image: axllent/mailpit@sha256:c96991d9bef73594c246d89ca81411d4e916f03e76a7d2d72fa2ab5dd3c9ce24
+    container_name: km-mailpit
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    pids_limit: 200
+    # 受けたメールは /tmp の中の DB に置く(再起動で消える。検証用なのでそれでよい)
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    environment:
+      # 受信したメールの日時を日本時間で表示させる
+      TZ: Asia/Tokyo
+    # ホストへは直接公開しない。Web 画面は reverse-proxy 経由で
+    # https://192.168.3.29:8025 として出す(他のサービスと同じく TLS 越し)。
+    # 平文の口を残さないため ports ではなく expose にしてある。
+    expose:
+      - "8025"                 # メール Web 画面(nginx が前段に立つ)
+      - "1025"                 # SMTP。web コンテナから mailpit:1025 で使う
+    # edge … nginx から / mail … web と Logto から送られてくる
+    networks:
+      - edge
+      - mail
+
+# ================================================================
+# **網を用途ごとに分ける**(2026-09-15。ファイル先頭の「多層防御の底上げ」の 1)。
+#
+# 以前は devnet 1 つに全員が居た。**範囲を固定する**のは、MariaDB の利用者を
+# `'Main'@'172.30.2.%'` のように appdb からだけ入れる形にするため(docs/12 の §2)。
+# 範囲は本番のホストで使っていない 172.30.0.0/16 から取った(2026-09-15 時点で 172.17〜19 が使用中)。
+#
+# **internal: true の網からは外へ出られない**(ゲートウェイが無い)。DB の網をそうしておけば、
+# DB のコンテナが破られても外へ持ち出す経路が無い。**ports で publish もできない**ので、
+# DB に外から繋ぐ口を作りたくなったら、網を変えるのではなく SSH で入って exec する。
+#
+# 名前を変えると compose は新しい網を作り、`up -d` で**全コンテナが作り直される**(数十秒止まる)。
+# 古い kosenmap_devnet は誰も使わなくなるので `docker network prune` で消える。
+# ================================================================
+networks:
+  edge:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.1.0/24
+  appdb:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.30.2.0/24
+  authdb:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.30.3.0/24
+  mail:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.4.0/24
+
+volumes:
+  # ================================================================
+  # **実体の名前を固定する。消すと本番のデータが消えたように見える。**
+  #
+  # compose はボリュームの実体名を `<プロジェクト名>_<ここの名前>` で作る。
+  # プロジェクト名は 2026-09-07 に `Test` → `kosenmap` へ変えたが、
+  # **本番のデータはすべて `test_` で始まる実体の中に入っている。**
+  #
+  #   test_mariadb_data        … アプリのデータ全部
+  #   test_postgres_data       … Logto(利用者・ロール)
+  #   test_letsencrypt         … Let's Encrypt の証明書と秘密鍵
+  #   test_mail_dkim           … DKIM の秘密鍵
+  #
+  # `name:` を書かないと、compose は `kosenmap_mariadb_data` を探し、
+  # **無いので空のボリュームを黙って新規作成する。** 起動は成功する ——
+  # サイトは上がり、**中身だけが空になる。**
+  # 証明書は失われ(HSTS のため誰も入れなくなる)、DKIM 鍵も変わる
+  # (DNS の公開鍵と合わなくなり、送ったメールが全部迷惑メール扱いになる)。
+  #
+  # **名前が古いのは承知のうえ。** 実体を改名するにはデータの移し替えが要り、
+  # 公開中のサイトを止めることになる。手順は docs/03-backup.ipynb にある(経緯は Old/docs/data-migration.md)。
+  # ここを「きれいな名前」に書き換えるのは、**その移し替えを済ませたあとだけ。**
+  # ================================================================
+  postgres_data:
+    name: test_postgres_data
+  mariadb_data:
+    name: test_mariadb_data
+  phpmyadmin_sessions:
+    name: test_phpmyadmin_sessions

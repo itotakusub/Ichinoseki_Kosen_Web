@@ -1,0 +1,8 @@
+{
+    "require": {
+        "logto/sdk": "^0.3.1",
+        "firebase/php-jwt": "^7.1",
+        "pusher/pusher-php-server": "^7.2",
+        "phpmailer/phpmailer": "^7.1"
+    }
+}
