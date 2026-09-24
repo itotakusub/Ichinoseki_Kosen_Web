@@ -65,6 +65,7 @@ organizations 1)。組織(`Kosen_Member`)に誰も居らず、`config/app-map.lo
 | ラベルの重なりほどき | **屋外だけ**に絞った(Website・アプリとも) |
 | SSH ログインの知らせ | PAM(`optional`)から `MAIL_ADMIN_TO` へ。同じ利用者・同じ接続元は 10 分に 1 通。本文に切る・BAN するコマンドを載せる |
 | 切る・BAN | `sudo kosenmap-ssh-kick --list / --ip X [--ban] / --unban X / --user U / --lock-user U / --unlock-user U` |
+| 信頼する接続元 | `sudo kosenmap-ssh-kick --trust X / --untrust X / --list-trusted`。一覧は `/etc/kosenmap/ssh-trusted-ips`(root だけが書ける)。信頼済みは件名が `[KosenMap] **信頼済み**SSH ログイン: 通知`、**それ以外は「重要」付き**(X-Priority・Importance。Gmail は見ない) |
 
 **本番でやること(SSH):** 配備のあと `sudo sh /opt/kosenmap/scripts/ssh-login-notify-setup.sh --fix`
 (`/usr/local/sbin` へ root:root 755 で写し、`/etc/pam.d/sshd` に 1 行足す)→ **別の SSH を開いたまま**

@@ -124,9 +124,33 @@ function km_mailer(): PHPMailer
  * 問い合わせフォームのように「メールが飛ばなくても投稿自体は残したい」場面では、
  * 呼び出し側で try/catch して error_log に落とすこと(km_form_* の使い方を参照)。
  */
-function km_mail_send(string $to, string $subject, string $body): void
+function km_mail_send(string $to, string $subject, string $body, bool $important = false): void
 {
-    km_mail_send_with_files($to, $subject, $body);
+    km_mail_send_with_files($to, $subject, $body, [], $important);
+}
+
+/**
+ * 「重要」の印を付ける・外す(2026-09-25)。
+ *
+ * 付けるのは3つ —— **メールの読み手ごとに見る場所が違う**:
+ *   X-Priority: 1           … Thunderbird・多くの携帯のメール
+ *   Importance: High        … Outlook(RFC 2156)
+ *   X-MSMail-Priority: High … 古い Outlook
+ *
+ * **Gmail はこれらを見ない**(重要マークは Gmail が自分で決める)。Gmail で目立たせたいなら、
+ * 件名で振り分けるフィルタを作る。
+ *
+ * **付けないときも外してから渡す。** km_mailer() は毎回作り直しているが、
+ * 実体を使い回す形に変えた日に、前の 1 通の「重要」が次の 1 通へ黙って残らないように。
+ */
+function km_mail_mark_important(PHPMailer $mailer, bool $important): void
+{
+    $mailer->clearCustomHeaders();
+    $mailer->Priority = $important ? 1 : null;
+    if ($important) {
+        $mailer->addCustomHeader('Importance', 'High');
+        $mailer->addCustomHeader('X-MSMail-Priority', 'High');
+    }
 }
 
 /**
@@ -140,11 +164,12 @@ function km_mail_send(string $to, string $subject, string $body): void
  *
  * @param array<int,string> $files 添付するファイルの絶対パス
  */
-function km_mail_send_with_files(string $to, string $subject, string $body, array $files = []): void
+function km_mail_send_with_files(string $to, string $subject, string $body, array $files = [], bool $important = false): void
 {
     $mailer = km_mailer();
     $mailer->clearAllRecipients();
     $mailer->clearAttachments();
+    km_mail_mark_important($mailer, $important);
     $mailer->addAddress($to);
     $mailer->Subject = $subject;
     $mailer->Body = $body;

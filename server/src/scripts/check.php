@@ -2028,6 +2028,24 @@ function km_check_ssh_notify(): void
     check('件名は「通知」', '[KosenMap] SSH ログイン: 通知 (h)', km_log_notice_subject($report));
     check_bool('本文も「通知」', str_contains(km_log_notice_body($report), '結果: 通知'));
 
+    km_check_heading('ssh-notify: 信頼済みと「重要」(2026-09-25)');
+    $trusted = km_log_notice_parse('{"label":"**信頼済み**SSH ログイン","host":"ubuntu","status":"info","important":false,"text":"x"}');
+    check('信頼済みの件名', '[KosenMap] **信頼済み**SSH ログイン: 通知 (ubuntu)', km_log_notice_subject($trusted));
+    check_bool('既定は重要を付けない', $report['important'] === false);
+    check_bool('true で重要', km_log_notice_parse('{"label":"a","important":true}')['important'] === true);
+    // 書き損じで全部に重要が付くと、本当に見るべき 1 通が埋もれる
+    check_bool('文字列の "true" や 1 では付けない', km_log_notice_parse('{"label":"a","important":"true"}')['important'] === false
+        && km_log_notice_parse('{"label":"a","important":1}')['important'] === false);
+
+    require_once __DIR__ . '/../lib/mailer.php';
+    $probe = new PHPMailer\PHPMailer\PHPMailer();
+    km_mail_mark_important($probe, true);
+    $headers = $probe->getCustomHeaders();
+    check_bool('重要なら X-Priority 1 と Importance: High', $probe->Priority === 1 && in_array(['Importance', 'High'], $headers, true));
+    km_mail_mark_important($probe, false);
+    check_bool('重要でなければ印を外す', $probe->Priority === null && $probe->getCustomHeaders() === []);
+    check_bool('notify-log.php は重要を渡す', str_contains((string) file_get_contents(__DIR__ . '/notify-log.php'), "km_mail_send(\$to, \$subject, \$body, \$report['important'])"));
+
     $repoRoot = km_check_repo_root();
     if ($repoRoot === null) {
         check_skip('ホスト側のスクリプト', '手元の作業ツリーで確認する(配備先に server/scripts の原本一式は無い)');
@@ -2051,6 +2069,15 @@ function km_check_ssh_notify(): void
     check_bool('PAM から来た値は絞ってから使う', str_contains($notify, "tr -c 'A-Za-z0-9._:@()-' '_'"));
     check_bool('同じ相手は 10 分まとめる', preg_match('/^COOLDOWN=600$/m', $notify) === 1);
     check_bool('status は info', str_contains($notify, '\"status\":\"info\"'));
+    // 信頼の一覧は root だけが書ける場所。配備の利用者が書けると、攻撃側が自分を「信頼済み」にできる
+    check_bool('信頼の一覧は /etc/kosenmap', str_contains($notify, 'TRUSTED_FILE="/etc/kosenmap/ssh-trusted-ips"') && str_contains($kick, 'TRUSTED_FILE="/etc/kosenmap/ssh-trusted-ips"'));
+    check_bool('信頼は完全一致だけ見る', str_contains($notify, 'grep -qFx -- "$RHOST_SAFE" "$TRUSTED_FILE"'));
+    check_bool('信頼済みは件名で分かる', str_contains($notify, 'LABEL="**信頼済み**SSH ログイン"'));
+    check_bool('重要は信頼していない接続元だけ', preg_match('/IMPORTANT=true\nif \[ "\$TRUSTED" -eq 1 \]; then\n  IMPORTANT=false/', $notify) === 1);
+    check_bool('信頼していなければ「信頼する」コマンドを載せる', str_contains($notify, 'sudo kosenmap-ssh-kick --trust $RHOST_SAFE'));
+    check_bool('信頼の一覧は root:root 644', str_contains($kick, 'chown root:root "$TRUSTED_FILE"') && str_contains($kick, 'chmod 644 "$TRUSTED_FILE"'));
+    // 信頼はメールのリンクから付けない(メールの安全確認がリンクを先に開くと、攻撃側が信頼済みになる)
+    check_bool('信頼はホストで sudo して付ける', !preg_match('#https?://[^\s"]*trust#', $notify));
 
     km_check_heading('ssh-notify: root への抜け道を作らない');
     // /opt/kosenmap/scripts は配備の利用者が書く。そこを root に直接走らせない
