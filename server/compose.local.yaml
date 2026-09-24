@@ -1,0 +1,98 @@
+# ローカル環境(LAN の中の検証機)で使う差分。**本番では使わない。**
+#
+#   .env(scripts/host-local.sh init が書く):
+#     KM_ENV=local
+#     KM_DOMAIN=<ローカルのドメイン>
+#     COMPOSE_FILE=compose.yaml:compose.vps.yaml:compose.local.yaml
+#
+# ## なぜ要るのか(2026-09-17)
+#
+# 本番の構成(compose.yaml + compose.vps.yaml)を LAN の検証機にそのまま持ち込むと、
+# Let's Encrypt の証明書が取れず(公開 DNS が無い)、**nginx が証明書を読めずに落ちる →
+# `restart: unless-stopped` で再起動を繰り返す**。MariaDB も certs/ の証明書が無いと同じく落ち、
+# web と phpMyAdmin は起動を待ったまま止まる。
+#
+# 本番のファイルを複製してローカル用を作ると、**片方だけ直して食い違う**(read_only・網・上限…)。
+# そこで本番の 2 枚はそのままに、**この 1 枚を重ねて「証明書・メール・名前」だけを差し替える。**
+#
+# ## 差し替えるもの
+#
+#   証明書 … Let's Encrypt ではなく、host-local.sh が certs/ に作る自作 CA の証明書
+#   メール … mailserver(外へ送る)ではなく Mailpit(溜めるだけ)。certbot も起動しない
+#   名前   … コンテナの中から <KM_DOMAIN> が nginx に届くように、edge の網で別名を付ける
+#            (LAN の DNS や PC の hosts はコンテナには効かない。web は Logto を
+#             https://<KM_DOMAIN>:3001 で、証明書を検証して呼ぶ)
+#   信頼   … web と Logto に自作 CA を信頼させる
+#
+# ## 書き方の決まり
+#
+# **`!override` を使わない。** 本番の一覧(web の volumes など)に**足すだけ**にする。
+# 置き換えると、本番で直した読み取り専用のマウントや上限がローカルだけ抜ける(check.php が見張る)。
+# **本番のドメインを書かない**(check.php が見張る)。
+#
+# 手順は docs/13-local-env.ipynb。
+
+services:
+  reverse-proxy:
+    # **8025 はここでだけ publish する。** 本番(compose.vps.yaml)は 2026-09-18 に閉じた。
+    # ports は**併合**なので、vps の一覧に 8025 が足される
+    ports:
+      - "0.0.0.0:8025:8025"
+    environment:
+      # host-local.sh init が作る。SAN は KM_DOMAIN・KM_ADMIN_DOMAIN・localhost・検証機の IP
+      KM_CERT: /etc/nginx/certs/local-server.pem
+      KM_CERT_KEY: /etc/nginx/certs/local-server-key.pem
+    volumes:
+      - ./certs/local-server.pem:/etc/nginx/certs/local-server.pem:ro
+      - ./certs/local-server-key.pem:/etc/nginx/certs/local-server-key.pem:ro
+    networks:
+      edge:
+        # **コンテナの中からこの名前で nginx に届かせる。** 本番では公開 DNS がホストの IP を返し、
+        # web はそこから nginx へ戻ってくる。ローカルにはその DNS が無い
+        aliases:
+          - ${KM_DOMAIN:?KM_DOMAIN を .env に書くこと(host-local.sh init)}
+          - ${KM_ADMIN_DOMAIN:-${KM_DOMAIN}}
+
+  # **Let's Encrypt も外へのメール送信もしない。** profile の内側に入れて起動させない
+  # (`docker compose --profile public up -d` と明示したときだけ起動する)
+  certbot:
+    profiles: ["public"]
+
+  mailserver:
+    profiles: ["public"]
+
+  # **Mailpit を起動する**(本番の compose.vps.yaml は profile で外している)。
+  # 問い合わせの通知も Logto の確認コードもここに溜まり、https://<KM_DOMAIN>:8025 で読める
+  mailpit:
+    profiles: !reset []
+
+  web:
+    environment:
+      # 画面に「ローカル環境」と出す(lib/site.php の km_site_is_local)。本番と見間違えないため
+      KM_ENV: local
+      # .env に本番の値が残っていても、ローカルでは必ず Mailpit へ落とす
+      MAIL_HOST: mailpit
+      MAIL_PORT: "1025"
+      MAIL_FROM: noreply@${KM_DOMAIN}
+      MAIL_USERNAME: ""
+      MAIL_PASSWORD: ""
+      MAIL_ENCRYPTION: ""
+    volumes:
+      # 自作 CA を信頼させる。start-with-local-ca.sh(compose.yaml の command)がシステムの CA と合成し、
+      # 99-local-ca.ini が PHP の curl と openssl にその束を使わせる(Logto の JWKS・Management API・SDK)。
+      # 形は compose.yaml(校内 LAN 構成)と同じ。compose.vps.yaml は `!override` でこの 2 つを落としている
+      - type: bind
+        source: ./certs/rootCA.pem
+        target: /etc/ssl/localca/rootCA.pem
+        read_only: true
+      - type: bind
+        source: ./docker/php/99-local-ca.ini
+        target: /usr/local/etc/php/conf.d/99-local-ca.ini
+        read_only: true
+
+  logto:
+    environment:
+      # Logto から https://<KM_DOMAIN>/api/logto-webhook.php へ webhook を送るとき、自作 CA を信頼させる
+      NODE_EXTRA_CA_CERTS: /etc/km-ca/rootCA.pem
+    volumes:
+      - ./certs/rootCA.pem:/etc/km-ca/rootCA.pem:ro
