@@ -53,9 +53,23 @@ pwsh -File server/src/scripts/js/run-all.ps1     # 地図の JavaScript(node)
 ```powershell
 pwsh -File tools\sync-from-website.ps1
 pwsh -File tools\push-github.ps1 -Message "変更の説明"
+pwsh -File tools\push-github.ps1 -CheckOnly    # 検査だけ(出さない)
 ```
 
-プルリクエストの説明は `docs/pull-requests/` に Markdown で残します。
+`push-github.ps1` は Android 側の控えと**同じ中身のファイル**です(**全部 stage してから**検査する)。
+
+プルリクエストの説明は `docs/pull-requests/` に Markdown で残します。今日の説明が無ければ下書きを作り
+(開いている PR の説明があればそこへ一言足し)、push のあとに開きます。
+
+### 両方まとめて
+
+```powershell
+pwsh -File server\scripts\push-github-all.ps1 -Message "変更の説明"   # Android と Website を写して出す
+pwsh -File server\scripts\push-github-all.ps1 -CheckOnly             # 写して検査するだけ
+```
+
+配備(`server\scripts\deploy-to-host.ps1`)も、**配備が済んだあとにこれを呼びます**(`-GitHub all|web|android|none`、既定は all)。
+GitHub へ出せなくても配備の結果は変わりません。
 
 ## ライセンス
 

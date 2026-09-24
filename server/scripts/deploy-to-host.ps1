@@ -58,6 +58,15 @@
   **残るのは平文で、中に .env と config/*.local.php が入っている。**
   普段は付けないこと。付けたときは最後に置き場所と消し方を表示する。
 
+.PARAMETER GitHub
+  配備が済んだあと、GitHub の控えへも出す(2026-09-25、利用者の指示)。既定は all(Android と Website の両方)。
+  web / android で片方だけ、none で出さない。中身は scripts\push-github-all.ps1
+  (手元の原本を控えへ写す → 秘密の検査 → commit → push → プルリクエストの説明を開く)。
+
+  **配備の「あと」に出す。** 本番に置けたものと GitHub の控えを揃えるため。
+  **出せなくても配備の結果(終了コード)は変えない** —— 控えは控えで、本番はもう入れ替わっている。
+  秘密の検査に当たって止まったときは、その控えの push-github.ps1 を確かめてから走らせる。
+
 .EXAMPLE
   # まず下見(何が転送されるかを見るだけ。接続もしない)
   .\deploy-to-host.ps1 -WhatIfOnly
@@ -119,7 +128,10 @@ param(
     # 取ったものを解凍して残す。**平文が残る**ので普段は付けない
     [switch]$OpenBackup,
     # 手元に何世代残すか(backup-data.ps1 へそのまま渡す)
-    [int]$BackupKeep = 7
+    [int]$BackupKeep = 7,
+    # 配備のあと GitHub の控えへも出す(理由は .PARAMETER GitHub)
+    [ValidateSet('all', 'web', 'android', 'none')]
+    [string]$GitHub = 'all'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -526,7 +538,7 @@ if (-not $Yes) {
     Write-Host ''
     Write-Host "  配備先 : $($preset.Label)" -ForegroundColor Yellow
     Write-Host "           $sshTarget`:$RemotePath"
-    Write-Host "  動作   : $Action$(if ($Services) { " (" + ($Services -join ', ') + ")" })$(if ($Backup) { ' + バックアップ' })$(if ($Backup -and $OpenBackup) { '(解凍まで)' })"
+    Write-Host "  動作   : $Action$(if ($Services) { " (" + ($Services -join ', ') + ")" })$(if ($Backup) { ' + バックアップ' })$(if ($Backup -and $OpenBackup) { '(解凍まで)' })$(if ($GitHub -ne 'none') { " + GitHub へ出す($GitHub)" })"
     Write-Host ''
     $answer = Read-Host "  $(if ($HostName -in $prodHostNames) { '本番' } else { $HostName })へ配備します。続けますか (yes/no)"
     if ($answer -ne 'yes') {
@@ -949,7 +961,33 @@ if ($Backup) {
     }
 }
 
+<#
+  ---- GitHub の控えへ出す(-GitHub none 以外)
+
+  **配備が済んでから。** 本番に置けたものと控えを揃える。
+  **出せなくても終了コードは変えない** —— 本番はもう入れ替わっており、控えが遅れているだけ。
+  それでも黙らない。止まったことと、次にすることを言う。
+#>
+$githubNote = $null
+if ($GitHub -ne 'none') {
+    $pushAll = Join-Path $PSScriptRoot 'push-github-all.ps1'
+    Write-Host ''
+    Write-Host "GitHub の控えへ出します($GitHub)" -ForegroundColor Cyan
+    try {
+        & pwsh -NoProfile -File $pushAll -Target $GitHub -Message "配備に合わせて写す($(Get-Date -Format 'yyyy-MM-dd HH:mm'))"
+        if ($LASTEXITCODE -ne 0) { throw "push-github-all.ps1 が $LASTEXITCODE で終わりました" }
+        $githubNote = 'GitHub の控えへ出しました。'
+    } catch {
+        Write-Host "GitHub へ出せませんでした: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host '  配備そのものは終わっています。出し直すには: pwsh -File .\push-github-all.ps1'
+        $githubNote = '**GitHub の控えは出せていません**(上の出力を確認してください)。'
+    }
+}
+
 Write-Host ''
+if ($githubNote) {
+    Write-Host $githubNote -ForegroundColor $(if ($githubNote.StartsWith('**')) { 'Yellow' } else { 'Green' })
+}
 if ($backupResult) {
     Write-Host "バックアップ: $($backupResult.OutDir)" -ForegroundColor Green
     if ($backupResult.PSObject.Properties['Opened']) {
