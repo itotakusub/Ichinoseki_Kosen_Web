@@ -63,6 +63,7 @@ const KM_CHECK_PURE = [
     'map-vertical',
     'building-floors',
     'ssh-notify',
+    'github-mirror',
     'ssh-roles',
     'account-delete',
     'legal',
@@ -2072,6 +2073,57 @@ function km_check_ssh_notify(): void
     $deploy = $read('scripts/deploy-to-host.ps1');
     foreach (['ssh-login-notify.sh', 'ssh-kick.sh', 'ssh-login-notify-setup.sh'] as $name) {
         check('配備の一覧と必須の両方に ' . $name, 2, substr_count($deploy, "'./scripts/{$name}'"));
+    }
+}
+
+/**
+ * GitHub の控えへ出す道(2026-09-25、利用者の指示)。配備のあとに両方の控えへ出す。
+ * **出せなくても配備を失敗にしない**こと、**まとめて検査を外す道を作らない**ことを押さえる。
+ */
+function km_check_github_mirror(): void
+{
+    $repoRoot = km_check_repo_root();
+    if ($repoRoot === null) {
+        check_skip('GitHub の控えへ出す道', '手元の作業ツリーで確認する(配備先に PC 側の道具は無い)');
+        return;
+    }
+    $read = static fn (string $path): string => (string) @file_get_contents($repoRoot . '/' . $path);
+    $deploy = $read('scripts/deploy-to-host.ps1');
+    $all = $read('scripts/push-github-all.ps1');
+
+    km_check_heading('github-mirror: 配備のあとに出す');
+    check_bool('push-github-all.ps1 がある', $all !== '');
+    check_bool('push-github-all.ps1 は UTF-8 BOM 付き', str_starts_with($all, "\xEF\xBB\xBF"));
+    check_bool('配備に -GitHub がある(既定は両方)', preg_match("/\[ValidateSet\('all', 'web', 'android', 'none'\)\]\s*\[string\]\\\$GitHub = 'all'/", $deploy) === 1);
+    check_bool('配備は push-github-all.ps1 を呼ぶ', str_contains($deploy, "Join-Path \$PSScriptRoot 'push-github-all.ps1'"));
+    // 配備の「あと」= 後片付けの結果を待ってから(終了コードの分岐より前、転送より後)
+    $pushAt = strpos($deploy, "\$pushAll = Join-Path");
+    check_bool('出すのは転送と後片付けのあと', $pushAt !== false && $pushAt > (int) strpos($deploy, '& $setupScript @setupArgs'));
+    // 出せなくても exit の値を変えない。catch の中で exit しないこと
+    if (preg_match('/\$pushAll = Join-Path.*?\n\}\n/s', $deploy, $m)) {
+        check_bool('出せなくても配備の終了コードは変えない', !str_contains($m[0], 'exit '));
+    } else {
+        check_bool('出す段を読めた', false);
+    }
+
+    km_check_heading('github-mirror: 検査を外す道を作らない');
+    check_bool('まとめて出すときに -Force を渡さない', !preg_match('/pushArgs \+= .*-Force/', $all));
+    check_bool('片方が止まってももう片方は出す', str_contains($all, 'catch {') && str_contains($all, 'foreach ($m in $mirrors)'));
+    check_bool('2つの push-github.ps1 の食い違いを知らせる', str_contains($all, 'Get-FileHash'));
+    check_bool('検査だけの道がある', str_contains($all, "\$pushArgs += '-CheckOnly'"));
+
+    // 控え(PC の F:\Pull)が在るときだけ、2つの push-github.ps1 が同じかを見る
+    $androidPush = 'F:/Pull/Ichinoseki_Kosen/scripts/push-github.ps1';
+    $webPush = 'F:/Pull/Ichinoseki_Kosen_Web/tools/push-github.ps1';
+    if (is_file($androidPush) && is_file($webPush)) {
+        check_bool('Android と Website の push-github.ps1 は同じ中身', hash_file('sha256', $androidPush) === hash_file('sha256', $webPush));
+        $push = (string) file_get_contents($webPush);
+        check_bool('stage してから検査する(新しいファイルも見る)', strpos($push, 'git add -A') < strpos($push, 'git diff --cached --unified=0'));
+        check_bool('push したら PR の説明を開く', str_contains($push, 'Start-Process -FilePath $target.FullName'));
+        // マージ済みの説明に足すと、前の PR の文が混ざる
+        check_bool('マージ済みの説明には足さない', str_contains($push, 'git cat-file -e "origin/main:docs/pull-requests/'));
+    } else {
+        check_skip('2つの push-github.ps1 の突き合わせ', '控え(F:\Pull)が無い');
     }
 }
 
@@ -5948,6 +6000,9 @@ foreach ($selected as $name) {
             break;
         case 'ssh-notify':
             km_check_ssh_notify();
+            break;
+        case 'github-mirror':
+            km_check_github_mirror();
             break;
         case 'account-delete':
             km_check_account_delete();
