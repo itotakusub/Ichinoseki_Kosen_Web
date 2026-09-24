@@ -9,6 +9,9 @@
 #   sudo kosenmap-ssh-kick --user kmops          その利用者の SSH をすべて切る
 #   sudo kosenmap-ssh-kick --lock-user kmops     その利用者を以後ログインできなくする(鍵でも)
 #   sudo kosenmap-ssh-kick --unlock-user kmops   上を戻す
+#   sudo kosenmap-ssh-kick --trust 203.0.113.5   その接続元を信頼する(知らせが「信頼済み」になり、重要が付かない)
+#   sudo kosenmap-ssh-kick --untrust 203.0.113.5 信頼をやめる
+#   sudo kosenmap-ssh-kick --list-trusted        信頼している接続元を見る
 #
 # ログインの知らせ(ssh-login-notify.sh)のメールに、そのときの接続元を入れた形で載る。
 # 置き場は /usr/local/sbin/kosenmap-ssh-kick(ssh-login-notify-setup.sh --fix が root:root 755 で写す)。
@@ -29,6 +32,12 @@
 # いま sudo を叩いている自分の接続元・利用者を指したら止める(--force で押し切れる)。
 # 鍵を盗まれた相手と同じ経路(同じ NAT の中など)から入っていると、自分も締め出される。
 #
+# ## 信頼する接続元(2026-09-25)
+#
+# 一覧は /etc/kosenmap/ssh-trusted-ips(root:root 644、1 行に 1 つ)。**root だけが書ける** ——
+# 配備の利用者が書き換えられると、攻撃側が自分の接続元を「信頼済み」にして目立たなくできる。
+# 信頼しても**止めるものは何も無い**(知らせの件名と重要の有無が変わるだけ)。
+#
 # ## 鍵を盗まれたとき
 #
 # **接続元を BAN しても、鍵があれば別の場所から入り直せる。** 本当に塞ぐのは、
@@ -41,9 +50,10 @@ set -eu
 
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 LOG="/var/log/kosenmap/ssh-kick.log"
+TRUSTED_FILE="/etc/kosenmap/ssh-trusted-ips"
 
 usage() {
-  sed -n '3,13p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '3,16p' "$0" | sed 's/^# \{0,1\}//'
   exit 2
 }
 
@@ -64,6 +74,9 @@ while [ $# -gt 0 ]; do
     --unban) ACTION=unban; TARGET="${2:-}"; shift 2 ;;
     --lock-user) ACTION=lock; TARGET="${2:-}"; shift 2 ;;
     --unlock-user) ACTION=unlock; TARGET="${2:-}"; shift 2 ;;
+    --trust) ACTION=trust; TARGET="${2:-}"; shift 2 ;;
+    --untrust) ACTION=untrust; TARGET="${2:-}"; shift 2 ;;
+    --list-trusted) ACTION=list-trusted; shift ;;
     --ban) BAN=1; shift ;;
     --force) FORCE=1; shift ;;
     *) usage ;;
@@ -244,5 +257,50 @@ case "$ACTION" in
     fi
     usermod --expiredate '' "$TARGET"
     log "戻した: 利用者 $TARGET(ログインできます)"
+    ;;
+  trust)
+    if ! valid_ip "$TARGET"; then
+      echo "IP の形ではありません: $TARGET" >&2
+      exit 2
+    fi
+    mkdir -p "$(dirname "$TRUSTED_FILE")"
+    chown root:root "$(dirname "$TRUSTED_FILE")"
+    chmod 755 "$(dirname "$TRUSTED_FILE")"
+    touch "$TRUSTED_FILE"
+    chown root:root "$TRUSTED_FILE"
+    chmod 644 "$TRUSTED_FILE"
+    if grep -qFx -- "$TARGET" "$TRUSTED_FILE"; then
+      log "もう信頼しています: $TARGET"
+    else
+      echo "$TARGET" >> "$TRUSTED_FILE"
+      log "信頼しました: $TARGET(次からの知らせは「信頼済み」。やめるとき: sudo kosenmap-ssh-kick --untrust $TARGET)"
+    fi
+    ;;
+  untrust)
+    if ! valid_ip "$TARGET"; then
+      echo "IP の形ではありません: $TARGET" >&2
+      exit 2
+    fi
+    if [ -f "$TRUSTED_FILE" ] && grep -qFx -- "$TARGET" "$TRUSTED_FILE"; then
+      # 一時ファイルに書いてから置き換える(途中で止まっても一覧が空にならない)
+      grep -vFx -- "$TARGET" "$TRUSTED_FILE" > "$TRUSTED_FILE.tmp" || true
+      chown root:root "$TRUSTED_FILE.tmp"
+      chmod 644 "$TRUSTED_FILE.tmp"
+      mv -f "$TRUSTED_FILE.tmp" "$TRUSTED_FILE"
+      log "信頼をやめました: $TARGET"
+    else
+      log "信頼の一覧にありません: $TARGET"
+    fi
+    ;;
+  list-trusted)
+    echo "== 信頼している接続元($TRUSTED_FILE) =="
+    if [ -s "$TRUSTED_FILE" ]; then
+      sed 's/^/  /' "$TRUSTED_FILE"
+    else
+      echo "  (まだありません)"
+    fi
+    if [ -n "$SELF_IP" ]; then
+      echo "(あなたの今の接続元: $SELF_IP)"
+    fi
     ;;
 esac
