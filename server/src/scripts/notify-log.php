@@ -47,7 +47,8 @@ $subject = km_log_notice_subject($report);
 $body = km_log_notice_body($report);
 
 try {
-    km_mail_send($to, $subject, $body);
+    // 重要(X-Priority / Importance)は、送る側が付けたときだけ。SSH の知らせでは信頼していない接続元のとき
+    km_mail_send($to, $subject, $body, $report['important']);
 } catch (Throwable $exception) {
     // 宛先は出す(設定の取り違えが一番多い)。中身は出さない
     fwrite(STDERR, '送信に失敗しました (宛先 ' . $to . '): ' . $exception->getMessage() . "\n");

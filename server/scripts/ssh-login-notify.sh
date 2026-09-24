@@ -28,7 +28,7 @@
 # 何通も届いて**読まれなくなる**。同じ利用者・同じ接続元は 10 分に 1 通にする
 # (まとめた回数は次の 1 通に書く)。利用者か接続元が違えば、すぐ送る。
 #
-# 試すとき:  sudo /usr/local/sbin/kosenmap-ssh-login-notify --test
+# 試すとき:  sudo /usr/local/sbin/kosenmap-ssh-login-notify --test [接続元の IP]
 #
 # POSIX sh。`[ … ] && cmd` を単独で書かない(set -e の下で落ちる)。
 
@@ -45,7 +45,8 @@ if [ "${1:-}" = "--test" ]; then
   TEST=1
   PAM_TYPE="open_session"
   PAM_USER="${SUDO_USER:-$(id -un)}"
-  PAM_RHOST="(試験)"
+  # 2 つ目に接続元を渡すと、その接続元として試せる(信頼済みの見え方を確かめるとき)
+  PAM_RHOST="${2:-(試験)}"
   PAM_SERVICE="sshd"
 fi
 
@@ -87,31 +88,67 @@ HOST_LABEL="$(hostname 2>/dev/null || echo unknown)"
 WHEN="$(date '+%Y-%m-%d %H:%M:%S %z')"
 
 LABEL="SSH ログイン"
+#
+# 信頼した接続元(2026-09-25、利用者の指示)。**一覧は root だけが書ける場所に置く** ——
+# 配備の利用者が書き換えられると、攻撃側が自分の IP を「信頼済み」にして目立たなくできる。
+# 足す・外すのは sudo kosenmap-ssh-kick --trust / --untrust。1 行に 1 つ、完全一致だけ見る。
+#
+TRUSTED_FILE="/etc/kosenmap/ssh-trusted-ips"
+TRUSTED=0
+if [ -f "$TRUSTED_FILE" ] && grep -qFx -- "$RHOST_SAFE" "$TRUSTED_FILE" 2>/dev/null; then
+  TRUSTED=1
+fi
+
+# 件名は「[KosenMap] <LABEL>: 通知 (<ホスト>)」になる(src/lib/log-notice.php)
+if [ "$TRUSTED" -eq 1 ]; then
+  LABEL="**信頼済み**SSH ログイン"
+fi
 if [ "$TEST" -eq 1 ]; then
-  LABEL="【試験】SSH ログイン"
+  LABEL="【試験】$LABEL"
+fi
+
+#
+# **信頼していない接続元だけ「重要」を付ける**(メールの X-Priority / Importance)。
+# 全部に付けると、配備のたびに重要が並び、本当に見るべき 1 通が埋もれる。
+#
+IMPORTANT=true
+if [ "$TRUSTED" -eq 1 ]; then
+  IMPORTANT=false
 fi
 
 # 本文。JSON の中に入れるので、**改行は \n、それ以外は見える文字だけ**で組む
-TEXT="SSH でログインがありました。\\n\\n利用者: $USER_SAFE\\n接続元: $RHOST_SAFE\\n時刻: $WHEN\\n入口: $SERVICE_SAFE"
+if [ "$TRUSTED" -eq 1 ]; then
+  TEXT="SSH でログインがありました(信頼済みの接続元)。"
+else
+  TEXT="SSH でログインがありました。**信頼済みの一覧に無い接続元です。**"
+fi
+TEXT="$TEXT\\n\\n利用者: $USER_SAFE\\n接続元: $RHOST_SAFE\\n時刻: $WHEN\\n入口: $SERVICE_SAFE"
 if [ "$SKIPPED" -gt 0 ]; then
   TEXT="$TEXT\\n\\n(この前の 10 分間に、同じ利用者・同じ接続元からのログインが $SKIPPED 回ありました。まとめて 1 通にしています)"
 fi
 #
 # 心当たりが無いときに**そのまま貼れる**コマンドを添える(2026-09-25、利用者の指示)。
-# メールのリンクから切る形にはしない —— メールの安全確認がリンクを先に開くと、
-# 本人が押す前に切れてしまう(ホストへ root の操作を通す入口も増える)。
+# メールのリンクから切る・信頼する形にはしない —— メールの安全確認がリンクを先に開くと、
+# 本人が押す前に切れる(信頼なら、**攻撃側の接続が勝手に信頼済みになる**)。
 #
-TEXT="$TEXT\\n\\n心当たりが無いときは、ホストに入って次を貼ってください(km で入り、sudo)。\\n"
-TEXT="$TEXT\\n  いまの接続を見る:        sudo kosenmap-ssh-kick --list"
-TEXT="$TEXT\\n  この接続元を切る:        sudo kosenmap-ssh-kick --ip $RHOST_SAFE"
-TEXT="$TEXT\\n  切って BAN する:         sudo kosenmap-ssh-kick --ip $RHOST_SAFE --ban"
-TEXT="$TEXT\\n  この利用者をすべて切る:  sudo kosenmap-ssh-kick --user $USER_SAFE"
-TEXT="$TEXT\\n  この利用者を止める:      sudo kosenmap-ssh-kick --lock-user $USER_SAFE"
-TEXT="$TEXT\\n  (戻すとき: --unban $RHOST_SAFE / --unlock-user $USER_SAFE)"
-TEXT="$TEXT\\n\\n接続元を BAN しても、鍵があれば別の場所から入り直せます。\\n鍵を盗まれたなら、その利用者の ~/.ssh/authorized_keys から鍵の行を外してください(docs/12)。"
+if [ "$TRUSTED" -eq 1 ]; then
+  TEXT="$TEXT\\n\\nこの接続元は信頼済みです。信頼をやめるとき: sudo kosenmap-ssh-kick --untrust $RHOST_SAFE"
+  TEXT="$TEXT\\n心当たりが無いなら、信頼をやめてから切ってください: sudo kosenmap-ssh-kick --ip $RHOST_SAFE --ban"
+else
+  TEXT="$TEXT\\n\\n自分の接続なら、次からは「信頼済み」として届くようにできます(ホストに入って sudo):\\n"
+  TEXT="$TEXT\\n  今の接続を信頼する:      sudo kosenmap-ssh-kick --trust $RHOST_SAFE"
+  TEXT="$TEXT\\n\\n心当たりが無いときは、ホストに入って次を貼ってください(km で入り、sudo)。\\n"
+  TEXT="$TEXT\\n  いまの接続を見る:        sudo kosenmap-ssh-kick --list"
+  TEXT="$TEXT\\n  この接続元を切る:        sudo kosenmap-ssh-kick --ip $RHOST_SAFE"
+  TEXT="$TEXT\\n  切って BAN する:         sudo kosenmap-ssh-kick --ip $RHOST_SAFE --ban"
+  TEXT="$TEXT\\n  この利用者をすべて切る:  sudo kosenmap-ssh-kick --user $USER_SAFE"
+  TEXT="$TEXT\\n  この利用者を止める:      sudo kosenmap-ssh-kick --lock-user $USER_SAFE"
+  TEXT="$TEXT\\n  (戻すとき: --unban $RHOST_SAFE / --unlock-user $USER_SAFE)"
+  TEXT="$TEXT\\n\\n接続元を BAN しても、鍵があれば別の場所から入り直せます。\\n鍵を盗まれたなら、その利用者の ~/.ssh/authorized_keys から鍵の行を外してください(docs/12)。"
+fi
 TEXT="$TEXT\\n\\n配備やバックアップの自動ログインでも届きます(同じ利用者・同じ接続元は 10 分に 1 通)。"
 
-REPORT="{\"label\":\"$LABEL\",\"host\":\"$(safe "$HOST_LABEL")\",\"status\":\"info\",\"exitCode\":null,\"text\":\"$TEXT\"}"
+REPORT="{\"label\":\"$LABEL\",\"host\":\"$(safe "$HOST_LABEL")\",\"status\":\"info\",\"important\":$IMPORTANT,\"exitCode\":null,\"text\":\"$TEXT\"}"
 
 # **裏で送って、すぐ戻る。** PAM(=ログイン)を送信の完了まで待たせない
 (
