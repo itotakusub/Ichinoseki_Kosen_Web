@@ -1,0 +1,456 @@
+# VPS(Linux + 独自ドメイン + Let's Encrypt)で使う差分。
+#
+#   docker compose -f compose.yaml -f compose.vps.yaml up -d
+#
+# **compose.yaml はそのまま使う。** ここは「校内 LAN の前提」を外して
+# 「インターネットに出す前提」に付け替えるだけの上書き。
+#
+# 前提(.env に入れておくもの):
+#   KM_DOMAIN / KM_APP_URL / KM_APP_PORT=443 / KM_CERT / KM_CERT_KEY / APP_URL
+#
+# **2026-09-14 から、必須なのは KM_DOMAIN だけ。** 上の残りはここで KM_DOMAIN から導く。
+#
+# 以前は URL 系を 1 つずつ .env に書く決まりで、ドメインを変えるには 10 か所を漏れなく
+# 書き換える必要があった。1 つでも古いと、公開ページは動くのに管理画面だけ 503 になる
+# (.env.example の注記を参照)—— 移行が済んだように見えてから気付く壊れ方をする。
+#
+#   KM_APP_URL / APP_URL   https://${KM_DOMAIN}
+#   KM_APP_PORT            443
+#   KM_CERT / KM_CERT_KEY  /etc/letsencrypt/live/${KM_DOMAIN}/fullchain.pem・privkey.pem
+#   LOGTO_ENDPOINT         https://${KM_DOMAIN}:3001
+#   LOGTO_ADMIN_ENDPOINT   https://${KM_DOMAIN}:3002
+#   PMA_ABSOLUTE_URI       https://${KM_DOMAIN}:8281/
+#   MAIL_HOST / MAIL_PORT  mailserver / 587
+#   MAIL_FROM              noreply@${KM_DOMAIN}
+#   KM_API_RESOURCE        https://${KM_DOMAIN}/api(下の web の注記を読むこと。**Logto の API リソースの登録と揃える値**)
+#
+# どれも `${名前:-導いた値}` なので、.env に書けばそちらが勝つ(空の行は「書いていない」と同じ)。
+# **KM_DOMAIN が無いと、`docker compose config` の時点で止まる**(reverse-proxy の `${KM_DOMAIN:?…}`)。
+# 以前の既定値 ito8795.com へ黙って落ちると、別のドメインのホストで本番の名前を名乗ってしまうため。
+#
+# 校内 LAN の compose.yaml 単体の既定値(192.168.3.29)は変えていない。
+#
+# 移行の手順そのものは docs/09-new-host.ipynb にある(細部は Old/docs/vps-migration.md)。
+
+services:
+  # **MariaDB を publish しない。**
+  #
+  # compose.yaml は `192.168.3.29:3306:3306` を publish している(校内 LAN でこの PC から
+  # phpMyAdmin 相当の作業をするため)。VPS には **その IP が存在しない**ので、
+  # そのままだと `cannot assign requested address` でコンテナが起動しない。
+  #
+  # かといって `3306:3306` に直すと、**データベースがインターネットに露出する**。
+  # 正解は「publish しない」。phpMyAdmin もアプリも同じ Docker ネットワークの中から
+  # `mariadb:3306` で届くので、外へ出す必要がまったく無い。
+  mariadb:
+    ports: !override []
+
+  web:
+    # mkcert のルート CA を合成する必要が無くなる(Logto も公的な証明書になるため)。
+    # **Windows のパスを bind mount している行を外す**のがここの主目的 —
+    # あの指定のままでは Linux では起動しない。
+    # ここも併合ではなく**置き換え**にする(理由は reverse-proxy と同じ)。
+    #
+    # 落ちるのは2つ:
+    #   /etc/ssl/localca/rootCA.pem  … mkcert の CA。VPS では Logto も公的な証明書になり不要
+    #   99-local-ca.ini              … PHP の curl.cainfo を /tmp/combined-ca.pem に向ける設定
+    # 両方無くなると PHP はイメージ既定の CA を使う。**それで正しい**(Let's Encrypt は
+    # 公的な CA で検証できる)。start-with-local-ca.sh は基底の command から呼ばれるので
+    # **残す** —— ローカル CA が無ければシステムの CA だけで進むように書いてある。
+    volumes: !override
+      # **src は読み取り専用。書ける 4 つは compose.yaml と同じ**(理由はあちらの web の volumes)。
+      # この一覧は `!override` なので、compose.yaml だけ直しても本番には届かない
+      - ./src:/var/www/html:ro
+      - ./src/uploads:/var/www/html/uploads
+      - ./src/cache:/var/www/html/cache
+      - ./src/config/app-map.local.php:/var/www/html/config/app-map.local.php
+      - ./src/config/map-access.local.php:/var/www/html/config/map-access.local.php
+      # MariaDB との TLS 接続を検証するための CA。**vps-bootstrap.sh が生成する**
+      # (mkcert のものではなく、コンテナ間専用の内部 CA)
+      - ./certs/rootCA.pem:/etc/ssl/certs/mariadb-rootCA.pem:ro
+      - type: bind
+        source: ./docker/php/99-timezone.ini
+        target: /usr/local/etc/php/conf.d/99-timezone.ini
+        read_only: true
+      - type: bind
+        source: ./docker/php/99-uploads.ini
+        target: /usr/local/etc/php/conf.d/99-uploads.ini
+        read_only: true
+      - type: bind
+        source: ./docker/php/99-errors.ini
+        target: /usr/local/etc/php/conf.d/99-errors.ini
+        read_only: true
+      # 実行時間・待ち時間・セッション(2026-09-14)。**compose.yaml と同じものをここにも書く** ——
+      # この一覧は `!override` なので、基底に足しただけでは VPS に届かない。
+      - type: bind
+        source: ./docker/php/99-limits.ini
+        target: /usr/local/etc/php/conf.d/99-limits.ini
+        read_only: true
+      # PATH_INFO を断つ・Apache の Timeout(2026-09-14)。同じく両方に書く
+      - type: bind
+        source: ./docker/php/apache-km.conf
+        target: /etc/apache2/conf-enabled/km.conf
+        read_only: true
+      - type: bind
+        source: ./docker/php/start-with-local-ca.sh
+        target: /usr/local/bin/start-with-local-ca.sh
+        read_only: true
+    # URL 系を KM_DOMAIN から導く(一覧と理由はファイル先頭)。environment は**併合**なので、
+    # ここに書いた名前だけが compose.yaml の値を置き換え、残りはそのまま使われる。
+    environment:
+      APP_URL: ${APP_URL:-https://${KM_DOMAIN}}
+      # 管理画面の URL。**KM_ADMIN_DOMAIN を .env に書いたときだけ公開側と別になる**(ファイル先頭の一覧)
+      ADMIN_URL: ${ADMIN_URL:-https://${KM_ADMIN_DOMAIN:-${KM_DOMAIN}}}
+      LOGTO_ENDPOINT: ${LOGTO_ENDPOINT:-https://${KM_DOMAIN}:3001}
+      # アクセストークンの audience(compose.yaml の web の注記を参照)。
+      # 導いた値はドメインを変えた瞬間に変わってしまうので、**移すときは host-domain.sh apply が
+      # KM_API_RESOURCE を .env に書く**(据え置くなら旧の値、--api-resource なら新しい値。Logto の登録と揃える)。
+      LOGTO_API_RESOURCE: ${KM_API_RESOURCE:-https://${KM_DOMAIN}/api}
+      KOSENMAP_LOGTO_AUDIENCE: ${KM_API_RESOURCE:-https://${KM_DOMAIN}/api}
+      # 本番の送信は mailserver(下)。**Mailpit へ落ちる既定を VPS では残さない**(server-ops 11)——
+      # .env に書き忘れると、問い合わせの通知(氏名・本文)が外へ届かずに Mailpit に溜まっていた。
+      MAIL_HOST: ${MAIL_HOST:-mailserver}
+      MAIL_PORT: ${MAIL_PORT:-587}
+      MAIL_FROM: ${MAIL_FROM:-noreply@${KM_DOMAIN}}
+
+  # Console と phpMyAdmin は**管理用のホスト名で開く**(2026-09-15)。ゲートが見るセッション Cookie は
+  # ホスト名ごとに分かれるため(lib/site.php の KM_SITE_ADMIN_SERVICES)。KM_ADMIN_DOMAIN が無ければ KM_DOMAIN。
+  # Console の戻り先は Logto が ADMIN_ENDPOINT から作るので、DB は書き換えなくてよい(scripts/logto-domain.php の注記)
+  logto:
+    environment:
+      ENDPOINT: ${LOGTO_ENDPOINT:-https://${KM_DOMAIN}:3001}
+      ADMIN_ENDPOINT: ${LOGTO_ADMIN_ENDPOINT:-https://${KM_ADMIN_DOMAIN:-${KM_DOMAIN}}:3002}
+
+  phpmyadmin:
+    environment:
+      PMA_ABSOLUTE_URI: ${PMA_ABSOLUTE_URI:-https://${KM_ADMIN_DOMAIN:-${KM_DOMAIN}}:8281/}
+
+  # **本番では Mailpit を起動しない**(2026-09-14 の診断で追加。server-ops 11)。
+  #
+  # 本番の送信は mailserver が担い、Mailpit は 1 通も受けていなかった(実測 0 通)。
+  # それでも無認証の画面を持つサービスが devnet の中に居続け、8025 も publish されていた。
+  # profile を付けると、`docker compose up -d` では作られない。
+  # 検証のために一時的に使うなら `docker compose --profile mailpit up -d mailpit`。
+  #
+  # **既に動いているコンテナは up しても消えない。** 配備のあとに一度だけ
+  # `docker compose stop mailpit && docker compose rm -f mailpit` を実行する(メールは 0 通なので失うものは無い)。
+  mailpit:
+    profiles: ["mailpit"]
+
+  reverse-proxy:
+    # 公開するのは4つ:
+    #
+    #   80    ACME(証明書更新)と HTTPS への転送
+    #   443   本体
+    #   3001  **Logto。利用者のブラウザがサインインのために直接ここへ飛ぶ**
+    #   6001  **Soketi。ブラウザが WebSocket でつなぐ**
+    #
+    # **3001 と 6001 を publish しないと、ログインもチャットも死活監視も動かない。**
+    # 当初この2つが抜けていて 80/443 だけになっていた。公開ページは動くので
+    # 「ほぼ移行できた」ように見えるが、**管理画面に入れない**
+    # (PHP からも `https://ドメイン:3001/oidc/...` へ届かなくなる)。
+    # Android アプリも Logto のトークンを取れなくなる。
+    #
+    # **管理系(8281 / 3002 / 8025)も publish する。** ただし守りは nginx 側で掛ける。
+    #
+    # 経緯: 最初はこの3つを publish せず、次に `127.0.0.1:` 限定にしていた。
+    # どちらも SSH トンネルが要り、しかもトンネル経由だと `https://localhost:8281` で
+    # 開くことになるため、**証明書名(CN=<ドメイン>)と一致せずブラウザが警告を出す**
+    # (実測で確認)。管理作業のたびに警告を踏む運用は、慣れとして良くない。
+    #
+    # 通常公開に戻したうえで、nginx 側の2枚(nginx/km/allow-admin.conf の IP 制限と、
+    # auth_request による Logto のログイン判定)で守る。**判定は proxy_pass の手前**なので、
+    # 未ログインの相手には phpMyAdmin にも Logto Console にも Mailpit にも一切渡らない。
+    # 応答するのは 443 と同じ nginx で、攻撃面はほとんど増えていない。
+    #
+    # **3306 は publish しない。** これは別の話で、DB を外に出す理由がまったく無い。
+    #
+    # **管理系の 3 つは `0.0.0.0:` で IPv4 だけにする**(2026-09-14 の診断で追加。server-ops 2)。
+    # アドレスを書かないと Docker は `[::]` でも待ち受け、IPv6 で来た接続は docker-proxy が中継する。
+    # するとコンテナから見た送信元が**ゲートウェイの 172.x に化け**、allow-admin.conf の
+    # `allow 172.16.0.0/12`(SSH トンネル用)で 1 枚目の IP 制限を素通りする。
+    # 本番で `[::]:8281` などを docker-proxy が待っていることを実測した(グローバル IPv6 は今は無いが、
+    # 業者が付けた時点で開く)。IPv4 だけにしておけば、その経路が最初から無い。
+    ports: !override
+      - "80:80"
+      - "443:443"
+      - "3001:3001"
+      - "6001:6001"
+      - "0.0.0.0:8281:8281"
+      - "0.0.0.0:3002:3002"
+    # **8025(Mailpit の画面)は publish しない**(2026-09-18)。
+    # 本番では Mailpit そのものを起動していない(下の profiles)ので、待ち受けても後ろには誰も居ない。
+    # nginx のログイン判定が先に立つので危険ではなかったが、**誰も使わない口を開けておく理由が無い。**
+    # ローカル環境では compose.local.yaml が 8025 を足す(Mailpit の画面を読むため)。
+    # **Mailpit を待たない**(本番では起動しない。下の mailpit を参照)。
+    # 基底の depends_on に残したままだと、profile で外したサービスを待とうとして up が止まる。
+    # depends_on は**併合**なので、`!override` で丸ごと書き直す。
+    depends_on: !override
+      web:
+        condition: service_started
+      phpmyadmin:
+        condition: service_started
+      logto:
+        condition: service_started
+      soketi:
+        condition: service_started
+    # KM_DOMAIN から導く(一覧と理由はファイル先頭)。
+    # **KM_DOMAIN だけは既定を持たない** —— 無ければ `docker compose config` の時点で止める。
+    environment:
+      KM_DOMAIN: "${KM_DOMAIN:?KM_DOMAIN を .env に書くこと(compose.vps.yaml)}"
+      KM_APP_URL: ${KM_APP_URL:-https://${KM_DOMAIN}}
+      KM_APP_PORT: ${KM_APP_PORT:-443}
+      KM_CERT: ${KM_CERT:-/etc/letsencrypt/live/${KM_DOMAIN}/fullchain.pem}
+      KM_CERT_KEY: ${KM_CERT_KEY:-/etc/letsencrypt/live/${KM_DOMAIN}/privkey.pem}
+      # 管理画面を別オリジンにするときだけ .env に KM_ADMIN_DOMAIN を書く(証明書は KM_DOMAIN の名前のまま、
+      # 管理用の名前を SAN に足す: host-cert.sh issue --also)。web の ADMIN_URL と同じ導き方
+      KM_ADMIN_DOMAIN: ${KM_ADMIN_DOMAIN:-${KM_DOMAIN}}
+      KM_ADMIN_URL: ${KM_ADMIN_URL:-https://${KM_ADMIN_DOMAIN:-${KM_DOMAIN}}}
+    # **`!override` が要る。** compose の `volumes:` は上書きではなく**併合**される
+    # (対象パスの違う項目は基底のものが残る)。基底には mkcert の
+    #     ./certs/192.168.3.29.pem:/etc/nginx/certs/192.168.3.29.pem
+    # があり、VPS にはそのファイルが無い。すると **Docker はそこにディレクトリを作る** ——
+    # certs/ に root 所有の空ディレクトリが生えるだけでなく、
+    # 「証明書のつもりがディレクトリ」という追いにくい状態になる
+    # (192.168.3.98 で実際に生成された)。
+    volumes: !override
+      - ./nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./nginx/km:/etc/nginx/km:ro
+      - letsencrypt:/etc/letsencrypt:ro
+      - certbot_webroot:/var/www/certbot:ro
+    # 証明書が更新されても、nginx は**読み込み直すまで古いものを使い続ける**。
+    # certbot 側から docker を叩かずに済むよう、こちらで定期的に reload する
+    # (12時間ごと。reload なので接続は切れない)。
+    #
+    # **初期化スクリプトを自分で呼ぶ必要がある。**
+    # 公式イメージの /docker-entrypoint.sh は
+    #     if [ "$1" = "nginx" ] || [ "$1" = "nginx-debug" ]; then ... fi
+    # という条件で /docker-entrypoint.d/* を走らせている。ここでは `sh` を渡すので
+    # **条件から外れ、テンプレート展開(20-envsubst-on-templates.sh)が飛ばされる。**
+    #
+    # 結果どうなるか —— nginx は素の既定ページのまま起動し、
+    # **443 を待ち受けず、CSP も レート制限も 管理系ゲートも一切効かない**。
+    # しかも 80 番では応答するので「動いていない」ことに気付きにくい。
+    # (192.168.3.98 での通し検証で判明。それまで「entrypoint はそのままなので
+    #  展開は従来どおり行われる」と書いてあったが、**誤りだった**)
+    command:
+      - sh
+      - -c
+      - |
+        for f in /docker-entrypoint.d/*; do
+          case "$$f" in
+            *.envsh) [ -x "$$f" ] && . "$$f" ;;
+            *.sh)    [ -x "$$f" ] && "$$f" ;;
+          esac
+        done
+        while :; do sleep 12h & wait $${!}; nginx -s reload; done &
+        nginx -g 'daemon off;'
+
+  # 証明書の取得と更新。webroot 方式なので nginx を止めずに済む。
+  #
+  # 初回だけ手で取る(ドメインの DNS が VPS を指してから):
+  #   docker compose -f compose.yaml -f compose.vps.yaml run --rm certbot \
+  #     certonly --webroot -w /var/www/certbot -d "$KM_DOMAIN" --email <連絡先> --agree-tos --no-eff-email
+  #
+  # そのあとはこのコンテナが 12 時間ごとに更新を試み、更新されたら nginx が拾えるよう
+  # reverse-proxy を reload する(証明書の入れ替えは reload で足りる)。
+  certbot:
+    # **digest で固定する(2026-09-07 時点の certbot/certbot:latest)。**
+    #
+    # `latest` のままだと次の `up -d` で中身が入れ替わる。
+    # ここが壊れると証明書が更新されず、**HSTS を有効にしてあるため
+    # 期限が切れた時点で誰もサイトへ入れなくなる。**
+    # しかも壊れ方が「静かに更新しなくなる」なので、切れるまで気づけない
+    # (そのための healthcheck が下にある —— 残り14日を切ったら unhealthy)。
+    #
+    # 上げるときは scripts/check-updates.sh --pins が出す行で置き換える
+    image: certbot/certbot@sha256:34ee91d2f43008eb78a007d22f23ed4b2eaa9a454cb27ca2c042b49527a695b4
+    container_name: km-certbot
+    restart: unless-stopped
+    # 上限の考え方は compose.yaml の services: の注記(2026-09-14)
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    pids_limit: 200
+    # 書くのは証明書のボリュームと、certbot の作業場所(tmpfs)だけ(2026-09-15)
+    read_only: true
+    tmpfs:
+      - /var/lib/letsencrypt
+      - /var/log/letsencrypt
+      - /tmp
+    # root のまま自分の持ち物(ボリューム)を書くだけなので、戻す特権は無い
+    cap_drop:
+      - ALL
+    volumes:
+      - letsencrypt:/etc/letsencrypt
+      - certbot_webroot:/var/www/certbot
+    #
+    # **「プロセスが生きているか」は見ない。**
+    # このコンテナは 12 時間ごとに眠るループで、更新が静かに壊れていても
+    # プロセス自体は元気に眠り続ける。見るべきは**証明書の残り日数**の方。
+    #
+    # 残り 14 日を切ったら unhealthy にする。Let's Encrypt の証明書は 90 日で、
+    # certbot は残り 30 日を切ると更新する。**14 日まで減っているなら更新が
+    # 効いていない**ということなので、そこを異常とみなす。
+    #
+    # HSTS を有効にしてあるため、**証明書を切らすと誰もサイトへ入れなくなる。**
+    # 気付ける仕組みをここに置く意味は大きい。
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'for f in /etc/letsencrypt/live/*/fullchain.pem; do openssl x509 -checkend 1209600 -noout -in "$$f" || exit 1; done'
+      start_period: 60s
+      interval: 6h
+      timeout: 10s
+      retries: 2
+    entrypoint: >
+      sh -c 'trap exit TERM;
+             while :; do
+               certbot renew --webroot -w /var/www/certbot --quiet;
+               sleep 12h & wait $${!};
+             done'
+
+  # 送信専用のメールサーバー(本番のみ)。検証環境は Mailpit のままにしてある。
+  #
+  # ## なぜ要るのか
+  #
+  # Mailpit は**受け取って溜めるだけで、外へは1通も配送しない**開発用の受け皿。
+  # 本番でこのままだと、**Logto の確認コードが誰にも届かない = 誰もログインできない。**
+  #
+  # ## 送信専用 —— 受信の口は作らない
+  #
+  # Dovecot も IMAP も置かず、**25 番の受信も開けない。** 問い合わせの本文は DB の
+  # 受信箱に残るので、メールは「気付くため」のものでしかない。作る量も攻撃面も減る。
+  #
+  # ## **publish しないことが最大の防御**
+  #
+  # `ports:` は書かない。`expose` だけなので、**この 587 に届くのは同じ Docker
+  # ネットワークの中にいるコンテナだけ。** インターネットからは接続そのものが成立しない。
+  #
+  # 開き放しの中継(open relay)にしてしまうと、迷惑メールの踏み台にされたうえ、
+  # **IP ごと拒否リストに載って自分のメールも一切届かなくなる。** publish しない限り、
+  # そもそも外から投げ込めない。**ここに `ports:` を足さないこと。**
+  #
+  # 二重の歯止めとして ALLOWED_SENDER_DOMAINS も効く(下記)。
+  #
+  # ## なぜ既製イメージなのか
+  #
+  # DKIM の署名まで含めて Postfix + OpenDKIM を手で組むと、確認すべき箇所が増える
+  # わりに得るものが少ない。鍵も設定もこちらのもので、**「自前」であることは変わらない。**
+  mailserver:
+    # **digest で固定する(2026-09-07 時点の boky/postfix:latest)。**
+    #
+    # ここが入れ替わって壊れると、**送信側からは成功に見えたまま届かなくなる。**
+    # DKIM の鍵は mail_dkim ボリュームにあるので像が変わっても残るが、
+    # 設定の作法が変わると署名が付かなくなりうる ——
+    # そうなると相手側で検証に失敗し、全部迷惑メール行きになる。
+    #
+    # 上げるときは scripts/check-updates.sh --pins が出す行で置き換える。
+    # **上げたら必ず1通送って、実際に届くところまで見ること。**
+    image: boky/postfix@sha256:aafc772384232497bed875e1eb66b4d3e54ba1ebc86e2e185a6dc1dbc48182ef
+    container_name: km-mailserver
+    restart: unless-stopped
+    # **no-new-privileges は付けない。** postfix の postdrop が setgid で動くので、付けると送信が止まる。
+    # 上限の考え方は compose.yaml の services: の注記(2026-09-14)
+    mem_limit: 192m
+    pids_limit: 200
+    # **read_only にしない**(2026-09-15)。イメージの起動スクリプトが env から /etc/postfix と
+    # /etc/opendkim の設定を**毎回その場で書き出す**。tmpfs で覆うとイメージの既定の設定まで消える。
+    # 特権は Docker の既定から「使わないもの」を落とす形にする(MKNOD・NET_RAW・SETPCAP・SETFCAP・AUDIT_WRITE)。
+    # postfix は chroot で動き(SYS_CHROOT)、587 で待ち(NET_BIND_SERVICE)、利用者を切り替え(SETUID・SETGID)、
+    # キューの持ち主を揃え(CHOWN・FOWNER・FSETID・DAC_OVERRIDE)、supervisord が子に合図を送る(KILL)
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - FSETID
+      - KILL
+      - NET_BIND_SERVICE
+      - SETGID
+      - SETUID
+      - SYS_CHROOT
+    environment:
+      TZ: Asia/Tokyo
+      # **この一覧に無い差出人からの送信は拒否される。**
+      # イメージは smtpd_recipient_restrictions に check_sender_access を必ず挟むので、
+      # ネットワーク内から来た通信であっても差出人ドメインは検査される。
+      # publish していないことと合わせて、踏み台化に対する二枚目の歯止め。
+      #
+      # **既定の ito8795.com を外した**(2026-09-14)。KM_DOMAIN を書き忘れた別のホストが
+      # 本番のドメインを名乗って送る形になっていた。KM_DOMAIN が無ければ reverse-proxy の
+      # `${KM_DOMAIN:?…}` で compose 全体が起動前に止まる。
+      #
+      # **Logto の SMTP コネクタの差出人は Logto の DB にある**(.env では変わらない)。ドメインを移したら
+      # logto-domain.php がそれも書き換える —— 残ると確認コードが拒否され、誰もサインインできなくなる。
+      ALLOWED_SENDER_DOMAINS: ${KM_DOMAIN}
+      # **相手のメールサーバーに名乗る名前。逆引き(PTR)と一致させること。**
+      # ここが合っていないと Gmail は FCrDNS の検査で落とす(= 迷惑メール行き)。
+      # ドメインを変えたら PTR も業者の画面で変える(host-domain.sh apply が案内する)。
+      POSTFIX_myhostname: mail.${KM_DOMAIN}
+      # DKIM の鍵をコンテナ内で作らせる。**作った公開鍵は DNS に登録する必要がある。**
+      #   docker compose logs mailserver | grep -A6 DKIM
+      # で控えを見られるほか、mail_dkim ボリュームの <ドメイン>.txt にも残る。
+      # **ドメインを移すときは、旧ドメインの鍵を新しい名前で複製してから up する**(host-domain.sh apply が行う)。
+      # 作らせると新しい鍵になり、DNS に登録済みの公開鍵(旧と同じ値)と合わなくなる。
+      DKIM_AUTOGENERATE: "1"
+      # 明示しておく。DNS 側のレコード名が mail._domainkey.<ドメイン> に決まる
+      DKIM_SELECTOR: mail
+      # 既定は 10.0.0.0/8 と 192.168.0.0/16 も含むが、**ここでは使わない範囲**なので外す。
+      # **認証なしで中継してよいのは mail の網(web と Logto)だけ**(2026-09-15)。以前は Docker の
+      # ブリッジ全体(172.16.0.0/12)で、nginx・phpMyAdmin・Soketi からも送れた。範囲は compose.yaml の networks:
+      POSTFIX_mynetworks: 127.0.0.0/8,172.30.4.0/24
+      # **イメージの既定は「無制限」**(起動ログに `Using unlimited message size` と出る)。
+      # 送るのは確認コードと問い合わせの通知だけなので、10 MB あれば充分。
+      # 上限が無いと、不具合で巨大な本文を作ったときにキューを詰まらせられる。
+      MESSAGE_SIZE_LIMIT: "10485760"
+    expose:
+      - "587"
+    volumes:
+      # **DKIM の秘密鍵はここに残す。** 消えると再生成され、DNS に登録した公開鍵と
+      # 合わなくなって **署名の検証が全部 fail になる**(= 迷惑メール行き)。
+      - mail_dkim:/etc/opendkim/keys
+      # 送信待ちのメール。再起動で消さないため
+      - mail_spool:/var/spool/postfix
+    # **mail の網だけ**(2026-09-15)。送ってくるのは web と Logto だけで、nginx や DB からは届かない
+    networks:
+      - mail
+    # イメージ同梱の検査。587 が ESMTP を返し、opendkim のソケットが生きているかを見る。
+    # **「プロセスが動いている」より一段深い**ので、そのまま使う。
+    healthcheck:
+      test: ["CMD", "sh", "/scripts/healthcheck.sh"]
+      start_period: 30s
+      interval: 1m
+      timeout: 10s
+      retries: 3
+
+volumes:
+  # ================================================================
+  # **実体の名前を固定する。ここを外すと、サイトに誰も入れなくなる。**
+  #
+  # compose は `<プロジェクト名>_<ここの名前>` で実体を作る。プロジェクト名は
+  # 2026-09-07 に `Test` → `kosenmap` へ変えたが、**中身はすべて `test_` の側にある。**
+  #
+  #   test_letsencrypt    … Let's Encrypt の証明書と秘密鍵
+  #   test_mail_dkim      … DKIM の秘密鍵
+  #
+  # `name:` が無いと compose は `kosenmap_letsencrypt` を探し、無いので
+  # **空のボリュームを黙って作る。** そして起動は成功する ——
+  #
+  #   - 証明書が消えるので nginx は TLS を張れない。**HSTS を有効にしてあるため、
+  #     ブラウザは HTTP へ落ちることを拒む。つまり誰もサイトへ入れない。**
+  #   - DKIM 鍵が作り直されると DNS に登録した公開鍵と合わなくなり、
+  #     **送ったメールが全部署名検証に失敗する**(= 迷惑メール行き)。
+  #     しかも送信側からは成功に見えるので、届いていないことに気づけない。
+  #
+  # 詳しい経緯は compose.yaml の volumes: の注記にある。
+  # ================================================================
+  letsencrypt:
+    name: test_letsencrypt
+  certbot_webroot:
+    name: test_certbot_webroot
+  mail_dkim:
+    name: test_mail_dkim
+  mail_spool:
+    name: test_mail_spool

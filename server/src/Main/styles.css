@@ -1,0 +1,2158 @@
+/*
+ * ======== 配色・角丸・文字の尺度 ========
+ *
+ * **アプリと同じ値を使う**(2026-09-03、利用者の指示)。
+ * 写す元は `app/src/main/java/com/ito/kosenmap/KosenMapTheme.kt`。
+ *
+ * それまでは藍(#6366f1)で、アプリの青(#2563EB)とは別の色だった。
+ * 同じ校舎の同じ案内なのに、**ブラウザで開くかアプリで開くかで別のものに見えた。**
+ *
+ * ## 地図の中の色はここに持たない
+ *
+ * 地点の色と形は `Main/map-style.js` が持っており、そちらは既にアプリと揃えてある。
+ * ここへ混ぜると**同じ色が2箇所**になり、片方だけ直したときに食い違う。
+ */
+:root {
+    /* Material3 の colorScheme に対応する。primary / secondary / error */
+    --primary: #2563EB;
+    --primary-dark: #1D4ED8;
+    --on-primary: #ffffff;
+    --accent: #06B6D4;
+    --secondary: #64748b;
+    --success: #10b981;
+    --danger: #EF4444;
+    --bg-map: #FDFDFD;
+    --text: #0F172A;
+    --glass: rgba(255, 255, 255, 0.8);
+    --glass-heavy: rgba(255, 255, 255, 0.95);
+    --border: rgba(255, 255, 255, 0.4);
+    /* 枠として見せたいとき。--border は面のふちで、こちらは線そのもの */
+    --border-strong: rgba(100, 116, 139, 0.4);
+    --shadow-sm: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+    --shadow-lg: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
+
+    /*
+     * 角丸。**Material3 の段階に合わせる。**
+     * それまでは 24px と 12px の2段しか無く、小さな部品にも大きな丸みが付いていた。
+     * `--radius-lg` / `--radius-md` は既存の名前をそのまま残す(全ページを一度に書き換えない)。
+     */
+    --radius-xs: 4px;
+    --radius-sm: 8px;
+    --radius-md: 12px;
+    --radius-lg: 16px;
+    --radius-xl: 28px;
+
+    /*
+     * 文字の尺度。**それまで尺度が無く**、各所で 1.5rem / 1.2rem と直書きしていた。
+     * Material3 の headline / title / body / label に対応させる。
+     */
+    --text-headline: 1.5rem;
+    --text-title: 1.125rem;
+    --text-body: 0.95rem;
+    --text-label: 0.8rem;
+
+    /* 見取り図の見え方。暗いときは白地の図面を落ち着かせる */
+    --map-image-filter: none;
+
+    /*
+     * 地図の上に出る字の倍率。表示調整の「文字」のつまみが `Main/map-style.js`
+     * (`applyLabelScale`)から書き換える。**ここに既定値を置いておくこと** ——
+     * JS が動く前や、調整パネルを出さない編集画面でも `calc()` を成り立たせる。
+     */
+    --km-label-scale: 1;
+
+    /*
+     * ======== 置き場所と押しやすさ ========
+     *
+     * **PC とスマホで値だけ差し替える**(2026-09-05、利用者の指示)。
+     * 位置の決め方(右に階のレール、左下に操作、上に細いバー)は両方で同じにし、
+     * 変わるのは「画面のふちからの距離」と「指で押す大きさ」だけにする ——
+     * 別々に組むと、片方だけ直したときにもう片方が置き去りになる。
+     *
+     * `--km-touch` は**押せる面の最小の高さ**。スマホで 48px を割らないこと
+     * (Android の最小タップ領域が 48dp。下回ると隣を押す)。
+     */
+    --km-edge: 16px;        /* 画面のふちからの距離 */
+    --km-bottom: 16px;      /* 下辺。スマホでは端末の余白ぶん足す */
+    --km-touch: 40px;       /* 押せる面の最小の高さ */
+    --km-floor-size: 44px;  /* 階のボタン(丸)の直径 */
+    /*
+     * 右に立つ階のレールの外幅。**下から出るシートが避ける先**として使う。
+     * 内訳は 内側の余白 6+6 + 枠 1+1 + ボタン1つぶん。
+     * ここと `.floor-nav` の中身は**必ず一緒に直すこと** ——
+     * ずれるとシートの右端がレールの下に潜り、押すと階が切り替わる。
+     */
+    --km-rail-width: calc(var(--km-floor-size) + 14px);
+}
+
+@media (max-width: 768px) {
+    :root {
+        --km-edge: 12px;
+        /*
+         * ホームバーのある端末では、下端に置いたボタンが**指の届かない帯**に入る。
+         * `viewport-fit=cover` を付けていないので env() は 0 になるが、
+         * 付けた日に自動で効くよう最初から包んでおく。
+         */
+        --km-bottom: max(12px, env(safe-area-inset-bottom));
+        --km-touch: 48px;
+        --km-floor-size: 48px;
+    }
+}
+
+/*
+ * ======== 暗い配色 ========
+ *
+ * アプリは System / Light / Dark を選べる(`KosenMapTheme.kt`)。
+ * Website には**何も無かった**ので揃える(2026-09-03)。
+ *
+ * **端末の設定と、画面での選択の両方を効かせる。**
+ * `data-km-theme` が付いていればそれが勝ち、無ければ端末の設定に従う ——
+ * 「端末は明るいが、この地図だけ暗くしたい」を成り立たせるため。
+ *
+ * 見取り図は**白地の PNG** で、そのまま暗い画面に置くと目を刺す。
+ * 画像そのものは差し替えられないので、フィルタで沈める。
+ */
+@media (prefers-color-scheme: dark) {
+    :root:not([data-km-theme="light"]) {
+        --primary: #60A5FA;
+        --primary-dark: #3B82F6;
+        --on-primary: #0B1220;
+        --accent: #22D3EE;
+        --secondary: #94a3b8;
+        --bg-map: #0F1116;
+        --text: #E2E8F0;
+        --danger: #F87171;
+        --glass: rgba(15, 23, 42, 0.82);
+        --glass-heavy: rgba(15, 23, 42, 0.95);
+        --border: rgba(148, 163, 184, 0.35);
+        --border-strong: rgba(148, 163, 184, 0.45);
+        --map-image-filter: invert(0.9) hue-rotate(180deg) brightness(0.95);
+    }
+}
+
+:root[data-km-theme="dark"] {
+    --primary: #60A5FA;
+    --primary-dark: #3B82F6;
+    --on-primary: #0B1220;
+    --accent: #22D3EE;
+    --secondary: #94a3b8;
+    --bg-map: #0F1116;
+    --text: #E2E8F0;
+    --danger: #F87171;
+    --glass: rgba(15, 23, 42, 0.82);
+    --glass-heavy: rgba(15, 23, 42, 0.95);
+    --border: rgba(148, 163, 184, 0.35);
+    --border-strong: rgba(148, 163, 184, 0.45);
+    --map-image-filter: invert(0.9) hue-rotate(180deg) brightness(0.95);
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    -webkit-tap-highlight-color: transparent;
+}
+
+body {
+    font-family: 'Inter', 'Noto Sans JP', sans-serif;
+    background: var(--bg-map);
+    color: var(--text);
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+}
+
+/* 見取り図。暗い配色のときだけ沈める(明るいときは `none`) */
+.leaflet-image-layer { filter: var(--map-image-filter); }
+
+/* ======== Layout Layer ======== */
+#map {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+}
+
+/* ======== 読み込み画面 ========
+ *
+ * index.php に直接書いてある(JS で作ると leaflet.js と app.js のダウンロードを
+ * 待つあいだ白いままになり、そもそもの目的を果たせない)。
+ * 地図・UI レイヤーより手前に出すので z-index は #ui-layer(1000)より上。
+ */
+.km-loading {
+    position: absolute;
+    inset: 0;
+    z-index: 2000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-map);
+    /* 消えるときだけ滑らかに。出るときは即座でよい */
+    transition: opacity 0.35s ease, visibility 0.35s ease;
+}
+
+/* app.js が読み込み完了(または諦め)で付ける */
+.km-loading.is-done {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+}
+
+.km-loading-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 2rem 2.5rem;
+    max-width: 20rem;
+    text-align: center;
+}
+
+.km-loading-icon {
+    font-size: 2.5rem;
+    line-height: 1;
+    animation: km-loading-pulse 1.6s ease-in-out infinite;
+}
+
+.km-loading-title {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.km-loading-track {
+    width: 100%;
+    height: 6px;
+    border-radius: 999px;
+    background: #e2e8f0;
+    overflow: hidden;
+}
+
+.km-loading-bar {
+    height: 100%;
+    width: 0;
+    border-radius: 999px;
+    background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+    transition: width 0.25s ease;
+}
+
+.km-loading-status {
+    font-size: 0.85rem;
+    color: var(--secondary);
+    /* 「3/6」などで文字数が変わっても場所が揺れないように高さを確保する */
+    min-height: 1.2em;
+}
+
+/* ======== 見取り図が読めなかったときの案内 ========
+ *
+ * app.js が作って出し入れする。地図データ全体が駄目だった .km-map-error と違い、
+ * **こちらは塞がない** — 他の階へは移れるべきなので、外枠は素通りさせ、
+ * 札の上だけ操作を受ける。
+ */
+.km-floor-notice {
+    position: absolute;
+    inset: 0;
+    z-index: 1500; /* 地図(1)と UI(1000)より上、読み込み画面(2000)より下 */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.2s ease, visibility 0.2s ease;
+}
+
+.km-floor-notice.is-visible {
+    opacity: 1;
+    visibility: visible;
+}
+
+.km-floor-notice-card {
+    pointer-events: auto; /* 札そのものは押せる */
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+    max-width: 22rem;
+    padding: 1.25rem 1.5rem;
+    text-align: center;
+    border-radius: var(--radius-lg);
+    background: var(--glass-heavy);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-lg);
+}
+
+.km-floor-notice-text {
+    font-size: 0.9rem;
+    line-height: 1.5;
+    color: var(--text);
+}
+
+.km-floor-notice-retry {
+    /* .secondary-btn を併用しているので、ここでは押しやすさだけ足す */
+    padding: 0.5rem 1.25rem;
+}
+
+/* 取得中は押せることが無いので、ボタンごと出さない */
+.km-floor-notice-retry.is-hidden {
+    display: none;
+}
+
+/*
+ * 取得中の札。失敗の札と同じ部品を使い回すが、こちらは「待てば直る」状態なので
+ * 控えめに出す(赤や警告色にしない)。動いていることが分かるよう点滅させる。
+ */
+.km-floor-notice.is-loading .km-floor-notice-card {
+    animation: km-floor-notice-breathe 1.6s ease-in-out infinite;
+}
+
+@keyframes km-floor-notice-breathe {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .km-floor-notice.is-loading .km-floor-notice-card {
+        animation: none;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .km-floor-notice {
+        transition: none;
+    }
+}
+
+/* 地図データそのものが取れなかったときの案内(app.js が差し込む) */
+.km-map-error {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    padding: 1.5rem;
+    text-align: center;
+    color: var(--secondary);
+    font-size: 1.1rem;
+}
+
+/*
+ * ======== パスワード解除フォーム ========
+ *
+ * 出る場所は2つ(組み立ては Main/unlock.js の1箇所):
+ *   .km-map-locked …… 地図の上。錠が掛かっていて何も描けないとき
+ *   #km-unlock-section …… 「ダウンロード・設定」パネルの中
+ *
+ * **style="…" 属性は使えない。** 1.0.1 で CSP の style-src から 'unsafe-inline' を
+ * 外したので、属性で書くと無視されて文字だけが裸で出る。見た目は必ずここに置く。
+ */
+
+/* 地図の上に出すときは、案内文と入力欄を縦に積む(.km-map-error は横並び) */
+.km-map-locked {
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.km-unlock-heading {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text, inherit);
+}
+
+.km-unlock-description {
+    margin: 0;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    color: var(--secondary);
+}
+
+.km-unlock-field {
+    display: flex;
+    gap: 0.5rem;
+    /* 細い画面では入力欄とボタンを縦に折る。横並びのままだと入力欄が潰れる */
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+/*
+ * 入力欄は `input[type="text"]` と同じ見た目にする。
+ * **あちらの指定は型で選んでいるので password には当たらない** —— 中身をここへ写す。
+ * `--border` は使わない(半透明パネル用の白い枠なので、この上では見えない)。
+ */
+.km-unlock-input {
+    flex: 1 1 10rem;
+    min-width: 0;   /* flex 子要素は既定で縮まない。これが無いと親からはみ出す */
+    min-height: var(--km-touch);
+    padding: 0.75rem 1rem;
+    font-size: 1rem;   /* 16px を割ると iOS がページごと拡大する */
+    border: 1px solid #e2e8f0;
+    border-radius: var(--radius-md);
+    background: #fff;
+}
+
+/* ボタンは .primary-btn を併用している。ここでは並びの都合だけ足す */
+.km-unlock-submit {
+    flex: 0 0 auto;
+}
+
+.km-unlock-submit:disabled {
+    opacity: 0.6;
+    cursor: progress;
+    transform: none;   /* .primary-btn:hover の持ち上げを、押せない間は止める */
+}
+
+.km-unlock-message {
+    margin: 0;
+    min-height: 1.2em;   /* 文言が出入りしても下の要素が跳ねない */
+    font-size: 0.85rem;
+    color: var(--secondary);
+}
+
+/* 状態は data 属性で持つ。JS から色を直接書くと、配色を変えたときに置き去りになる */
+.km-unlock-message[data-state="error"] { color: var(--danger, #dc2626); }
+.km-unlock-message[data-state="ok"] { color: var(--primary, #2563eb); }
+
+@keyframes km-loading-pulse {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.12); opacity: 0.65; }
+}
+
+/*
+ * 動きを減らす設定の人には脈打たせない。進捗バーの伸長も即座に切り替える
+ * (情報は文字で出しているので、動きが無くても内容は伝わる)。
+ */
+@media (prefers-reduced-motion: reduce) {
+    .km-loading,
+    .km-loading-bar {
+        transition: none;
+    }
+
+    .km-loading-icon {
+        animation: none;
+    }
+}
+
+#ui-layer {
+    position: absolute;
+    inset: 0;
+    z-index: 1000;
+    pointer-events: none; /* UIの隙間はマップを操作可能にする */
+    display: flex;
+    flex-direction: column;
+}
+
+/*
+ * **文字の下限を上げた**(2026-09-05)。
+ * ここは以前 `clamp(5px, 3.0vw, 15px)` で、幅 320px の端末では 9.6px、
+ * 幅の狭い端末では 5px まで縮んだ —— 読めないし、その大きさの文字を目印に
+ * 押すことになるので**押し間違える**。下限を 0.8rem(12.8px)に上げる。
+ *
+ * `white-space: nowrap; overflow: hidden` も外した。ここは地図の上に浮かぶ
+ * 部品**すべて**に掛かっていて、トップバーの中身が入りきらないと**黙って切れる**
+ * (はみ出したのではなく消える)ので、原因が見た目から分からなかった。
+ * 折らせたくないものは、その部品の側で指定する(.floor-btn / .user-chip)。
+ */
+#ui-layer {
+    font-size: clamp(0.8rem, 2.6vw, 0.95rem);
+}
+
+#ui-layer > * {
+    pointer-events: auto; /* UI要素自体は操作可能 */
+}
+
+
+
+
+/* ======== Common Styles ======== */
+.glass-panel {
+    background: var(--glass);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-lg);
+}
+
+/*
+ * ======== ボタン ========
+ *
+ * **役割で分ける**(Material3 の Filled / Outlined / Text)。
+ * それまでは `.primary-btn` / `.secondary-btn` の2つしかなく、
+ * 「押しても何も起きない補助の操作」まで枠付きの目立つボタンになっていた。
+ *
+ * **既存のクラス名は別名として残す。** 全ページを一度に書き換えると、
+ * 直し漏れたページだけ素の `<button>` になって気づけない。
+ */
+/*
+ * 3つとも**同じ高さ**にする(`--km-touch`)。役割で見た目は変えるが、
+ * 並べたときに高さが違うと、下辺が揃わず「押せる面」の見当が付かない。
+ * スマホでは 48px になる(上のトークン)。
+ */
+.btn-filled,
+.btn-outlined,
+.btn-text,
+.primary-btn,
+.secondary-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: var(--km-touch);
+    text-decoration: none;   /* <a> にも当てるので、下線を消す */
+}
+
+.btn-filled,
+.primary-btn {
+    background: var(--primary);
+    color: var(--on-primary);
+    border: none;
+    padding: 0.65rem 1.4rem;
+    /* Material3 のボタンは全円。角丸の段階とは別枠にする */
+    border-radius: 999px;
+    font-size: var(--text-label);
+    font-weight: 600;
+    cursor: pointer;
+    transition: box-shadow 0.2s, background 0.2s;
+}
+
+.btn-filled:hover,
+.primary-btn:hover {
+    /*
+     * **持ち上げない。** 以前は translateY で浮かせていたが、
+     * 並んだボタンが押すたびに動くと、隣を押し間違える。
+     * Material3 も影の濃さで応える。
+     */
+    box-shadow: var(--shadow-sm);
+    background: var(--primary-dark);
+}
+
+.btn-outlined,
+.secondary-btn {
+    background: transparent;
+    color: var(--primary);
+    border: 1px solid var(--border-strong);
+    padding: 0.65rem 1.4rem;
+    border-radius: 999px;
+    font-size: var(--text-label);
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.btn-outlined:hover,
+.secondary-btn:hover {
+    background: color-mix(in srgb, var(--primary) 8%, transparent);
+}
+
+/** 押しても画面が変わらない補助の操作(閉じる・あとで・詳しく)。 */
+.btn-text {
+    background: none;
+    border: none;
+    color: var(--primary);
+    padding: 0.65rem 0.9rem;
+    border-radius: 999px;
+    font-size: var(--text-label);
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.btn-text:hover {
+    background: color-mix(in srgb, var(--primary) 8%, transparent);
+}
+
+.icon-btn {
+    background: var(--glass);
+    border: 1px solid var(--border);
+    width: var(--km-touch);
+    height: var(--km-touch);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 1.2rem;
+    /* 丸が潰れないように。flex の中では既定で縮む */
+    flex: 0 0 auto;
+}
+
+/*
+ * ======== 地図の上の操作(左下) ========
+ *
+ * アプリの `MapScreen.kt` は、左下に「表示調整」「検索」の丸いピルを並べている
+ * (`Row(Alignment.BottomStart)`)。Website も同じ場所に置く(2026-09-05)。
+ *
+ * それまでは、検索の開閉が**トップバーの ✖ アイコン**、表示調整が**右下に浮いた丸**で、
+ * 同じ「地図の見え方を変える操作」が画面の反対側に散っていた。
+ *
+ * 中身は JS も足す(`Main/map-tuning.js` が「表示調整」を差し込む)ので、
+ * **見た目はこのクラスに集める** —— 片方だけ別の形になると、並びが揃わない。
+ */
+.km-action-bar {
+    position: absolute;
+    left: var(--km-edge);
+    bottom: var(--km-bottom);
+    z-index: 900;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.km-action-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: var(--km-touch);
+    padding: 0 1rem;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--glass-heavy);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    box-shadow: var(--shadow-sm);
+    color: var(--text);
+    font-size: var(--text-label);
+    font-weight: 700;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.km-action-btn:hover {
+    background: var(--glass);
+}
+
+/* 開いている操作は塗る。**押した結果が画面のどこに出たか**を結び付けるため */
+.km-action-btn.is-active {
+    background: var(--primary);
+    border-color: transparent;
+    color: var(--on-primary);
+}
+
+.km-action-icon {
+    font-size: 1rem;
+    line-height: 1;
+}
+
+/* ======== Top Bar ======== */
+/*
+ * **一段の細いバーにする**(2026-09-05)。
+ * それまでは題字の下にログインの2つが縦に積まれ、スマホでは高さ 140px 前後を
+ * 占めていた —— 地図の一番見たい上側が、押す用事の少ないボタンで埋まっていた。
+ *
+ * スマホではログインの2つを「ダウンロード・設定」パネルへ移す(`Main/panel.js`)。
+ * **同じ要素を動かす**(複製しない) —— 2つ置くと、片方だけ直したときに食い違う。
+ */
+.top-bar {
+    position: absolute;
+    top: var(--km-edge);
+    left: var(--km-edge);
+    right: var(--km-edge);
+    padding: 0.6rem 1rem;
+    display: flex;
+    align-items: center;
+    background: var(--glass);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+}
+
+.brand-area {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    width: 100%;
+    min-width: 0;   /* flex の子は既定で縮まない。無いと題字が右のボタンを押し出す */
+}
+
+.app-title {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: var(--text-headline);
+    font-weight: 800;
+    white-space: nowrap;
+    background: linear-gradient(135deg, var(--primary), var(--accent));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+/* 絵文字は塗り潰しの対象外にする(透明にすると消えてしまう) */
+.app-title .logo-icon {
+    -webkit-text-fill-color: initial;
+}
+
+.top-actions {
+    display: flex;
+    flex-direction: row;
+    gap: 0.5rem;
+    align-items: center;
+    /* 入りきらないときは右側から折る。切り落とさない */
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+/* **横並び。** 以前は縦積みで、バーが2段にも3段にもなっていた */
+.action-group-left,
+.action-group-right {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+/* フェーズ4で追加: ログイン中のユーザー名表示 */
+.user-chip {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--secondary);
+    white-space: nowrap;
+}
+
+/* 「ダウンロード・設定」へ移したときの並び(スマホ)。panel.js が入れ替える */
+#km-auth-slot .action-group-left {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+/* ======== Search Panel ======== */
+/*
+ * PC は**左に立つカード**、スマホは**下から出るシート**(下のメディアクエリ)。
+ * どちらも左下の「検索」ピルで開け閉てする。
+ */
+.search-panel {
+    position: absolute;
+    top: calc(var(--km-edge) + 60px + 12px);   /* トップバーの下 */
+    left: var(--km-edge);
+    width: 340px;
+    padding: 1.25rem;
+    border-radius: var(--radius-lg);
+    transition: transform 0.3s ease, opacity 0.3s ease;
+}
+
+/*
+ * パネルの見出しと「閉じる」。
+ * 閉じる的を**パネルの中にも**置く(2026-09-05、利用者の指示)——
+ * 左下のピルだけだと、PC では開いたパネル(左上)と閉じ方(左下)が
+ * 画面の端から端まで離れる。見出しは、丸い ✕ だけが浮くのを避けるためでもある。
+ */
+.search-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+}
+
+.search-title {
+    margin: 0;
+    font-size: var(--text-title);
+    font-weight: 700;
+    color: var(--text);
+}
+
+.search-container {
+    display: flex;
+    flex-direction: row;  /* 子要素（グループ）を横並びに配置 */
+    align-items: center;   /* 上下中央揃え（必要に応じて設定） */
+    gap: 0.75rem;          /* 入力欄グループとボタングループの間の隙間 */
+}
+
+/*
+ * 畳んだ状態。**以前は .hidden-mobile という名前で、モバイル幅でしか効かなかった**。
+ * デスクトップでも幅360pxのパネルが地図に重なって見える範囲を狭めていたので、
+ * どの画面幅でも畳めるようにした(モバイルの出方は下のメディアクエリで上書きする)。
+ */
+.search-panel.collapsed {
+    transform: translateX(calc(-100% - 40px));
+    opacity: 0;
+    pointer-events: none;
+}
+
+.search-inner {
+    display: flex;
+    gap: 0.75rem;
+    align-items: stretch;
+    /* 階を移るときの好み(.km-route-pref)を次の行へ送るため。入力欄とボタンの並びは変わらない */
+    flex-wrap: wrap;
+}
+
+.input-group {
+    display: flex;
+    flex-direction: column; /* 要素を縦並びに配置 */
+    gap: 0.5rem;            /* 入力欄同士の上下の隙間 */
+    flex: 1 1 auto;
+    min-width: 0;           /* 無いと入力欄がボタンを押し出して、パネルからはみ出す */
+}
+
+/*
+ * 階を移るときの好み(2026-09-22)。入力欄とボタンの間に細く置く ——
+ * ふだん触らない設定なので、案内開始の的を押しのけない大きさにする。
+ */
+.km-route-pref {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex: 0 0 100%;
+    order: 3;           /* 入力欄・ボタンの下(.search-inner は横並び) */
+    margin-top: 0.5rem;
+    font-size: 0.85rem;
+    color: var(--text-muted, #64748b);
+}
+
+.km-route-pref-select {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 0.4rem 0.6rem;
+    border-radius: var(--radius-md);
+    border: 1px solid #e2e8f0;
+    background: white;
+    color: var(--text);
+    font-size: 1rem;   /* 入力欄と同じ理由(iOS の自動拡大) */
+}
+
+/* ボタンを縦並びにする(PC。スマホでは横に並べ替える) */
+.button-group {
+    display: flex;
+    flex-direction: column; /* 要素を縦並びに配置 */
+    gap: 0.5rem;            /* ボタン同士の上下の隙間 */
+    flex: 0 0 auto;
+}
+
+.button-group > * {
+    white-space: nowrap;
+}
+
+input[type="text"] {
+    padding: 0.75rem 1rem;
+    min-height: var(--km-touch);
+    border-radius: var(--radius-md);
+    border: 1px solid #e2e8f0;
+    background: white;
+    /*
+     * **16px を下回らせない。** iOS の Safari は、16px 未満の入力欄に触れると
+     * ページごと拡大する(この地図は user-scalable=no なので、戻す手段が無い)。
+     */
+    font-size: 1rem;
+    outline: none;
+    width: 100%;
+}
+
+.category-dropdown {
+    grid-column: span 2;
+    margin-top: 0.75rem;
+    padding: 0.75rem;
+    min-height: var(--km-touch);
+    border-radius: var(--radius-md);
+    border: 1px solid #e2e8f0;
+    background: white;
+    color: var(--text);
+    font-size: 1rem;   /* 入力欄と同じ理由(iOS の自動拡大) */
+    outline: none;
+    width: 100%;
+    height: auto;
+}
+
+
+/*
+ * 暗い配色のときの入力欄。**白のままにしない** ——
+ * 暗いカードの中で入力欄だけが白く光り、そこだけ別のページに見える。
+ * 枠は他の面と同じ `--border-strong` を使う。
+ */
+@media (prefers-color-scheme: dark) {
+    :root:not([data-km-theme="light"]) input[type="text"],
+    :root:not([data-km-theme="light"]) .category-dropdown,
+    :root:not([data-km-theme="light"]) .km-unlock-input {
+        background: rgba(15, 23, 42, 0.6);
+        border-color: var(--border-strong);
+        color: var(--text);
+    }
+}
+
+:root[data-km-theme="dark"] input[type="text"],
+:root[data-km-theme="dark"] .category-dropdown,
+:root[data-km-theme="dark"] .km-unlock-input {
+    background: rgba(15, 23, 42, 0.6);
+    border-color: var(--border-strong);
+    color: var(--text);
+}
+
+
+/* ======== Floor Nav ========
+ *
+ * **右のふちに縦へ並べる**(2026-09-05)。写す元はアプリの `MapScreen.kt`:
+ * `Column(Alignment.CenterEnd)` に 56dp の丸いボタンを積んでいる。
+ *
+ * それまでは画面下に横並びの帯で、
+ *   - 下辺を占めるので、**下から出るシート**(経路案内・設定)と場所を取り合う
+ *   - 「外全体図」だけ幅が広く、押す面の大きさが揃わない
+ * という2つが同時に起きていた。縦の丸なら、どれも同じ大きさで指の通り道に並ぶ。
+ *
+ * **`.floor-nav` の中だけに効かせる。** `.floor-btn` は管理画面の地図編集
+ * (`admin/map-editor.php`)でも使っていて、あちらは AdminLTE のボタンの並び。
+ */
+.floor-nav {
+    position: absolute;
+    top: 50%;
+    right: var(--km-edge);
+    bottom: auto;
+    left: auto;
+    transform: translateY(-50%);
+    padding: 6px;
+    border-radius: 999px;
+    /* 取っ手を一覧の上に積む。取っ手は送りの外に出す(送っても消えないように) */
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    /* 画面が低いとき(横向きの端末)は中で送る。はみ出させない */
+    max-height: 72vh;
+}
+
+/*
+ * ======== 階のレールを畳む ========
+ *
+ * **ふだんは畳んでおく**(2026-09-05、利用者の指示)。
+ * 丸を6つ縦に積むと右のふちに 300px 前後の帯ができ、地図の右側が常に隠れる。
+ * 階を変えるのは「たまに」なので、ふだんは丸1つにして、押したときだけ一覧を出す。
+ *
+ * 開け閉ての合図は `Main/app.js`(階を選んだ・地図を触った・しばらく触っていない)。
+ *
+ * **`display: none` で消す。** 透明にして残すと、畳んだつもりの一覧が
+ * 指の下に居座り、地図を触ったつもりで階が変わる。
+ */
+.floor-nav.is-collapsed .floor-scroll {
+    display: none;
+}
+
+/*
+ * 畳むと丸1つになるので、横向きの端末で角を四角くしている指定より
+ * こちらを勝たせる(クラス2つぶんで詳細度が上)。
+ */
+.floor-nav.is-collapsed {
+    border-radius: 999px;
+}
+
+.floor-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: var(--km-floor-size);
+    height: var(--km-floor-size);
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--secondary);
+    font-size: 0.9rem;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s;
+}
+
+.floor-toggle:hover {
+    background: color-mix(in srgb, var(--primary) 10%, transparent);
+}
+
+/* 開いているときは ✕。階の名前(1F)と同じ大きさだと、記号だけ小さく見える */
+.floor-nav:not(.is-collapsed) .floor-toggle {
+    font-size: 1.25rem;
+}
+
+/* 畳んでいる間は「いまの階」を出す的なので、階のボタンの選択中と同じ顔にする */
+.floor-nav.is-collapsed .floor-toggle {
+    background: var(--primary);
+    color: var(--on-primary);
+    box-shadow: var(--shadow-sm);
+}
+
+.floor-scroll {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    max-height: inherit;
+    scrollbar-width: none;
+}
+
+.floor-scroll::-webkit-scrollbar { display: none; }
+
+.floor-btn {
+    background: transparent;
+    border: none;
+    padding: 0.6rem 1.2rem;
+    border-radius: 30px;
+    font-weight: 700;
+    color: var(--secondary);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.2s, color 0.2s;
+}
+
+.floor-nav .floor-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: var(--km-floor-size);
+    height: var(--km-floor-size);
+    padding: 0;
+    border-radius: 50%;
+    font-size: 0.9rem;
+    background: transparent;
+}
+
+.floor-nav .floor-btn:hover {
+    background: color-mix(in srgb, var(--primary) 10%, transparent);
+}
+
+.floor-btn.active {
+    background: var(--primary);
+    color: white;
+    box-shadow: var(--shadow-sm);
+}
+
+.floor-nav .floor-btn.active {
+    color: var(--on-primary);
+}
+
+/* ======== Admin Tool ======== */
+.builder-panel {
+    position: absolute;
+    top: 100px;
+    right: 20px;
+    width: 280px;
+    padding: 1.25rem;
+    border-radius: var(--radius-lg);
+}
+
+.builder-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.builder-modes {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.4rem;
+    margin-bottom: 0.75rem;
+}
+
+.admin-btn {
+    padding: 0.5rem;
+    border-radius: 8px;
+    border: 1px solid #e2e8f0;
+    background: white;
+    font-size: 0.8rem;
+    cursor: pointer;
+}
+
+.admin-exec-btn {
+    width: 100%;
+    margin-top: 0.5rem;
+    padding: 0.6rem;
+    background: var(--success);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-weight: bold;
+}
+
+.builder-actions {
+    display: flex;
+    gap: 0.4rem;
+    margin-top: 0.5rem;
+}
+
+.mini-btn {
+    flex: 1;
+    padding: 0.4rem;
+    font-size: 0.7rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    background: white;
+    cursor: pointer;
+}
+
+#builder-output {
+    width: 100%;
+    height: 60px;
+    margin-top: 0.75rem;
+    font-size: 0.7rem;
+    font-family: monospace;
+    padding: 0.5rem;
+    border-radius: 6px;
+    border: 1px solid #e2e8f0;
+}
+
+/* ======== ズームボタン ========
+ *
+ * `app.js` が `bottomright` で足している。**左下は操作ピルが使う**ので、
+ * ぶつからない側へ寄せた(2026-09-05)。
+ *
+ * それまではスマホだけ `Main/zoom.js` がトップバーの中へ引っ越しさせていたが、
+ * バーを一段に細くしたことで置き場所が無くなり、そもそも**画面の一番上**は
+ * 片手で持ったときに親指が最も届かない場所だった。zoom.js は Old/ へ退避。
+ */
+.leaflet-bottom.leaflet-right {
+    right: var(--km-edge);
+    bottom: var(--km-bottom);
+}
+
+.leaflet-bottom.leaflet-right .leaflet-control-zoom {
+    margin: 0;
+}
+
+/* ======== Responsive (Mobile) ========
+ *
+ * **置き場所の決め方は PC と同じ**(右に階、左下に操作、上に細いバー)。
+ * ここで変えるのは、指で押すための大きさと、下から出すか横に置くかだけ。
+ */
+@media (max-width: 768px) {
+    .app-title { font-size: var(--text-title); }
+
+    /*
+     * 検索は**下から出るシート**にする。左下の操作ピルより上に置き、
+     * 開いている間もピル(「閉じる」に変わる)を押せる状態にしておく ——
+     * シートで隠すと、閉じ方が画面から消える。
+     */
+    .search-panel {
+        top: auto;
+        bottom: calc(var(--km-bottom) + var(--km-touch) + 8px);
+        left: var(--km-edge);
+        /*
+         * **右は階のレールを避ける。**
+         * 画面いっぱいに広げると、入力欄とカテゴリー選択の右端 45px ほどが
+         * レールの下に潜り、そこを押すと階が切り替わる(実測で確認)。
+         * レールは真ん中の高さに立っているので、シートと必ず帯が重なる。
+         *
+         * 22px = レールの内側の余白と枠(6+6+1+1)ぶん 14px + 隙間 8px。
+         * **ちょうどで足すと 2px 重なる**(実測)。
+         */
+        right: calc(var(--km-edge) + var(--km-rail-width) + 8px);
+        width: auto;
+        padding: 1rem;
+        max-height: 52vh;
+        overflow-y: auto;
+    }
+
+    /* モバイルは下から出るシートなので、畳むときは下へ逃がす(左へ逃がすと不自然) */
+    .search-panel.collapsed {
+        transform: translateY(150%);
+        opacity: 1;
+    }
+
+    /*
+     * 入力欄とボタンを**縦に積む**。横に並べたままだと、幅 360px の端末では
+     * 入力欄が 5〜6 文字ぶんまで潰れ、何を打っているのか見えなくなる。
+     */
+    .search-inner {
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+
+    .button-group {
+        flex-direction: row;
+    }
+
+    /* 2つのボタンで幅を等分する。押す面をできるだけ広く取る */
+    .button-group > * {
+        flex: 1 1 0;
+    }
+
+    .builder-panel {
+        top: 70px;
+        right: 10px;
+        left: 10px;
+        width: auto;
+        max-height: 40vh;
+        overflow-y: auto;
+    }
+
+    /* Leaflet は触れる端末で 30px の四角を出す。指には小さい */
+    .leaflet-touch .leaflet-bar a,
+    .leaflet-control-zoom a {
+        width: 44px;
+        height: 44px;
+        line-height: 44px;
+        font-size: 1.3rem;
+    }
+
+    .mobile-only { display: flex !important; }
+    .pc-only { display: none !important; }
+}
+
+/*
+ * 画面が低いとき(端末を横にした・折りたたみを開いた)。**3列にする。**
+ *
+ * 高さ 400px の横向きでは、6つを縦に積むとレールが画面の上下いっぱいに伸び、
+ * 右下のズームボタンと重なった(実測。ズームの「+」がレールの下に隠れた)。
+ *
+ * **ボタンを小さくして詰める形は採らない** —— 押しやすさを削って場所を作ることになる。
+ * 列を増やせば 48px のまま高さが縮む。
+ *
+ * **2列では足りなくなった**(2026-09-05)。畳むための取っ手を上に足したぶん
+ * レールが 54px 伸び、高さ 400px でズームに 25px かぶった(実測)。
+ * 3列 2段なら下端は取っ手を足す前と同じ位置に戻る。
+ *
+ * 折り返しを 560px から **600px** へ上げているのも同じ理由 ——
+ * 縦に積んだときの高さが 330px から 384px になり、
+ * 高さ 561〜592px のあいだで下のズームに触れる隙間ができていた。
+ */
+@media (max-height: 600px) {
+    :root { --km-rail-width: calc(var(--km-floor-size) * 3 + 22px); }
+
+    /*
+     * **真ん中に置かず、トップバーの下から始める。**
+     * 中央に置いたままだと、レールの下端が右下のズームボタンに 4px 触れた(実測)。
+     * 上から積めば、下に何を置いても当たらない。
+     */
+    .floor-nav {
+        top: calc(var(--km-edge) + 60px + 12px);
+        transform: none;
+        border-radius: var(--radius-xl);
+    }
+
+    .floor-scroll {
+        display: grid;
+        grid-template-columns: repeat(3, auto);
+        gap: 4px;
+    }
+}
+
+@media (min-width: 769px) {
+    .mobile-only { display: none !important; }
+}
+
+/* ======== ルート案内の帯 ========(2026-09-25、利用者の指示)
+ *
+ * それまでの「下から出るシート」(guidance-panel)は、案内を始めた途端に
+ * 画面の半分以上を手順の一覧で埋め、肝心の経路が見えなかった。**1 行の帯にする。**
+ * 並びは左から ✕ / いまの行き先 / 位置の更新(index.php)。
+ *
+ * ## 置き場所(ほかの操作を隠さないこと)
+ *
+ *   - 下は**左下の操作ピルのすぐ上**。ピル(検索・表示調整)は押せるまま残す
+ *   - 右は**階のレールとズームを避ける**(スマホの検索シートと同じ決め方。
+ *     右下のズームはレールより細いので、レールを避ければズームにも当たらない)
+ *   - 帯が出ている間は、左下から出る表示調整とスマホの検索シートを**帯の高さぶん上へ逃がす**
+ *     (`--km-route-lift`。body.km-route-active のときだけ 0 でなくなる)
+ */
+:root { --km-route-lift: 0px; }
+body.km-route-active { --km-route-lift: calc(var(--km-touch) + 20px); }
+
+.km-route-bar {
+    position: absolute;
+    left: var(--km-edge);
+    bottom: calc(var(--km-bottom) + var(--km-touch) + 8px);
+    width: min(520px, calc(100% - var(--km-edge) * 2 - var(--km-rail-width) - 8px));
+    z-index: 900;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: calc(var(--km-touch) + 12px);
+    padding: 6px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--glass-heavy);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    box-shadow: var(--shadow-lg);
+    color: var(--text);
+    animation: km-route-in 0.25s ease;
+}
+/* display: flex は hidden 属性に勝ってしまう。**隠すときは必ず消す** */
+.km-route-bar[hidden] { display: none; }
+
+@keyframes km-route-in {
+    from { transform: translateY(12px); opacity: 0; }
+    to { transform: none; opacity: 1; }
+}
+
+.km-route-close {
+    flex: 0 0 auto;
+    width: var(--km-touch);
+    height: var(--km-touch);
+    border: none;
+    border-radius: 50%;
+    background: rgba(148, 163, 184, 0.18);
+    color: var(--secondary);
+    font-size: 1.4rem;
+    line-height: 1;
+    cursor: pointer;
+}
+.km-route-close:hover { background: var(--danger); color: #fff; }
+
+/* 行き先。押すとその地点を真ん中に出す。長い名前は … で切る(帯を 2 段にしない) */
+.km-route-target {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: var(--km-touch);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: flex-start;
+    padding: 0 0.25rem;
+    border: none;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.km-route-text,
+.km-route-sub {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.km-route-text { font-weight: 800; font-size: var(--text-body); }
+.km-route-sub { font-size: var(--text-label); color: var(--secondary); }
+
+.km-route-next {
+    flex: 0 0 auto;
+    min-height: var(--km-touch);
+    padding: 0 1rem;
+    border: none;
+    border-radius: 999px;
+    background: var(--primary);
+    color: var(--on-primary);
+    font-weight: 700;
+    white-space: nowrap;
+    cursor: pointer;
+}
+.km-route-next[hidden] { display: none; }
+.km-route-bar.is-arrived .km-route-text { color: var(--success); }
+
+/* 帯が出ている間、左下から出る面は帯の上へ */
+.km-tuning { margin-bottom: var(--km-route-lift); }
+@media (max-width: 768px) {
+    body.km-route-active .search-panel {
+        bottom: calc(var(--km-bottom) + var(--km-touch) + 8px + var(--km-route-lift));
+        max-height: calc(52vh - var(--km-route-lift));
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .km-route-bar { animation: none; }
+}
+
+/* ======== ダウンロード・設定の引き出し ========(2026-09-25、利用者の指示)
+ *
+ * **右から滑り出させる**(PC もスマホも同じ)。以前はルート案内と同じ下から出るシートで、
+ * 開くと地図の下半分と、左下の操作・右下のズームが隠れた。
+ *
+ * 閉じている間は画面の外に置き、`visibility: hidden` と `inert`(panel.js)で
+ * **押せない・辿れない**状態にする。滑らせただけでは、タブで見えない的に入る。
+ * 後ろの幕を押すか Esc で閉じる。
+ */
+.km-drawer {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(380px, 88vw);
+    z-index: 3000;
+    display: flex;
+    flex-direction: column;
+    background: var(--glass-heavy);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border-left: 1px solid var(--border);
+    border-radius: var(--radius-xl) 0 0 var(--radius-xl);
+    box-shadow: var(--shadow-lg);
+    color: var(--text);
+    transform: translateX(105%);
+    visibility: hidden;
+    transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s linear 0.3s;
+}
+.km-drawer.is-open {
+    transform: none;
+    visibility: visible;
+    transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s;
+}
+
+.km-drawer-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 2990;
+    background: rgba(15, 23, 42, 0.28);
+    animation: km-fade-in 0.3s ease;
+}
+.km-drawer-scrim[hidden] { display: none; }
+
+@keyframes km-fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.km-drawer-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 1rem 1rem 0.75rem 1.5rem;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.25);
+}
+.km-drawer-title { margin: 0; font-size: 1.15rem; font-weight: 800; }
+.km-drawer-close {
+    flex: 0 0 auto;
+    width: var(--km-touch);
+    height: var(--km-touch);
+    border: none;
+    border-radius: 50%;
+    background: rgba(148, 163, 184, 0.18);
+    color: var(--secondary);
+    font-size: 1.5rem;
+    line-height: 1;
+    cursor: pointer;
+}
+.km-drawer-close:hover { background: var(--danger); color: #fff; }
+
+/* 中身だけ送る。見出しと閉じるは上に残す(閉じ方が画面の外へ流れない) */
+.km-drawer-body {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .km-drawer,
+    .km-drawer.is-open { transition: none; }
+    .km-drawer-scrim { animation: none; }
+}
+
+/*
+ * 引き出しの中身。1.0.1 で CSP を厳格にして style="…" が使えなくなったので、
+ * index.php に直書きしていた指定をここへ移した。
+ * 上にも少し空ける。無いと最初の見出しが仕切り線に貼り付いて、切れて見える。
+ * 下辺に端末の余白(ホームバー)ぶんを足す。最後の項目が指の下に隠れないように。
+ */
+.info-list { padding: 1rem 1.25rem calc(1.5rem + var(--km-bottom)); }
+/*
+ * 節の中身は**縦に積み、隙間を空ける。**
+ * 「規約とポリシー」はボタンが2つ並ぶので、隙間が無いと狭い画面で隣を押す。
+ * 隙間は gap に一本化する(margin と両方あると、節ごとに空き方が変わる)。
+ */
+.info-section {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+    margin-bottom: 1.5rem;
+}
+.info-section h4 { margin: 0; }
+.info-text { font-size: 0.85rem; color: var(--secondary); margin: 0; line-height: 1.6; }
+.info-text.is-last { margin: 0; }
+
+/* ======== カテゴリー検索の結果 ========(2026-09-25)
+ * 検索パネルの中に並べる。以前はルート案内のシートを借りていた。
+ */
+.km-category-results {
+    margin-top: 0.75rem;
+    border-top: 1px solid rgba(148, 163, 184, 0.3);
+    padding-top: 0.5rem;
+}
+.km-category-results[hidden] { display: none; }
+.km-category-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--secondary);
+}
+.km-category-close {
+    width: var(--km-touch);
+    height: var(--km-touch);
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--secondary);
+    font-size: 1.2rem;
+    cursor: pointer;
+}
+.km-category-list {
+    list-style: none;
+    max-height: 30vh;
+    overflow-y: auto;
+}
+.km-category-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    min-height: var(--km-touch);
+    padding: 0.4rem 0.5rem;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text);
+    text-align: left;
+    font-size: 0.9rem;
+    cursor: pointer;
+}
+.km-category-item:hover { background: color-mix(in srgb, var(--primary) 10%, transparent); }
+.km-category-item small { color: var(--secondary); white-space: nowrap; }
+
+/* ======== はじめに ========(2026-09-25、利用者の要望)
+ * 初めて開いたときに 1 回だけ出す(Main/welcome.js)。
+ * 読み込み画面(2000)より手前 —— 地図の準備を待つあいだに読める。
+ */
+.km-welcome {
+    position: fixed;
+    inset: 0;
+    z-index: 2500;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    background: rgba(15, 23, 42, 0.45);
+    animation: km-fade-in 0.25s ease;
+}
+.km-welcome[hidden] { display: none; }
+.km-welcome-card {
+    width: min(460px, 100%);
+    max-height: calc(100vh - 32px);
+    overflow-y: auto;
+    padding: 1.5rem;
+    border-radius: var(--radius-xl);
+    background: var(--glass-heavy);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-lg);
+    color: var(--text);
+}
+.km-welcome-title { font-size: 1.25rem; font-weight: 800; margin-bottom: 0.5rem; }
+.km-welcome-lead { font-size: 0.9rem; color: var(--secondary); margin-bottom: 1rem; line-height: 1.6; }
+.km-welcome-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+    margin-bottom: 1.25rem;
+    font-size: 0.88rem;
+    line-height: 1.6;
+}
+.km-welcome-list li {
+    padding: 0.75rem 0.9rem;
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--primary) 7%, transparent);
+}
+.km-welcome-links { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 0.35rem; }
+.km-welcome-links a { color: var(--primary); font-weight: 700; }
+.km-welcome-ok { width: 100%; min-height: var(--km-touch); }
+
+@media (prefers-reduced-motion: reduce) {
+    .km-welcome { animation: none; }
+}
+
+/* ======== 地図が描けないとき ========(2026-09-25、利用者の指摘)
+ * 錠が掛かっている・データが無いときは、**押しても何も起きない操作を画面から下げる**
+ * (app.js の markMapUnavailable)。残すのはトップバーと解除欄だけ。
+ * スマホでは検索のシートが解除欄の上に被さり、入力の前にボタンが効かなかった。
+ */
+body.km-map-unavailable .search-panel,
+body.km-map-unavailable .km-action-bar,
+body.km-map-unavailable .floor-nav,
+body.km-map-unavailable .km-route-bar {
+    display: none;
+}
+
+/* 解除欄は札にして真ん中に置く(地図の無い真っ白な画面に、文字だけが浮かないように) */
+.km-map-locked > * { max-width: 24rem; width: 100%; }
+.km-map-locked {
+    padding-top: calc(var(--km-edge) + 72px);
+}
+
+/* ======== 屋外で拡大したときの建物名 ========(2026-09-25、利用者の要望)
+ * 以前は拡大すると建物名が**丸ごと消えた**(屋外には入れ替わる部屋名が無いのに)。
+ * 図形を消し、名前だけを薄い字で残す。**押せなくする** —— 下敷きの字なので、
+ * その上の出入口や道を押したつもりで建物が選ばれてはいけない。
+ * 付け外しは app.js(renderGlobalLabels)、判定は map-style.js の facilityFaded。
+ * 「表示調整」で 消す / そのまま出す も選べる(アプリの設定と同じ)。
+ */
+#map.km-facility-faded .km-node-facility { display: none; }
+#map.km-facility-faded .km-label-facility {
+    /* Leaflet はツールチップに opacity: 0.9 を**要素へ直接**書く。!important でないと負ける */
+    opacity: 0.45 !important;
+    pointer-events: none;
+    background: transparent !important;
+    border-color: transparent !important;
+    box-shadow: none;
+    color: #0F766E;
+    text-shadow: 0 0 3px #fff, 0 0 3px #fff;
+}
+:root[data-km-theme="dark"] #map.km-facility-faded .km-label-facility {
+    color: #5EEAD4;
+    text-shadow: 0 0 3px #0f172a, 0 0 3px #0f172a;
+}
+@media (prefers-color-scheme: dark) {
+    :root:not([data-km-theme="light"]) #map.km-facility-faded .km-label-facility {
+        color: #5EEAD4;
+        text-shadow: 0 0 3px #0f172a, 0 0 3px #0f172a;
+    }
+}
+
+
+/* ======== 地点(アプリと同じ見せ方) ========
+ *
+ * それまでノードは全部「透明な当たり判定」で、見えているのは文字のピルだけだった。
+ * 種類ごとの色も形も無く、アプリとは別物の地図に見えていた。
+ * 写す元は app/src/main/java/com/ito/kosenmap/GeneralMapNodeRenderer.kt。
+ *
+ * 図形そのものは JS が SVG で描く(`Main/map-style.js`)。
+ * **色を CSS に持たせない** —— 種類ごとの色は表示調整でも使うので、
+ * 2箇所に置くと片方だけ直したときに食い違う。
+ */
+.km-node { background: none; border: none; }
+.km-node-shape { display: block; overflow: visible; filter: drop-shadow(0 1px 2px rgba(15, 23, 42, 0.35)); }
+
+/* ラベルは**その地点の色で縁取る**。どの種類のものか、文字を読む前に分かる */
+/*
+ * 大きさは表示調整の「文字」のつまみで変わる(`--km-label-scale`、既定 1)。
+ * **`:root` に既定値を置いてある** —— JS が動く前や、調整パネルを出さない
+ * 編集画面でも `calc()` が成り立つように。
+ *
+ * 地図の上に出る字は**すべてこの係数を通すこと。** 一部だけ通すと、
+ * 大きくしたときに札と長さの釣り合いが崩れて、かえって読みにくくなる。
+ */
+.km-label {
+    background: rgba(255, 255, 255, 0.95) !important;
+    color: #0f172a;
+    font-weight: 700;
+    font-size: calc(0.78rem * var(--km-label-scale));
+    padding: 2px 8px !important;
+    border-radius: 8px !important;
+    border: 1.5px solid #cbd5e1 !important;
+    box-shadow: var(--shadow-sm);
+    white-space: nowrap;
+}
+.km-label::before { display: none !important; } /* Leaflet の吹き出しの角を出さない */
+
+.km-label-facility { border-color: #06B6D4 !important; font-size: calc(1.05rem * var(--km-label-scale)); font-weight: 800; }
+.km-label-room { border-color: #06B6D4 !important; }
+.km-label-stairs { border-color: #8B5CF6 !important; }
+.km-label-road { border-color: #F59E0B !important; }
+.km-label-entrance { border-color: #10B981 !important; }
+.km-label-wall { border-color: #64748B !important; }
+.km-label-wifi_router { border-color: #2563EB !important; }
+
+/* 辺の長さ。**px と明示する**(図面の縮尺を校正していないので m にはできない) */
+.km-edge-distance {
+    background: none;
+    border: none;
+    color: #64748b;
+    font-size: calc(0.62rem * var(--km-label-scale));
+    font-weight: 700;
+    text-align: center;
+    text-shadow: 0 0 3px #fff, 0 0 3px #fff;
+    pointer-events: none;
+}
+
+/*
+ * 管理画面のツールチップ。**style="…" は CSP に弾かれる**のでクラスで持つ。
+ * 中の細かい字は `em`(札の字に対する比)にしてある —— `rem` で固定すると、
+ * 文字を大きくしたときに ID と座標だけが取り残される。
+ */
+.km-admin-tip { text-align: center; line-height: 1.2; }
+.km-admin-tip-id { font-size: 0.85em; opacity: 0.7; }
+.km-admin-tip-xy { font-size: 0.85em; font-weight: bold; }
+
+/* 地点の詳細。アプリのボトムシートに合わせ、担当者名を独立した行にする */
+.km-detail-meta { display: flex; gap: 0.4rem; align-items: center; margin: 0.35rem 0 0.5rem; }
+.km-detail-chip {
+    font-size: 0.68rem; font-weight: 700; color: #fff;
+    padding: 1px 8px; border-radius: 999px; background: #94a3b8;
+}
+.km-chip-room, .km-chip-facility { background: #06B6D4; }
+.km-chip-stairs { background: #8B5CF6; }
+.km-chip-road { background: #F59E0B; }
+.km-chip-entrance { background: #10B981; }
+.km-chip-wall { background: #64748B; }
+.km-chip-wifi_router { background: #2563EB; }
+.km-detail-floor { font-size: 0.72rem; color: var(--secondary); font-weight: 700; }
+.km-detail-row {
+    display: flex; justify-content: space-between; gap: 0.75rem;
+    font-size: 0.78rem; padding: 2px 0; border-top: 1px solid rgba(148, 163, 184, 0.3);
+}
+.km-detail-row span { color: var(--secondary); }
+.km-detail-closed b { color: #dc2626; }
+
+/*
+ * 暗いときのラベル。**白のピルのままにしない** ——
+ * 沈めた見取り図の上で、白い札だけが光って読みにくくなる。
+ * 縁取りの色(種類の色)はそのまま残す。
+ */
+@media (prefers-color-scheme: dark) {
+    :root:not([data-km-theme="light"]) .km-label {
+        background: rgba(15, 23, 42, 0.92) !important;
+        color: #e2e8f0;
+    }
+    :root:not([data-km-theme="light"]) .km-edge-distance {
+        color: #cbd5e1;
+        text-shadow: 0 0 3px #0f172a, 0 0 3px #0f172a;
+    }
+}
+:root[data-km-theme="dark"] .km-label {
+    background: rgba(15, 23, 42, 0.92) !important;
+    color: #e2e8f0;
+}
+:root[data-km-theme="dark"] .km-edge-distance {
+    color: #cbd5e1;
+    text-shadow: 0 0 3px #0f172a, 0 0 3px #0f172a;
+}
+
+/* ======== 建物の階の切り替え ========
+ *
+ * 屋外図の上に建物の平面図を重ねたとき、その建物の 1F / 2F を選ぶ。
+ * **置かれているときだけ出す**(app.js)。常に出すと、押しても何も変わらない。
+ *
+ * 階の切り替え(外・1〜5F)とは別物なので、離れた位置に置く ——
+ * 並べると「6つ目の階」に見える。
+ */
+.km-building-switcher {
+    position: absolute;
+    /* トップバー(一段)の下。バーの高さを変えたら検索パネルと一緒に直すこと */
+    top: calc(var(--km-edge) + 60px + 12px);
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 900;
+    display: flex;
+    gap: 0.25rem;
+    padding: 0.25rem;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--glass-heavy);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    box-shadow: var(--shadow-sm);
+}
+.km-building-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: var(--km-touch);
+    border: none;
+    background: transparent;
+    color: var(--secondary);
+    font-size: 0.75rem;
+    font-weight: 700;
+    padding: 0.25rem 0.9rem;
+    border-radius: 999px;
+    cursor: pointer;
+}
+.km-building-btn.active { background: var(--primary); color: #fff; }
+
+/* ======== 表示調整パネル ========
+ *
+ * アプリの `MapDisplayTuningPanel` に相当するもの。
+ * 値は**閲覧者の手元**(localStorage)に置き、サーバーへは送らない。
+ */
+/*
+ * 開くボタンは**左下の操作バーの中**に入る(`Main/map-tuning.js` が
+ * `.km-action-btn` として足す)。ここに残っているのは、操作バーが無いページ
+ * (`admin/map-editor.php`)へ出したときの落とし場所。
+ */
+.km-tuning-btn {
+    position: absolute;
+    right: var(--km-edge);
+    bottom: calc(var(--km-bottom) + var(--km-touch) + 8px);
+    z-index: 900;
+    width: var(--km-touch);
+    height: var(--km-touch);
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--glass-heavy);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    box-shadow: var(--shadow-sm);
+    color: var(--text);
+    font-size: 1.1rem;
+    cursor: pointer;
+}
+.km-tuning-btn:hover { background: var(--glass); }
+
+/*
+ * 表示調整のパネル。**開くボタンと同じ側(左下)から出す。**
+ * 右下に出していたときは、押したボタンが左下、開いた面が右下で、
+ * 目が画面を横切ることになっていた。アプリも押した場所の近くから出る。
+ */
+.km-tuning {
+    position: absolute;
+    left: var(--km-edge);
+    bottom: calc(var(--km-bottom) + var(--km-touch) + 8px);
+    z-index: 950;
+    width: min(320px, calc(100vw - 2rem));
+    max-height: min(70vh, 560px);
+    overflow-y: auto;
+    padding: 1rem;
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border);
+    background: var(--glass-heavy);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    box-shadow: var(--shadow-lg);
+    color: var(--text);
+    font-size: 0.82rem;
+}
+
+/*
+ * スマホは下から出るシート。つまみやチェックに指を置ける幅を確保する。
+ * **右は検索シートと同じだけ階のレールを避ける**(潜ると、つまみを動かしたつもりで
+ * 階が切り替わる)。
+ */
+@media (max-width: 768px) {
+    .km-tuning {
+        left: var(--km-edge);
+        right: calc(var(--km-edge) + var(--km-rail-width) + 8px);
+        width: auto;
+        max-height: 60vh;
+    }
+}
+.km-tuning[hidden] { display: none; }
+.km-tuning h2 { font-size: 0.95rem; margin-bottom: 0.6rem; }
+.km-tuning h3 { font-size: 0.8rem; margin: 0.9rem 0 0.4rem; color: var(--secondary); }
+.km-tuning label { display: block; margin-bottom: 0.5rem; }
+/* つまみは指で掴めるだけの高さを取る(既定の 4px の線では掴めない) */
+.km-tuning input[type="range"] { width: 100%; height: 28px; }
+.km-tuning select {
+    width: 100%;
+    min-height: var(--km-touch);
+    padding: 4px 8px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-strong);
+    background: transparent;
+    color: var(--text);
+    font-size: 0.9rem;
+}
+/*
+ * チェックは**行ごと押せるようにする。** 20px の四角だけが的だと、
+ * 指では隣の行を押す。ラベルを `<label for>` にしてあるので、行を広げれば足りる。
+ */
+.km-tuning-check {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-height: var(--km-touch);
+}
+.km-tuning-check input[type="checkbox"] { width: 20px; height: 20px; flex: 0 0 auto; }
+.km-tuning-check label { flex: 1 1 auto; margin: 0; cursor: pointer; }
+.km-tuning-type {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    gap: 0.5rem;
+    align-items: center;
+    min-height: var(--km-touch);
+    padding: 0.3rem 0;
+    border-top: 1px solid rgba(148, 163, 184, 0.25);
+}
+.km-tuning-type input[type="checkbox"] { width: 20px; height: 20px; }
+.km-tuning-swatch { width: 10px; height: 10px; border-radius: 3px; display: inline-block; margin-right: 0.35rem; }
+.km-tuning-close {
+    margin-top: 0.9rem;
+    width: 100%;
+    min-height: var(--km-touch);
+    padding: 0.45rem;
+    border: none;
+    border-radius: 999px;
+    background: var(--primary);
+    color: var(--on-primary);
+    font-weight: 700;
+    cursor: pointer;
+}
+.km-tuning-reset {
+    margin-top: 0.4rem;
+    width: 100%;
+    min-height: var(--km-touch);
+    padding: 0.4rem;
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--secondary);
+    cursor: pointer;
+}
+
+/* ======== Leaflet Popup & Custom Pins Overrides ======== */
+
+.leaflet-popup-content-wrapper {
+    background: var(--glass-heavy) !important;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg) !important;
+    box-shadow: var(--shadow-lg) !important;
+    /* 面が暗い配色に追従するので、文字も追従させる(黒のままだと読めない) */
+    color: var(--text) !important;
+}
+
+.leaflet-popup-tip {
+    background: var(--glass-heavy) !important;
+}
+/*
+ * Leaflet のコントロールは地図の中(z-index 800)。UI レイヤー(1000)より下に置き、
+ * 下から出るシートが上に来るようにする。
+ */
+.leaflet-control {
+    z-index: 800;
+    pointer-events: auto;
+}
+.popup-content {
+    padding: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    min-width: 180px;
+}
+
+.popup-title {
+    font-size: 1.1rem;
+    font-weight: 800;
+    color: var(--primary-dark);
+    margin-bottom: 0.25rem;
+    display: block;
+    text-align: center;
+}
+
+.popup-btn {
+    width: 100%;
+    min-height: var(--km-touch);
+    padding: 0.7rem;
+    border-radius: 999px;
+    border: none;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+    color: white;
+    box-shadow: 0 4px 10px rgba(99, 102, 241, 0.2);
+}
+
+/* 持ち上げない(他のボタンと同じ理由。並んだボタンが動くと隣を押す) */
+.popup-btn:hover {
+    box-shadow: 0 6px 15px rgba(37, 99, 235, 0.3);
+}
+
+.popup-btn.secondary {
+    background: white;
+    color: var(--secondary);
+    border: 1px solid #e2e8f0;
+    box-shadow: none;
+}
+
+.popup-btn.secondary:hover {
+    background: #f8fafc;
+    box-shadow: var(--shadow-sm);
+}
+
+/* ======== Admin Tool Polish ======== */
+.admin-btn {
+    padding: 0.6rem;
+    border-radius: 10px;
+    border: 1px solid #e2e8f0;
+    background: white;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    color: var(--secondary);
+}
+
+.admin-btn:hover {
+    background: #f1f5f9;
+    border-color: var(--primary);
+}
+
+.admin-exec-btn {
+    width: 100%;
+    margin-top: 0.75rem;
+    padding: 0.8rem;
+    background: var(--success);
+    color: white;
+    border: none;
+    border-radius: 10px;
+    font-weight: 800;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(16, 185, 129, 0.2);
+}
+
+.mini-btn {
+    flex: 1;
+    padding: 0.5rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    background: white;
+    cursor: pointer;
+}
+
+/* ======== Route Pins ======== */
+.route-pin {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    pointer-events: none !important;
+}
+
+.pin-bubble {
+    background: white;
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 900;
+    white-space: nowrap;
+    box-shadow: 0 8px 20px rgba(0,0,0,0.2);
+    border: 2px solid transparent;
+    animation: pin-float 2s ease-in-out infinite;
+}
+
+.pin-arrow {
+    width: 0;
+    height: 0;
+    border-left: 8px solid transparent;
+    border-right: 8px solid transparent;
+    border-top: 10px solid white;
+    margin-top: -1px;
+}
+
+.pin-start .pin-bubble {
+    color: #2563eb;
+    border-color: #2563eb;
+}
+.pin-start .pin-arrow { border-top-color: #2563eb; }
+
+.pin-end .pin-bubble {
+    color: #dc2626;
+    border-color: #dc2626;
+}
+.pin-end .pin-arrow { border-top-color: #dc2626; }
+
+@keyframes pin-float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-8px); }
+}
+/* ------------------------------------------------------------------ */
+/* イベントモード(1.0.4)                                              */
+/*                                                                     */
+/* 見た目はすべてクラスで作る。style="…" 属性は CSP(lib/csp.php)に    */
+/* 弾かれ、文字だけが裸で出る状態になる(1.0.1 で実際に踏んだ)。      */
+/* ------------------------------------------------------------------ */
+
+.km-event-banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 8px 16px 0;
+    padding: 10px 14px;
+    border-radius: 12px;
+    /* 通行止めの赤とは別の色にする。バナーは警告ではなく案内 */
+    background: linear-gradient(90deg, rgba(251, 191, 36, 0.95), rgba(249, 168, 37, 0.95));
+    color: #422006;
+    font-weight: 700;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.15);
+}
+
+.km-event-banner-icon {
+    font-size: 1.2rem;
+    line-height: 1;
+}
+
+.km-event-banner-text {
+    flex: 1 1 auto;
+    /* 長い文言でも1行に潰さない。来場者はここしか読まないことがある */
+    word-break: break-word;
+}
+
+.km-event-banner-link {
+    flex: 0 0 auto;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.85);
+    color: #7c2d12;
+    text-decoration: none;
+    font-size: 0.85rem;
+}
+
+.km-event-banner-link:hover {
+    background: #fff;
+}
+
+/* 通行止めの ✕ 印。Leaflet のツールチップの枠を消して記号だけ見せる */
+.km-closure-mark {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    color: #dc2626;
+    font-weight: 900;
+    font-size: calc(0.9rem * var(--km-label-scale));
+}
+
+.km-closure-mark::before {
+    display: none;   /* 吹き出しの三角を消す */
+}
+
+/* 臨時の地点(模擬店・受付など)のアイコン */
+.km-event-poi {
+    background: transparent;
+    border: none;
+}
+
+.km-event-poi-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: #fff;
+    border: 2px solid #f59e0b;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+    font-size: 1rem;
+    line-height: 1;
+}
+
+@media (max-width: 768px) {
+    .km-event-banner {
+        margin: 6px 10px 0;
+        padding: 8px 10px;
+        font-size: 0.85rem;
+    }
+}
+
+/*
+ * 重なって読めないラベルは出さない(2026-09-22。app.js の declutterLabels)。
+ * **点は出したまま** —— 押せば名前が読めるので、情報そのものは消えない。
+ */
+.km-label.km-label-hidden {
+    display: none;
+}
+
+/* 建物の詳細に出す「中へ 1F 2F …」(2026-09-22。app.js の facilityFloorLinks) */
+.km-detail-enter {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
+    margin: 0.5rem 0;
+}
+
+.km-detail-enter-label {
+    font-size: 0.85rem;
+    color: #64748b;
+}
+
+.km-detail-enter .km-enter-btn {
+    flex: 0 0 auto;
+    padding: 0.35rem 0.7rem;
+}

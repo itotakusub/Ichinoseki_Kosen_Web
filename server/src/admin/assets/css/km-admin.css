@@ -1,0 +1,77 @@
+/*!
+ * KosenMap Admin — 自前の追加スタイル
+ *
+ * **AdminLTE は無編集で使う**方針なので、本体の CSS には一切手を入れない。
+ * ここは「AdminLTE のユーティリティクラスでは表せない、ごく少数の指定」だけを置く場所。
+ *
+ * 1.0.1 で CSP を厳格化(`style-src` から 'unsafe-inline' を外した)ため、
+ * HTML の `style="…"` 属性が使えなくなった。それらの行き先がここ。
+ * **値が動くもの**(進捗バーの幅・ドーナツの比率)は CSS 変数か JS の CSSOM 経由にしてある
+ * (JS から要素の style を触るのは CSP の対象外)。
+ */
+
+/* ヘッダーの通知・ユーザーメニューの幅 */
+.km-dropdown-8 { --bs-dropdown-min-width: 8rem; }
+.km-dropdown-9 { --bs-dropdown-min-width: 9rem; }
+
+/* カレンダーの日付セル(7列 = 14.28%) */
+.km-cal-cell {
+  height: 90px;
+  width: 14.28%;
+  vertical-align: top;
+}
+
+/* チャートの棒グラフは大きくなりすぎないように上限を持たせる */
+.km-chart-bar { max-width: 480px; }
+
+/*
+ * ドーナツ。比率だけが動くので、割合は CSS 変数 --km-donut で受け取る。
+ * 値は charts.php のインライン script(nonce 付き)が data 属性から設定する。
+ */
+.km-donut {
+  width: 140px;
+  height: 140px;
+  border-radius: 50%;
+  background: conic-gradient(
+    var(--bs-danger) 0% var(--km-donut, 0%),
+    var(--bs-primary) var(--km-donut, 0%) 100%
+  );
+}
+
+/* チャットの発言ログ。高さを固定して中でスクロールさせる */
+.km-chat-log {
+  height: 320px;
+  overflow-y: auto;
+}
+
+/* プロフィール画像は正方形へ切り出す(縦横比を保ったまま) */
+.km-avatar-img { object-fit: cover; }
+
+/* 空状態などで使う大きめのアイコン */
+.km-icon-3rem { font-size: 3rem; }
+.km-icon-4rem { font-size: 4rem; }
+
+/* FAQ の回答は改行をそのまま見せる(入力どおりに表示する) */
+.km-pre-wrap { white-space: pre-wrap; }
+
+/* 入力欄の幅(フォームの中で他の要素と並べるため固定幅にしている箇所) */
+.km-w-14 { width: 14rem; }
+.km-w-16 { width: 16rem; }
+
+/* カンバンのレーン。カードが 0 枚でもドロップ先として掴めるだけの高さを残す */
+.km-kanban-lane { min-height: 200px; }
+
+/* プロジェクト状況の進捗列 */
+.km-col-progress { width: 220px; }
+.km-progress-sm { height: 8px; }
+
+/* 配信の削除で「配信 ID を打つ」入力欄。CSP で style 属性が使えないので class にする。 */
+.km-w-12rem { width: 12rem; }
+
+/*
+ * 監視(services.js)のサービスの小さな印と、配信(map-publish.php)の QR の枠。
+ * 以前は style="…" で書いており、CSP の style-src(nonce)に弾かれて**効いていなかった**
+ * (security-review-2026-09-10 の 22)。
+ */
+.km-svc-icon { width: 2.25rem; height: 2.25rem; font-size: 1rem; }
+.km-qr-box { max-width: 240px; }
