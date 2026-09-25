@@ -1,0 +1,14 @@
+== A-32
+  復元に失敗した後の役割: VISITOR / 画面で氏名を出すか: false / 閲覧不可の地点を出すか: false
+  onSignedOut() を呼んでいる箇所(定義を除く):
+    MainActivity.kt:367:                wifiViewModel.onSignedOut()
+  その呼び出しを含む関数:
+    MainActivity.kt:355      private fun performLogout() {
+  復元に失敗したときの処理(MainActivity.kt restoreAuthentication の onFailure):
+                result.onSuccess { applyLogtoSession(it, notify = false) }
+                    .onFailure {
+                        isAuthenticated = false
+                        isAppUnlocked = false
+                        wifiViewModel.updateUserRole(MapUserRole.VISITOR)
+                        updateAuthUI()
+                    }

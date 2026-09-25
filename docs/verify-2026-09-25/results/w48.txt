@@ -1,0 +1,24 @@
+1) 教職員が申請する(POST /account.php)
+302 http://127.0.0.1:3900/account.php?staff=1
+   申請番号 #1
+2) 管理者が承認する(POST /admin/staff-requests.php)
+302 http://127.0.0.1:3900/admin/staff-requests.php?done=approve
+3) 管理者が地点を割り当てる(POST /admin/staff-nodes.php)
+302 http://127.0.0.1:3900/admin/staff-nodes.php?done=assign
+4) 管理者がチャットで発言する(POST /admin/api/chat-send.php。Soketi が居ないので 503 だが、保存は配信より先)
+503 
+   削除の前: 監査ログで teacher-0001 を含む行(実行者, 操作, detail)
+teacher-0001	staff.requested	#1
+admin-0001	staff.approved	#1 teacher-0001
+admin-0001	staffnode.assigned	aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1 teacher-0001
+5) Logto から教職員と管理者の User.Deleted が届く(署名付き webhook)
+{"ok":true,"message":"deleted"}
+{"ok":true,"message":"deleted"}
+== 削除の後
+   監査ログで teacher-0001 を含む行(実行者, 操作, detail):
+(NULL)	staff.approved	#1 teacher-0001
+(NULL)	staffnode.assigned	aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1 teacher-0001
+   申請・割り当ての表に残る行: 0
+   チャットに残る管理者 A の発言(sender_id, sender_name, message):
+admin-0001	管理者A	検証用の発言
+   監査ログで admin-0001 が実行者の行: 0(匿名化されていれば 0)

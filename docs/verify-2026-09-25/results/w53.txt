@@ -1,0 +1,13 @@
+ダンプ: 地点 604 件、氏名のある地点 55 件、異なる氏名 54 人
+公開リポジトリ(HEAD)に出る氏名: 4 人
+  氏名#3  server/docs/plan.md:555  同じ行に、ダンプ上の担当部屋の番号もある
+  氏名#3  server/src/scripts/check.php:393  同じ行に、ダンプ上の担当部屋の番号も無い
+  氏名#3  server/src/scripts/check.php:468  同じ行に、ダンプ上の担当部屋の番号も無い
+  氏名#8  server/src/Main/app.js:1860  同じ行に、ダンプ上の担当部屋の番号もある
+  氏名#19  server/src/scripts/check.php:1071  同じ行に、ダンプ上の担当部屋の番号も無い
+  氏名#19  server/src/scripts/check.php:1107  同じ行に、ダンプ上の担当部屋の番号も無い
+  氏名#19  server/src/scripts/check.php:1129  同じ行に、ダンプ上の担当部屋の番号も無い
+  氏名#19  server/src/scripts/check.php:1201  同じ行に、ダンプ上の担当部屋の番号も無い
+  氏名#19  server/src/scripts/check.php:1283  同じ行に、ダンプ上の担当部屋の番号もある
+  氏名#26  server/src/scripts/check.php:412  同じ行に、ダンプ上の担当部屋の番号も無い
+公開リポジトリの全履歴に出る氏名: 4 人
