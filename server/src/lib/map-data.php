@@ -327,6 +327,16 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
             ],
             KM_BUILDING_FLOORS
         ),
+        /*
+         * 経路の重み(2026-09-25)。**管理アプリから配ったときだけ載せる**(lib/route-weights.php)。
+         * 載っていなければ Main/dijkstra.js は自分の既定(KM_ROUTE_WEIGHTS)で動く。
+         * 画素に直した形で渡す(あちらは画素で持っている)。
+         */
+        'routeWeights' => (static function () use ($pdo): ?array {
+            require_once __DIR__ . '/route-weights.php';
+            $stored = km_route_weights_stored($pdo);
+            return $stored === null ? null : km_route_weights_for_web($stored);
+        })(),
     ];
 }
 

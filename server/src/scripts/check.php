@@ -64,6 +64,7 @@ const KM_CHECK_PURE = [
     'building-floors',
     'ssh-notify',
     'github-mirror',
+    'route-weights',
     'ssh-roles',
     'account-delete',
     'legal',
@@ -1989,7 +1990,8 @@ function km_check_map_vertical(): void
     $app = $src('Main/app.js');
 
     km_check_heading('map: エレベーター優先・階段優先');
-    check_bool('好みでない方は重くするだけ(外さない)', str_contains($dijkstra, 'const KM_VERTICAL_PENALTY = 4;'));
+    // 値は重みの表(KM_ROUTE_WEIGHTS)に 1 か所で持つ(2026-09-25)。倍率として掛けるだけで、道は外さない
+    check_bool('好みでない方は重くするだけ(外さない)', str_contains($dijkstra, '    verticalPenalty: 4,') && str_contains($dijkstra, "? 1 : this.weights.verticalPenalty"));
     check_bool('エレベーターは名前で見分ける(種類は階段と同じ)', str_contains($dijkstra, 'static isElevator(node)'));
     check_bool('英語表記も拾う', str_contains($dijkstra, "indexOf('elevator')"));
     check_bool('知らない値は指定なしに倒す', str_contains($dijkstra, "KM_VERTICAL_MODES.indexOf(vertical) >= 0 ? vertical : 'any'"));
@@ -2101,6 +2103,128 @@ function km_check_ssh_notify(): void
     foreach (['ssh-login-notify.sh', 'ssh-kick.sh', 'ssh-login-notify-setup.sh'] as $name) {
         check('配備の一覧と必須の両方に ' . $name, 2, substr_count($deploy, "'./scripts/{$name}'"));
     }
+}
+
+/**
+ * 経路の重み(2026-09-25、利用者の指示)。A 屋内優先・B 部屋を通り抜けない(既定)、C・D(設定)。
+ * **アプリと Website で同じ値**であること —— 片方だけ直すと、同じ場所へ違う道を案内する。
+ */
+function km_check_route_weights(): void
+{
+    $dijkstra = (string) file_get_contents(__DIR__ . '/../Main/dijkstra.js');
+    $appJs = (string) file_get_contents(__DIR__ . '/../Main/app.js');
+    $index = (string) file_get_contents(__DIR__ . '/../index.php');
+
+    km_check_heading('route-weights: Website');
+    $web = [];
+    if (preg_match('/const KM_ROUTE_WEIGHTS = Object\.freeze\(\{(.*?)\}\);/s', $dijkstra, $m)) {
+        preg_match_all('/^\s*(\w+):\s*([0-9.]+|true|false),/m', $m[1], $pairs, PREG_SET_ORDER);
+        foreach ($pairs as $p) {
+            $web[$p[1]] = $p[2];
+        }
+    }
+    check_bool('重みの表を読めた', count($web) === 7);
+    check('A: 出入り 1 回は 15m(150px)', '150', $web['entranceTransferPx'] ?? null);
+    check('A: 屋外は 1.3 倍', '1.3', $web['outsideMultiplier'] ?? null);
+    check('B: 部屋を通り抜けないが既定', 'true', $web['noRoomPassThrough'] ?? null);
+    // 通り抜けを禁じて道が消えるなら、許してもう一度(経路を消さない)
+    check_bool('B: 道が消えるなら通り抜けを許す', str_contains($dijkstra, 'const loose = this.searchPath(startNodeId, endNodeId, false);'));
+    check_bool('C・D は検索パネルで選べる', str_contains($index, 'id="route-fewer-floors"') && str_contains($index, 'id="route-rain"'));
+    check_bool('C・D を探索に渡す', str_contains($appJs, 'fewerFloors: routeOptions.fewerFloors') && str_contains($appJs, 'rain: routeOptions.rain'));
+    // 将来、管理アプリで決めた重みを配信データで配る受け口
+    check_bool('配信データの重みを受け取れる', str_contains($appJs, 'weights: graphData.routeWeights'));
+    check_bool('壊れた重みは既定へ倒す', str_contains($dijkstra, 'function kmRouteWeights(source)'));
+
+    km_check_heading('route-weights: 配る道(サーバー)');
+    require_once __DIR__ . '/../lib/route-weights.php';
+    require_once __DIR__ . '/../lib/app-map.php';
+    // 既定はサーバー・Website・アプリで同じ(Website は画素。10px/m)
+    $forWeb = km_route_weights_for_web(KM_ROUTE_WEIGHTS_DEFAULTS);
+    $sameAsWeb = true;
+    foreach ($forWeb as $key => $value) {
+        $webValue = $web[$key] ?? null;
+        $webValue = $webValue === 'true' ? true : ($webValue === 'false' ? false : (float) $webValue);
+        if ($webValue !== (is_bool($value) ? $value : (float) $value)) {
+            $sameAsWeb = false;
+        }
+    }
+    check_bool('サーバーの既定を画素に直すと Website の既定と同じ', $sameAsWeb);
+    check('無い項目は既定で埋める', KM_ROUTE_WEIGHTS_DEFAULTS, km_route_weights_normalize([]));
+    check('知らない項目は捨てる', KM_ROUTE_WEIGHTS_DEFAULTS, km_route_weights_normalize(['evil' => 1]));
+    check('値は受ける', 2.5, km_route_weights_normalize(['outsideMultiplier' => 2.5])['outsideMultiplier']);
+    $rejects = static function (array $input): bool {
+        try {
+            km_route_weights_normalize($input);
+            return false;
+        } catch (InvalidArgumentException) {
+            return true;
+        }
+    };
+    // 1 未満の倍率は「屋内優先」「減らす」を逆に効かせる
+    check_bool('倍率 1 未満は断る', $rejects(['outsideMultiplier' => 0.5]));
+    check_bool('桁違いは断る', $rejects(['floorTransferMeters' => 100000]));
+    check_bool('数でないものは断る', $rejects(['verticalPenalty' => 'abc']) && $rejects(['verticalPenalty' => true]));
+    check_bool('真偽値でない「通り抜けない」は断る', $rejects(['noRoomPassThrough' => 'false']));
+    check_bool('無限大は断る', $rejects(['rainOutsideMultiplier' => INF]));
+    check_bool('保存の形が 255 文字に収まる', strlen((string) json_encode(KM_ROUTE_WEIGHTS_DEFAULTS, JSON_PRESERVE_ZERO_FRACTION)) <= 255);
+
+    $api = (string) file_get_contents(__DIR__ . '/../api/route-weights.php');
+    $assertAt = strpos($api, 'logto_assert_permissions($principal, LOGTO_ADMIN_PERMISSIONS);');
+    check_bool('書き込みは管理者の権限を確かめてから', $assertAt !== false
+        && $assertAt < (int) strpos($api, 'km_route_weights_publish($pdo')
+        && $assertAt < (int) strpos($api, 'km_route_weights_reset($pdo)'));
+    check_bool('読みは権限なしで返す(秘密ではない)', strpos($api, "=== 'GET'") < $assertAt);
+    check_bool('配った・やめたをタイムラインに残す', str_contains($api, "'route.weights_publish'") && str_contains($api, "'route.weights_reset'"));
+
+    $mapDataLib = (string) file_get_contents(__DIR__ . '/../lib/map-data.php');
+    check_bool('Website の地図データに載せる(画素に直して)', str_contains($mapDataLib, "'routeWeights' =>") && str_contains($mapDataLib, 'km_route_weights_for_web($stored)'));
+    $appMapApi = (string) file_get_contents(__DIR__ . '/../api/app-map.php');
+    // 重みだけ変えたとき、版を上げずに「更新」で届くように
+    check_bool('アプリへ: 地図が最新のときの応答にも載せる', preg_match("/'upToDate' => true,.*?'routeWeights' => \\\$routeWeights,/s", $appMapApi) === 1);
+    check_bool('アプリへ: 本体の応答にも載せる', str_contains($appMapApi, "    \$routeWeights\n);"));
+    // 地図の外に置く。チェックサムは地図の文字列だけに取る
+    $map = new stdClass();
+    $map->nodes = [];
+    $package = json_decode((string) km_app_map_build_package($map, 'kosen-main', 1, '2026-09-25T00:00:00+09:00', '2027-01-01T00:00:00+09:00', null, true, KM_ROUTE_WEIGHTS_DEFAULTS), true);
+    check_bool('パッケージに重みが載る', is_array($package) && ($package['routeWeights']['floorTransferMeters'] ?? null) == 20);
+    check('チェックサムは地図だけ', 'sha256:' . hash('sha256', '{"nodes":[]}'), $package['checksum'] ?? null);
+    $plain = json_decode((string) km_app_map_build_package($map, 'kosen-main', 1, '2026-09-25T00:00:00+09:00', '2027-01-01T00:00:00+09:00', null, true), true);
+    check_bool('配っていなければ null', is_array($plain) && array_key_exists('routeWeights', $plain) && $plain['routeWeights'] === null);
+
+    $routeKt = 'C:/Users/itota/Documents/Test/app/src/main/java/com/ito/kosenmap/RouteSearch.kt';
+    if (!is_file($routeKt)) {
+        check_skip('route-weights: アプリと突き合わせ', 'アプリの原本が無い(本番のホストなど)');
+        return;
+    }
+    km_check_heading('route-weights: アプリと突き合わせ');
+    $kt = (string) file_get_contents($routeKt);
+    $num = static function (string $pattern) use ($kt): ?float {
+        return preg_match($pattern, $kt, $m) === 1 ? (float) $m[1] : null;
+    };
+    $pxPerMeter = 10.0;
+    check('1 層ぶん(20m × 10px/m)', (float) ($web['floorTransferPx'] ?? -1), $num('/const val FLOOR_TRANSFER_METERS = ([0-9.]+)f/') * $pxPerMeter);
+    check('出入り 1 回(15m × 10px/m)', (float) ($web['entranceTransferPx'] ?? -1), $num('/const val ENTRANCE_TRANSFER_METERS = ([0-9.]+)f/') * $pxPerMeter);
+    check('屋外の倍率', (float) ($web['outsideMultiplier'] ?? -1), $num('/val outsideMultiplier: Float = ([0-9.]+)f/'));
+    check('好みでない昇降の倍率', (float) ($web['verticalPenalty'] ?? -1), $num('/const val VERTICAL_PENALTY = ([0-9.]+)f/'));
+    check('階の移動を減らす倍率', (float) ($web['fewerFloorsMultiplier'] ?? -1), $num('/val fewerFloorsMultiplier: Float = ([0-9.]+)f/'));
+    check('雨の日の倍率', (float) ($web['rainOutsideMultiplier'] ?? -1), $num('/val rainOutsideMultiplier: Float = ([0-9.]+)f/'));
+    check_bool('部屋を通り抜けないが既定', str_contains($kt, 'val noRoomPassThrough: Boolean = true'));
+    check_bool('アプリも道が消えるなら通り抜けを許す', str_contains($kt, 'return searchRoute(graph, nodesByUuid, startNodeUuid, goalNodeUuid, avoidRooms = false)'));
+
+    $dir = dirname($routeKt);
+    $prefs = (string) @file_get_contents($dir . '/MapPreferences.kt');
+    $fragment = (string) @file_get_contents($dir . '/SettingFragment.kt');
+    // 一般ビルドでは手元の重みを読まない(取り込みで入っても効かせない)
+    check_bool('手元の重みを読むのは管理ビルドだけ', str_contains($prefs, 'if (adminBuild) routeWeightsFromPreferences(preferences, distributed) else distributed'));
+    check_bool('重みの設定は管理者だけに出す', str_contains($fragment, '"route_weights_category",'));
+    $pkgKt = (string) @file_get_contents($dir . '/MapPackage.kt');
+    $viewModel = (string) @file_get_contents($dir . '/WifiViewModel.kt');
+    $client = (string) @file_get_contents($dir . '/RouteWeightsClient.kt');
+    check_bool('アプリ: 最新のときの応答からも重みを読む', str_contains($pkgKt, 'routeWeights = parseRouteWeights(obj.get("routeWeights"))'));
+    check_bool('アプリ: 取得のたびに覚える(最新でも・本体でも)', substr_count($viewModel, 'rememberDistributedRouteWeights(result.') === 2);
+    check_bool('アプリ: 一般ビルドは配られた重みを使う', str_contains($prefs, 'DISTRIBUTED_ROUTE_WEIGHTS_KEY, null)) ?: RouteWeights()'));
+    check_bool('アプリ: 配る先は api/route-weights.php', str_contains($client, '"/api/route-weights.php"'));
+    check_bool('アプリ: 配るボタンは管理者だけに出す', str_contains($fragment, '"route_weight_publish",') && str_contains($fragment, '"route_weight_unpublish",'));
 }
 
 /**
@@ -3170,7 +3294,7 @@ function km_check_hardening(): void
     check_bool('include 専用の 404 は `\.php(/|$)`', str_contains($https, 'logto-client)\.php(/|$) {'));
     check_bool('proxy-web.conf に proxy_read_timeout を書かない(location で重複すると起動しない)', !str_contains((string) preg_replace('/^\s*#.*$/m', '', $file('nginx/km/proxy-web.conf')), 'proxy_read_timeout'));
     check('443 で 300s を許すのは downloads.php だけ', 1, substr_count($https, 'proxy_read_timeout 300s;'));
-    check_bool('未認証で重い口を km_api で絞る(メソッドを問わない)', str_contains($https, 'location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data)|logto_me)\.php$ {') && str_contains($https, 'limit_req zone=km_api burst=120 nodelay;'));
+    check_bool('未認証で重い口を km_api で絞る(メソッドを問わない)', str_contains($https, 'location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights)|logto_me)\.php$ {') && str_contains($https, 'limit_req zone=km_api burst=120 nodelay;'));
     check_bool('アプリの地図は km_appmap で絞る', preg_match('#location = /api/app-map\.php \{\s*limit_req zone=km_appmap burst=30 nodelay;#', $https) === 1);
     check_bool('callback.php は認可コードをログに残さない', preg_match('#location = /callback\.php \{\s*access_log [^;]+ km_no_query;#', $https) === 1);
     /*
@@ -5494,11 +5618,12 @@ function km_check_route(): void
         '階段は名前でも寄せる(古い地図のため)',
         preg_match("/'stairs',\s*Dijkstra\.stairKey,/", $dijkstra) === 1
     );
-    // 重みはアプリと同じ(20m / 3m を px/m の既定 10 で画素に直した値)
-    check_bool('階の移動は 200px', str_contains($dijkstra, 'KM_FLOOR_TRANSFER_PX = 200'));
-    check_bool('屋内外の出入りは 30px', str_contains($dijkstra, 'KM_ENTRANCE_TRANSFER_PX = 30'));
+    // 重みはアプリと同じ(20m / 15m を px/m の既定 10 で画素に直した値)。出入りは 2026-09-25 に A 屋内優先で 3m → 15m
+    // 値の突き合わせは route-weights の群がアプリの原本と行う
+    check_bool('階の移動は 200px', str_contains($dijkstra, '    floorTransferPx: 200,'));
+    check_bool('屋内外の出入りは 150px', str_contains($dijkstra, '    entranceTransferPx: 150,'));
     // 0 にすると階の移動がタダになり、少し歩けば済む場面で階段が選ばれる
-    check_bool('乗り換えをタダにしない', !str_contains($dijkstra, 'KM_FLOOR_TRANSFER_PX = 0'));
+    check_bool('乗り換えをタダにしない', !str_contains($dijkstra, 'floorTransferPx: 0,') && str_contains($dijkstra, "positive('floorTransferPx', 1)"));
     /*
      * **繋げたかどうかを数える。** 0 のまま外から中を探すと必ず失敗するので、
      * 「経路が見つかりません」ではなく**登録漏れ**として言う材料になる。
@@ -6041,6 +6166,9 @@ foreach ($selected as $name) {
             break;
         case 'github-mirror':
             km_check_github_mirror();
+            break;
+        case 'route-weights':
+            km_check_route_weights();
             break;
         case 'account-delete':
             km_check_account_delete();

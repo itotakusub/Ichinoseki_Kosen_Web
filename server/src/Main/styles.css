@@ -803,6 +803,17 @@ body {
     color: var(--text-muted, #64748b);
 }
 
+/* C・D の切り替え。行ごと押せるようにする(20px の四角だけが的だと、指では隣を押す) */
+.km-route-conditions { flex-wrap: wrap; gap: 0.25rem 1rem; margin-top: 0.25rem; }
+.km-route-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    min-height: var(--km-touch);
+    cursor: pointer;
+}
+.km-route-check input { width: 20px; height: 20px; }
+
 .km-route-pref-select {
     flex: 1 1 auto;
     min-width: 0;

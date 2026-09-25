@@ -447,9 +447,10 @@ server {
     }
 
     # 未認証で重い API(2026-09-14 の診断で追加。ゾーンの注記は http の km_api)。
+    # route-weights は 2026-09-25 に足した(読みは誰でもできる。書きは管理者のトークンが要る)。
     # **メソッドを問わず数える。** 見取り図・APK・人数・アカウント画像・地図のデータは GET でも PHP が毎回働く。
     # 静的資材の正規表現とは重ならない(こちらは `.php` で終わる)ので、並び順はここでよい。
-    location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data)|logto_me)\.php$ {
+    location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights)|logto_me)\.php$ {
         limit_req zone=km_api burst=120 nodelay;
         include /etc/nginx/km/proxy-web.conf;
         proxy_set_header X-Forwarded-Port ${KM_APP_PORT};

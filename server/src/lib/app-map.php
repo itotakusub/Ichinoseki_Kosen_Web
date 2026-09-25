@@ -945,7 +945,9 @@ function km_app_map_build_package(
     string $serverTime,
     string $expiresAt,
     ?string $activeEventUuid,
-    bool $withChecksum
+    bool $withChecksum,
+    /** 経路の重み(lib/route-weights.php)。配っていなければ null(アプリは自分の既定で動く) */
+    ?array $routeWeights = null
 ): ?string {
     $mapJson = json_encode($map, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     if (!is_string($mapJson)) {
@@ -963,6 +965,8 @@ function km_app_map_build_package(
         'activeEventUuid' => ($activeEventUuid ?? '') !== '' ? $activeEventUuid : null,
         'serverTime' => $serverTime,
         'checksum' => $withChecksum ? 'sha256:' . hash('sha256', $mapJson) : null,
+        // 地図の外に置く(チェックサムは地図の文字列だけに取っている。重みを変えても版を上げずに済む)
+        'routeWeights' => $routeWeights,
         'map' => $placeholder,
     ];
     $body = json_encode($package, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
