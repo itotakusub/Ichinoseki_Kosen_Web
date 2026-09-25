@@ -1,0 +1,14 @@
+[設定] 氏名の錠 = password、パスワード = PassA
+1) Cookie なし:
+namesUnlocked=false occupantName=null
+2) パスワード A で解除:
+  応答: {"success":true}
+  セッション: efdea3d0…
+3) 解除したセッションで:
+namesUnlocked=true occupantName="架空 太郎"
+[設定] 氏名の錠 = password、パスワード = PassB
+4) パスワードを B に替えた後、同じセッションで:
+namesUnlocked=true occupantName="架空 太郎"
+5) 新しいセッションで古いパスワード A を試す:
+  応答: {"success":false,"message":"パスワードが正しくありません。"}
+namesUnlocked=false occupantName=null
