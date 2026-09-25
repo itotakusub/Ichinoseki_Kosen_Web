@@ -72,6 +72,9 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     'row.update' => 'がレコードを更新しました',
     'row.delete' => 'がレコードを削除しました',
     'map.settings' => 'が地図の公開設定を変更しました',
+    // 経路の重み(2026-09-25)。管理アプリから api/route-weights.php で配る
+    'route.weights_publish' => 'が経路の重みを一般の既定として配りました',
+    'route.weights_reset' => 'が経路の重みを配るのをやめました(各端末は既定に戻ります)',
     // 実行者(公開ページの利用者)を頭に置く前提なので「が」から始める
     'map.unlock_failed' => 'が教職員氏名のパスワード解除に失敗しました',
     'task.create' => 'がタスクを追加しました',
