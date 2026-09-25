@@ -67,6 +67,30 @@ organizations 1)。組織(`Kosen_Member`)に誰も居らず、`config/app-map.lo
 | 切る・BAN | `sudo kosenmap-ssh-kick --list / --ip X [--ban] / --unban X / --user U / --lock-user U / --unlock-user U` |
 | 信頼する接続元 | `sudo kosenmap-ssh-kick --trust X / --untrust X / --list-trusted`。一覧は `/etc/kosenmap/ssh-trusted-ips`(root だけが書ける)。信頼済みは件名が `[KosenMap] **信頼済み**SSH ログイン: 通知`、**それ以外は「重要」付き**(X-Priority・Importance。Gmail は見ない) |
 
+### 経路の条件と重み(2026-09-25、利用者の指示)
+
+| 条件 | 扱い | 中身 |
+|---|---|---|
+| A 屋内優先 | **既定** | 出入り 1 回 3m → 15m、屋外の道 1.3 倍。中に道があれば中を通る |
+| B 部屋を通り抜けない | **既定** | 部屋は出発地・目的地のときだけ。それで道が無くなれば通り抜けを許す(経路を消さない) |
+| C 階の移動を減らす | 利用者の設定 | 1 層ぶんの重み × 2。Website は検索パネル、アプリは設定の「マップ設定」 |
+| D 雨の日 | 利用者の設定 | 屋外の道をさらに × 3 |
+
+重みの表は **Website `Main/dijkstra.js` の `KM_ROUTE_WEIGHTS` と アプリ `RouteSearch.kt` の `RouteWeights` の2か所**で、
+`check.php` の `route-weights` が値を突き合わせる。**管理アプリでは設定「経路の重み(管理)」で値を変えて試せる**
+(管理ビルドの管理者だけに出る。一般ビルドは手元の値を読まない)。
+
+**将来の予定(利用者の指示):** 管理アプリで決めた重みを、**一般の既定として配る。** 受け口は用意済み ——
+Website は `graphData.routeWeights`(`lib/map-data.php` に載せれば効く)、アプリは `RouteWeights` をそのまま
+配信パッケージから読む形にする。まだ配る道(管理アプリ → サーバー → 配信)は作っていない。
+
+### 管理マップの建物の階(2026-09-25)
+
+管理マップにも「平面図 1 枚 = 1 つの階」を効かせた。階ボタンの下の「建物の階 ▾」から開いて、中に地点を置ける。
+**重ね合わせの名残は外した** —— 道具の「外画像配置」、移動・削除で外画像を掴む動き、表示調整の「建物平面図を重ねる」、
+外を拡大したときに下地だけ薄くなる動き(一般マップでも、平面図が出ないのに全体図が霞んでいた)。
+配置のデータ(`km_map_overlays` / `AdMapOverlay`)は消していないので、`DRAW_BUILDING_OVERLAYS` を戻せば元どおり。
+
 **本番でやること(SSH):** 配備のあと `sudo sh /opt/kosenmap/scripts/ssh-login-notify-setup.sh --fix`
 (`/usr/local/sbin` へ root:root 755 で写し、`/etc/pam.d/sshd` に 1 行足す)→ **別の SSH を開いたまま**
 `sudo /usr/local/sbin/kosenmap-ssh-login-notify --test`。PAM と sudo が走らせるのは写しだけで、

@@ -2,16 +2,39 @@
 // ダイクストラ法を用いた最短経路計算アルゴリズム
 
 /*
- * 乗り換え1回ぶんの重み。**アプリ(`RouteSearch.kt`)と同じ値**を画素に直したもの。
+ * ======== 経路の重み ========(2026-09-25 に1か所へまとめた)
  *
- * あちらは「20m / 3m」をメートルで持ち、px/m(既定 10)を掛けて使う。
- * この地図の距離は画素で持っているので、掛けた後の値をそのまま置く。
+ * **アプリ(`RouteSearch.kt` の `RouteWeights`)と同じ値・同じ意味。** 片方だけ直すと、
+ * アプリと Website で違う道を案内する(check.php の route-weights が突き合わせる)。
+ * あちらはメートルで持ち px/m(既定 10)を掛けて使う。こちらは画素で持つので、掛けた後の値を置く。
  *
- * 0 にしない —— 階の移動がタダになると、同じ階を少し歩けば済む場面でも
- * 階段を上り下りする経路が選ばれる(アプリで実際にそうなっていた)。
+ *   floorTransferPx       … 階段・エレベーター 1 層ぶん(20m)。0 にしない —— 階の移動がタダになると、
+ *                            同じ階を少し歩けば済む場面でも上り下りする経路が選ばれる
+ *   entranceTransferPx    … 屋内外の出入り 1 回ぶん。**A 屋内優先**で 3m → 15m に上げた(利用者の指示)。
+ *                            3m だと「外へ出て入り直す」がほぼタダで、中に道があっても外回りが選ばれた
+ *   outsideMultiplier     … 屋外の道の重み。**A 屋内優先**(1.3 倍)
+ *   noRoomPassThrough     … **B 部屋を通り抜けない**。部屋は出発地・目的地のときだけ通る
+ *                            (通れる道がそれしか無いときは、黙って通り抜けを許す —— 経路を消さない)
+ *   verticalPenalty       … エレベーター優先・階段優先で、好みでない方にかける倍率
+ *   fewerFloorsMultiplier … **C 階の移動を減らす**(設定)。1 層ぶんの重みにかける
+ *   rainOutsideMultiplier … **D 雨の日モード**(設定)。屋外の道にさらにかける
+ *
+ * 値は管理アプリで試せる(アプリの設定「経路の重み(管理)」)。**将来は、管理アプリで決めた値を
+ * 一般の既定として配る予定**(map-data の routeWeights)。そのときもこの形で受け取る。
  */
-const KM_FLOOR_TRANSFER_PX = 200;      // 20m × 10px/m。1層ぶん
-const KM_ENTRANCE_TRANSFER_PX = 30;    //  3m × 10px/m。屋内外の出入り1回ぶん
+const KM_ROUTE_WEIGHTS = Object.freeze({
+    floorTransferPx: 200,         // 20m × 10px/m
+    entranceTransferPx: 150,      // 15m × 10px/m
+    outsideMultiplier: 1.3,
+    noRoomPassThrough: true,
+    verticalPenalty: 4,
+    fewerFloorsMultiplier: 2,
+    rainOutsideMultiplier: 3,
+});
+
+// 以前の名前。検査や他のファイルが読んでいるので残す(値は上の表から取る)
+const KM_FLOOR_TRANSFER_PX = KM_ROUTE_WEIGHTS.floorTransferPx;
+const KM_ENTRANCE_TRANSFER_PX = KM_ROUTE_WEIGHTS.entranceTransferPx;
 
 /*
  * エレベーター優先・階段優先(2026-09-22、利用者の要望)。**アプリ(`RouteSearch.kt`)と同じ値。**
@@ -21,16 +44,39 @@ const KM_ENTRANCE_TRANSFER_PX = 30;    //  3m × 10px/m。屋内外の出入り1
  * 4 倍だと 1 層ぶんが 20m → 80m 相当。少し遠回りでも好みの方を通り、
  * 好みの方が無ければ黙ってもう一方を使う。
  */
-const KM_VERTICAL_PENALTY = 4;
+const KM_VERTICAL_PENALTY = KM_ROUTE_WEIGHTS.verticalPenalty;
 
 /** 縦の移動の好み。'any'(指定なし)/ 'elevator' / 'stairs'。 */
 const KM_VERTICAL_MODES = ['any', 'elevator', 'stairs'];
 
+/**
+ * 重みを読む。**知らない値・壊れた値は既定へ倒す**(将来は配信データから来る。何が入っていても落ちない)。
+ * 倍率は 1 未満にさせない —— 屋外を軽くすると「屋内優先」が逆に効く。
+ */
+function kmRouteWeights(source) {
+    const w = Object.assign({}, KM_ROUTE_WEIGHTS);
+    if (!source || typeof source !== 'object') return w;
+    const positive = function (key, min) {
+        const v = Number(source[key]);
+        if (Number.isFinite(v) && v >= min) w[key] = v;
+    };
+    positive('floorTransferPx', 1);
+    positive('entranceTransferPx', 0);
+    positive('outsideMultiplier', 1);
+    positive('verticalPenalty', 1);
+    positive('fewerFloorsMultiplier', 1);
+    positive('rainOutsideMultiplier', 1);
+    if (typeof source.noRoomPassThrough === 'boolean') w.noRoomPassThrough = source.noRoomPassThrough;
+    return w;
+}
 class Dijkstra {
     /**
      * @param {object} nodes
      * @param {Array}  edges
-     * @param {{vertical?: string}} [options] vertical: 'any' | 'elevator' | 'stairs'
+     * @param {{vertical?: string, fewerFloors?: boolean, rain?: boolean, weights?: object}} [options]
+     *   vertical: 'any' | 'elevator' | 'stairs'
+     *   fewerFloors: C 階の移動を減らす / rain: D 雨の日モード(どちらも閲覧者の設定)
+     *   weights: 重みの上書き(既定は KM_ROUTE_WEIGHTS)
      */
     constructor(nodes, edges, options) {
         this.nodes = nodes;
@@ -38,6 +84,9 @@ class Dijkstra {
         const vertical = String((options && options.vertical) || 'any');
         // 知らない値は「指定なし」に倒す(localStorage は閲覧者の手元にあり、何でも入りうる)
         this.vertical = KM_VERTICAL_MODES.indexOf(vertical) >= 0 ? vertical : 'any';
+        this.fewerFloors = !!(options && options.fewerFloors === true);
+        this.rain = !!(options && options.rain === true);
+        this.weights = kmRouteWeights(options && options.weights);
 
         /*
          * イベントモードで閉じられた経路・地点は、**隣接リストに載せない**。
@@ -82,9 +131,10 @@ class Dijkstra {
                 continue;
             }
             if (this.adjacencyList[edge.source] && this.adjacencyList[edge.target]) {
-                this.adjacencyList[edge.source].push({ node: edge.target, weight: edge.distance });
+                const weight = edge.distance * this.outsideFactor(nodes[edge.source], nodes[edge.target]);
+                this.adjacencyList[edge.source].push({ node: edge.target, weight: weight });
                 // 逆方向の経路も登録
-                this.adjacencyList[edge.target].push({ node: edge.source, weight: edge.distance });
+                this.adjacencyList[edge.target].push({ node: edge.source, weight: weight });
             }
         }
 
@@ -130,7 +180,15 @@ class Dijkstra {
     verticalMultiplier(node) {
         if (this.vertical === 'any') return 1;
         const wantsElevator = this.vertical === 'elevator';
-        return Dijkstra.isElevator(node) === wantsElevator ? 1 : KM_VERTICAL_PENALTY;
+        return Dijkstra.isElevator(node) === wantsElevator ? 1 : this.weights.verticalPenalty;
+    }
+
+    /**
+     * 屋外の道にかける倍率(A 屋内優先・D 雨の日)。**両端とも屋外の線だけ**に効かせる。
+     */
+    outsideFactor(a, b) {
+        if (!a || !b || !Dijkstra.isOutside(a.floor) || !Dijkstra.isOutside(b.floor)) return 1;
+        return this.weights.outsideMultiplier * (this.rain ? this.weights.rainOutsideMultiplier : 1);
     }
 
     /** 接続ID。空なら「指定なし」。 */
@@ -231,7 +289,8 @@ class Dijkstra {
                     this.verticalMultiplier(a),
                     this.verticalMultiplier(b)
                 );
-                return Math.max(1, layers) * KM_FLOOR_TRANSFER_PX * multiplier;
+                const fewer = this.fewerFloors ? this.weights.fewerFloorsMultiplier : 1;
+                return Math.max(1, layers) * this.weights.floorTransferPx * multiplier * fewer;
             },
             () => { this.stairTransfers += 1; }
         );
@@ -258,7 +317,7 @@ class Dijkstra {
                 return floors.some(Dijkstra.isOutside)
                     && floors.some((f) => Dijkstra.floorNumber(f) === 1);
             },
-            () => KM_ENTRANCE_TRANSFER_PX,
+            () => this.weights.entranceTransferPx,
             () => { this.entranceTransfers += 1; }
         );
     }
@@ -270,6 +329,36 @@ class Dijkstra {
      * @returns {string[] | null} 経路のノードID配列。経路がない場合はnull
      */
     findShortestPath(startNodeId, endNodeId) {
+        /*
+         * **B 部屋を通り抜けない**(2026-09-25、利用者の指示)。部屋は出発地・目的地のときだけ通る。
+         * 部屋どうしが線で繋がっていると、教室の中を突っ切る経路になりうるため。
+         *
+         * **それで道が無くなるなら、通り抜けを許してもう一度探す。** ホールや吹き抜けを「部屋」として
+         * 描いてあり、そこを通らないと行けない場所がある —— 経路を消すより、通り抜けて案内する方がよい
+         * (エレベーター優先と同じ考え方)。どちらになったかは roomPassThroughUsed に残す。
+         */
+        this.roomPassThroughUsed = false;
+        if (this.weights.noRoomPassThrough) {
+            const strict = this.searchPath(startNodeId, endNodeId, true);
+            if (strict) return strict;
+            const loose = this.searchPath(startNodeId, endNodeId, false);
+            this.roomPassThroughUsed = loose !== null;
+            return loose;
+        }
+        return this.searchPath(startNodeId, endNodeId, false);
+    }
+
+    /** 部屋か(B の判定)。 */
+    isRoom(nodeId) {
+        const node = this.nodes[nodeId];
+        return !!node && String(node.type) === 'room';
+    }
+
+    /**
+     * 探索の本体。
+     * @param {boolean} avoidRooms 途中で部屋を通らない(出発地・目的地は除く)
+     */
+    searchPath(startNodeId, endNodeId, avoidRooms) {
         const distances = {};
         const previous = {};
         const priorityQueue = []; 
@@ -326,6 +415,10 @@ class Dijkstra {
 
             // 隣接ノードの距離を更新(閉じた地点は上で除いてあるが、念のため守る)
             for (const neighbor of this.adjacencyList[currentId] || []) {
+                if (avoidRooms && neighbor.node !== endNodeId && neighbor.node !== startNodeId
+                    && this.isRoom(neighbor.node)) {
+                    continue;
+                }
                 const alt = distances[currentId] + neighbor.weight;
                 if (alt < distances[neighbor.node]) {
                     distances[neighbor.node] = alt;

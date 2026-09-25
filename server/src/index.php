@@ -355,6 +355,17 @@ try {
                                 <option value="stairs">階段優先</option>
                             </select>
                         </div>
+                        <?php
+                        /*
+                         * 経路の条件(2026-09-25、利用者の指示)。C 階の移動を減らす / D 雨の日。
+                         * **どちらも重くするだけで、道を消さない**(Main/dijkstra.js の KM_ROUTE_WEIGHTS)。端末に覚える。
+                         * 屋内優先(A)と部屋を通り抜けない(B)は既定の動きなので、ここには出さない。
+                         */
+                        ?>
+                        <div class="km-route-pref km-route-conditions">
+                            <label class="km-route-check"><input type="checkbox" id="route-fewer-floors"> 階の移動を減らす</label>
+                            <label class="km-route-check"><input type="checkbox" id="route-rain"> 雨の日(外をなるべく通らない)</label>
+                        </div>
                         <div class="button-group">
                             <button id="search-btn" class="primary-btn">案内開始</button>
                             <button id="reset-btn" class="secondary-btn">リセット</button>
