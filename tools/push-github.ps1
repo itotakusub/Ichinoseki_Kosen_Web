@@ -263,7 +263,16 @@ if (-not $NoCommit) {
 
 # ---------------------------------------------------------------- 5. 出す
 
+<#
+  **1 回だけやり直す。** 通信の一時的な切れで止まることがある(2026-09-25 に 1 度あり、やり直したら通った)。
+  それ以上は繰り返さない —— 認証や権限の失敗は何度やっても同じで、待たせるだけになる。
+#>
 git push -u origin $Branch
+if ($LASTEXITCODE -ne 0) {
+    Write-Host 'push に失敗しました。5 秒待って、もう一度だけ試します。' -ForegroundColor Yellow
+    Start-Sleep -Seconds 5
+    git push -u origin $Branch
+}
 if ($LASTEXITCODE -ne 0) { throw "push に失敗しました($Branch)。" }
 
 Write-Host ''

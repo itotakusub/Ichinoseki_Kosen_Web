@@ -460,12 +460,15 @@ try {
          *
          * 並びは左から「✕(やめる)」「いまの行き先」「位置の更新(次へ)」。
          * 行き先は**次に目指す 1 か所だけ**(階段・出入口・目的地)を出す。
-         * Website は現在地を測れないので、着いたら「位置の更新」を押して次へ進める。
+         * Website は現在地を測れないので、「位置の更新」を押すと**今見えている部屋と合う名前の地点を選んでもらい**、
+         * そこから目的地まで引き直す(2026-09-25、利用者の指示)。候補は帯の上の #km-route-pick に出す。
          *
          * **置き場所は左下の操作ピルのすぐ上。** 右は階のレールとズームを避ける
          * (スマホの検索シートと同じ幅の決め方)。見た目は styles.css の `.km-route-bar`。
          */
         ?>
+        <div class="km-route-dock">
+        <div id="km-route-pick" class="km-route-pick" aria-live="polite" hidden></div>
         <div id="km-route-bar" class="km-route-bar" role="region" aria-label="ルート案内" hidden>
             <button id="km-route-close" type="button" class="km-route-close" title="案内をやめる" aria-label="案内をやめる">&times;</button>
             <button id="km-route-target" type="button" class="km-route-target" title="行き先を地図の真ん中に出す">
@@ -473,6 +476,7 @@ try {
                 <span id="km-route-sub" class="km-route-sub"></span>
             </button>
             <button id="km-route-next" type="button" class="km-route-next">位置の更新</button>
+        </div>
         </div>
 
         <?php
@@ -635,7 +639,7 @@ try {
                 </li>
                 <li>
                     <b>現在地は使いません</b><br>
-                    Web 版は端末の位置情報を読みません。案内中は、着いたら「位置の更新」を押して次へ進みます。
+                    Web 版は端末の位置情報を読みません。案内中に「位置の更新」を押し、今見えている部屋の名前を選ぶと、そこから案内し直します。
                 </li>
             </ul>
             <button id="km-welcome-ok" type="button" class="primary-btn km-welcome-ok">はじめる</button>
