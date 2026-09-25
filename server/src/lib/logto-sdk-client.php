@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Logto\Sdk\LogtoClient;
 use Logto\Sdk\Models\AccessTokenClaims;
 use Logto\Sdk\Models\IdTokenClaims;
+use Logto\Sdk\Storage\StorageKey;
 
 /**
  * **トークンの中身を base64url として読む**(2026-09-17)。
@@ -47,5 +48,53 @@ final class KmLogtoClient extends LogtoClient
     function getAccessTokenClaims(string $resource = ''): AccessTokenClaims
     {
         return new AccessTokenClaims(...self::kmJwtPayload($this->getAccessToken($resource), 'アクセストークン'));
+    }
+
+    /**
+     * **期限の切れていない** ID トークンの中身。近いか過ぎていれば、refresh_token で 1 回だけ取り直す(2026-09-25)。
+     *
+     * ## なぜ要るのか(診断 W-50・W-51)
+     *
+     * SDK の isAuthenticated() は ID トークンが**あるか**しか見ず、ID トークンが新しくなるのは
+     * getAccessToken() がアクセストークンを更新したときだけ。公開ページはそれを呼ばないので、
+     * 有効期間が過ぎると教職員の印(`exp` まで)が立たず、**画面には「○○ さん」と出たまま氏名が消えた。**
+     * 逆に account.php は期限を見ずに古い `organization_roles` を信じ、期限切れの ID トークンからの提案が通った。
+     *
+     * アクセストークンがまだ有効だと getAccessToken() は取り直さないので、ここで直接 refresh_token を使う。
+     * 取り直した ID トークンは SDK と同じく検証してから保存する(handleTokenResponse)。
+     *
+     * @return IdTokenClaims|null 期限内の中身。サインインしていない・取り直せなかったときは null
+     *                            (呼ぶ側は「教職員の特典を出さない」に倒す)
+     */
+    function kmFreshIdTokenClaims(int $marginSeconds = 60): ?IdTokenClaims
+    {
+        if (!$this->isAuthenticated()) {
+            return null;
+        }
+        $claims = $this->getIdTokenClaims();
+        if ((int) $claims->exp > time() + $marginSeconds) {
+            return $claims;
+        }
+
+        $refreshToken = $this->storage->get(StorageKey::refreshToken);
+        if (!is_string($refreshToken) || $refreshToken === '') {
+            return null;
+        }
+        try {
+            $response = $this->oidcCore->fetchTokenByRefreshToken(
+                clientId: $this->config->appId,
+                clientSecret: $this->config->appSecret,
+                refreshToken: $refreshToken,
+            );
+            $this->handleTokenResponse('', $response);
+        } catch (Throwable $exception) {
+            error_log('KmLogtoClient: ID トークンを取り直せませんでした: ' . $exception->getMessage());
+
+            return null;
+        }
+
+        $fresh = $this->getIdTokenClaims();
+
+        return (int) $fresh->exp > time() ? $fresh : null;
     }
 }

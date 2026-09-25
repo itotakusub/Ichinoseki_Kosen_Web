@@ -29,6 +29,8 @@ $openMenus = [
     'timeline' => 'content',
     'charts' => 'content',
     'mailbox' => 'content',
+    // ランキングの「調べられた語」を外す(2026-09-25、診断 W-45)
+    'ranking' => 'content',
     'profile' => 'extra',
     // FAQ は見本ページではなく、編集して公開する実コンテンツになった(フェーズ14)
     'faq' => 'content',
@@ -206,6 +208,12 @@ $parentLink = static fn(string $id): string => 'nav-link' . ($openMenu === $id ?
                     <a href="./mailbox.php" class="<?= $link('mailbox') ?>">
                       <i class="nav-icon bi bi-envelope-fill"></i>
                       <p data-i18n="side.mailbox">受信箱</p>
+                    </a>
+                  </li>
+                  <li class="nav-item">
+                    <a href="./ranking.php" class="<?= $link('ranking') ?>">
+                      <i class="nav-icon bi bi-trophy"></i>
+                      <p data-i18n="side.ranking">ランキングの語</p>
                     </a>
                   </li>
                   <?php // 問い合わせフォームは公開ページ(/contact.php)へ一本化した(フェーズ17)。

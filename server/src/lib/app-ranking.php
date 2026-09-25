@@ -37,7 +37,21 @@ require_once __DIR__ . '/app-secret.php';
  * 出どころから来た語だけを一覧に出す。IP そのものは残さない。
  *
  * 地図そのものは DB に入れない(JSON のまま)。ここに置くのは派生した集計値だけ。
+ *
+ * ## 1 回の送信で数える量を絞る(2026-09-25、診断 W-44・W-45)
+ *
+ * 以前は形と件数(50)しか見ておらず、**同じ地点 ID を 50 個並べれば 1 回で +50**、
+ * **実在しない ID と新しい語は送るたびに表の行が増えた**(1 つの IP から毎分最大 6,000 行)。
+ * いまは:
+ *   - 1 回の送信の中の重複を落とす(アプリはもともと重複を送らない)
+ *   - 地点は地図(km_map_nodes)に在る ID だけ数える。場所の表は地点の数で頭打ちになる
+ *   - 利用者の件数は、前の記録から KM_RANKING_USER_MIN_INTERVAL 秒たっていない送信では足さない
+ *   - 語の表は年ごとに KM_RANKING_MAX_QUERY_ROWS 行まで。語ごとの出どころの印も打ち止めにする
+ *   - 出どころは IP ではなく km_map_rate_limit_key()(IPv6 は /64)で数える
+ *   - 管理画面(admin/ranking.php)で、語を一覧から外せる(km_map_ranking_hidden_queries)
  */
+
+require_once __DIR__ . '/map-rate-limit.php';
 
 /** 記録を残す年数。これより古い年は捨てる。 */
 const KM_RANKING_RETENTION_YEARS = 2;
@@ -50,6 +64,15 @@ const KM_RANKING_MAX_QUERY_LENGTH = 64;
 
 /** 調べられた語を一覧に出すのに要る、異なる出どころの数。 */
 const KM_RANKING_QUERY_MIN_SOURCES = 3;
+
+/** 語の表に入れる、年ごとの行数の上限。超えたら新しい語は入れない(既にある語は数える)。 */
+const KM_RANKING_MAX_QUERY_ROWS = 20000;
+
+/** 語ごとに覚える出どころの数の上限。公開の判定に要る数より多くは要らない。 */
+const KM_RANKING_MAX_QUERY_SOURCES = KM_RANKING_QUERY_MIN_SOURCES * 4;
+
+/** 利用者の件数を足す間隔(秒)。これより短い間の送信は、場所の集計には入れるが利用者には足さない。 */
+const KM_RANKING_USER_MIN_INTERVAL = 30;
 
 function km_ranking_ensure_tables(PDO $pdo): void
 {
@@ -96,6 +119,16 @@ function km_ranking_ensure_tables(PDO $pdo): void
             INDEX idx_km_ranking_users_year (year, visits)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         SQL);
+
+    // 管理画面で一覧から外した語。**外したあとに同じ語が来ても数えない**(年ごと)
+    $pdo->exec(<<<'SQL'
+        CREATE TABLE IF NOT EXISTS km_map_ranking_hidden_queries (
+            normalized_query VARCHAR(64) NOT NULL,
+            year SMALLINT NOT NULL,
+            hidden_at DATETIME NOT NULL,
+            PRIMARY KEY (normalized_query, year)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        SQL);
 }
 
 // ---------------------------------------------------------------- 記録
@@ -120,7 +153,8 @@ function km_ranking_record(
 
     $year = (int) date('Y');
 
-    $places = km_ranking_clean_uuids($nodeUuids);
+    // 地図に在る地点だけ。**実在しない ID で表を膨らませない**(W-44)
+    $places = km_ranking_existing_uuids($pdo, km_ranking_clean_uuids($nodeUuids));
     if ($places !== []) {
         $statement = $pdo->prepare(
             'INSERT INTO km_map_ranking_places (node_uuid, year, visits)
@@ -134,36 +168,74 @@ function km_ranking_record(
 
     $words = km_ranking_clean_queries($queries);
     if ($words !== []) {
-        $statement = $pdo->prepare(
-            'INSERT INTO km_map_ranking_queries (normalized_query, year, searches)
-             VALUES (?, ?, 1)
-             ON DUPLICATE KEY UPDATE searches = searches + 1'
-        );
+        $words = km_ranking_without_hidden($pdo, $words, $year);
+    }
+    if ($words !== []) {
+        /*
+         * **既にある語は数える。新しい語は、年の上限まで。** 上限を超えたあとの新しい語は捨てる
+         * (1 つの IP から毎分数千行を足せた。W-44)。数え方は 1 文にまとめず、先に行数を見る ——
+         * 上限はおおよそでよい(同時に来た分だけ少し超えうる)。
+         */
+        $rows = $pdo->prepare('SELECT COUNT(*) FROM km_map_ranking_queries WHERE year = ?');
+        $rows->execute([$year]);
+        $full = (int) $rows->fetchColumn() >= KM_RANKING_MAX_QUERY_ROWS;
+        $statement = $full
+            ? $pdo->prepare('UPDATE km_map_ranking_queries SET searches = searches + 1 WHERE normalized_query = ? AND year = ?')
+            : $pdo->prepare(
+                'INSERT INTO km_map_ranking_queries (normalized_query, year, searches)
+                 VALUES (?, ?, 1)
+                 ON DUPLICATE KEY UPDATE searches = searches + 1'
+            );
+        $counted = [];
         foreach ($words as $word) {
             $statement->execute([$word, $year]);
+            if (!$full || $statement->rowCount() > 0) {
+                $counted[] = $word;
+            }
         }
 
-        if ($source !== null && $source !== '') {
-            $sourceHash = km_app_keyed_hash(km_app_secret($pdo, 'ranking'), "query-source|{$year}", $source);
+        if ($source !== null && $source !== '' && $counted !== []) {
+            // IP ではなく数える単位(IPv6 は /64)。アドレスを替えるだけで別の出どころにならないように
+            $sourceHash = km_app_keyed_hash(
+                km_app_secret($pdo, 'ranking'),
+                "query-source|{$year}",
+                km_map_rate_limit_key($source)
+            );
+            // 語ごとの出どころは打ち止めにする。公開の判定に要る数より多くは覚えない
             $mark = $pdo->prepare(
                 'INSERT IGNORE INTO km_map_ranking_query_sources (normalized_query, year, source_hash)
-                 VALUES (?, ?, ?)'
+                 SELECT ?, ?, ? FROM DUAL
+                 WHERE (SELECT COUNT(*) FROM km_map_ranking_query_sources
+                         WHERE normalized_query = ? AND year = ?) < ?'
             );
-            foreach ($words as $word) {
-                $mark->execute([$word, $year, $sourceHash]);
+            foreach ($counted as $word) {
+                $mark->execute([$word, $year, $sourceHash, $word, $year, KM_RANKING_MAX_QUERY_SOURCES]);
             }
         }
     }
 
     // **参加していない利用者の行は作らない。** 既定は参加しないこと。
     if ($userId !== null && $userId !== '' && $places !== []) {
+        /*
+         * **短い間隔で送り直しても件数は増えない**(W-44)。前の記録から
+         * KM_RANKING_USER_MIN_INTERVAL 秒たっていなければ、表示名だけ直して件数は足さない。
+         * アプリは 20 件たまるか画面を離れたときに送るので、ふつうの使い方ではまず当たらない。
+         */
         $pdo->prepare(
             'INSERT INTO km_map_ranking_users (user_id, year, visits, display_name, updated_at)
              VALUES (?, ?, ?, ?, NOW())
-             ON DUPLICATE KEY UPDATE visits = visits + VALUES(visits),
-                                     display_name = VALUES(display_name),
-                                     updated_at = NOW()'
-        )->execute([$userId, $year, count($places), km_ranking_clean_name($displayName)]);
+             ON DUPLICATE KEY UPDATE
+                 visits = IF(updated_at <= DATE_SUB(NOW(), INTERVAL ? SECOND), visits + VALUES(visits), visits),
+                 display_name = VALUES(display_name),
+                 updated_at = IF(updated_at <= DATE_SUB(NOW(), INTERVAL ? SECOND), NOW(), updated_at)'
+        )->execute([
+            $userId,
+            $year,
+            count($places),
+            km_ranking_clean_name($displayName),
+            KM_RANKING_USER_MIN_INTERVAL,
+            KM_RANKING_USER_MIN_INTERVAL,
+        ]);
     }
 
     km_ranking_purge_old($pdo, $year);
@@ -184,11 +256,137 @@ function km_ranking_clean_uuids(array $raw): array
         }
         $value = trim((string) $entry);
         // アプリの UUID は英数字とハイフン。表に妙な値を溜めないため入口で絞る。
-        if ($value !== '' && preg_match('/^[A-Za-z0-9_-]{1,64}$/', $value) === 1) {
+        // **同じ ID は 1 回だけ**(W-44。並べて送っても 1 回の送信で 1 と数える)
+        if ($value !== '' && preg_match('/^[A-Za-z0-9_-]{1,64}$/', $value) === 1 && !in_array($value, $cleaned, true)) {
             $cleaned[] = $value;
         }
     }
     return $cleaned;
+}
+
+/**
+ * 地図(km_map_nodes.uuid)に在る ID だけを、渡された順で返す。
+ *
+ * **確かめられなければ 1 件も数えない**(表が無い・DB の不調)。ランキングが一時的に数えないのは害が小さく、
+ * 数え方の歯止めが外れる方が困る。
+ *
+ * @param array<int, string> $uuids km_ranking_clean_uuids() を通したもの
+ * @return array<int, string>
+ */
+function km_ranking_existing_uuids(PDO $pdo, array $uuids): array
+{
+    if ($uuids === []) {
+        return [];
+    }
+    try {
+        $placeholders = implode(',', array_fill(0, count($uuids), '?'));
+        $statement = $pdo->prepare("SELECT uuid FROM km_map_nodes WHERE uuid IN ({$placeholders})");
+        $statement->execute(array_values($uuids));
+        $known = array_fill_keys(array_map('strval', $statement->fetchAll(PDO::FETCH_COLUMN)), true);
+    } catch (Throwable $exception) {
+        error_log('km_ranking_existing_uuids: 地図の地点を確かめられないので数えません: ' . $exception->getMessage());
+        return [];
+    }
+
+    return array_values(array_filter($uuids, static fn (string $uuid): bool => isset($known[$uuid])));
+}
+
+/**
+ * 管理画面で外した語を除く。
+ *
+ * @param array<int, string> $words
+ * @return array<int, string>
+ */
+function km_ranking_without_hidden(PDO $pdo, array $words, int $year): array
+{
+    if ($words === []) {
+        return [];
+    }
+    $placeholders = implode(',', array_fill(0, count($words), '?'));
+    $statement = $pdo->prepare(
+        "SELECT normalized_query FROM km_map_ranking_hidden_queries
+         WHERE year = ? AND normalized_query IN ({$placeholders})"
+    );
+    $statement->execute([$year, ...array_values($words)]);
+    $hidden = array_fill_keys(array_map('strval', $statement->fetchAll(PDO::FETCH_COLUMN)), true);
+
+    return array_values(array_filter($words, static fn (string $word): bool => !isset($hidden[$word])));
+}
+
+/**
+ * 語を一覧から外す(管理画面から)。**回数と出どころの印も消す。** 同じ年のうちは、また来ても数えない。
+ *
+ * @return bool 外した語が一覧に在ったか
+ */
+function km_ranking_hide_query(PDO $pdo, string $query, int $year): bool
+{
+    km_ranking_ensure_tables($pdo);
+    $query = trim($query);
+    if ($query === '' || mb_strlen($query, 'UTF-8') > KM_RANKING_MAX_QUERY_LENGTH) {
+        throw new InvalidArgumentException('外す語が正しくありません。');
+    }
+
+    $pdo->beginTransaction();
+    try {
+        $pdo->prepare(
+            'INSERT IGNORE INTO km_map_ranking_hidden_queries (normalized_query, year, hidden_at) VALUES (?, ?, NOW())'
+        )->execute([$query, $year]);
+        $removed = $pdo->prepare('DELETE FROM km_map_ranking_queries WHERE normalized_query = ? AND year = ?');
+        $removed->execute([$query, $year]);
+        $pdo->prepare('DELETE FROM km_map_ranking_query_sources WHERE normalized_query = ? AND year = ?')
+            ->execute([$query, $year]);
+        $pdo->commit();
+    } catch (Throwable $exception) {
+        $pdo->rollBack();
+        throw $exception;
+    }
+
+    return $removed->rowCount() > 0;
+}
+
+/**
+ * 管理画面の一覧。**公開の条件に満たない語も出す**(公開される前に外せるように)。
+ *
+ * @return array<int, array{query:string, searches:int, sources:int, public:bool}>
+ */
+function km_ranking_queries_for_admin(PDO $pdo, int $year, int $limit = 100): array
+{
+    km_ranking_ensure_tables($pdo);
+    $statement = $pdo->prepare(
+        'SELECT q.normalized_query, q.searches,
+                (SELECT COUNT(*) FROM km_map_ranking_query_sources s
+                  WHERE s.normalized_query = q.normalized_query AND s.year = q.year) AS sources
+         FROM km_map_ranking_queries q
+         WHERE q.year = ?
+         ORDER BY q.searches DESC, q.normalized_query ASC LIMIT ?'
+    );
+    $statement->bindValue(1, $year, PDO::PARAM_INT);
+    $statement->bindValue(2, max(1, min(500, $limit)), PDO::PARAM_INT);
+    $statement->execute();
+
+    $rows = [];
+    foreach ($statement->fetchAll() as $row) {
+        $sources = (int) $row['sources'];
+        $rows[] = [
+            'query' => (string) $row['normalized_query'],
+            'searches' => (int) $row['searches'],
+            'sources' => $sources,
+            'public' => $sources >= KM_RANKING_QUERY_MIN_SOURCES,
+        ];
+    }
+    return $rows;
+}
+
+/** 外した語の一覧(新しい順)。 */
+function km_ranking_hidden_queries(PDO $pdo, int $year): array
+{
+    km_ranking_ensure_tables($pdo);
+    $statement = $pdo->prepare(
+        'SELECT normalized_query FROM km_map_ranking_hidden_queries WHERE year = ? ORDER BY hidden_at DESC LIMIT 200'
+    );
+    $statement->execute([$year]);
+
+    return array_map('strval', $statement->fetchAll(PDO::FETCH_COLUMN));
 }
 
 /**
@@ -217,6 +415,10 @@ function km_ranking_clean_queries(array $raw): array
             continue;
         }
         if (mb_strlen($value, 'UTF-8') > KM_RANKING_MAX_QUERY_LENGTH) {
+            continue;
+        }
+        // 同じ語は 1 回の送信で 1 回だけ数える
+        if (in_array($value, $cleaned, true)) {
             continue;
         }
         $cleaned[] = $value;
@@ -252,7 +454,7 @@ function km_ranking_public_user_key(string $secret, string $userId, int $year): 
 function km_ranking_purge_old(PDO $pdo, int $currentYear): void
 {
     $oldest = $currentYear - KM_RANKING_RETENTION_YEARS;
-    foreach (['km_map_ranking_places', 'km_map_ranking_queries', 'km_map_ranking_query_sources', 'km_map_ranking_users'] as $table) {
+    foreach (['km_map_ranking_places', 'km_map_ranking_queries', 'km_map_ranking_query_sources', 'km_map_ranking_users', 'km_map_ranking_hidden_queries'] as $table) {
         $pdo->prepare("DELETE FROM {$table} WHERE year < ?")->execute([$oldest]);
     }
 }
@@ -313,6 +515,8 @@ function km_ranking_queries(
          WHERE q.year = ?
            AND (SELECT COUNT(*) FROM km_map_ranking_query_sources s
                  WHERE s.normalized_query = q.normalized_query AND s.year = q.year) >= ?
+           AND NOT EXISTS (SELECT 1 FROM km_map_ranking_hidden_queries h
+                 WHERE h.normalized_query = q.normalized_query AND h.year = q.year)
          ORDER BY q.searches DESC, q.normalized_query ASC LIMIT ?'
     );
     $statement->bindValue(1, $year, PDO::PARAM_INT);

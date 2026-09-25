@@ -142,8 +142,14 @@ if ($signedIn) {
             if (($_POST['do_account'] ?? '') === 'staff_node_edit') {
                 require_once __DIR__ . '/lib/staff-nodes.php';
                 require_once __DIR__ . '/lib/admin-log.php';
-                $isTeacherNow = km_staff_org_claims_is_teacher(
-                    isset($claims->organization_roles) && is_array($claims->organization_roles) ? $claims->organization_roles : null
+                /*
+                 * **期限の切れた ID トークンは信じない**(2026-09-25、診断 W-51)。以前は古い organization_roles のまま通り、
+                 * Logto で組織から外したあとも、古いセッションから出した提案が承認されて地図に入った。
+                 * 期限が近ければ取り直し(lib/logto-sdk-client.php)、取り直した中身で見る。
+                 */
+                $freshClaims = $client->kmFreshIdTokenClaims();
+                $isTeacherNow = $freshClaims !== null && km_staff_org_claims_is_teacher(
+                    is_array($freshClaims->organization_roles ?? null) ? $freshClaims->organization_roles : null
                 );
                 if (!$isTeacherNow) {
                     throw new KmLogtoAccountException('教職員の権限が今のサインインにありません。一度サインアウトしてから入り直してください。');
@@ -308,8 +314,10 @@ if ($signedIn) {
     $staffActive = false;
     $staffNodes = [];
     if ($staffEnabled && ($staffLatest['status'] ?? null) === 'approved') {
-        $staffActive = km_staff_org_claims_is_teacher(
-            isset($claims->organization_roles) && is_array($claims->organization_roles) ? $claims->organization_roles : null
+        // 期限の切れた ID トークンでは担当地点(教職員氏名を含む)を出さない(W-51。上の提案と同じ判定)
+        $freshClaims = $client->kmFreshIdTokenClaims();
+        $staffActive = $freshClaims !== null && km_staff_org_claims_is_teacher(
+            is_array($freshClaims->organization_roles ?? null) ? $freshClaims->organization_roles : null
         );
         if ($staffActive) {
             try {

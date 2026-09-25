@@ -60,6 +60,8 @@ $haveRevision = isset($input['haveRevision']) && is_int($input['haveRevision'])
 $haveMapId = is_string($input['haveMapId'] ?? null) && preg_match('/^[A-Za-z0-9._-]{1,32}$/', $input['haveMapId']) === 1
     ? $input['haveMapId']
     : null;
+// 端末が持っている地図の中身の段(visitor / staff / names。2026-09-25、W-52)。無ければ古いアプリとして扱う
+$haveLevel = km_app_map_parse_have_level($input['haveLevel'] ?? null);
 
 $serverTime = (new DateTimeImmutable('now'))->format(DateTimeInterface::ATOM);
 
@@ -183,7 +185,33 @@ $revision = isset($meta['revision']) && is_int($meta['revision']) ? $meta['revis
  */
 $routeWeights = km_route_weights_stored($pdo);
 
-if (km_app_map_is_up_to_date($slug, $haveMapId, $haveRevision, $revision)) {
+/*
+ * スタッフ限定の一時地点は、権限を確認できたときだけ含める。
+ * 検証に失敗しても 401 にはせず来場者版を返す(ログインが切れただけで
+ * 地図そのものを取得できなくなる方が困る)。
+ *
+ * **イベント用の正本も同じ扱い。** 添付した JSON に氏名や staffOnly の地点が入っていても、
+ * ここで落とす(添付する人が消し忘れても配らない)。
+ *
+ * **「最新です」の判定より前に決める**(2026-09-25、W-52)。どの段の中身を配るかで、
+ * 端末の持っている地図を置き換えるかが変わる。
+ */
+$principal = logto_optional_principal();
+$permissions = is_array($principal) ? ($principal['permissions'] ?? []) : [];
+/*
+ * 教職員(docs/15 段 D。2026-09-18)。組織トークンで、こちらの組織の教職員の権限を持つ人
+ * (logto_guard.php が組織 ID を照合したうえで is_teacher を立てる)。
+ * **イベント運営とは別の権限**だが、閲覧不可の地点(staffOnly)は教職員にも見せる。
+ */
+$isTeacher = is_array($principal) && ($principal['is_teacher'] ?? false) === true;
+$isStaff = is_array($principal) && (
+    in_array(LOGTO_STAFF_PERMISSION, $permissions, true) || ($principal['is_admin'] ?? 0) === 1
+);
+$privileged = $isStaff || $isTeacher;
+$sendNames = $privileged && km_app_map_may_send_occupant_names($privileged, $isTeacher);
+$contentLevel = km_app_map_content_level($privileged, $sendNames);
+
+if (km_app_map_is_up_to_date($slug, $haveMapId, $haveRevision, $revision, $haveLevel, $contentLevel)) {
     // 本体を返さない場合でも serverTime は必ず返す。端末はこれで時計を合わせ、
     // 有効期限の判定に端末の時計を使わずに済む。
     respond([
@@ -193,6 +221,7 @@ if (km_app_map_is_up_to_date($slug, $haveMapId, $haveRevision, $revision)) {
         'expiresAt' => $expiresAt->format(DateTimeInterface::ATOM),
         'serverTime' => $serverTime,
         'routeWeights' => $routeWeights,
+        'contentLevel' => $contentLevel,
     ]);
 }
 
@@ -208,28 +237,10 @@ if ($map === null) {
     respond(['success' => false, 'message' => 'マップを準備できませんでした。'], 500);
 }
 
-/*
- * スタッフ限定の一時地点は、権限を確認できたときだけ含める。
- * 検証に失敗しても 401 にはせず来場者版を返す(ログインが切れただけで
- * 地図そのものを取得できなくなる方が困る)。
- *
- * **イベント用の正本も同じ扱い。** 添付した JSON に氏名や staffOnly の地点が入っていても、
- * ここで落とす(添付する人が消し忘れても配らない)。
- */
-$principal = logto_optional_principal();
-$permissions = is_array($principal) ? ($principal['permissions'] ?? []) : [];
-/*
- * 教職員(docs/15 段 D。2026-09-18)。組織トークンで、こちらの組織の教職員の権限を持つ人
- * (logto_guard.php が組織 ID を照合したうえで is_teacher を立てる)。
- * **イベント運営とは別の権限**だが、閲覧不可の地点(staffOnly)は教職員にも見せる。
- */
-$isTeacher = is_array($principal) && ($principal['is_teacher'] ?? false) === true;
-$isStaff = is_array($principal) && (
-    in_array(LOGTO_STAFF_PERMISSION, $permissions, true) || ($principal['is_admin'] ?? 0) === 1
-);
-if (!$isStaff && !$isTeacher) {
+// 何を落とすかは上で決めた段($contentLevel)と同じ判定
+if (!$privileged) {
     $map = km_app_map_strip_staff_only($map);
-} elseif (!km_app_map_may_send_occupant_names($isStaff || $isTeacher, $isTeacher)) {
+} elseif (!$sendNames) {
     /*
      * **staff でも、氏名だけは別に判断する。**
      *
@@ -248,7 +259,8 @@ $body = km_app_map_build_package(
     $expiresAt->format(DateTimeInterface::ATOM),
     is_string($meta['activeEventUuid'] ?? null) ? $meta['activeEventUuid'] : null,
     ($meta['checksum'] ?? true) !== false,
-    $routeWeights
+    $routeWeights,
+    $contentLevel
 );
 if ($body === null) {
     error_log("api/app-map.php: パッケージを組み立てられません: {$slug}");

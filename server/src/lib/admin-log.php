@@ -75,6 +75,8 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     // 経路の重み(2026-09-25)。管理アプリから api/route-weights.php で配る
     'route.weights_publish' => 'が経路の重みを一般の既定として配りました',
     'route.weights_reset' => 'が経路の重みを配るのをやめました(各端末は既定に戻ります)',
+    // ランキングの「調べられた語」を外した(2026-09-25、W-45)。**語そのものは記録しない**(詳細は年だけ)
+    'ranking.query_hidden' => 'がランキングの調べられた語を一覧から外しました',
     // 実行者(公開ページの利用者)を頭に置く前提なので「が」から始める
     'map.unlock_failed' => 'が教職員氏名のパスワード解除に失敗しました',
     'task.create' => 'がタスクを追加しました',
@@ -266,6 +268,10 @@ function km_admin_log_record(
             "INSERT INTO km_admin_log ({$columns}, created_at) VALUES ({$placeholders}, NOW())"
         );
         $stmt->execute($values);
+
+        // 期限を過ぎた IP を消す(1 日 1 回だけ動く。lib/privacy-retention.php、W-49)。失敗しても記録は済んでいる
+        require_once __DIR__ . '/privacy-retention.php';
+        km_privacy_purge_daily($pdo);
     } catch (Throwable $exception) {
         error_log('km_admin_log_record failed (' . $category . '/' . $action . '): ' . $exception->getMessage());
     }

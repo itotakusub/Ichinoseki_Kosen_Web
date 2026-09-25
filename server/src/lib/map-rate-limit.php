@@ -46,7 +46,7 @@ declare(strict_types=1);
  * 以前ここに書いていた `ON *.*` は誤りで、他のスキーマには届かない。
  * 表は自動で作る。`scripts/create-rate-limit-table.sql` は自動作成が使えない環境向けの代替。
  *
- * 失敗回数のクリアは DELETE ではなく UPDATE にしてある。DELETE 権限が無い環境でも壊れないため。
+ * 解除に成功したら行ごと消す(2026-09-25。成功した人の IP を残さない)。古い行は lib/privacy-retention.php が 1 日で消す。
  */
 
 const KM_MAP_UNLOCK_FAILURE_LIMIT = 8;
@@ -279,7 +279,12 @@ function km_map_record_unlock_failure(PDO $pdo, string $scope = 'web'): void
 }
 
 /**
- * 失敗回数を 0 に戻す。**この錠の分だけ。** DELETE ではなく UPDATE。
+ * 失敗回数を消す。**この錠の分だけ。**
+ *
+ * **行ごと消す**(2026-09-25、診断 W-49)。以前は 0 に戻す UPDATE で、照合の前に必ず 1 回数えるため
+ * **1 回で正しく解除した人の IP まで「失敗 0 回」の行として残り続けた。**
+ * 冒頭の「DELETE 権限が無い環境」の配慮は、アプリの DB 利用者が ALL を持つと分かった今は要らない
+ * (lib/account-delete.php も DELETE している)。
  *
  * **'app' では呼ばない。** アクセスコードは配布物で誰でも持っているので、成功で消すと
  * 「外れ7回ごとに当たり1回」で無制限に試せる(android-data#1)。時間の窓で自然に消えるのを待つ。
@@ -291,8 +296,7 @@ function km_map_clear_unlock_failures(PDO $pdo, string $scope = 'web'): void
     try {
         km_map_rate_limit_ensure_table($pdo, $scope);
         $stmt = $pdo->prepare(
-            "UPDATE {$table}
-             SET failure_count = 0, locked_until = NULL
+            "DELETE FROM {$table}
              WHERE ip_address = INET6_ATON(?)"
         );
         $stmt->execute([km_map_rate_limit_key()]);

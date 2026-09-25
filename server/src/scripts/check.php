@@ -65,6 +65,8 @@ const KM_CHECK_PURE = [
     'ssh-notify',
     'github-mirror',
     'route-weights',
+    // 診断 2026-09-25(docs/16)の所見を直したこと
+    'review-0925',
     'ssh-roles',
     'account-delete',
     'legal',
@@ -391,7 +393,7 @@ function km_check_app_map(): string
         'nodes' => [
             ['uuid' => 'n1', 'title' => '教員室', 'subtitle' => '1-106',
                 'type1' => 'room', 'floor' => '1F', 'x' => 1, 'y' => 2,
-                'occupantName' => '架空 太郎 先生'],
+                'occupantName' => '架空 一郎 先生'],
             // 氏名のキーを持たないノード。**落ちないこと**
             ['uuid' => 'n2', 'title' => '通路', 'subtitle' => '',
                 'type1' => 'road', 'floor' => '1F', 'x' => 3, 'y' => 4],
@@ -410,7 +412,7 @@ function km_check_app_map(): string
         'version' => 10,
         'nodes' => [['uuid' => 'n1', 'title' => '教員室', 'subtitle' => '1-106',
             'type1' => 'room', 'floor' => '1F', 'x' => 1, 'y' => 2,
-            'occupantName' => '架空 太郎 先生']],
+            'occupantName' => '架空 花子 先生']],
         'lines' => [],
     ]));
     check_bool(
@@ -466,7 +468,7 @@ function km_check_app_map(): string
     $snapshot = km_app_map_decode_snapshot(json_encode([
         'version' => 10,
         'nodes' => [
-            ['uuid' => 'n1', 'occupantName' => '架空 太郎 先生'],
+            ['uuid' => 'n1', 'occupantName' => '架空 一郎 先生'],
             ['uuid' => 'n2', 'occupantName' => null],
             // **空白だけは「入っていない」。** 数え方がずれると、失った氏名に気づけない
             ['uuid' => 'n3', 'occupantName' => '   '],
@@ -851,7 +853,7 @@ function km_check_map_access(): void
     check('public なら誰でも見られる', true, km_map_view_unlocked($config('hidden', 'public')));
     check('password で未入力なら見せない', false, km_map_view_unlocked($config('public', 'password')));
 
-    $_SESSION['km_map_unlocked'] = true;
+    $_SESSION['km_map_unlocked'] = km_map_password_fingerprint('dummy');
     check('password で入力済みなら見せる', true, km_map_view_unlocked($config('hidden', 'password')));
 
     km_check_heading('map-access: 2つの錠は独立している');
@@ -865,7 +867,7 @@ function km_check_map_access(): void
     check('氏名 hidden・地図 public → 氏名は出ない', false, km_map_names_unlocked($config('hidden', 'public')));
 
     // 逆向き。地図を開けても、氏名の設定が hidden なら氏名は出ない。
-    $_SESSION['km_map_unlocked'] = true;
+    $_SESSION['km_map_unlocked'] = km_map_password_fingerprint('dummy');
     check('解除しても hidden の氏名は出ない', false, km_map_names_unlocked($config('hidden', 'password')));
     check('解除すれば password の氏名は出る', true, km_map_names_unlocked($config('password', 'public')));
 
@@ -884,8 +886,28 @@ function km_check_map_access(): void
     check_bool('管理者の印は読み取れる', km_map_admin_session());
 
     $_SESSION = [];
-    $_SESSION['km_map_unlocked'] = true;
+    $_SESSION['km_map_unlocked'] = km_map_password_fingerprint('dummy');
     check_bool('利用者の解除は管理者の印にならない', !km_map_admin_session());
+    $_SESSION = [];
+
+    /*
+     * **パスワードを替えたら、前の解除は効かない**(2026-09-25、診断 W-46)。
+     * 以前は印が true かだけを見ていたので、漏れたパスワードで解除した人は替えたあとも氏名を見続けられた。
+     */
+    km_check_heading('map-access: パスワードを替えたら解除が外れる(W-46)');
+    $withHash = static fn (?string $hash): array => ['mode' => 'password', 'mapMode' => 'password', 'passwordHash' => $hash];
+    $oldHash = password_hash('PassA', PASSWORD_BCRYPT, ['cost' => 4]);
+    $newHash = password_hash('PassB', PASSWORD_BCRYPT, ['cost' => 4]);
+    $_SESSION['km_map_unlocked'] = km_map_password_fingerprint($oldHash);
+    check_bool('解除した設定のままなら氏名も地図も開く', km_map_names_unlocked($withHash($oldHash)) && km_map_view_unlocked($withHash($oldHash)));
+    check_bool('パスワードを替えたら氏名は閉じる', !km_map_names_unlocked($withHash($newHash)));
+    check_bool('パスワードを替えたら地図も閉じる', !km_map_view_unlocked($withHash($newHash)));
+    $_SESSION['km_map_unlocked'] = true;
+    check_bool('以前の形(true)の印は効かない', !km_map_password_entered($withHash($oldHash)));
+    $_SESSION['km_map_unlocked'] = km_map_password_fingerprint(null);
+    check_bool('パスワードが未設定なら要約は無く、誰も解除できない', km_map_password_fingerprint(null) === null && !km_map_password_entered($withHash(null)));
+    $unlockApi = (string) file_get_contents(__DIR__ . '/../api/map-unlock.php');
+    check_bool('解除の API は要約を入れる', str_contains($unlockApi, '$_SESSION[\'km_map_unlocked\'] = km_map_password_fingerprint($config[\'passwordHash\']);'));
     $_SESSION = [];
 
     km_check_heading('map-access: 入力欄を出す条件');
@@ -1069,7 +1091,7 @@ function km_check_app_map_convert(): void
         'nodes' => [
             ['uuid' => $uuid, 'title' => '第二実習室', 'subtitle' => '管-105',
                 'type1' => 'room', 'floor' => '1F', 'x' => 514.27, 'y' => 212.69,
-                'occupantName' => '架空 太郎'],
+                'occupantName' => '架空 次郎'],
             ['uuid' => 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', 'title' => '通路', 'subtitle' => '',
                 'type1' => 'road', 'floor' => '1F', 'x' => 600.0, 'y' => 300.0],
             /*
@@ -1105,7 +1127,7 @@ function km_check_app_map_convert(): void
     check('title はそのまま', '第二実習室', $result['nodes'][0]['title']);
     check('subtitle はそのまま', '管-105', $result['nodes'][0]['subtitle']);
     check('subtitle が無ければ空', '', $result['nodes'][1]['subtitle']);
-    check('氏名を持ち越す', '架空 太郎', $result['nodes'][0]['occupant_name']);
+    check('氏名を持ち越す', '架空 次郎', $result['nodes'][0]['occupant_name']);
     /*
      * **種類を潰さない。** 以前は road と entrance を両方 `point` にしていたが、
      * `point` からはどちらだったか戻せない。Web が正本になると復元できない情報になる。
@@ -1127,7 +1149,7 @@ function km_check_app_map_convert(): void
     km_check_heading('app-map-convert: 適用したらどうなるか');
     $existing = [
         // 変換後に残る ID。**名前が違う**ので中身が変わる
-        km_app_map_node_id($uuid) => ['name' => '古い名前', 'occupant_name' => '架空 太郎'],
+        km_app_map_node_id($uuid) => ['name' => '古い名前', 'occupant_name' => '架空 次郎'],
         // 変換後に無い ID(削除される)。**氏名を持っているので必ず報告する**
         'n_new_10' => ['name' => 'トレーナー室 管-104', 'occupant_name' => '伊藤 太郎'],
     ];
@@ -1199,7 +1221,7 @@ function km_check_app_map_convert(): void
     check('X が元に戻る', 514.27, $backMap->nodes[0]->x);
     check('階の表記が戻る', '1F', $backMap->nodes[0]->floor);
     check('種類が戻る', 'wall', $backMap->nodes[2]->type1);
-    check('氏名が戻る', '架空 太郎', $backMap->nodes[0]->occupantName);
+    check('氏名が戻る', '架空 次郎', $backMap->nodes[0]->occupantName);
     /*
      * 端末が出す精度の測定履歴は**持たない**。地図の内容ではない。
      * 空配列で出す —— アプリは `orEmpty()` で受けるが、
@@ -1281,7 +1303,7 @@ function km_check_app_map_convert(): void
         // 上げた地図にも在り、そちらにも氏名がある → 置き換わるだけ
         $sameId => ['name' => '第二実習室 管-105', 'occupant_name' => '古い 名前'],
         // 上げた地図に無い → 「消す」を選んだときだけ失われる
-        'n_new_10' => ['name' => 'トレーナー室 管-104', 'occupant_name' => '架空 太郎'],
+        'n_new_10' => ['name' => 'トレーナー室 管-104', 'occupant_name' => '架空 次郎'],
     ]);
     check('上書きで消える氏名を挙げる', ['通路'], $withNames['occupantCleared']);
     check('消える地点の氏名は別に挙げる', ['トレーナー室 管-104'], $withNames['occupantLost']);
@@ -1874,18 +1896,18 @@ function km_check_staff_org_map(): void
     $_SESSION = [];
     check_bool('一般: 切り替えを付けても hidden は見えない', !km_map_names_unlocked($cfg('hidden', 'public', true)));
     check_bool('一般: password はパスワードを入れるまで見えない', !km_map_names_unlocked($cfg('password', 'public', false)) && !km_map_view_unlocked($cfg('hidden', 'password', false)));
-    $_SESSION = ['km_map_unlocked' => true];
+    $_SESSION = ['km_map_unlocked' => km_map_password_fingerprint('x')];
     check_bool('一般: パスワードを入れても hidden は見えない', !km_map_names_unlocked($cfg('hidden', 'public', true)));
     $_SESSION = $savedSession ?? [];
 
     $src = static fn (string $rel): string => (string) file_get_contents(__DIR__ . '/../' . $rel);
     $index = $src('index.php');
     check_bool('公開ページ: 開くたびに印を外してから立て直す', strpos($index, "unset(\$_SESSION['km_map_teacher_until']);") < strpos($index, "\$_SESSION['km_map_teacher_until'] = min("));
-    check_bool('公開ページ: 止められたアカウントには印を立てない', str_contains($index, 'if (!km_logto_user_is_suspended((string) $claims->sub)) {'));
-    check_bool('公開ページ: 印の期限は ID トークンの期限まで(最長 1 時間)', str_contains($index, 'min((int) $claims->exp, time() + 3600)'));
+    check_bool('公開ページ: 止められたアカウントには印を立てない', str_contains($index, 'if (!km_logto_user_is_suspended((string) $fresh->sub)) {'));
+    check_bool('公開ページ: 印の期限は ID トークンの期限まで(最長 1 時間)', str_contains($index, 'min((int) $fresh->exp, time() + 3600)'));
     check_bool('サインアウトで印を外す', str_contains($src('sign-out.php'), "unset(\$_SESSION['km_map_teacher_until']);"));
     $appMap = $src('api/app-map.php');
-    check_bool('アプリ: 教職員には閲覧不可の地点も配る', str_contains($appMap, 'if (!$isStaff && !$isTeacher) {'));
+    check_bool('アプリ: 教職員には閲覧不可の地点も配る', str_contains($appMap, '$privileged = $isStaff || $isTeacher;') && str_contains($appMap, 'if (!$privileged) {'));
     check_bool('アプリ: hidden の切り替えは教職員だけ(イベント運営は対象外)', str_contains($src('lib/app-map.php'), "return \$isTeacher && \$config['teacherSeesHidden'];"));
     check_bool('設定: hidden の切り替えの既定は見せない(厳密に true のときだけ)', str_contains($src('lib/map-access.php'), "'teacherSeesHidden' => (\$config['teacherSeesHidden'] ?? false) === true,"));
 }
@@ -2106,6 +2128,177 @@ function km_check_ssh_notify(): void
 }
 
 /**
+ * 診断(2026-09-25、docs/16)の所見を直したこと。**DB も Logto も使わない**(SQLite と偽物で動かす)。
+ */
+function km_check_review_0925(): void
+{
+    $src = __DIR__ . '/..';
+    $read = static fn (string $path): string => (string) @file_get_contents($src . '/' . $path);
+    // 説明の文章に当たらないよう、コメントを外してから探す
+    $code = static fn (string $text): string => (string) preg_replace(['#/\*.*?\*/#s', '#^\s*//.*$#m'], '', $text);
+
+    require_once $src . '/lib/app-ranking.php';
+
+    km_check_heading('review-0925 W-44: ランキングは重複と実在しない地点を数えない');
+    check('同じ地点 ID を 60 個並べても 1 つ', 1, count(km_ranking_clean_uuids(array_fill(0, 60, 'aaaa-1'))));
+    check('同じ語は 1 回の送信で 1 回', ['図書館'], km_ranking_clean_queries(['図書館', ' 図書館 ', '図書館']));
+    if (extension_loaded('pdo_sqlite')) {
+        $lite = new PDO('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+        $lite->exec('CREATE TABLE km_map_nodes (id TEXT, uuid TEXT)');
+        $lite->exec("INSERT INTO km_map_nodes VALUES ('a1', 'real-1'), ('a2', 'real-2')");
+        check('地図に在る地点だけ残す(順は送られた順)', ['real-2', 'real-1'], km_ranking_existing_uuids($lite, ['real-2', 'ghost-1', 'real-1']));
+        $broken = new PDO('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+        check('地図を確かめられなければ 1 件も数えない', [], km_ranking_existing_uuids($broken, ['real-1']));
+    } else {
+        check_skip('ranking: 地図に在る地点だけ', 'pdo_sqlite が無い');
+    }
+    $ranking = $code($read('lib/app-ranking.php'));
+    check_bool('記録は地図に在る地点だけを数える', str_contains($ranking, '$places = km_ranking_existing_uuids($pdo, km_ranking_clean_uuids($nodeUuids));'));
+    check_bool('利用者の件数は短い間隔では足さない', str_contains($ranking, 'visits = IF(updated_at <= DATE_SUB(NOW(), INTERVAL ? SECOND), visits + VALUES(visits), visits)'));
+    check_bool('語の表は年ごとの上限を超えたら新しい語を入れない', str_contains($ranking, '>= KM_RANKING_MAX_QUERY_ROWS') && str_contains($ranking, 'UPDATE km_map_ranking_queries SET searches = searches + 1 WHERE'));
+    check_bool('語ごとの出どころは打ち止め', str_contains($ranking, '< ?') && str_contains($ranking, 'KM_RANKING_MAX_QUERY_SOURCES]'));
+
+    km_check_heading('review-0925 W-45: 調べられた語を管理画面で外せる');
+    check_bool('出どころは /64 単位(km_map_rate_limit_key)で数える', str_contains($ranking, 'km_map_rate_limit_key($source)'));
+    check_bool('公開の一覧は外した語を出さない', str_contains($ranking, 'NOT EXISTS (SELECT 1 FROM km_map_ranking_hidden_queries h'));
+    check_bool('外した語は年の掃除でも消える', str_contains($ranking, "'km_map_ranking_hidden_queries'] as \$table"));
+    $page = $read('admin/ranking.php');
+    check_bool('管理画面は guard.php を通る', str_contains($page, "require __DIR__ . '/_inc/guard.php';"));
+    check_bool('外す操作は CSRF を確かめてから', strpos($page, 'km_csrf_verify()') !== false && strpos($page, 'km_csrf_verify()') < strpos($page, 'km_ranking_hide_query('));
+    check_bool('外したことを記録する(語そのものは書かない)', str_contains($page, "km_admin_log_record('content', 'ranking.query_hidden', (string) \$year);"));
+    require_once $src . '/lib/admin-log.php';
+    check_bool('記録の文言がある', isset(KM_ADMIN_LOG_ACTION_LABELS['ranking.query_hidden']));
+    check_bool('メニューから開ける', str_contains($read('admin/_inc/partials/sidebar.php'), 'href="./ranking.php"'));
+    check_bool('語は画面でエスケープする', str_contains($page, "<?= km_e(\$row['query']) ?>"));
+
+    km_check_heading('review-0925 W-48: 削除した人の ID は他の記録とチャットからも消す');
+    require_once $src . '/lib/account-delete.php';
+    check('LIKE の % _ ! を文字どおりにする', 'a!%b!_c!!', km_account_delete_like_escape('a%b_c!'));
+    $delete = $code($read('lib/account-delete.php'));
+    check_bool('監査ログの detail から対象者の ID を置き換える', str_contains($delete, "UPDATE km_admin_log SET detail = REPLACE(detail, ?, ?) WHERE detail LIKE ? ESCAPE '!'"));
+    check_bool('チャットの発言者を匿名にする', str_contains($delete, 'UPDATE km_chat_messages SET sender_id = ?, sender_name = ? WHERE sender_id = ?'));
+    check_bool('置き換えは同じ取引の中(commit の前)', strpos($delete, 'UPDATE km_chat_messages') < strpos($delete, '$pdo->commit();'));
+    check_bool('ポリシーに「された側」とチャットのことを書く', str_contains($read('lib/legal.php'), 'あなたの利用者 ID を削除します') && str_contains($read('lib/legal.php'), '発言者の名前と利用者 ID を削除します'));
+
+    km_check_heading('review-0925 W-49: IP の保存期限');
+    require_once $src . '/lib/privacy-retention.php';
+    check('監査ログの IP は 90 日', 90, KM_PRIVACY_AUDIT_IP_DAYS);
+    check('解除の試行は 1 日', 1, KM_PRIVACY_UNLOCK_ATTEMPT_DAYS);
+    $retention = $code($read('lib/privacy-retention.php'));
+    check_bool('監査ログは行を残して IP だけ空にする', str_contains($retention, "\$columns = 'ip_address = NULL';") && !str_contains($retention, 'DELETE FROM km_admin_log'));
+    check_bool('解除の試行はロックが切れてから消す', str_contains($retention, 'AND (locked_until IS NULL OR locked_until < NOW())'));
+    check_bool('監査の記録のついでに 1 日 1 回動く', str_contains($code($read('lib/admin-log.php')), 'km_privacy_purge_daily($pdo);'));
+    check_bool('解除の API でも動く', str_contains($code($read('api/map-unlock.php')), 'km_privacy_purge_daily($pdo);'));
+    $clear = $code($read('lib/map-rate-limit.php'));
+    check_bool('解除に成功したら行ごと消す(成功した IP を残さない)', (bool) preg_match('/function km_map_clear_unlock_failures.*?DELETE FROM \{\$table\}/s', $clear));
+    require_once $src . '/lib/legal.php';
+    $policy = json_encode(km_legal_privacy(), JSON_UNESCAPED_UNICODE);
+    check_bool('ポリシーに日数が出る(定数から)', is_string($policy) && str_contains($policy, '90 日を過ぎると削除します') && str_contains($policy, '1 日で削除します'));
+    check('ポリシーの改定日', '2026-09-25', KM_LEGAL_UPDATED);
+
+    km_check_heading('review-0925 W-50・W-51: 期限の切れた ID トークンを取り直す');
+    km_check_review_0925_fresh_claims($src);
+    check_bool('公開ページは取り直した中身で教職員を判定する', str_contains($code($read('index.php')), '$fresh = $client->kmFreshIdTokenClaims();'));
+    check_bool('取り直せない教職員には理由を出す', str_contains($read('index.php'), '教職員の表示を出すには、サインインし直してください'));
+    $account = $code($read('account.php'));
+    check('アカウント画面は 2 箇所とも取り直した中身で見る', 2, substr_count($account, '$freshClaims = $client->kmFreshIdTokenClaims();'));
+    check_bool('古い ID トークンの organization_roles で教職員を決めない', !str_contains($account, 'isset($claims->organization_roles)'));
+    km_check_heading('review-0925 W-52: 中身の段が変われば地図を送り直す');
+    require_once $src . '/lib/app-map.php';
+    check('来場者', 'visitor', km_app_map_content_level(false, false));
+    check('スタッフ(氏名なし)', 'staff', km_app_map_content_level(true, false));
+    check('氏名入り', 'names', km_app_map_content_level(true, true));
+    check('来場者に氏名の段は付かない', 'visitor', km_app_map_content_level(false, true));
+    check('知らない段は unknown(必ず送り直す)', 'unknown', km_app_map_parse_have_level('everything'));
+    check('送ってこない古いアプリは null', null, km_app_map_parse_have_level(null));
+    check_bool('同じ版・同じ段なら最新', km_app_map_is_up_to_date('kosen-main', 'kosen-main', 3, 3, 'names', 'names'));
+    check_bool('権限を失った(names → visitor)なら送り直す', !km_app_map_is_up_to_date('kosen-main', 'kosen-main', 3, 3, 'names', 'visitor'));
+    check_bool('教職員になった(visitor → names)なら送り直す', !km_app_map_is_up_to_date('kosen-main', 'kosen-main', 3, 3, 'visitor', 'names'));
+    check_bool('段の分からない端末(unknown)には送り直す', !km_app_map_is_up_to_date('kosen-main', 'kosen-main', 3, 3, 'unknown', 'visitor'));
+    check_bool('段を送らない古いアプリは今までどおり', km_app_map_is_up_to_date('kosen-main', 'kosen-main', 3, 3, null, 'visitor'));
+    $appMap = $code($read('api/app-map.php'));
+    check_bool('段は「最新です」の判定より前に決める', strpos($appMap, '$contentLevel = km_app_map_content_level(') < strpos($appMap, 'km_app_map_is_up_to_date('));
+    check_bool('「最新です」の応答にも段を載せる', str_contains($appMap, "'contentLevel' => \$contentLevel,"));
+    $package = km_app_map_build_package((object) ['nodes' => []], 'kosen-main', 1, '2026-09-25T00:00:00+09:00', '2026-10-01T00:00:00+09:00', null, true, null, 'staff');
+    $decoded = json_decode((string) $package, true);
+    check('パッケージに段を載せる', 'staff', $decoded['contentLevel'] ?? null);
+    check_bool('段を渡さなければ以前と同じ形', !str_contains((string) km_app_map_build_package((object) ['nodes' => []], 'kosen-main', 1, 'a', 'b', null, true), 'contentLevel'));
+}
+
+/** kmFreshIdTokenClaims を、Logto に繋がずに動かす(偽の OidcCore と保存場所)。 */
+function km_check_review_0925_fresh_claims(string $src): void
+{
+    if (!is_file($src . '/vendor/autoload.php')) {
+        check_skip('W-50: ID トークンの取り直し', 'vendor が無い');
+        return;
+    }
+    require_once $src . '/vendor/autoload.php';
+    require_once $src . '/lib/logto-sdk-client.php';
+
+    $b64 = static fn (string $s): string => rtrim(strtr(base64_encode($s), '+/', '-_'), '=');
+    $jwt = static fn (array $claims): string => $b64('{"alg":"none"}') . '.' . $b64((string) json_encode($claims)) . '.sig';
+    $claims = static fn (int $exp, array $roles): array => [
+        'iss' => 'https://logto.test/oidc', 'sub' => 'teacher-1', 'aud' => 'app', 'exp' => $exp, 'iat' => $exp - 3600,
+        'organization_roles' => $roles,
+    ];
+
+    $make = static function (?string $idToken, ?string $refreshToken, string $mode) {
+        $storage = new class implements \Logto\Sdk\Storage\Storage {
+            public array $data = [];
+            public function get(\Logto\Sdk\Storage\StorageKey $key): ?string { return $this->data[$key->value] ?? null; }
+            public function set(\Logto\Sdk\Storage\StorageKey $key, ?string $value): void { $this->data[$key->value] = $value; }
+            public function delete(\Logto\Sdk\Storage\StorageKey $key): void { unset($this->data[$key->value]); }
+        };
+        $storage->set(\Logto\Sdk\Storage\StorageKey::idToken, $idToken);
+        $storage->set(\Logto\Sdk\Storage\StorageKey::refreshToken, $refreshToken);
+        $oidc = new class extends \Logto\Sdk\Oidc\OidcCore {
+            public string $mode = 'ok';
+            public string $nextIdToken = '';
+            public int $calls = 0;
+            public function __construct() {}
+            public function verifyIdToken(string $idToken, string $clientId) {}
+            public function fetchTokenByRefreshToken(string $clientId, ?string $clientSecret, string $refreshToken, string $resource = ''): \Logto\Sdk\Oidc\TokenResponse
+            {
+                $this->calls++;
+                if ($this->mode === 'fail') {
+                    throw new RuntimeException('invalid_grant');
+                }
+                return new \Logto\Sdk\Oidc\TokenResponse(
+                    access_token: 'at', token_type: 'Bearer', expires_in: 3600, refresh_token: 'rt-2', id_token: $this->nextIdToken
+                );
+            }
+        };
+        $oidc->mode = $mode;
+        $client = (new ReflectionClass(KmLogtoClient::class))->newInstanceWithoutConstructor();
+        $client->config = new \Logto\Sdk\LogtoConfig(endpoint: 'https://logto.test', appId: 'app', appSecret: 'fake');
+        $client->storage = $storage;
+        (new ReflectionProperty(\Logto\Sdk\LogtoClient::class, 'oidcCore'))->setValue($client, $oidc);
+
+        return [$client, $oidc, $storage];
+    };
+
+    $teacherRole = ['org-1:teacher'];
+    [$client, $oidc] = $make($jwt($claims(time() + 3600, $teacherRole)), 'rt-1', 'ok');
+    $fresh = $client->kmFreshIdTokenClaims();
+    check_bool('期限内ならそのまま使い、取り直さない', $fresh !== null && $oidc->calls === 0);
+
+    [$client, $oidc, $storage] = $make($jwt($claims(time() - 60, $teacherRole)), 'rt-1', 'ok');
+    $oidc->nextIdToken = $jwt($claims(time() + 3600, []));
+    $fresh = $client->kmFreshIdTokenClaims();
+    check_bool('期限切れなら取り直し、新しい中身を返す(組織から外れていれば外れる)', $fresh !== null && $oidc->calls === 1 && ($fresh->organization_roles ?? null) === []);
+    check('取り直した refresh_token を保存する', 'rt-2', $storage->get(\Logto\Sdk\Storage\StorageKey::refreshToken));
+
+    [$client, $oidc] = $make($jwt($claims(time() - 60, $teacherRole)), 'rt-1', 'fail');
+    check_bool('取り直せなければ null(教職員の特典を出さない)', $client->kmFreshIdTokenClaims() === null);
+
+    [$client, $oidc] = $make($jwt($claims(time() - 60, $teacherRole)), null, 'ok');
+    check_bool('refresh_token が無ければ null', $client->kmFreshIdTokenClaims() === null && $oidc->calls === 0);
+
+    [$client] = $make(null, null, 'ok');
+    check_bool('サインインしていなければ null', $client->kmFreshIdTokenClaims() === null);
+}
+
+/**
  * 経路の重み(2026-09-25、利用者の指示)。A 屋内優先・B 部屋を通り抜けない(既定)、C・D(設定)。
  * **アプリと Website で同じ値**であること —— 片方だけ直すと、同じ場所へ違う道を案内する。
  */
@@ -2181,7 +2374,7 @@ function km_check_route_weights(): void
     $appMapApi = (string) file_get_contents(__DIR__ . '/../api/app-map.php');
     // 重みだけ変えたとき、版を上げずに「更新」で届くように
     check_bool('アプリへ: 地図が最新のときの応答にも載せる', preg_match("/'upToDate' => true,.*?'routeWeights' => \\\$routeWeights,/s", $appMapApi) === 1);
-    check_bool('アプリへ: 本体の応答にも載せる', str_contains($appMapApi, "    \$routeWeights\n);"));
+    check_bool('アプリへ: 本体の応答にも載せる', str_contains($appMapApi, "    \$routeWeights,\n    \$contentLevel\n);"));
     // 地図の外に置く。チェックサムは地図の文字列だけに取る
     $map = new stdClass();
     $map->nodes = [];
@@ -3020,7 +3213,7 @@ function km_check_hardening(): void
     check_bool('ID を送らない古いアプリ・kosen-event は必ず送る', !km_app_map_is_up_to_date('kosen-event', null, 5, 1));
     check_bool('版を持っていなければ送る', !km_app_map_is_up_to_date('kosen-main', 'kosen-main', null, 1));
     $appMapApi = $code($read('api/app-map.php'));
-    check_bool('api は haveMapId を渡して比べる', str_contains($appMapApi, 'km_app_map_is_up_to_date($slug, $haveMapId, $haveRevision, $revision)'));
+    check_bool('api は haveMapId を渡して比べる', str_contains($appMapApi, 'km_app_map_is_up_to_date($slug, $haveMapId, $haveRevision, $revision, $haveLevel, $contentLevel)'));
 
     km_check_heading('hardening D: アクセスコードの照合(lookup と、配信先の無いコード)');
     $secret = str_repeat('s', 32);
@@ -6169,6 +6362,9 @@ foreach ($selected as $name) {
             break;
         case 'route-weights':
             km_check_route_weights();
+            break;
+        case 'review-0925':
+            km_check_review_0925();
             break;
         case 'account-delete':
             km_check_account_delete();
