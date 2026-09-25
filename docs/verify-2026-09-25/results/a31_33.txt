@@ -1,0 +1,7 @@
+== A-31
+  今 2026/09/25 20:00、期限 2026-09-26T10:00 → 「版 3 / 期限 2026/09/26 10:00 —— 今日までです。」
+  今 2026/09/25 20:00、期限 2026-09-25T23:00 → 「版 3 / 期限 2026/09/25 23:00 —— 今日までです。」
+== A-33
+  正常な Keystore → 暗号化された領域: {refresh_token=AAAAAAAAAAAAAAAAKD88KD8pMncuNTE/NHcJHxkIHw53DBsWDx8=} / 平文の領域: {}
+  Keystore の準備に失敗(cipher = null) → 暗号化された領域: {} / 平文の領域: {refresh_token=refresh-token-SECRET-VALUE}
+  暗号化で例外 → 暗号化された領域: {} / 平文の領域: {refresh_token=refresh-token-SECRET-VALUE}
