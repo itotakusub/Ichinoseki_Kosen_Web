@@ -233,10 +233,38 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     let verticalPreference = loadVerticalPreference();
-    let dijkstra = new Dijkstra(graphData.nodes, graphData.edges, { vertical: verticalPreference });
+
+    /*
+     * 経路の条件(2026-09-25)。C 階の移動を減らす / D 雨の日。**端末に覚える**(閲覧者ごとの好み)。
+     * 重みそのもの(KM_ROUTE_WEIGHTS)は触らせない —— 決めるのは管理側で、将来は
+     * 配信データの routeWeights で一般の既定を配る予定(graphData.routeWeights があれば使う)。
+     */
+    const KM_ROUTE_OPTIONS_KEY = 'km-route-options-v1';
+
+    function loadRouteOptions() {
+        try {
+            const saved = JSON.parse(window.localStorage.getItem(KM_ROUTE_OPTIONS_KEY) || '{}');
+            return { fewerFloors: saved.fewerFloors === true, rain: saved.rain === true };
+        } catch (e) {
+            return { fewerFloors: false, rain: false };
+        }
+    }
+
+    let routeOptions = loadRouteOptions();
+
+    function dijkstraOptions() {
+        return {
+            vertical: verticalPreference,
+            fewerFloors: routeOptions.fewerFloors,
+            rain: routeOptions.rain,
+            weights: graphData.routeWeights,
+        };
+    }
+
+    let dijkstra = new Dijkstra(graphData.nodes, graphData.edges, dijkstraOptions());
 
     function rebuildDijkstra() {
-        dijkstra = new Dijkstra(graphData.nodes, graphData.edges, { vertical: verticalPreference });
+        dijkstra = new Dijkstra(graphData.nodes, graphData.edges, dijkstraOptions());
     }
     // 地図編集ツールが地点や線を変えたあとにも作り直せるようにしておく
     window.kmRebuildDijkstra = rebuildDijkstra;
@@ -1599,6 +1627,27 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
         });
     }
+
+    /*
+     * C・D の切り替え。**選び直したらその場で引き直す**(「階を移るとき」と同じ理由)。
+     */
+    [['route-fewer-floors', 'fewerFloors'], ['route-rain', 'rain']].forEach(([elementId, key]) => {
+        const box = document.getElementById(elementId);
+        if (!box) return;
+        box.checked = routeOptions[key];
+        box.addEventListener('change', () => {
+            routeOptions = Object.assign({}, routeOptions, { [key]: box.checked });
+            try {
+                window.localStorage.setItem(KM_ROUTE_OPTIONS_KEY, JSON.stringify(routeOptions));
+            } catch (e) {
+                // 保存できなくても、この画面の間は効く
+            }
+            rebuildDijkstra();
+            if (currentRoutePath && startInput && endInput && startInput.value && endInput.value) {
+                searchBtn.click();
+            }
+        });
+    });
 
     // ---- UIイベントリスナー ----
     if (searchBtn) {

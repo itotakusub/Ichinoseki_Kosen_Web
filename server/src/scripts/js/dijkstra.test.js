@@ -275,6 +275,94 @@ const outsideStairs = new Dijkstra(
 );
 check('屋外は階段で繋がない', 0, outsideStairs.stairTransfers);
 
+heading('dijkstra: 経路の条件(2026-09-25)');
+/*
+ * A 屋内優先: 1F の廊下(中)を 100 歩くか、外へ出て 60 歩いて入り直すか。
+ * 以前(出入り 30px・外 1 倍)は 30+60+30=120 < … ではなく、中が 100 なら中。
+ * ここでは中を 170 にして、**以前なら外回りだった形**を作る(30+60+30=120 < 170)。
+ * 今は 150+78+150=378 > 170 なので中を通る。
+ */
+const indoor = {
+    a: { floor: '1', type: 'road', name: '' },
+    b: { floor: '1', type: 'road', name: '' },
+    ea: { floor: '1', type: 'entrance', name: '', transferGroupId: 'east' },
+    eb: { floor: '1', type: 'entrance', name: '', transferGroupId: 'west' },
+    oa: { floor: 'outside', type: 'entrance', name: '', transferGroupId: 'east' },
+    ob: { floor: 'outside', type: 'entrance', name: '', transferGroupId: 'west' },
+};
+const indoorEdges = [
+    { source: 'a', target: 'b', distance: 170 },
+    { source: 'a', target: 'ea', distance: 0 },
+    { source: 'b', target: 'eb', distance: 0 },
+    { source: 'oa', target: 'ob', distance: 60 },
+];
+check('A: 中に道があれば中を通る', ['a', 'b'], new Dijkstra(indoor, indoorEdges).findShortestPath('a', 'b'));
+check('A: 以前の重みなら外回りだった', ['a', 'ea', 'oa', 'ob', 'eb', 'b'],
+    new Dijkstra(indoor, indoorEdges, { weights: { entranceTransferPx: 30, outsideMultiplier: 1 } }).findShortestPath('a', 'b'));
+
+// B 部屋を通り抜けない。部屋 r を抜ければ 2、廊下を回れば 10
+const rooms = {
+    s: { floor: '1', type: 'road', name: '' },
+    r: { floor: '1', type: 'room', name: '教室' },
+    g: { floor: '1', type: 'road', name: '' },
+    c: { floor: '1', type: 'road', name: '' },
+};
+const roomEdges = [
+    { source: 's', target: 'r', distance: 1 },
+    { source: 'r', target: 'g', distance: 1 },
+    { source: 's', target: 'c', distance: 5 },
+    { source: 'c', target: 'g', distance: 5 },
+];
+const roomGraph = new Dijkstra(rooms, roomEdges);
+check('B: 教室の中を突っ切らない', ['s', 'c', 'g'], roomGraph.findShortestPath('s', 'g'));
+check('B: 通り抜けは使っていない', false, roomGraph.roomPassThroughUsed);
+check('B: 部屋そのものは目的地にできる', ['s', 'r'], roomGraph.findShortestPath('s', 'r'));
+const onlyThroughRoom = new Dijkstra(rooms, roomEdges.slice(0, 2));
+check('B: 部屋を通るしか無ければ通す(経路を消さない)', ['s', 'r', 'g'], onlyThroughRoom.findShortestPath('s', 'g'));
+check('B: 通り抜けを使ったと分かる', true, onlyThroughRoom.roomPassThroughUsed);
+check('B: 切れば突っ切る', ['s', 'r', 'g'], new Dijkstra(rooms, roomEdges, { weights: { noRoomPassThrough: false } }).findShortestPath('s', 'g'));
+
+// C 階の移動を減らす: 階段で 2F を抜ける(1 層 200)か、1F を 300 歩くか
+const floors = {
+    a: { floor: '1', type: 'road', name: '' },
+    s1: { floor: '1', type: 'stairs', name: '階段A' },
+    s2: { floor: '2', type: 'stairs', name: '階段A' },
+    t2: { floor: '2', type: 'stairs', name: '階段B' },
+    t1: { floor: '1', type: 'stairs', name: '階段B' },
+    b: { floor: '1', type: 'road', name: '' },
+};
+const floorEdges = [
+    { source: 'a', target: 's1', distance: 0 },
+    { source: 's2', target: 't2', distance: 10 },
+    { source: 't1', target: 'b', distance: 0 },
+    { source: 'a', target: 'b', distance: 500 },
+];
+check('C: 既定なら 2F を抜ける(400+10 < 500)', ['a', 's1', 's2', 't2', 't1', 'b'], new Dijkstra(floors, floorEdges).findShortestPath('a', 'b'));
+check('C: 減らすなら同じ階を歩く(810 > 500)', ['a', 'b'], new Dijkstra(floors, floorEdges, { fewerFloors: true }).findShortestPath('a', 'b'));
+
+// D 雨の日: 外 100(×1.3=130)か、中 250 か。雨なら外は 390
+const rainMap = {
+    a: { floor: 'outside', type: 'road', name: '' },
+    b: { floor: 'outside', type: 'road', name: '' },
+    c: { floor: 'outside', type: 'road', name: '' },
+};
+const rainEdges = [
+    { source: 'a', target: 'b', distance: 100 },
+    { source: 'a', target: 'c', distance: 1 },
+];
+const rainGraph = (rain) => new Dijkstra(rainMap, rainEdges, { rain: rain });
+check('D: 屋外の道は 1.3 倍', 130, Math.round(rainGraph(false).adjacencyList.a[0].weight));
+check('D: 雨の日はさらに 3 倍', 390, Math.round(rainGraph(true).adjacencyList.a[0].weight));
+
+heading('dijkstra: 重みの読み取り');
+const weights = sandbox.kmRouteWeights;
+check('既定の出入り 1 回', 150, weights(null).entranceTransferPx);
+check('壊れた値は既定へ', 1.3, weights({ outsideMultiplier: 'x' }).outsideMultiplier);
+// 屋外を軽くすると「屋内優先」が逆に効く
+check('倍率は 1 未満にさせない', 1.3, weights({ outsideMultiplier: 0.5 }).outsideMultiplier);
+check('上書きは効く', 2, weights({ outsideMultiplier: 2 }).outsideMultiplier);
+check('真偽値だけ受ける', true, weights({ noRoomPassThrough: 'false' }).noRoomPassThrough);
+
 console.log('');
 if (failures === 0) {
     console.log(`すべて通過 (${count} 件)`);
