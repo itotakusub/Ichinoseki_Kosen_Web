@@ -1,0 +1,10 @@
+== A-29
+  取り込みで残るキー: [map_node_size_percent, ranking_participate]
+  同意の記録(ranking_participate_consented)は取り込めるか: false
+  次の起動の RankingConsent.migrate の判定: 参加=false / 改めて尋ねる=true
+  (この判定は MainActivity.onCreate でしか呼ばれない。それまでの送信は ranking_participate=true のまま)
+== A-29-send
+  端末の設定: {ranking_participate=true}(同意の記録 ranking_participate_consented は無い)
+  isParticipating() = true
+  record() の送信: 成功
+  公開ランキング(GET、ログイン不要)の利用者: [{"userId":"ud792d810153998bdd82e7e9a6bee051","displayName":"Test Teacher","visits":1}]

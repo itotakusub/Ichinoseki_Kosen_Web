@@ -1,0 +1,23 @@
+== W-50 (比較) ID トークンの期限が 1 時間先の教職員
+   画面の表示: 👤 教職員teacher-f さん
+   教職員の印の期限: {"km_map_teacher_until":1790305592}  (今は 1790301992)
+   namesUnlocked=true occupantName="架空 太郎"
+== W-50 ID トークンの期限が 1 分前に切れた教職員(リフレッシュトークンは持っている)
+   画面の表示: 👤 教職員teacher-s さん
+   教職員の印の期限: {"km_map_teacher_until":1790301932}  (今は 1790301992)
+   namesUnlocked=false occupantName=null
+   偽 Logto が受けた要求のうち、トークンの更新(grant_type=refresh_token)の数: 0
+   ID トークンは変わったか: exp=1790301932(変わっていない)
+
+== W-51 準備: 教職員 teacher-0002 を申請・承認・地点の割り当てまで済ませる
+   申請: 302 http://127.0.0.1:3900/account.php?staff=1
+   承認: 302 http://127.0.0.1:3900/admin/staff-requests.php?done=approve
+   割り当て: 302 http://127.0.0.1:3900/admin/staff-nodes.php?done=assign
+== W-51 この教職員の ID トークンを「2 時間前に切れた」ものに差し替える(Console で組織から外した後も、セッションに残る古いトークンを想定)
+   アカウント画面に担当地点の現在の氏名が出るか: 出る
+   地点の変更を提案(POST /account.php do_account=staff_node_edit): 302 http://127.0.0.1:3900/account.php?node=sent
+   提案の表(利用者, 状態, 内容):
+teacher-0002	pending	{"occupantName":{"from":"架空 太郎","to":"期限切れのトークンから"}}
+   申請の表の状態: approved
+   管理者が提案 #1 を承認: 302 http://127.0.0.1:3900/admin/staff-nodes.php?done=approve
+   地図の地点の氏名: 期限切れのトークンから

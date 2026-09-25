@@ -1,0 +1,16 @@
+1) 失敗の記録(監査ログ): action, IP
+map.unlock_failed	198.51.100.2
+2) 失敗回数の表: IP, 回数
+198.51.100.1	0
+198.51.100.2	1
+3) 同じ IP から正しいパスワード(B)で成功させる
+{"success":true}
+4) 成功の後も失敗回数の表に行が残るか: IP, 回数
+198.51.100.1	0
+198.51.100.2	0
+5) これらの表を消す(DELETE・TRUNCATE・期限つきの掃除)処理がコードにあるか:
+websrc/lib/map-events.php:430:            $pdo->prepare("DELETE FROM {$table} WHERE event_id = ?")->execute([$id]);
+websrc/lib/app-ranking.php:256:        $pdo->prepare("DELETE FROM {$table} WHERE year < ?")->execute([$oldest]);
+websrc/lib/account-delete.php:114:                $stmt = $pdo->prepare("DELETE FROM {$table} WHERE user_id = ?");
+websrc/lib/account-delete.php:134:            $stmt = $pdo->prepare('DELETE FROM km_admin_log WHERE actor_id = ?');
+websrc/scripts/reset-app-ranking.php:98:        $pdo->exec("DELETE FROM {$table}");
