@@ -30,6 +30,7 @@ require_once __DIR__ . '/../lib/db.php';
 require_once __DIR__ . '/../lib/map-rate-limit.php';
 require_once __DIR__ . '/../lib/app-secret.php';
 require_once __DIR__ . '/../lib/app-map.php';
+require_once __DIR__ . '/../lib/route-weights.php';
 
 require_method('POST');
 
@@ -174,6 +175,14 @@ if ($expiresAt->getTimestamp() < time()) {
 }
 
 $revision = isset($meta['revision']) && is_int($meta['revision']) ? $meta['revision'] : 0;
+
+/*
+ * 経路の重み(2026-09-25)。管理アプリから配ったときだけ載せる(lib/route-weights.php)。
+ * **地図が最新のときの応答にも載せる** —— 重みだけ変えたときに、版を上げなくても「更新」で届くように。
+ * 単位はアプリと同じ(メートルと倍率)。無ければアプリは自分の既定(RouteWeights())で動く。
+ */
+$routeWeights = km_route_weights_stored($pdo);
+
 if (km_app_map_is_up_to_date($slug, $haveMapId, $haveRevision, $revision)) {
     // 本体を返さない場合でも serverTime は必ず返す。端末はこれで時計を合わせ、
     // 有効期限の判定に端末の時計を使わずに済む。
@@ -183,6 +192,7 @@ if (km_app_map_is_up_to_date($slug, $haveMapId, $haveRevision, $revision)) {
         'revision' => $revision,
         'expiresAt' => $expiresAt->format(DateTimeInterface::ATOM),
         'serverTime' => $serverTime,
+        'routeWeights' => $routeWeights,
     ]);
 }
 
@@ -237,7 +247,8 @@ $body = km_app_map_build_package(
     $serverTime,
     $expiresAt->format(DateTimeInterface::ATOM),
     is_string($meta['activeEventUuid'] ?? null) ? $meta['activeEventUuid'] : null,
-    ($meta['checksum'] ?? true) !== false
+    ($meta['checksum'] ?? true) !== false,
+    $routeWeights
 );
 if ($body === null) {
     error_log("api/app-map.php: パッケージを組み立てられません: {$slug}");
