@@ -1906,7 +1906,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     // 部屋名 + (パスワード解除済みで割り当てがあれば)教職員氏名 をまとめて組み立てる。
-    // 移行前の graph.js は "教員室 管-310 架空 太郎" のように1本の文字列だったが、
+    // 移行前の graph.js は "教員室 管-310 架空 三郎" のように1本の文字列だったが、
     // フェーズ3の DB 移行で name(部屋名)と occupantName(教職員氏名)を別カラムに
     // 分離したため、表示側で元の見た目に組み立て直す。
     function displayNameFor(node) {

@@ -4,7 +4,8 @@ declare(strict_types=1);
 
 /**
  * 地図の occupant_name を解除するためのパスワード確認エンドポイント。
- * 成功すると $_SESSION['km_map_unlocked'] = true になり、ブラウザセッション中は保持される。
+ * 成功すると $_SESSION['km_map_unlocked'] に今のパスワード設定の要約が入り、ブラウザセッション中は保持される
+ * (パスワードを替えると一致しなくなって外れる。2026-09-25)。
  */
 
 // Cookie 属性は lib/session.php に一本化(同じ内容を書き写さない)
@@ -81,6 +82,10 @@ if ($config['mapMode'] !== 'password' && km_map_event_overlay($pdo)['hideOccupan
  * 読むだけの判定は枠を確保しないため、同時に送れば 8 回を超えて試せた(critic#0)。
  * 数えるのは 409 で断る分の後 —— 解除が無効なときの要求で回数を減らさない。
  */
+// 期限を過ぎた試行の記録を消す(1 日 1 回だけ動く。lib/privacy-retention.php、W-49)
+require_once __DIR__ . '/../lib/privacy-retention.php';
+km_privacy_purge_daily($pdo);
+
 if (!km_map_unlock_attempt($pdo, 'web')) {
     km_map_unlock_respond(['success' => false, 'message' => '試行回数が多すぎます。しばらく待ってから再試行してください。'], 429);
 }
@@ -105,6 +110,10 @@ km_map_clear_unlock_failures($pdo, 'web');
  * true を渡して古いセッションファイルも消す(残しておくと同じ問題が残る)。
  */
 session_regenerate_id(true);
-$_SESSION['km_map_unlocked'] = true;
+/*
+ * 印は true ではなく**いまの設定の要約**(2026-09-25、W-46)。管理画面でパスワードを替えると一致しなくなり、
+ * 替える前に解除した人も入れ直しになる(lib/map-access.php の km_map_password_entered)。
+ */
+$_SESSION['km_map_unlocked'] = km_map_password_fingerprint($config['passwordHash']);
 
 km_map_unlock_respond(['success' => true]);

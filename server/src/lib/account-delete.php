@@ -155,6 +155,38 @@ function km_account_delete_data(PDO $pdo, string $userId): array
             $anonymized = $stmt->rowCount();
         }
 
+        /*
+         * **その人が「された側」の記録からも ID を消す**(2026-09-25、診断 W-48)。
+         *
+         * 上で消えるのは本人が操作した行だけ。管理者が**その人に対して**した操作
+         * (教職員の申請の承認・取り消し、地点の割り当て)は、detail に対象者の利用者 ID を書いている。
+         * そのままだと「この ID が教職員として承認された」が残り、ポリシー(利用者 ID は削除する)と食い違う。
+         * 行は残し(誰が何をしたかの記録は要る)、ID だけを置き換える。
+         */
+        $detailScrubbed = 0;
+        $stmt = $pdo->prepare(
+            "UPDATE km_admin_log SET detail = REPLACE(detail, ?, ?) WHERE detail LIKE ? ESCAPE '!'"
+        );
+        $stmt->execute([$userId, KM_ACCOUNT_DELETE_PLACEHOLDER, '%' . km_account_delete_like_escape($userId) . '%']);
+        $detailScrubbed = $stmt->rowCount();
+
+        /*
+         * **チャットの発言者も消す**(同 W-48)。km_chat_messages の列は user_id ではなく sender_id なので、
+         * 上の一覧(KM_ACCOUNT_DELETE_TABLES)では消えない。本文は残す(会話の流れが分からなくなるため)。
+         * 列は NOT NULL なので空文字と決まった名前にする。表がまだ無ければ何もしない。
+         */
+        $chatAnonymized = 0;
+        try {
+            $stmt = $pdo->prepare('UPDATE km_chat_messages SET sender_id = ?, sender_name = ? WHERE sender_id = ?');
+            $stmt->execute(['', KM_ACCOUNT_DELETE_PLACEHOLDER, $userId]);
+            $chatAnonymized = $stmt->rowCount();
+        } catch (PDOException $exception) {
+            if (!str_contains($exception->getMessage(), 'Base table or view not found')
+                && !str_contains($exception->getMessage(), '1146')) {
+                throw $exception;
+            }
+        }
+
         $pdo->commit();
     } catch (Throwable $exception) {
         $pdo->rollBack();
@@ -171,8 +203,19 @@ function km_account_delete_data(PDO $pdo, string $userId): array
     return [
         'tables' => $deleted,
         'auditAnonymized' => $anonymized,
+        'auditDetailScrubbed' => $detailScrubbed,
+        'chatAnonymized' => $chatAnonymized,
         'avatarRemoved' => $avatarRemoved,
     ];
+}
+
+/** 消した利用者の代わりに置く文字列。監査ログの detail とチャットの発言者名に入る。 */
+const KM_ACCOUNT_DELETE_PLACEHOLDER = '(削除された利用者)';
+
+/** LIKE の中で `%` `_` と逃がし文字(`!`)を文字どおりに扱わせる。 */
+function km_account_delete_like_escape(string $value): string
+{
+    return strtr($value, ['!' => '!!', '%' => '!%', '_' => '!_']);
 }
 
 /**
@@ -193,6 +236,12 @@ function km_account_delete_summary(array $result): string
     if ((int) $result['auditAnonymized'] > 0) {
         $parts[] = 'audit' . (KM_ACCOUNT_DELETE_PURGES_AUDIT ? '削除' : '匿名化') . '='
             . $result['auditAnonymized'];
+    }
+    if ((int) ($result['auditDetailScrubbed'] ?? 0) > 0) {
+        $parts[] = 'audit対象者=' . $result['auditDetailScrubbed'];
+    }
+    if ((int) ($result['chatAnonymized'] ?? 0) > 0) {
+        $parts[] = 'chat匿名化=' . $result['chatAnonymized'];
     }
     if ($result['avatarRemoved']) {
         $parts[] = 'avatar=1';

@@ -31,6 +31,8 @@ declare(strict_types=1);
  */
 $loggedIn = false;
 $displayName = null;
+/** 教職員なのに ID トークンを取り直せなかった(特典を出せない)。画面に「サインインし直すと戻る」と出す */
+$teacherNeedsSignIn = false;
 try {
     require __DIR__ . '/logto-client.php'; // $client, $appUrl を定義する
     $loggedIn = $client->isAuthenticated();
@@ -54,13 +56,25 @@ try {
         require_once __DIR__ . '/lib/staff-org.php';
         $roles = isset($claims->organization_roles) && is_array($claims->organization_roles) ? $claims->organization_roles : null;
         if (km_staff_org_claims_is_teacher($roles)) {
-            try {
-                require_once __DIR__ . '/lib/logto-management.php';
-                if (!km_logto_user_is_suspended((string) $claims->sub)) {
-                    $_SESSION['km_map_teacher_until'] = min((int) $claims->exp, time() + 3600);
+            /*
+             * **期限の切れた ID トークンは取り直してから判定する**(2026-09-25、診断 W-50)。
+             * 以前は古いまま読んでいたので、有効期間が過ぎると教職員に氏名が出なくなった
+             * (右上には「○○ さん」と出たまま)。取り直した ID トークンの organization_roles で見直す ——
+             * Logto で組織から外された人は、ここで外れる。取り直せなければ印を立てず、理由を画面に出す。
+             */
+            $fresh = $client->kmFreshIdTokenClaims();
+            $freshRoles = $fresh !== null && is_array($fresh->organization_roles ?? null) ? $fresh->organization_roles : null;
+            if ($fresh === null) {
+                $teacherNeedsSignIn = true;
+            } elseif (km_staff_org_claims_is_teacher($freshRoles)) {
+                try {
+                    require_once __DIR__ . '/lib/logto-management.php';
+                    if (!km_logto_user_is_suspended((string) $fresh->sub)) {
+                        $_SESSION['km_map_teacher_until'] = min((int) $fresh->exp, time() + 3600);
+                    }
+                } catch (Throwable $exception) {
+                    error_log('KosenMap home: teacher flag not set (suspension check failed): ' . $exception->getMessage());
                 }
-            } catch (Throwable $exception) {
-                error_log('KosenMap home: teacher flag not set (suspension check failed): ' . $exception->getMessage());
             }
         }
     }
@@ -267,6 +281,10 @@ try {
                     <div class="action-group-left" id="km-auth-links">
                         <?php if ($loggedIn): ?>
                             <span class="user-chip">👤 <?= km_home_e($displayName) ?> さん</span>
+                            <?php if ($teacherNeedsSignIn): ?>
+                                <?php // サインインの期限が切れ、取り直せなかった教職員(W-50)。黙って氏名を消さず、理由を出す ?>
+                                <span class="user-chip" role="status">教職員の表示を出すには、サインインし直してください</span>
+                            <?php endif; ?>
                             <?php // POST + CSRF でだけ出られる。GET だと他サイトのリンクで追い出せた ?>
                             <form method="post" action="/sign-out.php" class="km-signout-form">
                                 <?= km_csrf_field() ?>

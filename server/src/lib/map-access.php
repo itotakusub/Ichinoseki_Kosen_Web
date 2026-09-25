@@ -196,9 +196,37 @@ function km_map_access_write_config(string $path, string $php): void
  * 管理者の抜け道は [km_map_admin_session] に分けてある。**印を分ければ、
  * 公開ページは管理者に対しても設定どおりに閉じる** —— 設定した本人が確かめられる。
  */
-function km_map_password_entered(): bool
+function km_map_password_entered(array $config): bool
 {
-    return ($_SESSION['km_map_unlocked'] ?? false) === true;
+    /*
+     * **どのパスワードで解いたかまで見る**(2026-09-25、診断 W-46)。
+     *
+     * 以前は印が true かだけを見ていたので、パスワードが漏れて替えても、
+     * **漏れたパスワードで既に解除した人は教職員氏名を見続けられた。**
+     * いまは解除したときの設定の要約(km_map_password_fingerprint)を入れておき、今の設定と比べる。
+     * 替えた瞬間に、全員がもう一度パスワードを聞かれる(意図どおり)。
+     * 以前の形(true)は一致しないので、配備のあと一度だけ入れ直しになる。
+     */
+    $stored = $_SESSION['km_map_unlocked'] ?? null;
+    $current = km_map_password_fingerprint($config['passwordHash'] ?? null);
+
+    return is_string($stored) && $current !== null && hash_equals($current, $stored);
+}
+
+/**
+ * パスワードの設定の要約。**解除の印に入れ、今の設定と比べるためだけに使う。**
+ *
+ * password_hash() の出力は毎回違う塩を持つので、同じパスワードを入れ直しても要約は変わる
+ * (= 「保存し直した」で全員の解除が外れる。外したいときの操作としても使える)。
+ * 未設定なら null(誰も解除できない)。
+ */
+function km_map_password_fingerprint(?string $passwordHash): ?string
+{
+    if ($passwordHash === null || $passwordHash === '') {
+        return null;
+    }
+
+    return hash('sha256', 'km-map-unlock|' . $passwordHash);
 }
 
 /**
@@ -239,7 +267,7 @@ function km_map_names_unlocked(array $config): bool
         'public' => true,
         // hidden は既定で誰にも出さない。管理画面で「教職員には見せる」にしたときだけ教職員に出す
         'hidden' => ($config['teacherSeesHidden'] ?? false) === true && km_map_teacher_session(),
-        'password' => km_map_password_entered() || km_map_teacher_session(),
+        'password' => km_map_password_entered($config) || km_map_teacher_session(),
         default => false,
     };
 }
@@ -256,7 +284,7 @@ function km_map_view_unlocked(array $config): bool
     return match ($config['mapMode']) {
         'public' => true,
         // 教職員はパスワード無しで地図を見られる(docs/15 段 D)
-        'password' => km_map_password_entered() || km_map_teacher_session(),
+        'password' => km_map_password_entered($config) || km_map_teacher_session(),
         default => true,
     };
 }

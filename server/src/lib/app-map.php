@@ -298,10 +298,24 @@ function km_app_map_remember_lookup(array $config, string $hash, array $lookup):
  *
  * - 端末が `haveMapId` を送ってきた … それが配信先と同じときだけ版を比べる
  * - 送ってこない(古いアプリ)… 今まで配っていたのは kosen-main だけなので、そのときだけ比べる
+ *
+ * **中身の段(contentLevel)も比べる**(2026-09-25、診断 W-52)。同じ版でも、来場者に配る分と
+ * 教職員に配る分では中身(氏名・閲覧不可の地点)が違う。以前は版だけを見たので、権限を取り消された端末に
+ * **氏名入りの地図が残り続けた**(逆に、教職員になった人は次の版まで氏名が届かなかった)。
+ * 端末が haveLevel を送ってきたときだけ比べる。送ってこない古いアプリは今までどおり。
  */
-function km_app_map_is_up_to_date(string $slug, ?string $haveMapId, ?int $haveRevision, int $revision): bool
-{
+function km_app_map_is_up_to_date(
+    string $slug,
+    ?string $haveMapId,
+    ?int $haveRevision,
+    int $revision,
+    ?string $haveLevel = null,
+    ?string $level = null
+): bool {
     if ($haveRevision === null) {
+        return false;
+    }
+    if ($haveLevel !== null && $level !== null && $haveLevel !== $level) {
         return false;
     }
     if ($haveMapId !== null) {
@@ -947,7 +961,9 @@ function km_app_map_build_package(
     ?string $activeEventUuid,
     bool $withChecksum,
     /** 経路の重み(lib/route-weights.php)。配っていなければ null(アプリは自分の既定で動く) */
-    ?array $routeWeights = null
+    ?array $routeWeights = null,
+    /** 中身の段(km_app_map_content_level)。null なら載せない(以前と同じ形) */
+    ?string $contentLevel = null
 ): ?string {
     $mapJson = json_encode($map, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     if (!is_string($mapJson)) {
@@ -969,9 +985,41 @@ function km_app_map_build_package(
         'routeWeights' => $routeWeights,
         'map' => $placeholder,
     ];
+    if ($contentLevel !== null) {
+        // どの段の中身か(km_app_map_content_level)。端末が覚えて、次の取得で haveLevel として送る(W-52)
+        $package = array_slice($package, 0, -1, true) + ['contentLevel' => $contentLevel, 'map' => $placeholder];
+    }
     $body = json_encode($package, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     if (!is_string($body)) {
         return null;
     }
     return str_replace('"' . $placeholder . '"', $mapJson, $body);
+}
+
+/** 中身の段。来場者版・スタッフ版(閲覧不可の地点あり・氏名なし)・氏名入り。 */
+const KM_APP_MAP_CONTENT_LEVELS = ['visitor', 'staff', 'names'];
+
+/**
+ * この要求に配る中身の段(2026-09-25、W-52)。api/app-map.php の「何を落とすか」と同じ判定から決める。
+ *
+ * @param bool $privileged スタッフか教職員(閲覧不可の地点を見せてよい)
+ * @param bool $names      氏名も配ってよい(km_app_map_may_send_occupant_names)
+ */
+function km_app_map_content_level(bool $privileged, bool $names): string
+{
+    if (!$privileged) {
+        return 'visitor';
+    }
+
+    return $names ? 'names' : 'staff';
+}
+
+/** 端末が送ってきた haveLevel。知らない値は 'unknown'(= 必ず送り直す)、無ければ null(古いアプリ)。 */
+function km_app_map_parse_have_level(mixed $raw): ?string
+{
+    if (!is_string($raw) || $raw === '') {
+        return null;
+    }
+
+    return in_array($raw, KM_APP_MAP_CONTENT_LEVELS, true) ? $raw : 'unknown';
 }

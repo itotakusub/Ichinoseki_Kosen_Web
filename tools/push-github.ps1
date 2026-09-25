@@ -16,6 +16,10 @@ GitHub へ出す前に、秘密が混じっていないかを確かめてから 
   1. **出してはいけない名前のファイル**(署名鍵・.env・*.local.php・鍵と証明書・利用者のデータ)
   2. **出す変更の中身**に、直書きの資格情報らしい行・秘密鍵の中身・トークンの形
   3. 個人のメールアドレスらしいもの(**止めずに知らせるだけ**)
+  4. **公開の IPv4 アドレス**(私用・文書用・公開 DNS・ホスト自身の公開アドレスは除く)。
+     運用者の回線の IP が文書に載ったまま公開された(診断 2026-09-25 の W-47)
+  5. **教職員の氏名**。リポジトリの外の一覧(`~\.kosenmap\private-names.txt`、
+     update-private-names.ps1 が作る)と照合する。一覧が無ければ知らせるだけ(同 W-53)
 
 **先に全部を stage してから見る。** stage 前の `git diff` には**新しいファイルが入らない** ——
 最初の commit はすべて新しいファイルなので、何も検査されずに素通りする(2026-09-25 に気づいた)。
@@ -43,6 +47,10 @@ push のあとにプルリクエストの説明を開かない(自動実行な�
 
 .PARAMETER CheckOnly
 検査だけして終える。**commit も push もせず、stage も元に戻す。**
+
+.PARAMETER ScanAll
+中身の検査(2〜5)を、出す変更だけでなく**追跡中の全ファイル**に掛ける。
+初めて使うときと、履歴を書き換えたあとの確かめに。-CheckOnly と一緒に使う。
 #>
 [CmdletBinding()]
 param(
@@ -51,7 +59,8 @@ param(
     [switch]$NoCommit,
     [switch]$Force,
     [switch]$NoOpen,
-    [switch]$CheckOnly
+    [switch]$CheckOnly,
+    [switch]$ScanAll
 )
 
 $ErrorActionPreference = 'Stop'
@@ -152,6 +161,40 @@ $diff = if ($NoCommit) {
 }
 $added = @($diff | Where-Object { $_ -match '^\+' -and $_ -notmatch '^\+\+\+' })
 
+<#
+  **どこに出たか**も持つ(IP と氏名は、値を伏せて「ファイル:行」だけ出すため)。
+  差分なら `+++ b/…` と `@@ … +行,数 @@` から数える。-ScanAll なら追跡中の全ファイルを読む。
+#>
+$located = New-Object System.Collections.Generic.List[object]
+if ($ScanAll) {
+    $binary = '\.(png|jpe?g|gif|webp|ico|svg|pdf|zip|gz|jar|apk|aab|exe|dll|so|class|dex|ttf|otf|woff2?|jks|keystore|bin)$'
+    foreach ($path in @(git ls-files) + @(git diff --cached --name-only --diff-filter=A) | Sort-Object -Unique) {
+        if ($path -match $binary) { continue }
+        $full = Join-Path $repoRoot $path
+        if (-not (Test-Path -LiteralPath $full -PathType Leaf) -or (Get-Item -LiteralPath $full).Length -gt 20MB) { continue }
+        $no = 0
+        foreach ($line in [IO.File]::ReadLines($full)) {
+            $no++
+            $located.Add([pscustomobject]@{ Where = "${path}:$no"; Text = $line })
+        }
+    }
+} else {
+    $file = ''
+    $no = 0
+    foreach ($line in $diff) {
+        if ($line -match '^\+\+\+ (?:b/)?(.*)$') { $file = $Matches[1]; continue }
+        if ($line -match '^@@ -\S+ \+(\d+)') { $no = [int]$Matches[1]; continue }
+        if ($line -match '^\+') {
+            $located.Add([pscustomobject]@{ Where = "${file}:$no"; Text = $line.Substring(1) })
+            $no++
+        }
+    }
+}
+if ($ScanAll) {
+    # 全体を見るときは、2・3 の検査も全体に掛ける(行頭の + は付いていないので付けて揃える)
+    $added = @($located | ForEach-Object { '+' + $_.Text })
+}
+
 $suspicious = @($added | Where-Object { $_ -match $valuePattern -or $_ -match $pemPattern -or $_ -match $tokenPattern })
 if ($suspicious.Count -gt 0) {
     $secretHits += $suspicious | Select-Object -First 10 | ForEach-Object {
@@ -165,6 +208,76 @@ $emails = @($added | ForEach-Object { [regex]::Matches($_, $emailPattern) | ForE
 if ($emails.Count -gt 0) {
     Write-Host "--- 個人のメールアドレスらしいもの ($($emails.Count) 種類。止めはしない) ---" -ForegroundColor Yellow
     $emails | ForEach-Object { Write-Host ('  ' + ($_ -replace '^(.{2})[^@]*', '$1***')) -ForegroundColor Yellow }
+    Write-Host ''
+}
+
+# ------------------------------------------------ 4. 公開の IPv4 アドレス
+
+<#
+  **回線の IP は、おおよその所在地と、管理用の口を許している相手を教える**(W-47)。
+  除くもの: 私用・予約・文書用(RFC 5737)の範囲、公開 DNS、nginx/km/allow-admin.conf が
+  allow しているホスト自身の公開アドレス(DNS で誰でも引ける)。
+  版番号(jdk-21.0.12.101・v1.2.3.4 のように前後が英字や - . で続くもの)は形で除く。
+#>
+function Test-KmPublicIpv4([string]$text) {
+    $octets = $text.Split('.') | ForEach-Object { [int]$_ }
+    if ($octets | Where-Object { $_ -gt 255 }) { return $false }
+    $a, $b, $c, $d = $octets
+    if ($a -in 0, 10, 127 -or $a -ge 224) { return $false }
+    if ($a -eq 172 -and $b -ge 16 -and $b -le 31) { return $false }
+    if ($a -eq 192 -and $b -eq 168) { return $false }
+    if ($a -eq 169 -and $b -eq 254) { return $false }
+    if ($a -eq 100 -and $b -ge 64 -and $b -le 127) { return $false }   # 事業者の共有(CGNAT)
+    if ("$a.$b.$c" -in '192.0.2', '198.51.100', '203.0.113') { return $false }   # 文書用
+    if ($text -eq '1.2.3.4') { return $false }   # 説明の例
+    if ($text -in '1.1.1.1', '1.0.0.1', '8.8.8.8', '8.8.4.4', '9.9.9.9', '149.112.112.112') { return $false }
+    return $true
+}
+$allowedIps = @()
+$allowConf = Join-Path $repoRoot 'server\nginx\km\allow-admin.conf'
+if (Test-Path -LiteralPath $allowConf) {
+    $allowedIps = @(Select-String -LiteralPath $allowConf -Pattern '^\s*allow\s+([0-9.]+)\s*;' | ForEach-Object { $_.Matches[0].Groups[1].Value })
+}
+# 前に / が付くものは版(Chrome/120.0.0.0)。lock ファイルは依存の版の一覧なので見ない
+$ipPattern = '(?<![\w./-])(\d{1,3}(?:\.\d{1,3}){3})(?![\w.-]*[A-Za-z])(?![\d.])'
+$ipSkipFiles = '(^|/)([^/]*\.lock|package-lock\.json|gradle\.lockfile)(:\d+)?$'
+# JDK の版(「jdk-21.0.11.10 が 21.0.12.8 に」)は、同じ行に jdk とあれば版として扱う
+$ipHits = @($located | Where-Object { $_.Where -notmatch $ipSkipFiles -and $_.Text -notmatch '(?i)jdk' } | ForEach-Object {
+    $entry = $_
+    [regex]::Matches($entry.Text, $ipPattern) | ForEach-Object {
+        $ip = $_.Groups[1].Value
+        if ((Test-KmPublicIpv4 $ip) -and $ip -notin $allowedIps) {
+            # **値は伏せる。** 先頭の区切りだけ出す
+            "公開の IPv4 アドレス: $($entry.Where)  $(($ip -split '\.')[0]).*.*.*"
+        }
+    }
+} | Select-Object -Unique)
+if ($ipHits.Count -gt 0) {
+    $secretHits += $ipHits | Select-Object -First 20
+}
+
+# ------------------------------------------------ 5. 教職員の氏名
+
+<#
+  **一覧はリポジトリの外。** 無ければ知らせるだけ(一覧が無い PC でも push は止めない)。
+  当たったら値は出さず、「ファイル:行」と一覧の中の番号だけ出す。
+#>
+$namesFile = if ($env:KM_PRIVATE_NAMES_FILE) { $env:KM_PRIVATE_NAMES_FILE } else { Join-Path $HOME '.kosenmap\private-names.txt' }
+if (Test-Path -LiteralPath $namesFile) {
+    $privateNames = @(Get-Content -LiteralPath $namesFile -Encoding UTF8 | Where-Object { $_.Trim().Length -ge 2 })
+    $nameHits = @($located | ForEach-Object {
+        $entry = $_
+        for ($i = 0; $i -lt $privateNames.Count; $i++) {
+            if ($entry.Text.Contains($privateNames[$i])) {
+                "教職員の氏名(一覧の #$i): $($entry.Where)"
+            }
+        }
+    } | Select-Object -Unique)
+    if ($nameHits.Count -gt 0) {
+        $secretHits += $nameHits | Select-Object -First 20
+    }
+} else {
+    Write-Host "氏名の一覧がありません($namesFile)。氏名の検査は飛ばします。update-private-names.ps1 で作れます。" -ForegroundColor Yellow
     Write-Host ''
 }
 
@@ -189,7 +302,7 @@ if ($CheckOnly) {
     exit 0
 }
 
-# ------------------------------------------- 4. プルリクエストの説明(下書き)
+# ------------------------------------------- 6. プルリクエストの説明(下書き)
 
 <#
   **説明が「まだ main に入っていない今日のもの」ならそこへ足し、無ければ下書きを作る。**
@@ -261,7 +374,7 @@ if (-not $NoCommit) {
     if ($LASTEXITCODE -ne 0) { throw 'commit に失敗しました。' }
 }
 
-# ---------------------------------------------------------------- 5. 出す
+# ---------------------------------------------------------------- 7. 出す
 
 <#
   **1 回だけやり直す。** 通信の一時的な切れで止まることがある(2026-09-25 に 1 度あり、やり直したら通った)。
@@ -283,7 +396,7 @@ if ($Branch -ne 'main') {
     Write-Host "プルリクエストはこちらから: $remote/compare/main...$Branch"
 }
 
-# ------------------------------------------- 6. プルリクエストの説明を開く
+# ------------------------------------------- 8. プルリクエストの説明を開く
 
 <#
   開くのは**いま作った・足した説明**。今回 commit しなかったとき(既にある commit を出しただけ)は、
