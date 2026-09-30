@@ -60,6 +60,14 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && !km_csrf_verify()) {
             header('Location: ./guest-links.php?created=1', true, 302);
             exit;
         }
+        if ($action === 'revoke_account') {
+            $accountId = (int) ($_POST['account_id'] ?? 0);
+            if (km_map_guest_revoke_account($pdo, $accountId)) {
+                km_admin_log_record('content', 'guest.account_revoke', '#' . $accountId);
+            }
+            header('Location: ./guest-links.php?revoked=1', true, 302);
+            exit;
+        }
         if ($action === 'revoke') {
             $id = (int) ($_POST['id'] ?? 0);
             if (km_map_guest_revoke($pdo, $id)) {
@@ -96,9 +104,11 @@ $configNote = match (true) {
 };
 
 $links = [];
+$accountsByLink = [];
 $dbError = null;
 try {
     $links = km_map_guest_list(km_db());
+    $accountsByLink = km_map_guest_accounts_by_link(km_db());
 } catch (Throwable $exception) {
     error_log('guest-links.php list failed: ' . $exception->getMessage());
     $dbError = $exception->getMessage();
@@ -135,8 +145,9 @@ require __DIR__ . '/_inc/partials/page-header.php';
             <div class="alert alert-info d-flex align-items-start" role="alert">
               <i class="bi bi-info-circle-fill me-2 mt-1" aria-hidden="true"></i>
               <div data-i18n="page.guestLinks.notice">
-                リンクを開いてボタンを押したブラウザだけが、期限まで教職員と同じように地図を見られます(地図のパスワードが要らず、教員の地点の名前が見えます)。
-                Logto のアカウントは要りません。リンクを知っている人は誰でも使えるので、短い期限と少ない台数にしてください。
+                リンクを開いた人は、名前(と所属)を入れて仮アカウントを作ると、期限まで教職員と同じように地図を見られます(地図のパスワードが要らず、教員の地点の名前が見えます)。
+                仮アカウントはこのサーバーの DB にだけ作り、Logto のアカウントは要りません。誰がいつ作り、最後にいつ見たかは下の一覧で分かり、人ごとに止められます。
+                リンクを知っている人は誰でも作れるので、短い期限と少ない人数にしてください。
               </div>
             </div>
 
@@ -192,7 +203,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
                       </select>
                     </div>
                     <div class="mb-3">
-                      <label class="form-label" for="km-guest-uses" data-i18n="page.guestLinks.maxUses">使える台数(ブラウザの数)</label>
+                      <label class="form-label" for="km-guest-uses" data-i18n="page.guestLinks.maxUses">作れる仮アカウントの数(人数)</label>
                       <input type="number" class="form-control" id="km-guest-uses" name="max_uses" min="1" max="<?= (int) KM_MAP_GUEST_MAX_USES ?>" value="1" required />
                     </div>
                     <button type="submit" class="btn btn-primary">
@@ -216,7 +227,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
                               <th>#</th>
                               <th data-i18n="page.guestLinks.colLabel">呼び名</th>
                               <th data-i18n="page.guestLinks.colExpires">期限</th>
-                              <th class="text-end" data-i18n="page.guestLinks.colUses">使った台数</th>
+                              <th class="text-end" data-i18n="page.guestLinks.colUses">作った数</th>
                               <th data-i18n="page.guestLinks.colStatus">状態</th>
                               <th></th>
                             </tr>
@@ -243,6 +254,40 @@ require __DIR__ . '/_inc/partials/page-header.php';
                                   <?php endif; ?>
                                 </td>
                               </tr>
+                              <?php // このリンクで作られた仮アカウント。**誰が見ているか**をここで確かめる ?>
+                              <?php foreach ($accountsByLink[$row['id']] ?? [] as $account): ?>
+                                <tr class="small">
+                                  <td></td>
+                                  <td colspan="2">
+                                    <i class="bi bi-person me-1" aria-hidden="true"></i><?= km_e($account['name']) ?>
+                                    <?php if ($account['affiliation'] !== null): ?>
+                                      <span class="text-body-secondary">(<?= km_e($account['affiliation']) ?>)</span>
+                                    <?php endif; ?>
+                                  </td>
+                                  <td class="text-end text-body-secondary">
+                                    <span data-i18n="page.guestLinks.accountCreated">作成</span> <?= km_e(date('n/j H:i', $account['createdAt'])) ?><br>
+                                    <span data-i18n="page.guestLinks.accountSeen">最後に見た</span>
+                                    <?= $account['lastSeenAt'] !== null ? km_e(date('n/j H:i', $account['lastSeenAt'])) : '—' ?>
+                                  </td>
+                                  <td>
+                                    <?php if ($account['revoked']): ?>
+                                      <span class="badge text-bg-danger" data-i18n="page.guestLinks.accountStopped">止めた</span>
+                                    <?php endif; ?>
+                                  </td>
+                                  <td class="text-end">
+                                    <?php if (!$account['revoked'] && $row['status'] !== 'expired' && !$row['revoked']): ?>
+                                      <form method="post" class="d-inline km-guest-revoke-form">
+                                        <?= km_csrf_field() ?>
+                                        <input type="hidden" name="action" value="revoke_account" />
+                                        <input type="hidden" name="account_id" value="<?= (int) $account['id'] ?>" />
+                                        <button type="submit" class="btn btn-sm btn-outline-danger">
+                                          <span data-i18n="page.guestLinks.stopAccount">この人を止める</span>
+                                        </button>
+                                      </form>
+                                    <?php endif; ?>
+                                  </td>
+                                </tr>
+                              <?php endforeach; ?>
                             <?php endforeach; ?>
                           </tbody>
                         </table>

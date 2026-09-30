@@ -2253,24 +2253,30 @@ function km_check_guest_links(): void
     $saved = $_SESSION ?? null;
     $cfg = static fn (string $mode, string $mapMode, bool $seesHidden): array => ['mode' => $mode, 'mapMode' => $mapMode, 'passwordHash' => 'x', 'teacherSeesHidden' => $seesHidden];
     $_SESSION = [KM_MAP_GUEST_SESSION_KEY => ['id' => 1, 'until' => time() + 600]];
+    check_bool('仮アカウントの無い印(前の形)は効かない', !km_map_guest_session());
+    $_SESSION = [KM_MAP_GUEST_SESSION_KEY => ['id' => 1, 'account' => 7, 'until' => time() + 600, 'name' => '試し 花子']];
     check_bool('期限内の印ならお試しの閲覧中', km_map_guest_session());
+    check('画面に出す名前', '試し 花子', km_map_guest_name());
     check_bool('password の氏名がパスワード無しで見える', km_map_names_unlocked($cfg('password', 'public', false)));
     check_bool('password の地図がパスワード無しで見える', km_map_view_unlocked($cfg('hidden', 'password', false)));
     check_bool('hidden は既定で見えない(教職員と同じ)', !km_map_names_unlocked($cfg('hidden', 'public', false)));
     check_bool('hidden でも「教職員には見せる」なら見える', km_map_names_unlocked($cfg('hidden', 'public', true)));
-    $_SESSION = [KM_MAP_GUEST_SESSION_KEY => ['id' => 1, 'until' => time() - 1]];
+    $_SESSION = [KM_MAP_GUEST_SESSION_KEY => ['id' => 1, 'account' => 7, 'until' => time() - 1]];
     check_bool('期限切れの印は効かない', !km_map_guest_session() && !km_map_names_unlocked($cfg('password', 'public', false)));
-    $_SESSION = [KM_MAP_GUEST_SESSION_KEY => ['id' => '1', 'until' => (string) (time() + 600)]];
+    $_SESSION = [KM_MAP_GUEST_SESSION_KEY => ['id' => '1', 'account' => '7', 'until' => (string) (time() + 600)]];
     check_bool('数字でない印は効かない', !km_map_guest_session());
-    $_SESSION = [KM_MAP_GUEST_SESSION_KEY => ['id' => 1, 'until' => time() + 600]];
+    $_SESSION = [KM_MAP_GUEST_SESSION_KEY => ['id' => 1, 'account' => 7, 'until' => time() + 600]];
     check_bool('管理者の印にはならない', !km_map_admin_session());
     $_SESSION = $saved ?? [];
 
     km_check_heading('guest-links: 入口');
     $guest = $code($read('guest.php'));
-    check_bool('GET では使わない(確かめるだけ)', str_contains($guest, 'km_map_guest_peek($pdo, $token)') && substr_count($guest, 'km_map_guest_redeem(') === 1);
-    check_bool('使うのは POST で CSRF を確かめてから', strpos($guest, 'km_csrf_verify()') < strpos($guest, 'km_map_guest_redeem('));
+    check_bool('GET では使わない(確かめるだけ)', str_contains($guest, 'km_map_guest_peek($pdo, $token)') && strpos($guest, '$action === \'create\'') < strpos($guest, 'km_map_guest_create_account('));
+    check_bool('作るのも入り直すのも POST で CSRF を確かめてから', strpos($guest, 'km_csrf_verify()') < strpos($guest, 'km_map_guest_create_account(') && strpos($guest, 'km_csrf_verify()') < strpos($guest, 'km_map_guest_reenter('));
+    check_bool('再入場コードの総当たりを絞る(錠 guest)', strpos($guest, 'km_map_unlock_attempt($pdo, \'guest\')') < strpos($guest, 'km_map_guest_reenter('));
+    check_bool('再入場コードは作った画面でだけ見せる(URL に載せない)', str_contains($guest, 'km_map_guest_format_code($created[\'code\'])') && !str_contains($guest, 'Location: /?'));
     check_bool('印を立てる前にセッション ID を作り直す', strpos($guest, 'session_regenerate_id(true);') < strpos($guest, 'km_map_guest_grant('));
+    check_bool('記録に名前を写さない(番号だけ)', !preg_match('/km_admin_log_record\([^;]*name/', $guest));
     check_bool('参照元を渡さない', str_contains($guest, "header('Referrer-Policy: no-referrer');"));
     $lib = $code($read('lib/map-guest.php'));
     check_bool('台数は 1 本の UPDATE で数える', str_contains($lib, 'SET uses = uses + 1') && str_contains($lib, 'AND uses < max_uses'));
@@ -2286,12 +2292,30 @@ function km_check_guest_links(): void
     check_bool('発行したリンクを URL に載せて戻さない', str_contains($admin, "header('Location: ./guest-links.php?created=1', true, 302);") && str_contains($admin, "\$_SESSION['km_guest_link_new']"));
     check_bool('記録に呼び名を写さない(番号だけ)', str_contains($admin, "km_admin_log_record('content', 'guest.link_create', '#' . \$created['id']);"));
     require_once $src . '/lib/admin-log.php';
-    foreach (['guest.link_create', 'guest.link_revoke', 'guest.link_used'] as $action) {
+    foreach (['guest.link_create', 'guest.link_revoke', 'guest.account_create', 'guest.account_reenter', 'guest.account_revoke'] as $action) {
         check_bool('記録の文言: ' . $action, isset(KM_ADMIN_LOG_ACTION_LABELS[$action]));
     }
     check_bool('メニューから開ける', str_contains($read('admin/_inc/partials/sidebar.php'), 'href="./guest-links.php"'));
     check_bool('期限の切れたリンクは 30 日で消す', str_contains($code($read('lib/privacy-retention.php')), 'DELETE FROM km_map_guest_links WHERE expires_at < DATE_SUB(NOW(), INTERVAL ? DAY)'));
     check_bool('退会したら発行者を外す', str_contains($code($read('lib/account-delete.php')), 'UPDATE km_map_guest_links SET created_by = NULL WHERE created_by = ?'));
+    km_check_heading('guest-links: 仮アカウント(MariaDB)');
+    check('コードは見間違えやすい字を使わない', 0, preg_match('/[01OIL]/', KM_MAP_GUEST_CODE_ALPHABET));
+    $newCode = km_map_guest_new_code();
+    check_bool('作ったコードは揃えた形と同じ', km_map_guest_normalize_code($newCode) === $newCode && strlen($newCode) === KM_MAP_GUEST_CODE_LENGTH);
+    check('小文字・ハイフン・空白を許して揃える', 'K7QMAB23', km_map_guest_normalize_code(' k7qm-ab23 '));
+    check('使わない字(0 や O)を含むコードは受けない', null, km_map_guest_normalize_code('K0QM-AB23'));
+    check('4 文字ずつ区切って見せる', 'K7QM-AB23', km_map_guest_format_code('K7QMAB23'));
+    check_bool('コードの要約はリンクごとに違う', km_map_guest_code_hash(1, 'K7QMAB23') !== km_map_guest_code_hash(2, 'K7QMAB23'));
+    check('名前の制御文字を落とし長さで切る', str_repeat('あ', KM_MAP_GUEST_NAME_MAX), km_map_guest_clean_text("\x07" . str_repeat('あ', 40), KM_MAP_GUEST_NAME_MAX));
+    check_bool('仮アカウントは Logto ではなく DB の表に作る', str_contains($lib, 'INSERT INTO km_map_guest_accounts') && !str_contains($lib, 'logto'));
+    check_bool('1 人分を使うのと作るのは 1 つの取引', (bool) preg_match('/function km_map_guest_create_account.*?beginTransaction.*?SET uses = uses \+ 1.*?INSERT INTO km_map_guest_accounts.*?commit/s', $lib));
+    check_bool('入り直しは台数を使わない', !preg_match('/function km_map_guest_reenter.*?uses = uses \+ 1.*?function km_map_guest_grant/s', $lib));
+    check_bool('止めたアカウントは突き合わせで外れる', str_contains($lib, 'a.revoked_at IS NULL') && str_contains($lib, 'l.revoked_at IS NULL AND l.expires_at > NOW()'));
+    check_bool('期限の切れたリンクの仮アカウントも消す(リンクより先に)', strpos($code($read('lib/privacy-retention.php')), 'DELETE FROM km_map_guest_accounts') < strpos($code($read('lib/privacy-retention.php')), 'DELETE FROM km_map_guest_links'));
+    check_bool('ポリシーに仮アカウントの名前と保存期間を書く', str_contains($read('lib/legal.php'), '仮アカウント') && str_contains($read('lib/legal.php'), '入力した名前・所属'));
+    check_bool('再入場の錠がある', isset(KM_MAP_UNLOCK_SCOPES['guest']));
+    check_bool('管理画面で人ごとに止められる', str_contains($admin, 'km_map_guest_revoke_account(') && str_contains($admin, "km_admin_log_record('content', 'guest.account_revoke'"));
+    check_bool('公開ページに誰として見ているかを出す', str_contains($read('index.php'), 'お試し: <?= km_home_e((string) $guestName) ?> さん'));
     $nginx = (string) @file_get_contents($src . '/../nginx/default.conf.template');
     if (preg_match('#location = /guest\.php \{(.*?)\n    \}#s', $nginx, $m)) {
         check_bool('nginx: クエリをログに残さない', str_contains($m[1], 'km_no_query'));
@@ -2990,7 +3014,7 @@ function km_check_security_review(): void
 
     km_check_heading('security-review 3・7: 解除の試行は錠ごとに、DB が落ちても数える');
     require_once __DIR__ . '/../lib/map-rate-limit.php';
-    check('錠は web と app', ['web', 'app'], array_keys(KM_MAP_UNLOCK_SCOPES));
+    check('錠は web と app と guest(お試しの閲覧の再入場コード)', ['web', 'app', 'guest'], array_keys(KM_MAP_UNLOCK_SCOPES));
     check_bool('表は別々', KM_MAP_UNLOCK_SCOPES['web'] !== KM_MAP_UNLOCK_SCOPES['app']);
     $unlockApi = $code($read('api/map-unlock.php'));
     $appMapApi = $code($read('api/app-map.php'));
