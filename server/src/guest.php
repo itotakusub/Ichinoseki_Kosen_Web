@@ -68,7 +68,7 @@ try {
         } elseif (is_array($account)) {
             // 権限が上がる瞬間にセッション ID を作り直す(セッション固定への対策。api/map-unlock.php と同じ)
             session_regenerate_id(true);
-            km_map_guest_grant($account['linkId'], $account['accountId'], $account['expiresAt'], $account['name']);
+            km_map_guest_grant($account['linkId'], $account['accountId'], $account['expiresAt'], $account['name'], $account['names']);
             // 名前は記録に写さない(管理画面の一覧で見られる)。番号だけ
             km_admin_log_record('content', 'guest.account_create', '#' . $account['linkId'] . ' / ' . $account['accountId']);
             $created = $account;
@@ -84,7 +84,7 @@ try {
             } else {
                 km_map_clear_unlock_failures($pdo, 'guest');
                 session_regenerate_id(true);
-                km_map_guest_grant($account['linkId'], $account['accountId'], $account['expiresAt'], $account['name']);
+                km_map_guest_grant($account['linkId'], $account['accountId'], $account['expiresAt'], $account['name'], $account['names']);
                 km_admin_log_record('content', 'guest.account_reenter', '#' . $account['linkId'] . ' / ' . $account['accountId']);
                 header('Location: /', true, 303);
                 exit;
@@ -131,8 +131,9 @@ try {
             <h2><?= km_guest_e($created['name']) ?> さんの仮アカウントを作りました</h2>
             <p>
                 <strong><?= km_guest_e(date('Y/m/d H:i', $created['expiresAt'])) ?></strong> まで、このブラウザで
-                教員の地点の名前をパスワード無しで見られます。
+                地図をパスワード無しで見られます。
             </p>
+            <p>教員の地点の名前は、運営者があなたの仮アカウントに許可すると見えるようになります(地図を開き直すと反映されます)。</p>
             <p>ブラウザを閉じたり別の端末で見たりするときは、同じリンクを開いて次の<strong>再入場コード</strong>を入れてください。</p>
             <p class="km-doc-code"><?= km_guest_e(km_map_guest_format_code($created['code'])) ?></p>
             <p class="km-doc-updated">このコードは<strong>この画面でしか表示しません。</strong>メモするか、画面を保存してください。</p>
@@ -140,7 +141,7 @@ try {
         <?php elseif ($link !== null): ?>
             <p>
                 このリンクでは、仮アカウントを作ると <strong><?= km_guest_e(date('Y/m/d H:i', $link['expiresAt'])) ?></strong> まで、
-                このブラウザで教員の地点の名前をパスワード無しで見られます。
+                このブラウザで地図をパスワード無しで見られます。教員の地点の名前は、運営者が許可した仮アカウントだけに表示されます。
                 入れた名前は、誰が見ているかを運営者が確かめるためだけに使い、期限の 30 日後に消えます。
             </p>
             <?php if ($formError !== null): ?>

@@ -6,8 +6,8 @@ declare(strict_types=1);
  * お試しの閲覧リンク(2026-09-30、利用者の指示)。
  *
  * 管理画面(admin/guest-links.php)で期限と使える台数を決めてリンクを発行し、
- * 開いたブラウザだけが、期限まで**教職員と同じように**地図を見られる
- * (地図の錠を通る・教職員氏名が見える)。Logto のアカウントは要らない。
+ * 開いたブラウザだけが、期限まで地図の錠を通れる。教職員氏名は、管理画面で許した仮アカウントだけに出る
+ * (下の「教員名は人ごとに許す」)。Logto のアカウントは要らない。
  *
  * ## 守り
  *
@@ -30,6 +30,12 @@ declare(strict_types=1);
  *   表にはコードの要約だけを置く。コードの総当たりは、地図のパスワードと同じ数え方で絞る(錠 'guest')
  * - 管理画面で、誰が・いつ作り・最後にいつ見たかが分かり、アカウントごとに止められる
  * - 入れた名前と所属は、リンクと一緒に期限の 30 日後に消える
+ *
+ * ## 教員名は人ごとに許す(2026-09-30 の 3 回目、利用者の指示)
+ *
+ * 仮アカウントを作っただけでは**地図の錠を通るだけ**で、教員名は出ない。
+ * 管理画面で「教員名を見せる」にした仮アカウントだけ、教職員と同じように氏名が見える(names_allowed)。
+ * 許す・外すは、開いているブラウザにも次に地図を開いたときに効く(km_map_guest_verify が表から読み直す)。
  */
 
 require_once __DIR__ . '/db.php';
@@ -48,6 +54,11 @@ const KM_MAP_GUEST_SESSION_KEY = 'km_map_guest';
 
 function km_map_guest_ensure_table(PDO $pdo): void
 {
+    // 公開ページを開くたびに呼ばれるので、1 回の要求で 1 回だけ
+    static $ensured = false;
+    if ($ensured) {
+        return;
+    }
     $pdo->exec(<<<'SQL'
         CREATE TABLE IF NOT EXISTS km_map_guest_links (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -72,6 +83,7 @@ function km_map_guest_ensure_table(PDO $pdo): void
             display_name VARCHAR(32) NOT NULL,
             affiliation VARCHAR(64) NULL,
             code_hash CHAR(64) NOT NULL,
+            names_allowed TINYINT(1) NOT NULL DEFAULT 0,
             created_at DATETIME NOT NULL,
             last_seen_at DATETIME NULL,
             revoked_at DATETIME NULL,
@@ -79,6 +91,19 @@ function km_map_guest_ensure_table(PDO $pdo): void
             INDEX idx_km_map_guest_account_link (link_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         SQL);
+
+    // 後から足した列(教員名を人ごとに許す)。**既にある表には無いときだけ足す**(lib/user-stats.php と同じ形)
+    $column = $pdo->query(
+        "SELECT COUNT(*) FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'km_map_guest_accounts' AND COLUMN_NAME = 'names_allowed'"
+    );
+    if ($column !== false && (int) $column->fetchColumn() === 0) {
+        $pdo->exec(
+            'ALTER TABLE km_map_guest_accounts
+               ADD COLUMN IF NOT EXISTS names_allowed TINYINT(1) NOT NULL DEFAULT 0 AFTER code_hash'
+        );
+    }
+    $ensured = true;
 }
 
 /** 名前の長さの上限(文字)。 */
@@ -334,13 +359,15 @@ function km_map_guest_create_account(PDO $pdo, string $token, string $name, stri
         'expiresAt' => (int) $link['expiresAt'],
         'code' => $code,
         'name' => $name,
+        // 作っただけでは教員名は見えない(管理画面で人ごとに許す)
+        'names' => false,
     ];
 }
 
 /**
  * 再入場。**台数は使わない。** リンクが生きていて、アカウントが止められていないときだけ。
  *
- * @return array{linkId:int, accountId:int, expiresAt:int, name:string}|null
+ * @return array{linkId:int, accountId:int, expiresAt:int, name:string, names:bool}|null
  */
 function km_map_guest_reenter(PDO $pdo, string $token, string $rawCode): ?array
 {
@@ -350,7 +377,7 @@ function km_map_guest_reenter(PDO $pdo, string $token, string $rawCode): ?array
         return null;
     }
     $statement = $pdo->prepare(
-        'SELECT id, display_name FROM km_map_guest_accounts
+        'SELECT id, display_name, names_allowed FROM km_map_guest_accounts
          WHERE link_id = ? AND code_hash = ? AND revoked_at IS NULL'
     );
     $statement->execute([$link['id'], km_map_guest_code_hash($link['id'], $code)]);
@@ -365,13 +392,23 @@ function km_map_guest_reenter(PDO $pdo, string $token, string $rawCode): ?array
         'accountId' => (int) $row['id'],
         'expiresAt' => $link['expiresAt'],
         'name' => (string) $row['display_name'],
+        'names' => (int) $row['names_allowed'] === 1,
     ];
 }
 
-/** このセッションに印を立てる。**呼ぶ前に session_regenerate_id(true) すること**(権限が上がる瞬間)。 */
-function km_map_guest_grant(int $linkId, int $accountId, int $expiresAt, string $name): void
+/**
+ * このセッションに印を立てる。**呼ぶ前に session_regenerate_id(true) すること**(権限が上がる瞬間)。
+ * $names は教員名を見てよいか。以後は km_map_guest_verify が表から読み直す。
+ */
+function km_map_guest_grant(int $linkId, int $accountId, int $expiresAt, string $name, bool $names): void
 {
-    $_SESSION[KM_MAP_GUEST_SESSION_KEY] = ['id' => $linkId, 'account' => $accountId, 'until' => $expiresAt, 'name' => $name];
+    $_SESSION[KM_MAP_GUEST_SESSION_KEY] = [
+        'id' => $linkId,
+        'account' => $accountId,
+        'until' => $expiresAt,
+        'name' => $name,
+        'names' => $names,
+    ];
 }
 
 /**
@@ -389,6 +426,12 @@ function km_map_guest_session(): bool
         && $mark['until'] > time();
 }
 
+/** お試しの閲覧中で、**管理画面で教員名を許された**仮アカウントか。true そのものだけを許す。 */
+function km_map_guest_names_session(): bool
+{
+    return km_map_guest_session() && ($_SESSION[KM_MAP_GUEST_SESSION_KEY]['names'] ?? false) === true;
+}
+
 /** 画面に出す名前(お試しの閲覧中でなければ null)。 */
 function km_map_guest_name(): ?string
 {
@@ -398,6 +441,7 @@ function km_map_guest_name(): ?string
 /**
  * 印を表と突き合わせ、リンクかアカウントが取り消し・期限切れなら外す。公開ページ(index.php)と地図データの API が呼ぶ。
  * ついでに「最後に見た時刻」を書く(KM_MAP_GUEST_SEEN_INTERVAL 秒に 1 回まで)。
+ * **教員名を見てよいか(names_allowed)も、ここで表から読み直す**(管理画面で許す・外すがすぐ効く)。
  *
  * **確かめられなければ外す**(fail closed)。困るのは「お試しの人に一時的に氏名が出ない」だけ。
  * セッションが閉じたあと(書けない)に呼んだときは、この要求の間だけ効かなくする。
@@ -414,14 +458,16 @@ function km_map_guest_verify(?PDO $pdo = null): bool
             $pdo ??= km_db();
             km_map_guest_ensure_table($pdo);
             $statement = $pdo->prepare(
-                'SELECT 1 FROM km_map_guest_accounts a
+                'SELECT a.names_allowed FROM km_map_guest_accounts a
                    JOIN km_map_guest_links l ON l.id = a.link_id
                   WHERE a.id = ? AND a.link_id = ? AND a.revoked_at IS NULL
                     AND l.revoked_at IS NULL AND l.expires_at > NOW()'
             );
             $statement->execute([$mark['account'], $mark['id']]);
-            $ok = $statement->fetchColumn() !== false;
+            $namesAllowed = $statement->fetchColumn();
+            $ok = $namesAllowed !== false;
             if ($ok) {
+                $_SESSION[KM_MAP_GUEST_SESSION_KEY]['names'] = (int) $namesAllowed === 1;
                 $pdo->prepare(
                     'UPDATE km_map_guest_accounts SET last_seen_at = NOW()
                      WHERE id = ? AND (last_seen_at IS NULL OR last_seen_at < DATE_SUB(NOW(), INTERVAL ? SECOND))'
@@ -442,13 +488,13 @@ function km_map_guest_verify(?PDO $pdo = null): bool
 /**
  * 管理画面の一覧: リンクごとの仮アカウント(新しい順)。
  *
- * @return array<int, array<int, array{id:int, name:string, affiliation:?string, createdAt:int, lastSeenAt:?int, revoked:bool}>>
+ * @return array<int, array<int, array{id:int, name:string, affiliation:?string, namesAllowed:bool, createdAt:int, lastSeenAt:?int, revoked:bool}>>
  */
 function km_map_guest_accounts_by_link(PDO $pdo): array
 {
     km_map_guest_ensure_table($pdo);
     $rows = $pdo->query(
-        'SELECT id, link_id, display_name, affiliation, UNIX_TIMESTAMP(created_at) AS createdAt,
+        'SELECT id, link_id, display_name, affiliation, names_allowed, UNIX_TIMESTAMP(created_at) AS createdAt,
                 UNIX_TIMESTAMP(last_seen_at) AS lastSeenAt, revoked_at IS NOT NULL AS revoked
          FROM km_map_guest_accounts ORDER BY id DESC LIMIT 1000'
     );
@@ -458,6 +504,7 @@ function km_map_guest_accounts_by_link(PDO $pdo): array
             'id' => (int) $row['id'],
             'name' => (string) $row['display_name'],
             'affiliation' => $row['affiliation'] !== null ? (string) $row['affiliation'] : null,
+            'namesAllowed' => (int) $row['names_allowed'] === 1,
             'createdAt' => (int) $row['createdAt'],
             'lastSeenAt' => $row['lastSeenAt'] !== null ? (int) $row['lastSeenAt'] : null,
             'revoked' => (bool) $row['revoked'],
@@ -473,6 +520,21 @@ function km_map_guest_revoke_account(PDO $pdo, int $accountId): bool
     km_map_guest_ensure_table($pdo);
     $statement = $pdo->prepare('UPDATE km_map_guest_accounts SET revoked_at = NOW() WHERE id = ? AND revoked_at IS NULL');
     $statement->execute([$accountId]);
+
+    return $statement->rowCount() > 0;
+}
+
+/**
+ * 仮アカウントに教員名を見せるか決める(管理画面から)。止めたアカウントは変えない。
+ * **開いているブラウザにも、次に地図を開いたときに効く**(km_map_guest_verify)。
+ */
+function km_map_guest_set_names(PDO $pdo, int $accountId, bool $allowed): bool
+{
+    km_map_guest_ensure_table($pdo);
+    $statement = $pdo->prepare(
+        'UPDATE km_map_guest_accounts SET names_allowed = ? WHERE id = ? AND revoked_at IS NULL AND names_allowed <> ?'
+    );
+    $statement->execute([$allowed ? 1 : 0, $accountId, $allowed ? 1 : 0]);
 
     return $statement->rowCount() > 0;
 }

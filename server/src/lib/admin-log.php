@@ -84,6 +84,8 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     'guest.account_create' => 'がお試しの閲覧の仮アカウントを作りました',
     'guest.account_reenter' => 'がお試しの閲覧の仮アカウントで入り直しました',
     'guest.account_revoke' => 'がお試しの閲覧の仮アカウントを止めました',
+    'guest.account_names_allow' => 'がお試しの閲覧の仮アカウントに教員名を見せるようにしました',
+    'guest.account_names_deny' => 'がお試しの閲覧の仮アカウントの教員名を隠しました',
     // 実行者(公開ページの利用者)を頭に置く前提なので「が」から始める
     'map.unlock_failed' => 'が教職員氏名のパスワード解除に失敗しました',
     'task.create' => 'がタスクを追加しました',
