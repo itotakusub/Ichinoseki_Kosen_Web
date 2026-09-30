@@ -115,7 +115,8 @@ unset($_SESSION['km_admin_denied_logged'], $_SESSION['km_gate_denied_logged']);
  * 管理画面から来たときの印(km_map_admin)。残すと、共用の端末でサインアウトしても
  * **次の人が解除済みの地図を見られる**(security-review-2026-09-10 の 5)。
  */
-unset($_SESSION['km_map_unlocked'], $_SESSION['km_map_admin']);
+// お試しの閲覧リンクの印(km_map_guest。2026-09-30)も同じ理由で外す
+unset($_SESSION['km_map_unlocked'], $_SESSION['km_map_admin'], $_SESSION['km_map_guest']);
 // 教職員の印(docs/15 段 D)も。共用の端末でサインアウトしたあとに教職員として見え続けないように
 unset($_SESSION['km_map_teacher_until']);
 

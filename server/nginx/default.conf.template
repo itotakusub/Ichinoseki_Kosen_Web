@@ -534,6 +534,24 @@ server {
         proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
     }
 
+    # お試しの閲覧リンク(2026-09-30、lib/map-guest.php)。**URL にリンクの中身が乗るのでログには残さない**。
+    # 参照元も渡さない(verify.php と同じ)。トークンの総当たりに備えて入口でも回数を絞る。
+    location = /guest.php {
+        access_log /var/log/nginx/access.log km_no_query;
+        limit_req zone=km_public burst=5 nodelay;
+
+        # ここで add_header を書くと server ブロックの add_header は継承されない(上の verify.php と同じ)
+        add_header X-Content-Type-Options nosniff always;
+        add_header X-Frame-Options SAMEORIGIN always;
+        add_header Referrer-Policy no-referrer always;
+        add_header Permissions-Policy $km_permissions_policy always;
+        add_header Content-Security-Policy $km_csp_fallback always;
+        include /etc/nginx/km/hsts-*.conf;
+
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+
     # 管理画面はファイル管理(10MB)の分だけ広げる。
     # **`^~` を付けないこと** —— 付けると上の正規表現(`^/admin/_` の 404、静的資材)が効かなくなる
     location /admin/ {

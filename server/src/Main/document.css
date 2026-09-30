@@ -81,6 +81,28 @@ body {
     color: var(--on-primary);
 }
 
+/* 決める操作(お試しの閲覧の「地図を開く」)。導線の Outlined に対して塗りつぶし */
+.km-doc-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: var(--km-touch);
+    margin: 0.5rem 0 1.5rem;
+    padding: 0.45rem 1.4rem;
+    border: none;
+    border-radius: 999px;
+    background: var(--primary);
+    color: var(--on-primary);
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.km-doc-button:hover,
+.km-doc-button:focus-visible {
+    filter: brightness(1.08);
+}
+
 .km-doc-main {
     max-width: 46rem;
     margin: 0 auto;

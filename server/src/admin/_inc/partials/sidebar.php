@@ -31,6 +31,8 @@ $openMenus = [
     'mailbox' => 'content',
     // ランキングの「調べられた語」を外す(2026-09-25、診断 W-45)
     'ranking' => 'content',
+    // お試しの閲覧リンク(2026-09-30、lib/map-guest.php)
+    'guestLinks' => 'content',
     'profile' => 'extra',
     // FAQ は見本ページではなく、編集して公開する実コンテンツになった(フェーズ14)
     'faq' => 'content',
@@ -214,6 +216,12 @@ $parentLink = static fn(string $id): string => 'nav-link' . ($openMenu === $id ?
                     <a href="./ranking.php" class="<?= $link('ranking') ?>">
                       <i class="nav-icon bi bi-trophy"></i>
                       <p data-i18n="side.ranking">ランキングの語</p>
+                    </a>
+                  </li>
+                  <li class="nav-item">
+                    <a href="./guest-links.php" class="<?= $link('guestLinks') ?>">
+                      <i class="nav-icon bi bi-link-45deg"></i>
+                      <p data-i18n="side.guestLinks">お試しの閲覧リンク</p>
                     </a>
                   </li>
                   <?php // 問い合わせフォームは公開ページ(/contact.php)へ一本化した(フェーズ17)。
