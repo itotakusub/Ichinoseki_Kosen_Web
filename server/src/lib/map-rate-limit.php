@@ -61,6 +61,8 @@ const KM_MAP_UNLOCK_SCOPES = [
     'web' => 'km_map_unlock_attempts',
     // アプリの配信アクセスコード(api/app-map.php)
     'app' => 'km_app_unlock_attempts',
+    // お試しの閲覧の再入場コード(guest.php。2026-09-30)。上限は 'web' と同じ
+    'guest' => 'km_guest_unlock_attempts',
 ];
 
 /**

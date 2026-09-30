@@ -95,6 +95,7 @@ km_session_start();
 require_once __DIR__ . '/lib/map-guest.php';
 $guestViewing = km_map_guest_verify();
 $guestUntil = $guestViewing ? (int) $_SESSION[KM_MAP_GUEST_SESSION_KEY]['until'] : null;
+$guestName = $guestViewing ? km_map_guest_name() : null;
 
 function km_home_e(?string $value): string
 {
@@ -291,7 +292,7 @@ try {
                     <div class="action-group-left" id="km-auth-links">
                         <?php if ($guestViewing && $guestUntil !== null): ?>
                             <?php // お試しの閲覧中であることと期限を隠さない(期限が来たら黙って氏名が消えるだけにしない) ?>
-                            <span class="user-chip" role="status">お試しの閲覧中(<?= km_home_e(date('n/j H:i', $guestUntil)) ?> まで)</span>
+                            <span class="user-chip" role="status">お試し: <?= km_home_e((string) $guestName) ?> さん(<?= km_home_e(date('n/j H:i', $guestUntil)) ?> まで)</span>
                         <?php endif; ?>
                         <?php if ($loggedIn): ?>
                             <span class="user-chip">👤 <?= km_home_e($displayName) ?> さん</span>

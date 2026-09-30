@@ -74,7 +74,14 @@ function km_privacy_purge(PDO $pdo): array
 
     $counts['km_admin_log'] = km_privacy_run($pdo, km_privacy_audit_sql($pdo), [KM_PRIVACY_AUDIT_IP_DAYS]);
 
-    // お試しの閲覧リンク(lib/map-guest.php)。期限が切れて KM_PRIVACY_GUEST_LINK_DAYS 日たったものは行ごと消す
+    // お試しの閲覧リンク(lib/map-guest.php)。期限が切れて KM_PRIVACY_GUEST_LINK_DAYS 日たったものは行ごと消す。
+    // **仮アカウント(名前・所属)を先に消す** —— リンクだけ消すと、どのリンクのものか分からない名前が残る
+    $counts['km_map_guest_accounts'] = km_privacy_run(
+        $pdo,
+        'DELETE FROM km_map_guest_accounts WHERE link_id IN (
+             SELECT id FROM km_map_guest_links WHERE expires_at < DATE_SUB(NOW(), INTERVAL ? DAY))',
+        [KM_PRIVACY_GUEST_LINK_DAYS]
+    );
     $counts['km_map_guest_links'] = km_privacy_run(
         $pdo,
         'DELETE FROM km_map_guest_links WHERE expires_at < DATE_SUB(NOW(), INTERVAL ? DAY)',

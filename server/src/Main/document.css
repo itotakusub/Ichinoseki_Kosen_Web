@@ -103,6 +103,46 @@ body {
     filter: brightness(1.08);
 }
 
+a.km-doc-button {
+    text-decoration: none;
+}
+
+/* お試しの閲覧の入力欄(guest.php) */
+.km-doc-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    max-width: 24rem;
+}
+
+.km-doc-form label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    font-weight: 600;
+}
+
+.km-doc-form input {
+    min-height: var(--km-touch);
+    padding: 0.4rem 0.75rem;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--glass-heavy);
+    color: inherit;
+    font: inherit;
+    font-weight: 400;
+}
+
+/* 再入場コード。**見間違えないよう大きく、字間を空ける** */
+.km-doc-code {
+    font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+    font-size: 2rem;
+    font-weight: 700;
+    letter-spacing: 0.2em;
+    margin: 0.5rem 0;
+    user-select: all;
+}
+
 .km-doc-main {
     max-width: 46rem;
     margin: 0 auto;
