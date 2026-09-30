@@ -175,6 +175,13 @@ function km_account_delete_data(PDO $pdo, string $userId): array
          * 上の一覧(KM_ACCOUNT_DELETE_TABLES)では消えない。本文は残す(会話の流れが分からなくなるため)。
          * 列は NOT NULL なので空文字と決まった名前にする。表がまだ無ければ何もしない。
          */
+        // お試しの閲覧リンクを発行した人(created_by)も外す(2026-09-30。表が無ければ何もしない)
+        km_account_delete_optional(
+            $pdo,
+            'UPDATE km_map_guest_links SET created_by = NULL WHERE created_by = ?',
+            [$userId]
+        );
+
         $chatAnonymized = 0;
         try {
             $stmt = $pdo->prepare('UPDATE km_chat_messages SET sender_id = ?, sender_name = ? WHERE sender_id = ?');
@@ -211,6 +218,23 @@ function km_account_delete_data(PDO $pdo, string $userId): array
 
 /** 消した利用者の代わりに置く文字列。監査ログの detail とチャットの発言者名に入る。 */
 const KM_ACCOUNT_DELETE_PLACEHOLDER = '(削除された利用者)';
+
+/** 表がまだ無いかもしれない文を流す。**表が無いだけなら 0**、それ以外の失敗は投げる。 */
+function km_account_delete_optional(PDO $pdo, string $sql, array $params): int
+{
+    try {
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+
+        return $stmt->rowCount();
+    } catch (PDOException $exception) {
+        if (str_contains($exception->getMessage(), 'Base table or view not found')
+            || str_contains($exception->getMessage(), '1146')) {
+            return 0;
+        }
+        throw $exception;
+    }
+}
 
 /** LIKE の中で `%` `_` と逃がし文字(`!`)を文字どおりに扱わせる。 */
 function km_account_delete_like_escape(string $value): string

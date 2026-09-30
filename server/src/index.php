@@ -86,6 +86,16 @@ try {
     unset($_SESSION['km_map_teacher_until']);
 }
 
+/*
+ * お試しの閲覧リンク(lib/map-guest.php。2026-09-30)。**取り消し・期限切れならここで印を外す。**
+ * 印の無い人は DB に問い合わせない。地図データの同梱(km_map_data)より前に済ませること。
+ */
+require_once __DIR__ . '/lib/session.php';
+km_session_start();
+require_once __DIR__ . '/lib/map-guest.php';
+$guestViewing = km_map_guest_verify();
+$guestUntil = $guestViewing ? (int) $_SESSION[KM_MAP_GUEST_SESSION_KEY]['until'] : null;
+
 function km_home_e(?string $value): string
 {
     return htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
@@ -279,6 +289,10 @@ try {
 
                 <div class="top-actions">
                     <div class="action-group-left" id="km-auth-links">
+                        <?php if ($guestViewing && $guestUntil !== null): ?>
+                            <?php // お試しの閲覧中であることと期限を隠さない(期限が来たら黙って氏名が消えるだけにしない) ?>
+                            <span class="user-chip" role="status">お試しの閲覧中(<?= km_home_e(date('n/j H:i', $guestUntil)) ?> まで)</span>
+                        <?php endif; ?>
                         <?php if ($loggedIn): ?>
                             <span class="user-chip">👤 <?= km_home_e($displayName) ?> さん</span>
                             <?php if ($teacherNeedsSignIn): ?>

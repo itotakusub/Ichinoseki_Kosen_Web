@@ -37,7 +37,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/privacy-retention.php';
 
 /** 最終改定日。**本文を変えたらここも変える。** 読む人が変更に気づく唯一の手がかり。 */
-const KM_LEGAL_UPDATED = '2026-09-25';
+const KM_LEGAL_UPDATED = '2026-09-30';
 
 /**
  * 運営者の情報。**ここを埋めてから公開すること。**
@@ -357,6 +357,8 @@ function km_legal_privacy(): array
                     . '記録から ' . KM_PRIVACY_AUDIT_IP_DAYS . ' 日を過ぎると削除します(記録そのものは残ります)。'
                     . '地図のパスワードを試した記録(接続元 IP アドレスと回数)は、総当たりを防ぐためだけに使い、'
                     . KM_PRIVACY_UNLOCK_ATTEMPT_DAYS . ' 日で削除します。正しいパスワードを入れた時点でも削除します。'
+                    . 'お試しの閲覧リンク(運営者が発行する期限付きのリンク)は、期限が切れて '
+                    . KM_PRIVACY_GUEST_LINK_DAYS . ' 日たつと削除します。'
                     . 'ランキングの記録は年ごとに集計しています。',
                 /*
                  * **実装と1対1で書く。**

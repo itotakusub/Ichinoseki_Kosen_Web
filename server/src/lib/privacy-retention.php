@@ -33,6 +33,9 @@ const KM_PRIVACY_AUDIT_IP_DAYS = 90;
 /** 解除の試行の記録を残す日数。数えるのは 15 分の窓だけなので、1 日で足りる。 */
 const KM_PRIVACY_UNLOCK_ATTEMPT_DAYS = 1;
 
+/** お試しの閲覧リンクを、期限が切れてから残す日数(管理画面の一覧で「使われたか」を見返すため)。 */
+const KM_PRIVACY_GUEST_LINK_DAYS = 30;
+
 /** 最後に掃除した日(Y-m-d)を置く km_settings の名前。 */
 const KM_PRIVACY_PURGED_ON_SETTING = 'privacy_purged_on';
 
@@ -70,6 +73,13 @@ function km_privacy_purge(PDO $pdo): array
     $counts = [];
 
     $counts['km_admin_log'] = km_privacy_run($pdo, km_privacy_audit_sql($pdo), [KM_PRIVACY_AUDIT_IP_DAYS]);
+
+    // お試しの閲覧リンク(lib/map-guest.php)。期限が切れて KM_PRIVACY_GUEST_LINK_DAYS 日たったものは行ごと消す
+    $counts['km_map_guest_links'] = km_privacy_run(
+        $pdo,
+        'DELETE FROM km_map_guest_links WHERE expires_at < DATE_SUB(NOW(), INTERVAL ? DAY)',
+        [KM_PRIVACY_GUEST_LINK_DAYS]
+    );
 
     foreach (KM_MAP_UNLOCK_SCOPES as $table) {
         $counts[$table] = km_privacy_run(

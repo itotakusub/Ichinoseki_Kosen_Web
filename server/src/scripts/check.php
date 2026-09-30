@@ -67,6 +67,8 @@ const KM_CHECK_PURE = [
     'route-weights',
     // 診断 2026-09-25(docs/16)の所見を直したこと
     'review-0925',
+    // お試しの閲覧リンク(2026-09-30)
+    'guest-links',
     'ssh-roles',
     'account-delete',
     'legal',
@@ -2194,7 +2196,7 @@ function km_check_review_0925(): void
     require_once $src . '/lib/legal.php';
     $policy = json_encode(km_legal_privacy(), JSON_UNESCAPED_UNICODE);
     check_bool('ポリシーに日数が出る(定数から)', is_string($policy) && str_contains($policy, '90 日を過ぎると削除します') && str_contains($policy, '1 日で削除します'));
-    check('ポリシーの改定日', '2026-09-25', KM_LEGAL_UPDATED);
+    check_bool('ポリシーの改定日は 2026-09-25 以降', KM_LEGAL_UPDATED >= '2026-09-25');
 
     km_check_heading('review-0925 W-50・W-51: 期限の切れた ID トークンを取り直す');
     km_check_review_0925_fresh_claims($src);
@@ -2223,6 +2225,81 @@ function km_check_review_0925(): void
     $decoded = json_decode((string) $package, true);
     check('パッケージに段を載せる', 'staff', $decoded['contentLevel'] ?? null);
     check_bool('段を渡さなければ以前と同じ形', !str_contains((string) km_app_map_build_package((object) ['nodes' => []], 'kosen-main', 1, 'a', 'b', null, true), 'contentLevel'));
+}
+
+/**
+ * お試しの閲覧リンク(2026-09-30、lib/map-guest.php)。DB は使わない(判定と、入口の順番を見る)。
+ */
+function km_check_guest_links(): void
+{
+    $src = __DIR__ . '/..';
+    $read = static fn (string $path): string => (string) @file_get_contents($src . '/' . $path);
+    $code = static fn (string $text): string => (string) preg_replace(['#/\*.*?\*/#s', '#^\s*//.*$#m'], '', $text);
+    require_once $src . '/lib/map-guest.php';
+    require_once $src . '/lib/map-access.php';
+
+    km_check_heading('guest-links: 形と状態');
+    check_bool('発行する形(48 桁の 16 進数)だけ受ける', km_map_guest_token_valid(str_repeat('a1', 24)) && !km_map_guest_token_valid('abc') && !km_map_guest_token_valid(str_repeat('Z', 48)));
+    check_bool('表に置くのは要約(トークンそのものではない)', km_map_guest_token_hash(str_repeat('a', 48)) !== str_repeat('a', 48) && strlen(km_map_guest_token_hash('x')) === 64);
+    $now = 1_800_000_000;
+    check('使える', 'active', km_map_guest_status(false, $now + 60, 0, 1, $now));
+    check('台数を使い切った', 'used_up', km_map_guest_status(false, $now + 60, 1, 1, $now));
+    check('期限切れ', 'expired', km_map_guest_status(false, $now, 0, 1, $now));
+    check('取り消しがいちばん強い', 'revoked', km_map_guest_status(true, $now - 60, 5, 1, $now));
+    check('呼び名の制御文字は落とす', 'ab', km_map_guest_clean_label("a\x07b"));
+    check_bool('期限の上限は 14 日', max(KM_MAP_GUEST_DAY_CHOICES) <= KM_MAP_GUEST_MAX_DAYS && KM_MAP_GUEST_MAX_DAYS === 14);
+
+    km_check_heading('guest-links: 見える範囲は教職員と同じ');
+    $saved = $_SESSION ?? null;
+    $cfg = static fn (string $mode, string $mapMode, bool $seesHidden): array => ['mode' => $mode, 'mapMode' => $mapMode, 'passwordHash' => 'x', 'teacherSeesHidden' => $seesHidden];
+    $_SESSION = [KM_MAP_GUEST_SESSION_KEY => ['id' => 1, 'until' => time() + 600]];
+    check_bool('期限内の印ならお試しの閲覧中', km_map_guest_session());
+    check_bool('password の氏名がパスワード無しで見える', km_map_names_unlocked($cfg('password', 'public', false)));
+    check_bool('password の地図がパスワード無しで見える', km_map_view_unlocked($cfg('hidden', 'password', false)));
+    check_bool('hidden は既定で見えない(教職員と同じ)', !km_map_names_unlocked($cfg('hidden', 'public', false)));
+    check_bool('hidden でも「教職員には見せる」なら見える', km_map_names_unlocked($cfg('hidden', 'public', true)));
+    $_SESSION = [KM_MAP_GUEST_SESSION_KEY => ['id' => 1, 'until' => time() - 1]];
+    check_bool('期限切れの印は効かない', !km_map_guest_session() && !km_map_names_unlocked($cfg('password', 'public', false)));
+    $_SESSION = [KM_MAP_GUEST_SESSION_KEY => ['id' => '1', 'until' => (string) (time() + 600)]];
+    check_bool('数字でない印は効かない', !km_map_guest_session());
+    $_SESSION = [KM_MAP_GUEST_SESSION_KEY => ['id' => 1, 'until' => time() + 600]];
+    check_bool('管理者の印にはならない', !km_map_admin_session());
+    $_SESSION = $saved ?? [];
+
+    km_check_heading('guest-links: 入口');
+    $guest = $code($read('guest.php'));
+    check_bool('GET では使わない(確かめるだけ)', str_contains($guest, 'km_map_guest_peek($pdo, $token)') && substr_count($guest, 'km_map_guest_redeem(') === 1);
+    check_bool('使うのは POST で CSRF を確かめてから', strpos($guest, 'km_csrf_verify()') < strpos($guest, 'km_map_guest_redeem('));
+    check_bool('印を立てる前にセッション ID を作り直す', strpos($guest, 'session_regenerate_id(true);') < strpos($guest, 'km_map_guest_grant('));
+    check_bool('参照元を渡さない', str_contains($guest, "header('Referrer-Policy: no-referrer');"));
+    $lib = $code($read('lib/map-guest.php'));
+    check_bool('台数は 1 本の UPDATE で数える', str_contains($lib, 'SET uses = uses + 1') && str_contains($lib, 'AND uses < max_uses'));
+    check_bool('取り消し・期限切れは表と突き合わせて外す', str_contains($lib, 'unset($_SESSION[KM_MAP_GUEST_SESSION_KEY]);'));
+    $index = $code($read('index.php'));
+    check_bool('公開ページは地図を同梱する前に突き合わせる', strpos($index, 'km_map_guest_verify()') !== false && strpos($index, 'km_map_guest_verify()') < strpos($index, 'km_map_data(km_db())'));
+    $mapData = $code($read('api/map-data.php'));
+    check_bool('地図データの API はセッションを閉じる前に突き合わせる', strpos($mapData, 'km_map_guest_verify();') < strpos($mapData, 'session_write_close();'));
+    check_bool('サインアウトで外す', str_contains($code($read('sign-out.php')), "\$_SESSION['km_map_guest']"));
+    $admin = $code($read('admin/guest-links.php'));
+    check_bool('管理画面は guard.php を通る', str_contains($admin, "require __DIR__ . '/_inc/guard.php';"));
+    check_bool('発行・取り消しは CSRF を確かめてから', strpos($admin, 'km_csrf_verify()') < strpos($admin, 'km_map_guest_create('));
+    check_bool('発行したリンクを URL に載せて戻さない', str_contains($admin, "header('Location: ./guest-links.php?created=1', true, 302);") && str_contains($admin, "\$_SESSION['km_guest_link_new']"));
+    check_bool('記録に呼び名を写さない(番号だけ)', str_contains($admin, "km_admin_log_record('content', 'guest.link_create', '#' . \$created['id']);"));
+    require_once $src . '/lib/admin-log.php';
+    foreach (['guest.link_create', 'guest.link_revoke', 'guest.link_used'] as $action) {
+        check_bool('記録の文言: ' . $action, isset(KM_ADMIN_LOG_ACTION_LABELS[$action]));
+    }
+    check_bool('メニューから開ける', str_contains($read('admin/_inc/partials/sidebar.php'), 'href="./guest-links.php"'));
+    check_bool('期限の切れたリンクは 30 日で消す', str_contains($code($read('lib/privacy-retention.php')), 'DELETE FROM km_map_guest_links WHERE expires_at < DATE_SUB(NOW(), INTERVAL ? DAY)'));
+    check_bool('退会したら発行者を外す', str_contains($code($read('lib/account-delete.php')), 'UPDATE km_map_guest_links SET created_by = NULL WHERE created_by = ?'));
+    $nginx = (string) @file_get_contents($src . '/../nginx/default.conf.template');
+    if (preg_match('#location = /guest\.php \{(.*?)\n    \}#s', $nginx, $m)) {
+        check_bool('nginx: クエリをログに残さない', str_contains($m[1], 'km_no_query'));
+        check_bool('nginx: 参照元を渡さない', str_contains($m[1], 'Referrer-Policy no-referrer always'));
+        check_bool('nginx: 入口で回数を絞る', str_contains($m[1], 'limit_req zone=km_public'));
+    } else {
+        check_bool('nginx に /guest.php の location がある', false);
+    }
 }
 
 /** kmFreshIdTokenClaims を、Logto に繋がずに動かす(偽の OidcCore と保存場所)。 */
@@ -6365,6 +6442,9 @@ foreach ($selected as $name) {
             break;
         case 'review-0925':
             km_check_review_0925();
+            break;
+        case 'guest-links':
+            km_check_guest_links();
             break;
         case 'account-delete':
             km_check_account_delete();

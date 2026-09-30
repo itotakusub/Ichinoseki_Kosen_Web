@@ -23,6 +23,9 @@ km_session_start();
  * 読み終えた時点で閉じる(閉じたあとは $_SESSION の書き込みが効かないが、
  * ここは読むだけなので問題ない)。
  */
+// お試しの閲覧リンクは、閉じる前に表と突き合わせる(取り消し・期限切れなら外す。lib/map-guest.php)
+require_once __DIR__ . '/../lib/map-guest.php';
+km_map_guest_verify();
 session_write_close();
 
 require_once __DIR__ . '/../lib/db.php';
