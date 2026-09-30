@@ -2316,8 +2316,12 @@ function km_check_guest_links(): void
     check_bool('再入場の錠がある', isset(KM_MAP_UNLOCK_SCOPES['guest']));
     check_bool('管理画面で人ごとに止められる', str_contains($admin, 'km_map_guest_revoke_account(') && str_contains($admin, "km_admin_log_record('content', 'guest.account_revoke'"));
     check_bool('公開ページに誰として見ているかを出す', str_contains($read('index.php'), 'お試し: <?= km_home_e((string) $guestName) ?> さん'));
-    $nginx = (string) @file_get_contents($src . '/../nginx/default.conf.template');
-    if (preg_match('#location = /guest\.php \{(.*?)\n    \}#s', $nginx, $m)) {
+    // nginx/ は src/ の外。配備先の web コンテナには無いので飛ばす(2026-09-30。09-17 と同じ付け忘れ)
+    $guestRepoRoot = km_check_repo_root();
+    $nginx = $guestRepoRoot === null ? '' : (string) @file_get_contents($guestRepoRoot . '/nginx/default.conf.template');
+    if ($guestRepoRoot === null) {
+        check_skip('nginx に /guest.php の location がある', '手元の作業ツリーで確認する。配備先に nginx/ は出ない');
+    } elseif (preg_match('#location = /guest\.php \{(.*?)\n    \}#s', $nginx, $m)) {
         check_bool('nginx: クエリをログに残さない', str_contains($m[1], 'km_no_query'));
         check_bool('nginx: 参照元を渡さない', str_contains($m[1], 'Referrer-Policy no-referrer always'));
         check_bool('nginx: 入口で回数を絞る', str_contains($m[1], 'limit_req zone=km_public'));
