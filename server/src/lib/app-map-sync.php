@@ -272,6 +272,67 @@ function km_map_nodes_columns(PDO $pdo): array
     return $known;
 }
 
+/** BSSID の列に入れたい幅(1 台のルーターの複数の BSSID をカンマ区切りで。2026-10-02)。 */
+const KM_MAP_NODES_BSSID_WIDTH = 255;
+
+/**
+ * `km_map_nodes.bssid` を KM_MAP_NODES_BSSID_WIDTH 字まで広げ、**いまの幅**を返す。
+ *
+ * 1 台のルーターは SSID ごと・2.4/5GHz ごとに別の BSSID を出すので、アプリはカンマ区切りで複数送る。
+ * 以前の列は 32 字(1 件しか入らない)で、厳格モードでは**長すぎて取り込みごと止まる**。
+ * 広げられなければ(権限など)いまの幅を返し、呼び出し側が入るだけに切る。列が無ければ null。
+ */
+function km_map_nodes_ensure_bssid_width(PDO $pdo): ?int
+{
+    $width = null;
+    try {
+        $width = $pdo->query(
+            "SELECT CHARACTER_MAXIMUM_LENGTH FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'km_map_nodes' AND COLUMN_NAME = 'bssid'"
+        )->fetchColumn();
+        if ($width === false || $width === null) {
+            return null;
+        }
+        if ((int) $width < KM_MAP_NODES_BSSID_WIDTH) {
+            $pdo->exec('ALTER TABLE km_map_nodes MODIFY COLUMN bssid varchar(' . KM_MAP_NODES_BSSID_WIDTH . ') DEFAULT NULL');
+            return KM_MAP_NODES_BSSID_WIDTH;
+        }
+        return (int) $width;
+    } catch (Throwable $exception) {
+        error_log('km_map_nodes_ensure_bssid_width failed: ' . $exception->getMessage());
+        // 幅が分かっていれば(広げるのに失敗)その幅に切る。聞けもしなければ以前と同じく切らない
+        return is_numeric($width) ? (int) $width : null;
+    }
+}
+
+/**
+ * カンマ区切りの BSSID を、列の幅に**丸ごと入る件数だけ**残す。**純粋関数。**
+ * 途中で切ると壊れた BSSID になるので、1 件ずつ足して入らなくなったところで止める。
+ */
+function km_app_map_fit_bssids(string $value, ?int $width): ?string
+{
+    $value = trim($value);
+    if ($value === '') {
+        return null;
+    }
+    if ($width === null || strlen($value) <= $width) {
+        return $value;
+    }
+    $kept = '';
+    foreach (preg_split('/\s*,\s*/', $value) ?: [] as $bssid) {
+        if ($bssid === '') {
+            continue;
+        }
+        $next = $kept === '' ? $bssid : $kept . ', ' . $bssid;
+        if (strlen($next) > $width) {
+            break;
+        }
+        $kept = $next;
+    }
+
+    return $kept === '' ? null : $kept;
+}
+
 /**
  * 辺を向きの無い1本として数えるための鍵。`a|b` と `b|a` を同じものにする。
  *
@@ -322,6 +383,8 @@ function km_app_map_sync_apply(
     bool $removeMissing = false,
     bool $keepOccupantNames = true
 ): array {
+    // BSSID の列を広げる。**取引の前に**(ALTER は取引を勝手に確定させる)
+    $bssidWidth = km_map_nodes_ensure_bssid_width($pdo);
     $pdo->beginTransaction();
     try {
         /*
@@ -381,7 +444,12 @@ function km_app_map_sync_apply(
         foreach ($converted['nodes'] as $node) {
             $values = [];
             foreach ($columns as $column) {
-                $values[] = $node[$column] ?? ($column === 'name' ? '' : null);
+                $value = $node[$column] ?? ($column === 'name' ? '' : null);
+                if ($column === 'bssid' && is_string($value)) {
+                    // 広げられなかったときも取り込みを止めない(入るだけの BSSID を残す)
+                    $value = km_app_map_fit_bssids($value, $bssidWidth);
+                }
+                $values[] = $value;
             }
             $insertNode->execute($values);
 

@@ -69,6 +69,8 @@ const KM_CHECK_PURE = [
     'review-0925',
     // お試しの閲覧リンク(2026-09-30)
     'guest-links',
+    // 1 台のルーターの複数 BSSID(2026-10-02)
+    'router-bssids',
     'ssh-roles',
     'account-delete',
     'legal',
@@ -2225,6 +2227,28 @@ function km_check_review_0925(): void
     $decoded = json_decode((string) $package, true);
     check('パッケージに段を載せる', 'staff', $decoded['contentLevel'] ?? null);
     check_bool('段を渡さなければ以前と同じ形', !str_contains((string) km_app_map_build_package((object) ['nodes' => []], 'kosen-main', 1, 'a', 'b', null, true), 'contentLevel'));
+}
+
+/**
+ * 1 台のルーターの複数 BSSID(2026-10-02)。アプリはカンマ区切りで送る。列が狭いと取り込みごと止まる。
+ */
+function km_check_router_bssids(): void
+{
+    require_once __DIR__ . '/../lib/app-map-sync.php';
+    km_check_heading('router-bssids: 列の幅と切り方');
+    $two = 'AA:BB:CC:DD:EE:01, AA:BB:CC:DD:EE:02';
+    check('幅に入るならそのまま', $two, km_app_map_fit_bssids($two, 255));
+    check('32 字なら丸ごと入る 1 件だけ残す(途中で切らない)', 'AA:BB:CC:DD:EE:01', km_app_map_fit_bssids($two, 32));
+    check('幅が分からなければ切らない', $two, km_app_map_fit_bssids($two, null));
+    check('空は null', null, km_app_map_fit_bssids('  ', 255));
+    check('1 件も入らなければ null', null, km_app_map_fit_bssids('AA:BB:CC:DD:EE:01', 10));
+    $sync = (string) file_get_contents(__DIR__ . '/../lib/app-map-sync.php');
+    $applyAt = strpos($sync, 'function km_app_map_sync_apply(');
+    check_bool('列を広げるのは取引の前(ALTER は取引を確定させる)', $applyAt !== false
+        && strpos($sync, 'km_map_nodes_ensure_bssid_width($pdo);', $applyAt) < strpos($sync, '$pdo->beginTransaction();', $applyAt));
+    check_bool('入れる前に幅に合わせる', str_contains($sync, "\$value = km_app_map_fit_bssids(\$value, \$bssidWidth);"));
+    check_bool('広げる幅は 255', KM_MAP_NODES_BSSID_WIDTH === 255 && str_contains($sync, "'ALTER TABLE km_map_nodes MODIFY COLUMN bssid varchar(' . KM_MAP_NODES_BSSID_WIDTH . ') DEFAULT NULL'"));
+    check_bool('移行の SQL も 255 にする', str_contains((string) file_get_contents(__DIR__ . '/migrate-map-app-schema.sql'), 'MODIFY COLUMN bssid varchar(255) DEFAULT NULL;'));
 }
 
 /**
@@ -6493,6 +6517,9 @@ foreach ($selected as $name) {
             break;
         case 'guest-links':
             km_check_guest_links();
+            break;
+        case 'router-bssids':
+            km_check_router_bssids();
             break;
         case 'account-delete':
             km_check_account_delete();

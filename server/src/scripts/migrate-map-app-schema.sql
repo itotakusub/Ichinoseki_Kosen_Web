@@ -48,7 +48,10 @@ ALTER TABLE km_map_nodes ADD COLUMN IF NOT EXISTS use_wifi tinyint(1) NOT NULL D
 -- 自由記述の小分類。アプリ側は空文字を既定にしているので NULL にしない
 ALTER TABLE km_map_nodes ADD COLUMN IF NOT EXISTS type2 varchar(64) NOT NULL DEFAULT '' AFTER type;
 -- ここから下は `wifi_router` ノードと電波の校正値。**いまは 0 件**だが、器だけ先に作る
-ALTER TABLE km_map_nodes ADD COLUMN IF NOT EXISTS bssid varchar(32) DEFAULT NULL AFTER type2;
+-- 1 台のルーターが複数の BSSID(SSID ごと・2.4/5GHz ごと)を出すので、カンマ区切りで複数入れる(2026-10-02)。
+-- 32 字では 1 件しか入らない。既にある 32 字の列は取り込みのたびに広げる(lib/app-map-sync.php)
+ALTER TABLE km_map_nodes ADD COLUMN IF NOT EXISTS bssid varchar(255) DEFAULT NULL AFTER type2;
+ALTER TABLE km_map_nodes MODIFY COLUMN bssid varchar(255) DEFAULT NULL;
 ALTER TABLE km_map_nodes ADD COLUMN IF NOT EXISTS tx_power_at_one_meter smallint DEFAULT NULL AFTER bssid;
 ALTER TABLE km_map_nodes ADD COLUMN IF NOT EXISTS path_loss_exponent float DEFAULT NULL AFTER tx_power_at_one_meter;
 -- 階をまたぐ階段・出入口の対応付け
