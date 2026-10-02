@@ -263,17 +263,20 @@ function km_map_teacher_session(): bool
 /**
  * 教職員と同じ扱いをしてよいか。**教職員の印か、お試しの閲覧リンク**(lib/map-guest.php。2026-09-30)。
  *
- * お試しの閲覧は、見せる範囲を教職員と揃える(氏名と地図の錠だけ)。別の判定を足すと、
+ * - $forNames = false(地図の錠): 仮アカウントなら誰でも通る
+ * - $forNames = true(教職員氏名): **管理画面で教員名を許した仮アカウントだけ**(利用者の指示。2026-09-30)
+ *
+ * 氏名の判定は、ここを通したうえで `hidden` の扱いを教職員と揃える。別の判定を足すと、
  * 片方だけ `hidden` の扱いを忘れる。
  */
-function km_map_teacher_like_session(): bool
+function km_map_teacher_like_session(bool $forNames): bool
 {
     if (km_map_teacher_session()) {
         return true;
     }
     require_once __DIR__ . '/map-guest.php';
 
-    return km_map_guest_session();
+    return $forNames ? km_map_guest_names_session() : km_map_guest_session();
 }
 
 /** 現在のリクエストで occupant_name を返してよいか。 */
@@ -281,9 +284,9 @@ function km_map_names_unlocked(array $config): bool
 {
     return match ($config['mode']) {
         'public' => true,
-        // hidden は既定で誰にも出さない。管理画面で「教職員には見せる」にしたときだけ教職員(とお試しの閲覧)に出す
-        'hidden' => ($config['teacherSeesHidden'] ?? false) === true && km_map_teacher_like_session(),
-        'password' => km_map_password_entered($config) || km_map_teacher_like_session(),
+        // hidden は既定で誰にも出さない。管理画面で「教職員には見せる」にしたときだけ教職員(と教員名を許した仮アカウント)に出す
+        'hidden' => ($config['teacherSeesHidden'] ?? false) === true && km_map_teacher_like_session(true),
+        'password' => km_map_password_entered($config) || km_map_teacher_like_session(true),
         default => false,
     };
 }
@@ -300,7 +303,7 @@ function km_map_view_unlocked(array $config): bool
     return match ($config['mapMode']) {
         'public' => true,
         // 教職員(とお試しの閲覧)はパスワード無しで地図を見られる(docs/15 段 D)
-        'password' => km_map_password_entered($config) || km_map_teacher_like_session(),
+        'password' => km_map_password_entered($config) || km_map_teacher_like_session(false),
         default => true,
     };
 }

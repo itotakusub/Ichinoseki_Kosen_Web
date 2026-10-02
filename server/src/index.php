@@ -292,7 +292,7 @@ try {
                     <div class="action-group-left" id="km-auth-links">
                         <?php if ($guestViewing && $guestUntil !== null): ?>
                             <?php // お試しの閲覧中であることと期限を隠さない(期限が来たら黙って氏名が消えるだけにしない) ?>
-                            <span class="user-chip" role="status">お試し: <?= km_home_e((string) $guestName) ?> さん(<?= km_home_e(date('n/j H:i', $guestUntil)) ?> まで)</span>
+                            <span class="user-chip" role="status">お試し: <?= km_home_e((string) $guestName) ?> さん(<?= km_home_e(date('n/j H:i', $guestUntil)) ?> まで<?= km_map_guest_names_session() ? '' : '・教員名は未許可' ?>)</span>
                         <?php endif; ?>
                         <?php if ($loggedIn): ?>
                             <span class="user-chip">👤 <?= km_home_e($displayName) ?> さん</span>

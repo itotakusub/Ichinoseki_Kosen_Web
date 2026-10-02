@@ -5,8 +5,8 @@ declare(strict_types=1);
 /**
  * お試しの閲覧リンク(lib/map-guest.php。2026-09-30、利用者の指示)。
  *
- * 期限と使える台数を決めてリンクを発行する。開いた人は、そのブラウザだけ期限まで
- * **教職員と同じように**地図を見られる(地図の錠を通る・教職員氏名が見える)。途中で取り消せる。
+ * 期限と使える台数を決めてリンクを発行する。開いた人は仮アカウントを作り、そのブラウザだけ期限まで
+ * 地図の錠を通れる。**教職員氏名は、ここで「教員名を見せる」にした仮アカウントだけ**に出る。途中で取り消せる。
  *
  * **リンクはここで 1 回しか見せない**(表には要約だけを置く)。見せる前に URL へ載せて
  * 戻し先を作ると、アクセスログやブラウザの履歴にトークンが残るので、セッションで 1 回だけ渡す。
@@ -60,6 +60,16 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && !km_csrf_verify()) {
             header('Location: ./guest-links.php?created=1', true, 302);
             exit;
         }
+        if ($action === 'set_names') {
+            // 教員名は人ごとに許す(利用者の指示。2026-09-30)。開いているブラウザにも次に地図を開いたときに効く
+            $accountId = (int) ($_POST['account_id'] ?? 0);
+            $allow = ($_POST['allow'] ?? '') === '1';
+            if (km_map_guest_set_names($pdo, $accountId, $allow)) {
+                km_admin_log_record('content', $allow ? 'guest.account_names_allow' : 'guest.account_names_deny', '#' . $accountId);
+            }
+            header('Location: ./guest-links.php?names=1', true, 302);
+            exit;
+        }
         if ($action === 'revoke_account') {
             $accountId = (int) ($_POST['account_id'] ?? 0);
             if (km_map_guest_revoke_account($pdo, $accountId)) {
@@ -89,7 +99,9 @@ if (isset($_GET['created'], $_SESSION['km_guest_link_new']) && is_array($_SESSIO
 }
 unset($_SESSION['km_guest_link_new']);
 if (isset($_GET['revoked'])) {
-    $notice = 'revokedNotice';
+    $notice = ['key' => 'revokedNotice', 'text' => '取り消しました。'];
+} elseif (isset($_GET['names'])) {
+    $notice = ['key' => 'namesNotice', 'text' => '教員名の表示を変えました。相手が地図を開き直すと反映されます。'];
 }
 
 /*
@@ -131,7 +143,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
           <!--begin::Container-->
           <div class="container-fluid">
             <?php if ($notice !== null): ?>
-              <div class="alert alert-success" role="alert" data-i18n="page.guestLinks.<?= km_e($notice) ?>">取り消しました。</div>
+              <div class="alert alert-success" role="alert" data-i18n="page.guestLinks.<?= km_e($notice['key']) ?>"><?= km_e($notice['text']) ?></div>
             <?php endif; ?>
             <?php foreach ($errors as $error): ?>
               <div class="alert alert-danger" role="alert"><?= km_e($error) ?></div>
@@ -145,7 +157,8 @@ require __DIR__ . '/_inc/partials/page-header.php';
             <div class="alert alert-info d-flex align-items-start" role="alert">
               <i class="bi bi-info-circle-fill me-2 mt-1" aria-hidden="true"></i>
               <div data-i18n="page.guestLinks.notice">
-                リンクを開いた人は、名前(と所属)を入れて仮アカウントを作ると、期限まで教職員と同じように地図を見られます(地図のパスワードが要らず、教員の地点の名前が見えます)。
+                リンクを開いた人は、名前(と所属)を入れて仮アカウントを作ると、期限まで地図のパスワード無しで地図を見られます。
+                教員の地点の名前は、下の一覧で「教員名を見せる」にした仮アカウントだけに出ます(作っただけでは出ません)。
                 仮アカウントはこのサーバーの DB にだけ作り、Logto のアカウントは要りません。誰がいつ作り、最後にいつ見たかは下の一覧で分かり、人ごとに止められます。
                 リンクを知っている人は誰でも作れるので、短い期限と少ない人数にしてください。
               </div>
@@ -272,10 +285,29 @@ require __DIR__ . '/_inc/partials/page-header.php';
                                   <td>
                                     <?php if ($account['revoked']): ?>
                                       <span class="badge text-bg-danger" data-i18n="page.guestLinks.accountStopped">止めた</span>
+                                    <?php elseif ($account['namesAllowed']): ?>
+                                      <span class="badge text-bg-warning" data-i18n="page.guestLinks.namesOn">教員名が見える</span>
+                                    <?php else: ?>
+                                      <span class="badge text-bg-light" data-i18n="page.guestLinks.namesOff">地図だけ</span>
                                     <?php endif; ?>
                                   </td>
-                                  <td class="text-end">
+                                  <td class="text-end text-nowrap">
                                     <?php if (!$account['revoked'] && $row['status'] !== 'expired' && !$row['revoked']): ?>
+                                      <form method="post" class="d-inline<?= $account['namesAllowed'] ? '' : ' km-guest-names-form' ?>">
+                                        <?= km_csrf_field() ?>
+                                        <input type="hidden" name="action" value="set_names" />
+                                        <input type="hidden" name="account_id" value="<?= (int) $account['id'] ?>" />
+                                        <input type="hidden" name="allow" value="<?= $account['namesAllowed'] ? '0' : '1' ?>" />
+                                        <?php if ($account['namesAllowed']): ?>
+                                          <button type="submit" class="btn btn-sm btn-outline-secondary">
+                                            <span data-i18n="page.guestLinks.namesDeny">教員名を隠す</span>
+                                          </button>
+                                        <?php else: ?>
+                                          <button type="submit" class="btn btn-sm btn-outline-warning">
+                                            <span data-i18n="page.guestLinks.namesAllow">教員名を見せる</span>
+                                          </button>
+                                        <?php endif; ?>
+                                      </form>
                                       <form method="post" class="d-inline km-guest-revoke-form">
                                         <?= km_csrf_field() ?>
                                         <input type="hidden" name="action" value="revoke_account" />
@@ -320,6 +352,14 @@ require __DIR__ . '/_inc/partials/page-header.php';
                 copy.classList.replace('btn-outline-success', 'btn-success');
               });
             }
+            // 教員名を見せるのは個人情報を渡すこと。押し間違いで許さないように確かめる
+            document.querySelectorAll('.km-guest-names-form').forEach((form) => {
+              form.addEventListener('submit', (event) => {
+                if (!window.confirm(window.KmI18n ? window.KmI18n.t('page.guestLinks.confirmNames') : 'allow names?')) {
+                  event.preventDefault();
+                }
+              });
+            });
             document.querySelectorAll('.km-guest-revoke-form').forEach((form) => {
               form.addEventListener('submit', (event) => {
                 if (!window.confirm(window.KmI18n ? window.KmI18n.t('page.guestLinks.confirmRevoke') : 'revoke?')) {

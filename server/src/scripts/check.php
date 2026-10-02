@@ -2249,19 +2249,29 @@ function km_check_guest_links(): void
     check('呼び名の制御文字は落とす', 'ab', km_map_guest_clean_label("a\x07b"));
     check_bool('期限の上限は 14 日', max(KM_MAP_GUEST_DAY_CHOICES) <= KM_MAP_GUEST_MAX_DAYS && KM_MAP_GUEST_MAX_DAYS === 14);
 
-    km_check_heading('guest-links: 見える範囲は教職員と同じ');
+    km_check_heading('guest-links: 見える範囲(地図は誰でも・教員名は許した人だけ)');
     $saved = $_SESSION ?? null;
     $cfg = static fn (string $mode, string $mapMode, bool $seesHidden): array => ['mode' => $mode, 'mapMode' => $mapMode, 'passwordHash' => 'x', 'teacherSeesHidden' => $seesHidden];
     $_SESSION = [KM_MAP_GUEST_SESSION_KEY => ['id' => 1, 'until' => time() + 600]];
     check_bool('仮アカウントの無い印(前の形)は効かない', !km_map_guest_session());
-    $_SESSION = [KM_MAP_GUEST_SESSION_KEY => ['id' => 1, 'account' => 7, 'until' => time() + 600, 'name' => '試し 花子']];
+    // 教員名を許していない仮アカウント(作っただけ。利用者の指示で既定は許さない)
+    $_SESSION = [KM_MAP_GUEST_SESSION_KEY => ['id' => 1, 'account' => 7, 'until' => time() + 600, 'name' => '試し 花子', 'names' => false]];
     check_bool('期限内の印ならお試しの閲覧中', km_map_guest_session());
     check('画面に出す名前', '試し 花子', km_map_guest_name());
-    check_bool('password の氏名がパスワード無しで見える', km_map_names_unlocked($cfg('password', 'public', false)));
-    check_bool('password の地図がパスワード無しで見える', km_map_view_unlocked($cfg('hidden', 'password', false)));
-    check_bool('hidden は既定で見えない(教職員と同じ)', !km_map_names_unlocked($cfg('hidden', 'public', false)));
-    check_bool('hidden でも「教職員には見せる」なら見える', km_map_names_unlocked($cfg('hidden', 'public', true)));
-    $_SESSION = [KM_MAP_GUEST_SESSION_KEY => ['id' => 1, 'account' => 7, 'until' => time() - 1]];
+    check_bool('許していなければ: password の地図はパスワード無しで見える', km_map_view_unlocked($cfg('hidden', 'password', false)));
+    check_bool('許していなければ: password の氏名は見えない', !km_map_names_unlocked($cfg('password', 'public', false)) && !km_map_guest_names_session());
+    check_bool('許していなければ: hidden で「教職員には見せる」でも見えない', !km_map_names_unlocked($cfg('hidden', 'public', true)));
+    $_SESSION[KM_MAP_GUEST_SESSION_KEY]['names'] = 1;
+    check_bool('names は true そのものだけ(1 や "1" では許さない)', !km_map_guest_names_session());
+    $_SESSION = [KM_MAP_GUEST_SESSION_KEY => ['id' => 1, 'account' => 7, 'until' => time() + 600, 'name' => '試し 花子']];
+    check_bool('names の無い印(前の形)は教員名を許さない', !km_map_guest_names_session() && km_map_guest_session());
+    // 管理画面で教員名を許した仮アカウント
+    $_SESSION = [KM_MAP_GUEST_SESSION_KEY => ['id' => 1, 'account' => 7, 'until' => time() + 600, 'name' => '試し 花子', 'names' => true]];
+    check_bool('許した人: password の氏名がパスワード無しで見える', km_map_names_unlocked($cfg('password', 'public', false)));
+    check_bool('許した人: password の地図がパスワード無しで見える', km_map_view_unlocked($cfg('hidden', 'password', false)));
+    check_bool('許した人: hidden は既定で見えない(教職員と同じ)', !km_map_names_unlocked($cfg('hidden', 'public', false)));
+    check_bool('許した人: hidden でも「教職員には見せる」なら見える', km_map_names_unlocked($cfg('hidden', 'public', true)));
+    $_SESSION = [KM_MAP_GUEST_SESSION_KEY => ['id' => 1, 'account' => 7, 'until' => time() - 1, 'names' => true]];
     check_bool('期限切れの印は効かない', !km_map_guest_session() && !km_map_names_unlocked($cfg('password', 'public', false)));
     $_SESSION = [KM_MAP_GUEST_SESSION_KEY => ['id' => '1', 'account' => '7', 'until' => (string) (time() + 600)]];
     check_bool('数字でない印は効かない', !km_map_guest_session());
@@ -2292,7 +2302,7 @@ function km_check_guest_links(): void
     check_bool('発行したリンクを URL に載せて戻さない', str_contains($admin, "header('Location: ./guest-links.php?created=1', true, 302);") && str_contains($admin, "\$_SESSION['km_guest_link_new']"));
     check_bool('記録に呼び名を写さない(番号だけ)', str_contains($admin, "km_admin_log_record('content', 'guest.link_create', '#' . \$created['id']);"));
     require_once $src . '/lib/admin-log.php';
-    foreach (['guest.link_create', 'guest.link_revoke', 'guest.account_create', 'guest.account_reenter', 'guest.account_revoke'] as $action) {
+    foreach (['guest.link_create', 'guest.link_revoke', 'guest.account_create', 'guest.account_reenter', 'guest.account_revoke', 'guest.account_names_allow', 'guest.account_names_deny'] as $action) {
         check_bool('記録の文言: ' . $action, isset(KM_ADMIN_LOG_ACTION_LABELS[$action]));
     }
     check_bool('メニューから開ける', str_contains($read('admin/_inc/partials/sidebar.php'), 'href="./guest-links.php"'));
@@ -2315,9 +2325,23 @@ function km_check_guest_links(): void
     check_bool('ポリシーに仮アカウントの名前と保存期間を書く', str_contains($read('lib/legal.php'), '仮アカウント') && str_contains($read('lib/legal.php'), '入力した名前・所属'));
     check_bool('再入場の錠がある', isset(KM_MAP_UNLOCK_SCOPES['guest']));
     check_bool('管理画面で人ごとに止められる', str_contains($admin, 'km_map_guest_revoke_account(') && str_contains($admin, "km_admin_log_record('content', 'guest.account_revoke'"));
+    km_check_heading('guest-links: 教員名は人ごとに許す');
+    check_bool('表に names_allowed を持ち、既定は許さない', str_contains($lib, 'names_allowed TINYINT(1) NOT NULL DEFAULT 0,'));
+    check_bool('既にある表には列を後から足す(無いときだけ)', str_contains($lib, "COLUMN_NAME = 'names_allowed'") && str_contains($lib, 'ADD COLUMN IF NOT EXISTS names_allowed'));
+    check_bool('作っただけでは許さない', (bool) preg_match("/function km_map_guest_create_account.*?'names' => false,/s", $lib));
+    check_bool('突き合わせのたびに表から読み直す(許す・外すがすぐ効く)', (bool) preg_match("/function km_map_guest_verify.*?SELECT a\\.names_allowed.*?\\['names'\\] = \\(int\\) \\\$namesAllowed === 1;/s", $lib));
+    check_bool('入り直しも表の値で印を立てる', (bool) preg_match('/function km_map_guest_reenter.*?SELECT id, display_name, names_allowed/s', $lib) && substr_count($guest, "\$account['names']);") === 2);
+    check_bool('止めたアカウントは変えない', str_contains($lib, 'SET names_allowed = ? WHERE id = ? AND revoked_at IS NULL'));
+    check_bool('氏名の判定は許した人だけ・地図の錠は仮アカウントなら通す', str_contains($code($read('lib/map-access.php')), "'password' => km_map_password_entered(\$config) || km_map_teacher_like_session(true),") && str_contains($code($read('lib/map-access.php')), "'password' => km_map_password_entered(\$config) || km_map_teacher_like_session(false),"));
+    check_bool('管理画面: CSRF を確かめてから・記録は番号だけ', strpos($admin, 'km_csrf_verify()') < strpos($admin, 'km_map_guest_set_names(') && str_contains($admin, "\$allow ? 'guest.account_names_allow' : 'guest.account_names_deny', '#' . \$accountId);"));
+    check_bool('管理画面: 見せる前に確かめる', str_contains($read('admin/guest-links.php'), "'page.guestLinks.confirmNames'") && str_contains($read('admin/assets/i18n/ja.js'), '"page.guestLinks.confirmNames"') && str_contains($read('admin/assets/i18n/en.js'), '"page.guestLinks.confirmNames"'));
     check_bool('公開ページに誰として見ているかを出す', str_contains($read('index.php'), 'お試し: <?= km_home_e((string) $guestName) ?> さん'));
-    $nginx = (string) @file_get_contents($src . '/../nginx/default.conf.template');
-    if (preg_match('#location = /guest\.php \{(.*?)\n    \}#s', $nginx, $m)) {
+    // nginx/ は src/ の外。配備先の web コンテナには無いので飛ばす(2026-09-30。09-17 と同じ付け忘れ)
+    $guestRepoRoot = km_check_repo_root();
+    $nginx = $guestRepoRoot === null ? '' : (string) @file_get_contents($guestRepoRoot . '/nginx/default.conf.template');
+    if ($guestRepoRoot === null) {
+        check_skip('nginx に /guest.php の location がある', '手元の作業ツリーで確認する。配備先に nginx/ は出ない');
+    } elseif (preg_match('#location = /guest\.php \{(.*?)\n    \}#s', $nginx, $m)) {
         check_bool('nginx: クエリをログに残さない', str_contains($m[1], 'km_no_query'));
         check_bool('nginx: 参照元を渡さない', str_contains($m[1], 'Referrer-Policy no-referrer always'));
         check_bool('nginx: 入口で回数を絞る', str_contains($m[1], 'limit_req zone=km_public'));
