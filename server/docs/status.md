@@ -158,6 +158,12 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
   既にある表には初回に列を足す。許す・隠すは、相手が地図を開き直したときに効く(`km_map_guest_verify` が表から読み直す)。記録は `guest.account_names_allow` / `_deny`(番号だけ)
 - 配備先の check で `nginx に /guest.php の location がある` が FAIL になっていたのを直した(配備先には `nginx/` が無いので SKIP)
 
+### 1 台のルーターの複数 BSSID(2026-10-02、利用者の指示)
+
+- アプリはルーターの地点に BSSID を**カンマ区切りで複数**送る。`km_map_nodes.bssid` は 32 字(1 件)だったので、
+  地図の取り込み(`km_app_map_sync_apply`)の前に **255 字へ自動で広げる**(取引の前。広げられなければ入るだけの件数に切って取り込みは止めない)。
+  `scripts/migrate-map-app-schema.sql` も 255 字に。check の組 `router-bssids`
+
 **残っている作業は [12-hardening-2026-09-15](12-hardening-2026-09-15.ipynb) §0 の表が正本**(2026-09-18 時点で #2 Android の配布と #15 旧ドメインの解約だけ)。
 
 ---
