@@ -71,6 +71,8 @@ const KM_CHECK_PURE = [
     'guest-links',
     // 1 台のルーターの複数 BSSID(2026-10-02)
     'router-bssids',
+    // 地図の北と距離の補正を配る(2026-10-05)
+    'map-calibration',
     'ssh-roles',
     'account-delete',
     'legal',
@@ -2230,6 +2232,58 @@ function km_check_review_0925(): void
 }
 
 /**
+ * 地図の北と距離の補正(2026-10-05、lib/map-calibration.php)。DB は使わない(検査と、口の守りを見る)。
+ */
+function km_check_map_calibration(): void
+{
+    $src = __DIR__ . '/..';
+    require_once $src . '/lib/map-calibration.php';
+    require_once $src . '/lib/app-map.php';
+    km_check_heading('map-calibration: 検め方');
+    $ok = km_map_calibration_normalize([
+        'mapUpBearingDegrees' => 12.5,
+        'mapUpBearingByFloor' => ['OUTSIDE' => 30],
+        'defaultPixelsPerMeter' => 9.5,
+        'segments' => [['fromUuid' => 'a-1', 'toUuid' => 'b-2', 'meters' => 12]],
+    ]);
+    check('北の向き', 12.5, $ok['mapUpBearingDegrees']);
+    check('階ごとの北は数に揃える', ['OUTSIDE' => 30.0], $ok['mapUpBearingByFloor']);
+    check('区間の距離は数に揃える', 12.0, $ok['segments'][0]['meters']);
+    check('空でも通る(既定)', [], km_map_calibration_normalize([])['segments']);
+    $rejects = static function (array $input): bool {
+        try {
+            km_map_calibration_normalize($input);
+            return false;
+        } catch (InvalidArgumentException) {
+            return true;
+        }
+    };
+    check_bool('北は 0〜360 度', $rejects(['mapUpBearingDegrees' => 360]) && $rejects(['mapUpBearingDegrees' => -1]) && $rejects(['mapUpBearingDegrees' => '90']));
+    check_bool('階の名前の形を確かめる', $rejects(['mapUpBearingByFloor' => ['1F; DROP' => 0]]));
+    check_bool('区間の 2 点は別・距離は 0.1〜1000 m', $rejects(['segments' => [['fromUuid' => 'a', 'toUuid' => 'a', 'meters' => 5]]])
+        && $rejects(['segments' => [['fromUuid' => 'a', 'toUuid' => 'b', 'meters' => 0]]])
+        && $rejects(['segments' => [['fromUuid' => 'a', 'toUuid' => 'b', 'meters' => 5000]]]));
+    check_bool('区間は ' . KM_MAP_CALIBRATION_MAX_SEGMENTS . ' 本まで', $rejects(['segments' => array_fill(0, KM_MAP_CALIBRATION_MAX_SEGMENTS + 1, ['fromUuid' => 'a', 'toUuid' => 'b', 'meters' => 1])]));
+    check_bool('既定の縮尺は 0.5〜200 px/m', $rejects(['defaultPixelsPerMeter' => 0.1]) && $rejects(['defaultPixelsPerMeter' => 500]));
+
+    km_check_heading('map-calibration: 配り方');
+    $package = json_decode((string) km_app_map_build_package((object) ['nodes' => []], 'kosen-main', 1, 'a', 'b', null, true, null, null, $ok), true);
+    check('地図の配信に補正を載せる', 12.5, $package['calibration']['mapUpBearingDegrees'] ?? null);
+    check_bool('補正はチェックサムの外(地図の文字列だけに取る)', ($package['checksum'] ?? '') === 'sha256:' . hash('sha256', json_encode((object) ['nodes' => []])));
+    check_bool('補正が無ければ以前と同じ形', !array_key_exists('calibration', json_decode((string) km_app_map_build_package((object) ['nodes' => []], 'kosen-main', 1, 'a', 'b', null, true), true)));
+    $read = static fn (string $path): string => (string) @file_get_contents($src . '/' . $path);
+    $api = $read('api/map-calibration.php');
+    check_bool('書き込みは管理者のトークンだけ', strpos($api, "require_method('POST');") < strpos($api, 'logto_assert_permissions($principal, LOGTO_ADMIN_PERMISSIONS);')
+        && strpos($api, 'logto_assert_permissions($principal, LOGTO_ADMIN_PERMISSIONS);') < strpos($api, 'km_map_calibration_publish('));
+    check_bool('本文は 64KB まで', str_contains($api, 'km_api_json_body(64 * 1024)'));
+    $appMap = $read('api/app-map.php');
+    check_bool('「最新です」の応答にも載せる', str_contains($appMap, "'calibration' => \$calibration,"));
+    require_once $src . '/lib/admin-log.php';
+    check_bool('記録の文言', isset(KM_ADMIN_LOG_ACTION_LABELS['map.calibration_publish'], KM_ADMIN_LOG_ACTION_LABELS['map.calibration_unpublish']));
+    check_bool('専用の表(km_settings の 255 字に入らない)', str_contains($read('lib/map-calibration.php'), 'body MEDIUMTEXT NOT NULL'));
+}
+
+/**
  * 1 台のルーターの複数 BSSID(2026-10-02)。アプリはカンマ区切りで送る。列が狭いと取り込みごと止まる。
  */
 function km_check_router_bssids(): void
@@ -2523,7 +2577,7 @@ function km_check_route_weights(): void
     $appMapApi = (string) file_get_contents(__DIR__ . '/../api/app-map.php');
     // 重みだけ変えたとき、版を上げずに「更新」で届くように
     check_bool('アプリへ: 地図が最新のときの応答にも載せる', preg_match("/'upToDate' => true,.*?'routeWeights' => \\\$routeWeights,/s", $appMapApi) === 1);
-    check_bool('アプリへ: 本体の応答にも載せる', str_contains($appMapApi, "    \$routeWeights,\n    \$contentLevel\n);"));
+    check_bool('アプリへ: 本体の応答にも載せる', str_contains($appMapApi, "    \$routeWeights,\n    \$contentLevel,\n    \$calibration\n);"));
     // 地図の外に置く。チェックサムは地図の文字列だけに取る
     $map = new stdClass();
     $map->nodes = [];
@@ -3636,7 +3690,7 @@ function km_check_hardening(): void
     check_bool('include 専用の 404 は `\.php(/|$)`', str_contains($https, 'logto-client)\.php(/|$) {'));
     check_bool('proxy-web.conf に proxy_read_timeout を書かない(location で重複すると起動しない)', !str_contains((string) preg_replace('/^\s*#.*$/m', '', $file('nginx/km/proxy-web.conf')), 'proxy_read_timeout'));
     check('443 で 300s を許すのは downloads.php だけ', 1, substr_count($https, 'proxy_read_timeout 300s;'));
-    check_bool('未認証で重い口を km_api で絞る(メソッドを問わない)', str_contains($https, 'location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights)|logto_me)\.php$ {') && str_contains($https, 'limit_req zone=km_api burst=120 nodelay;'));
+    check_bool('未認証で重い口を km_api で絞る(メソッドを問わない)', str_contains($https, 'location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update)|logto_me)\.php$ {') && str_contains($https, 'limit_req zone=km_api burst=120 nodelay;'));
     check_bool('アプリの地図は km_appmap で絞る', preg_match('#location = /api/app-map\.php \{\s*limit_req zone=km_appmap burst=30 nodelay;#', $https) === 1);
     check_bool('callback.php は認可コードをログに残さない', preg_match('#location = /callback\.php \{\s*access_log [^;]+ km_no_query;#', $https) === 1);
     /*
@@ -6520,6 +6574,9 @@ foreach ($selected as $name) {
             break;
         case 'router-bssids':
             km_check_router_bssids();
+            break;
+        case 'map-calibration':
+            km_check_map_calibration();
             break;
         case 'account-delete':
             km_check_account_delete();

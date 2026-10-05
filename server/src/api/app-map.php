@@ -31,6 +31,7 @@ require_once __DIR__ . '/../lib/map-rate-limit.php';
 require_once __DIR__ . '/../lib/app-secret.php';
 require_once __DIR__ . '/../lib/app-map.php';
 require_once __DIR__ . '/../lib/route-weights.php';
+require_once __DIR__ . '/../lib/map-calibration.php';
 
 require_method('POST');
 
@@ -184,6 +185,8 @@ $revision = isset($meta['revision']) && is_int($meta['revision']) ? $meta['revis
  * 単位はアプリと同じ(メートルと倍率)。無ければアプリは自分の既定(RouteWeights())で動く。
  */
 $routeWeights = km_route_weights_stored($pdo);
+// 北と距離の補正(2026-10-05。lib/map-calibration.php)。重みと同じく、最新のときの応答にも載せる
+$calibration = km_map_calibration_stored($pdo);
 
 /*
  * スタッフ限定の一時地点は、権限を確認できたときだけ含める。
@@ -221,6 +224,7 @@ if (km_app_map_is_up_to_date($slug, $haveMapId, $haveRevision, $revision, $haveL
         'expiresAt' => $expiresAt->format(DateTimeInterface::ATOM),
         'serverTime' => $serverTime,
         'routeWeights' => $routeWeights,
+        'calibration' => $calibration,
         'contentLevel' => $contentLevel,
     ]);
 }
@@ -260,7 +264,8 @@ $body = km_app_map_build_package(
     is_string($meta['activeEventUuid'] ?? null) ? $meta['activeEventUuid'] : null,
     ($meta['checksum'] ?? true) !== false,
     $routeWeights,
-    $contentLevel
+    $contentLevel,
+    $calibration
 );
 if ($body === null) {
     error_log("api/app-map.php: パッケージを組み立てられません: {$slug}");
