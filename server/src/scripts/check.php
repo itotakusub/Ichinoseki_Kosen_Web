@@ -3922,6 +3922,23 @@ function km_check_hardening(): void
     check_bool('配備は相手の .env の KM_ENV を見て、本番に KM_ENV=local があれば止まる', str_contains($deploy, '本番のホスト($HostName)の .env が KM_ENV=local になっています'));
 
     /*
+     * ## 機密なしのコピー(2026-10-05)
+     *
+     * 検証機へは MariaDB だけを戻し、本番の .env・config・Logto・uploads は持ち込まない。
+     * 秘密は host-local.sh init --fresh-secrets が新しく作り、氏名や記録は local-sanitize.sh が抜く。
+     */
+    km_check_heading('local-copy: 機密なしのコピー(--fresh-secrets と local-sanitize.sh)');
+    check_bool('--fresh-secrets は空のキーだけを埋める(入っている値に触らない)', str_contains($hostLocal, '--fresh-secrets) FRESH=1; shift ;;') && str_contains($hostLocal, 'if [ -z "$(env_value "$1")" ]; then') && str_contains($hostLocal, 'od -An -N24 -tx1 /dev/urandom'));
+    check_bool('--fresh-secrets は本番の判定(init の 1.)を通ったあとでだけ動く', strpos($hostLocal, 'fresh_secrets' . "\n" . '  fi') > strpos($hostLocal, "ok \"本番の .env でも、Let's Encrypt の証明書のあるホストでもありません\""));
+    check_bool('--fresh-secrets は秘密の値を表示しない', str_contains($hostLocal, 'did "$1 を乱数で作りました"') && !str_contains($hostLocal, 'did "$1=$2 '));
+    $sanitize = $file('scripts/local-sanitize.sh');
+    check_bool('local-sanitize.sh がある', $sanitize !== '');
+    check_bool('local-sanitize.sh は KM_ENV=local でなければ・本番の名前なら止まる', str_contains($sanitize, 'if [ "$(env_value KM_ENV)" != "local" ]; then') && str_contains($sanitize, 'PROD_DOMAINS="ito4.jp ito8795.com"'));
+    check_bool('local-sanitize.sh は氏名をダミーに・記録と鍵を空にする', str_contains($sanitize, "SET occupant_name = CONCAT('教員'") && str_contains($sanitize, 'km_admin_log') && str_contains($sanitize, 'km_app_secrets') && str_contains($sanitize, 'km_staff_requests'));
+    check_bool('local-sanitize.sh はパスワードを引数に載せない(MYSQL_PWD)', str_contains($sanitize, 'MYSQL_PWD="$MARIADB_ROOT_PASSWORD"') && !preg_match('/-p"?\$MARIADB/', $sanitize));
+    check_bool('配備物に local-sanitize.sh がある', str_contains($deploy, "'./scripts/local-sanitize.sh'"));
+
+    /*
      * ## ドメインの統一(2026-09-17。ito8795.com → ito4.jp)
      *
      * 旧ドメインは切り替えと同時に手放す(移行の間だけ生かす仕組みは作ったが、利用者の判断で外した)。

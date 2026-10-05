@@ -391,6 +391,8 @@ $include = @(
     './scripts/logto-db-role.sql'
     # ローカル環境を立てる(自作 CA と証明書・.env の切り替え)。**LAN の検証機で最初に叩く**(docs/13)
     './scripts/host-local.sh'
+    # 機密なしのコピー: 控えから戻した MariaDB から氏名・記録・鍵を抜く。**KM_ENV=local でなければ止まる**(docs/13)
+    './scripts/local-sanitize.sh'
     <#
       SSH ログインの知らせと、切る・BAN する道具(2026-09-25)。
       **ここに置くのは原本だけ。** PAM と sudo から root で走るのは、ssh-login-notify-setup.sh --fix が
