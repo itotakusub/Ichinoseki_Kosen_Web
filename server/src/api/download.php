@@ -37,6 +37,18 @@ if (!isset(KM_DISTRIBUTABLES[$slug])) {
 }
 $spec = KM_DISTRIBUTABLES[$slug];
 
+/*
+ * 管理用アプリ(apk_admin。2026-10-05)は**管理者のトークンが要る**。
+ * 管理アプリが自分の更新を取りに来るときだけ使う。断るときは JSON で返す(api_bootstrap の respond)。
+ */
+if (($spec['requiresAdmin'] ?? false) === true) {
+    require_once __DIR__ . '/../api_bootstrap.php';
+    require_once __DIR__ . '/../logto_config.php';
+    require_once __DIR__ . '/../logto_guard.php';
+    $principal = logto_require_principal();
+    logto_assert_permissions($principal, LOGTO_ADMIN_PERMISSIONS);
+}
+
 $row = null;
 try {
     $row = km_dist_find(km_db(), $slug);
