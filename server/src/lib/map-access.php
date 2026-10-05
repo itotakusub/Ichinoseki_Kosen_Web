@@ -22,6 +22,8 @@ declare(strict_types=1);
  * 一度入れれば両方の錠が開く。
  */
 
+require_once __DIR__ . '/opcache.php';
+
 const KM_MAP_ACCESS_MODES = ['hidden', 'password', 'public'];
 
 /** 地図そのものの公開範囲。**既定は public**(これまでの動きを変えない)。 */
@@ -156,6 +158,8 @@ function km_map_access_write_config(string $path, string $php): void
                 // rename で作り直すと権限が umask 任せ(通常 0644)になる。
                 // パスワードのハッシュを同じホストの他の利用者に見せない。
                 chmod($path, 0640);
+                // 次の要求からすぐ効かせる(OPcache は既定で 2 秒見に行かない。lib/opcache.php)
+                km_opcache_forget($path);
 
                 return;
             }
@@ -165,6 +169,8 @@ function km_map_access_write_config(string $path, string $php): void
         }
 
         if (file_put_contents($path, $php, LOCK_EX) !== false) {
+            km_opcache_forget($path);
+
             return;
         }
     } finally {

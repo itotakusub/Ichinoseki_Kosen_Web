@@ -162,6 +162,8 @@ globalThis.KM_I18N.ja = {
   "page.chat.sendError": "送信に失敗しました。",
   "page.chat.title": "チャット | KosenMap 管理",
   "page.downloads.apkButton": "APK をダウンロード",
+  "page.downloads.versionCodeField": "版番号(空なら APK の中から読みます。入れたときは APK の中の値と照らします)",
+  "page.downloads.versionCodeHint": "アプリは、この数が自分より大きいときだけ「新しい版があります」と知らせます。SHA-256 はサーバーで計算します。",
   "page.downloads.apkHint": "ビルドができたら、下のフォームから置いてください。置いた時点でダウンロードできるようになります。",
   "page.downloads.apkNotReady": "まだ配布用の APK はありません",
   "page.downloads.apkReady": "端末にインストールできる APK が登録されています。Android の設定で「提供元不明のアプリ」を許可してからインストールしてください。",

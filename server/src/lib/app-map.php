@@ -16,6 +16,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/app-secret.php';
 require_once __DIR__ . '/user-error.php';
+require_once __DIR__ . '/opcache.php';
 
 const KM_APP_MAP_FORMAT = 'kosenmap-map-package';
 const KM_APP_MAP_FORMAT_VERSION = 1;
@@ -103,6 +104,8 @@ function km_app_map_write_config(array $config, ?string $path = null): void
                 // rename で作り直すと権限が umask 任せになる。
                 // アクセスコードのハッシュを同じホストの他の利用者に見せない
                 chmod($path, 0640);
+                // 次の要求からすぐ効かせる(停止・削除・コードの変更。lib/opcache.php)
+                km_opcache_forget($path);
 
                 return;
             }
@@ -112,6 +115,8 @@ function km_app_map_write_config(array $config, ?string $path = null): void
         }
 
         if (file_put_contents($path, $php, LOCK_EX) !== false) {
+            km_opcache_forget($path);
+
             return;
         }
     } finally {

@@ -161,6 +161,8 @@ globalThis.KM_I18N.en = {
   "page.chat.sendError": "Failed to send.",
   "page.chat.title": "Chat | KosenMap Admin",
   "page.downloads.apkButton": "Download the APK",
+  "page.downloads.versionCodeField": "Version code (leave blank to read it from the APK; if entered, it must match the APK)",
+  "page.downloads.versionCodeHint": "The app only offers an update when this number is larger than its own. The server computes the SHA-256.",
   "page.downloads.apkReady": "An installable APK is registered. Allow installs from unknown sources in Android settings before installing it.",
   "page.downloads.apkHint": "Once a build is ready, upload it with the form below. It becomes downloadable the moment you do.",
   "page.downloads.apkNotReady": "No APK is available for distribution yet",

@@ -4182,6 +4182,41 @@ function km_check_hardening(): void
         && !isset($panoDecoded['map']['panoramas']));
     $noPanoBody = km_app_map_build_package($panoMap, 'kosen-main', 3, '2026-10-06T00:00:00+09:00', '2026-11-06T00:00:00+09:00', null, true, null, 'visitor', null, []);
     check_bool('配信: 写真が無ければ載せない(今までと同じ形)', !str_contains((string) $noPanoBody, 'panoramas'));
+    // 診断の「情報」(2026-10-05): PHP が書いた設定は OPcache にすぐ読み直させる(錠・パスワード・配信の停止が 2 秒遅れない)
+    check_bool('設定を書いたら OPcache に読み直させる(地図の錠・アプリの配信)', substr_count($file('src/lib/map-access.php'), 'km_opcache_forget($path);') === 2
+        && substr_count($file('src/lib/app-map.php'), 'km_opcache_forget($path);') === 2 && str_contains($file('src/lib/opcache.php'), '@opcache_invalidate($path, true);'));
+    // 診断の「情報」(2026-10-05): 配布物の版番号は APK の中から読み、入力と照らす(lib/apk-version.php)
+    require_once __DIR__ . '/../lib/apk-version.php';
+    $axml = static function (int $code, bool $deflate) : string {
+        // 文字列表(UTF-16。"versionCode" 1 つ)+ 要素の始まり(属性 1 つ: 名前 0・型 0x10・値 $code)
+        $str = 'versionCode';
+        $u16 = pack('v', strlen($str)) . mb_convert_encoding($str, 'UTF-16LE', 'UTF-8') . "\0\0";
+        $pool = pack('vvVVVVVV', 0x0001, 28, 28 + 4 + strlen($u16), 1, 0, 0, 28 + 4, 0) . pack('V', 0) . $u16;
+        $attr = pack('VVVvCCV', 0xFFFFFFFF, 0, 0xFFFFFFFF, 8, 0, 0x10, $code);
+        $tag = pack('vvVVV', 0x0102, 16, 16 + 20 + strlen($attr), 1, 0xFFFFFFFF) . pack('VVvvvvvv', 0xFFFFFFFF, 0, 20, 20, 1, 0, 0, 0) . $attr;
+        $body = $pool . $tag;
+        $xml = pack('vvV', 0x0003, 8, 8 + strlen($body)) . $body;
+        $data = $deflate ? (string) gzdeflate($xml) : $xml;
+        $name = 'AndroidManifest.xml';
+        $crc = crc32($xml);
+        $method = $deflate ? 8 : 0;
+        $local = "PK\x03\x04" . pack('vvvvvVVVvv', 20, 0, $method, 0, 0, $crc, strlen($data), strlen($xml), strlen($name), 0) . $name . $data;
+        $central = "PK\x01\x02" . pack('vvvvvvVVVvvvvvVV', 20, 20, 0, $method, 0, 0, $crc, strlen($data), strlen($xml), strlen($name), 0, 0, 0, 0, 0, 0) . $name;
+        return $local . $central . "PK\x05\x06" . pack('vvvvVVv', 0, 0, 1, 1, strlen($central), strlen($local), 0);
+    };
+    $apkTmp = tempnam(sys_get_temp_dir(), 'kmapk');
+    file_put_contents($apkTmp, $axml(401816, true));
+    $apkDeflated = km_apk_version_code($apkTmp);
+    file_put_contents($apkTmp, $axml(7, false));
+    $apkStored = km_apk_version_code($apkTmp);
+    file_put_contents($apkTmp, 'not a zip');
+    $apkBroken = km_apk_version_code($apkTmp);
+    unlink($apkTmp);
+    check_bool('APK の版番号: deflate・格納のどちらでも読め、壊れたものは null', $apkDeflated === 401816 && $apkStored === 7 && $apkBroken === null,
+        var_export([$apkDeflated, $apkStored, $apkBroken], true));
+    $distLib = $file('src/lib/distributables.php');
+    check_bool('配布物: 入力と APK の版番号が違えば断り、空なら APK の値を使う', str_contains($distLib, '$versionCode !== null && $versionCode !== $apkVersionCode')
+        && str_contains($distLib, '$versionCode = $apkVersionCode;'));
     // 診断 W-54(2026-10-05): 見取り図の口も、錠を見る前に仮アカウントを表から確かめ直す(セッションを閉じる前に)
     $floorImage = $file('src/api/floor-image.php');
     check_bool('W-54: 見取り図の口は錠を見る前に km_map_guest_verify() を呼ぶ', strpos($floorImage, 'km_map_guest_verify();') !== false
@@ -6861,7 +6896,14 @@ if (in_array('app-ranking', $selected, true) && !function_exists('mb_strlen')) {
 
 $package = null;
 
+/*
+ * **組ごとに例外を受け止める**(2026-10-06、診断「1 つの検査が例外を投げると以降が走らない」)。
+ * 以前は 1 つの組の途中で例外(読めないファイル・型の誤りなど)が出ると、残りの組が 1 件も走らずに
+ * 致命的エラーで終わっていた。ここで受け止めて**その組を失敗として数え**、次の組へ進む。
+ * (構文の誤りのように、このファイルそのものが読めないものは受け止められない。それは exit 255 になる)
+ */
 foreach ($selected as $name) {
+    try {
     switch ($name) {
         case 'user-stats':
             km_check_user_stats();
@@ -6990,6 +7032,12 @@ foreach ($selected as $name) {
             // 環境依存。数えず、終了コードだけを持ち帰る。
             $recaptchaExit = km_check_recaptcha();
             break;
+    }
+    } catch (Throwable $exception) {
+        $failures++;
+        $checks++;
+        echo "  [$name] 組の途中で例外が出ました(ここから先のこの組の検査は走っていません)    FAIL  "
+            . get_class($exception) . ': ' . $exception->getMessage() . ' (' . basename($exception->getFile()) . ':' . $exception->getLine() . ")\n";
     }
 }
 

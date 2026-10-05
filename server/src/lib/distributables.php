@@ -205,6 +205,26 @@ function km_dist_store(PDO $pdo, string $slug, array $file, ?string $versionLabe
         throw new InvalidArgumentException('バージョンは64文字以内にしてください。');
     }
     if (($spec['needsVersionCode'] ?? false) === true) {
+        /*
+         * **APK の中の版番号を読み、入力と照らす**(2026-10-06、診断の「情報」。lib/apk-version.php)。
+         * 実際より大きく入れると、端末は毎日「更新あり」と出すが入れられない(端末は APK の中で確かめて断る)。
+         * 読めたら: 入力が空ならそれを使い、違えば断る。読めなければ今までどおり入力に頼る。
+         */
+        if ($extension === 'apk') {
+            require_once __DIR__ . '/apk-version.php';
+            $apkVersionCode = km_apk_version_code($tmp);
+            if ($apkVersionCode !== null) {
+                if ($versionCode !== null && $versionCode !== $apkVersionCode) {
+                    throw new InvalidArgumentException(
+                        '入れた版番号(' . $versionCode . ')と、APK の中の版番号(' . $apkVersionCode . ')が違います。'
+                        . '版番号の欄を空にすると、APK の中の値を使います。'
+                    );
+                }
+                $versionCode = $apkVersionCode;
+            } else {
+                error_log('km_dist_store: APK から版番号を読めませんでした(手入力に頼ります): ' . $slug);
+            }
+        }
         // アプリの自動更新は版番号で新しいかを決める。無いと、置いても誰の端末にも届かない
         if ($versionCode === null || $versionCode < 1 || $versionCode > KM_DIST_MAX_VERSION_CODE) {
             throw new InvalidArgumentException('版番号(アプリの設定「バージョン」の括弧内の数)を入れてください。');
