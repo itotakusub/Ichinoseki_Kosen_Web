@@ -122,7 +122,9 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && !km_csrf_verify()) {
             $slug,
             $_FILES['file'] ?? [],
             (string) ($_POST['version_label'] ?? ''),
-            $KM_USER['name'] ?? null
+            $KM_USER['name'] ?? null,
+            // 版番号(アプリの versionCode。2026-10-05)。アプリの自動更新が比べる
+            ctype_digit(trim((string) ($_POST['version_code'] ?? ''))) ? (int) trim((string) $_POST['version_code']) : null
         );
         km_admin_log_record('content', 'dist.update', $slug);
         header('Location: ./downloads.php?uploaded=1', true, 302);
@@ -216,6 +218,25 @@ require __DIR__ . '/_inc/partials/page-header.php';
                         value="<?= km_e((string) ($row['versionLabel'] ?? '')) ?>"
                       />
                     </div>
+                    <?php if (($spec['needsVersionCode'] ?? false) === true): ?>
+                      <div class="mb-2">
+                        <label class="form-label fs-7" for="km-code-<?= km_e($slug) ?>" data-i18n="page.downloads.versionCodeField">
+                          版番号(必須。アプリの設定「バージョン」の括弧内の数)
+                        </label>
+                        <input
+                          type="number"
+                          class="form-control form-control-sm"
+                          id="km-code-<?= km_e($slug) ?>"
+                          name="version_code"
+                          min="1"
+                          max="<?= (int) KM_DIST_MAX_VERSION_CODE ?>"
+                          required
+                        />
+                        <div class="form-text" data-i18n="page.downloads.versionCodeHint">
+                          アプリは、この数が自分より大きいときだけ「新しい版があります」と知らせます。SHA-256 はサーバーで計算します。
+                        </div>
+                      </div>
+                    <?php endif; ?>
                     <div class="d-flex gap-2">
                       <button type="submit" class="btn btn-outline-primary btn-sm" data-i18n="page.downloads.replaceButton">
                         差し替える
@@ -249,7 +270,13 @@ require __DIR__ . '/_inc/partials/page-header.php';
                     <?php if (($row['versionLabel'] ?? null) !== null): ?>
                       (<?= km_e((string) $row['versionLabel']) ?>)
                     <?php endif; ?>
+                    <?php if (($row['versionCode'] ?? null) !== null): ?>
+                      / <span data-i18n="page.downloads.versionCodeShort">版番号</span> <?= (int) $row['versionCode'] ?>
+                    <?php endif; ?>
                     / <?= km_e(km_upload_format_size((int) $row['sizeBytes'])) ?>
+                    <?php if (($row['sha256'] ?? null) !== null): ?>
+                      / SHA-256 <code><?= km_e(substr((string) $row['sha256'], 0, 12)) ?>…</code>
+                    <?php endif; ?>
                     / <?= km_e(date('Y-m-d H:i', (int) $row['updatedAtEpoch'])) ?>
                     <?php if (($row['updatedBy'] ?? null) !== null): ?>
                       / <?= km_e((string) $row['updatedBy']) ?>
@@ -675,6 +702,21 @@ require __DIR__ . '/_inc/partials/page-header.php';
                     <?php $renderUploadForm('apk', $dist['apk'] ?? null); ?>
                   </div>
                   <!-- /.card-body -->
+                </div>
+                <!--end::Card-->
+
+                <!--begin::Card 管理用 APK(2026-10-05)-->
+                <div class="card mb-4">
+                  <div class="card-header">
+                    <h3 class="card-title" data-i18n="page.downloads.apkAdminTitle">管理用 Android アプリ (APK)</h3>
+                  </div>
+                  <div class="card-body">
+                    <p class="fs-7 text-body-secondary" data-i18n="page.downloads.apkAdminHint">
+                      管理アプリの自動アップデートが取りに来ます。ダウンロードには管理者のログインが要り、公開ページには出しません。
+                    </p>
+                    <?php $renderCurrent($dist['apk_admin'] ?? null); ?>
+                    <?php $renderUploadForm('apk_admin', $dist['apk_admin'] ?? null); ?>
+                  </div>
                 </div>
                 <!--end::Card-->
               </div>

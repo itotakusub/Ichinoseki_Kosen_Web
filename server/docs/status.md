@@ -158,6 +158,16 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
   既にある表には初回に列を足す。許す・隠すは、相手が地図を開き直したときに効く(`km_map_guest_verify` が表から読み直す)。記録は `guest.account_names_allow` / `_deny`(番号だけ)
 - 配備先の check で `nginx に /guest.php の location がある` が FAIL になっていたのを直した(配備先には `nginx/` が無いので SKIP)
 
+### アプリの 15 項目(2026-10-05、利用者の指示)
+
+- **北と距離の補正を全員の端末に配る**: 新しい表 `km_map_calibration`(初回に自動で作る)・`api/map-calibration.php`(書きは管理者のトークン)。
+  地図の配信(`api/app-map.php`)に `calibration` を載せる(重みと同じくチェックサムの外)。check の組 `map-calibration`
+- **アプリの自動アップデート**: 配布物に管理用の枠 `apk_admin`(ダウンロードに管理者のトークンが要る)。APK は**版番号が必須**、SHA-256 はサーバーで取る
+  (`km_distributables` に列 `version_code`・`sha256` を初回に足す)。`api/app-update.php?flavor=visitor|admin`。check の組 `app-update`。
+  アプリは版番号(ビルドの日時から作る)が大きいときだけ知らせ、SHA-256 と**署名が同じか**を確かめてからインストール画面を出す
+- nginx: `map-calibration`・`app-update` を km_api の絞りに入れた(配備で nginx を読み直す)
+- 見送り: ストリートビュー(別の計画)、証明書の検査を緩める項目(入れない)
+
 ### 1 台のルーターの複数 BSSID(2026-10-02、利用者の指示)
 
 - アプリはルーターの地点に BSSID を**カンマ区切りで複数**送る。`km_map_nodes.bssid` は 32 字(1 件)だったので、

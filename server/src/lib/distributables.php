@@ -54,8 +54,26 @@ const KM_DISTRIBUTABLES = [
         'downloadName' => 'KosenMap.apk',
         'maxBytes' => 200 * 1024 * 1024,
         'fallback' => null,
+        // 版番号(アプリの versionCode)を必須にする。アプリの自動更新が比べる(2026-10-05)
+        'needsVersionCode' => true,
+        'requiresAdmin' => false,
+    ],
+    /*
+     * 管理用アプリ(2026-10-05、利用者の指示「自動アップデート」)。**ダウンロードには管理者のトークンが要る**
+     * (管理アプリが自分の更新を取りに来るときだけ使う。公開ページには出さない)。
+     */
+    'apk_admin' => [
+        'extensions' => ['apk'],
+        'downloadName' => 'KosenMap-admin.apk',
+        'maxBytes' => 200 * 1024 * 1024,
+        'fallback' => null,
+        'needsVersionCode' => true,
+        'requiresAdmin' => true,
     ],
 ];
+
+/** 版番号の上限(Android の versionCode は 2100000000 まで)。 */
+const KM_DIST_MAX_VERSION_CODE = 2100000000;
 
 function km_dist_ensure_table(PDO $pdo): void
 {
@@ -70,9 +88,25 @@ function km_dist_ensure_table(PDO $pdo): void
             updated_at DATETIME NOT NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         SQL);
+
+    // 2026-10-05 に足した列(版番号・SHA-256)。**既にある表には無いときだけ足す**(1 回の要求で 1 回だけ見る)
+    static $columnsChecked = false;
+    if (!$columnsChecked) {
+        $columns = $pdo->query(
+            "SELECT COLUMN_NAME FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'km_distributables'"
+        )->fetchAll(PDO::FETCH_COLUMN);
+        if (!in_array('version_code', $columns, true)) {
+            $pdo->exec('ALTER TABLE km_distributables ADD COLUMN IF NOT EXISTS version_code INT NULL AFTER version_label');
+        }
+        if (!in_array('sha256', $columns, true)) {
+            $pdo->exec('ALTER TABLE km_distributables ADD COLUMN IF NOT EXISTS sha256 CHAR(64) NULL AFTER version_code');
+        }
+        $columnsChecked = true;
+    }
 }
 
-/** @return array{slug:string, originalName:string, storedName:string, sizeBytes:int, versionLabel:?string, updatedBy:?string, updatedAtEpoch:int}|null */
+/** @return array{slug:string, originalName:string, storedName:string, sizeBytes:int, versionLabel:?string, versionCode:?int, sha256:?string, updatedBy:?string, updatedAtEpoch:int}|null */
 function km_dist_find(PDO $pdo, string $slug): ?array
 {
     if (!isset(KM_DISTRIBUTABLES[$slug])) {
@@ -82,7 +116,7 @@ function km_dist_find(PDO $pdo, string $slug): ?array
 
     $stmt = $pdo->prepare(
         'SELECT slug, original_name AS originalName, stored_name AS storedName, size_bytes AS sizeBytes,
-                version_label AS versionLabel, updated_by AS updatedBy,
+                version_label AS versionLabel, version_code AS versionCode, sha256, updated_by AS updatedBy,
                 UNIX_TIMESTAMP(updated_at) AS updatedAtEpoch
          FROM km_distributables WHERE slug = ?'
     );
@@ -100,7 +134,7 @@ function km_dist_all(PDO $pdo): array
     $rows = [];
     foreach ($pdo->query(
         'SELECT slug, original_name AS originalName, stored_name AS storedName, size_bytes AS sizeBytes,
-                version_label AS versionLabel, updated_by AS updatedBy,
+                version_label AS versionLabel, version_code AS versionCode, sha256, updated_by AS updatedBy,
                 UNIX_TIMESTAMP(updated_at) AS updatedAtEpoch
          FROM km_distributables'
     ) as $row) {
@@ -115,7 +149,7 @@ function km_dist_all(PDO $pdo): array
  *
  * @param array $file $_FILES['...'] の形
  */
-function km_dist_store(PDO $pdo, string $slug, array $file, ?string $versionLabel, ?string $updatedBy): void
+function km_dist_store(PDO $pdo, string $slug, array $file, ?string $versionLabel, ?string $updatedBy, ?int $versionCode = null): void
 {
     if (!isset(KM_DISTRIBUTABLES[$slug])) {
         throw new InvalidArgumentException('配布物の種類が不正です。');
@@ -170,6 +204,19 @@ function km_dist_store(PDO $pdo, string $slug, array $file, ?string $versionLabe
     if ($versionLabel !== null && mb_strlen($versionLabel) > 64) {
         throw new InvalidArgumentException('バージョンは64文字以内にしてください。');
     }
+    if (($spec['needsVersionCode'] ?? false) === true) {
+        // アプリの自動更新は版番号で新しいかを決める。無いと、置いても誰の端末にも届かない
+        if ($versionCode === null || $versionCode < 1 || $versionCode > KM_DIST_MAX_VERSION_CODE) {
+            throw new InvalidArgumentException('版番号(アプリの設定「バージョン」の括弧内の数)を入れてください。');
+        }
+    } else {
+        $versionCode = null;
+    }
+    // 改ざん・途切れを端末が確かめるための SHA-256(置く前の一時ファイルで取る)
+    $sha256 = hash_file('sha256', $tmp);
+    if (!is_string($sha256) || strlen($sha256) !== 64) {
+        throw new RuntimeException('ファイルの要約を取れませんでした。');
+    }
 
     $dir = km_upload_dir();
     if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
@@ -199,12 +246,14 @@ function km_dist_store(PDO $pdo, string $slug, array $file, ?string $versionLabe
 
     try {
         $pdo->prepare(
-            'INSERT INTO km_distributables (slug, original_name, stored_name, size_bytes, version_label, updated_by, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, NOW())
+            'INSERT INTO km_distributables (slug, original_name, stored_name, size_bytes, version_label, version_code, sha256, updated_by, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
              ON DUPLICATE KEY UPDATE original_name = VALUES(original_name),
                                      stored_name = VALUES(stored_name),
                                      size_bytes = VALUES(size_bytes),
                                      version_label = VALUES(version_label),
+                                     version_code = VALUES(version_code),
+                                     sha256 = VALUES(sha256),
                                      updated_by = VALUES(updated_by),
                                      updated_at = NOW()'
         )->execute([
@@ -213,6 +262,8 @@ function km_dist_store(PDO $pdo, string $slug, array $file, ?string $versionLabe
             $storedName,
             $size,
             ($versionLabel === null || trim($versionLabel) === '') ? null : trim($versionLabel),
+            $versionCode,
+            $sha256,
             $updatedBy,
         ]);
     } catch (Throwable $exception) {

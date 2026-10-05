@@ -73,6 +73,8 @@ const KM_CHECK_PURE = [
     'router-bssids',
     // 地図の北と距離の補正を配る(2026-10-05)
     'map-calibration',
+    // アプリの自動更新(2026-10-05)
+    'app-update',
     'ssh-roles',
     'account-delete',
     'legal',
@@ -2232,6 +2234,35 @@ function km_check_review_0925(): void
 }
 
 /**
+ * アプリの自動更新(2026-10-05、api/app-update.php・lib/distributables.php)。DB は使わない(形と守りを見る)。
+ */
+function km_check_app_update(): void
+{
+    $src = __DIR__ . '/..';
+    require_once $src . '/lib/distributables.php';
+    $read = static fn (string $path): string => (string) @file_get_contents($src . '/' . $path);
+    km_check_heading('app-update: 配布物');
+    check_bool('一般用と管理用の 2 枠', isset(KM_DISTRIBUTABLES['apk'], KM_DISTRIBUTABLES['apk_admin']));
+    check_bool('管理用はダウンロードに管理者が要る・一般用は要らない', KM_DISTRIBUTABLES['apk_admin']['requiresAdmin'] === true && KM_DISTRIBUTABLES['apk']['requiresAdmin'] === false);
+    check_bool('APK は版番号が必須', KM_DISTRIBUTABLES['apk']['needsVersionCode'] === true && KM_DISTRIBUTABLES['apk_admin']['needsVersionCode'] === true);
+    $lib = $read('lib/distributables.php');
+    check_bool('SHA-256 はサーバーで取る(置く前の一時ファイルで)', strpos($lib, "hash_file('sha256', \$tmp)") !== false && strpos($lib, "hash_file('sha256', \$tmp)") < strpos($lib, 'move_uploaded_file('));
+    check_bool('既にある表には列を後から足す', str_contains($lib, 'ADD COLUMN IF NOT EXISTS version_code INT NULL') && str_contains($lib, 'ADD COLUMN IF NOT EXISTS sha256 CHAR(64) NULL'));
+    check_bool('版番号は Android の上限まで', KM_DIST_MAX_VERSION_CODE === 2100000000);
+    km_check_heading('app-update: 口');
+    $api = $read('api/app-update.php');
+    check_bool('読むだけ(GET)', str_contains($api, "require_method('GET');") && !str_contains($api, 'km_dist_store('));
+    check_bool('管理用は管理者のトークンを確かめてから', strpos($api, 'logto_assert_permissions($principal, LOGTO_ADMIN_PERMISSIONS);') < strpos($api, 'km_dist_find('));
+    check_bool('版番号と SHA-256 の無い登録は「更新なし」', str_contains($api, "respond(['success' => true, 'available' => false]);"));
+    $download = $read('api/download.php');
+    check_bool('管理用の APK は管理者のトークンが無いと出さない', strpos($download, "(\$spec['requiresAdmin'] ?? false) === true") < strpos($download, 'readfile($path);')
+        && str_contains($download, 'logto_assert_permissions($principal, LOGTO_ADMIN_PERMISSIONS);'));
+    $page = $read('admin/downloads.php');
+    check_bool('管理画面に版番号の欄と管理用の枠', str_contains($page, 'name="version_code"') && str_contains($page, "\$renderUploadForm('apk_admin'"));
+    check_bool('公開ページに管理用 APK の入口を出さない', !str_contains($read('index.php'), 'slug=apk_admin'));
+}
+
+/**
  * 地図の北と距離の補正(2026-10-05、lib/map-calibration.php)。DB は使わない(検査と、口の守りを見る)。
  */
 function km_check_map_calibration(): void
@@ -2605,7 +2636,7 @@ function km_check_route_weights(): void
     check('階の移動を減らす倍率', (float) ($web['fewerFloorsMultiplier'] ?? -1), $num('/val fewerFloorsMultiplier: Float = ([0-9.]+)f/'));
     check('雨の日の倍率', (float) ($web['rainOutsideMultiplier'] ?? -1), $num('/val rainOutsideMultiplier: Float = ([0-9.]+)f/'));
     check_bool('部屋を通り抜けないが既定', str_contains($kt, 'val noRoomPassThrough: Boolean = true'));
-    check_bool('アプリも道が消えるなら通り抜けを許す', str_contains($kt, 'return searchRoute(graph, nodesByUuid, startNodeUuid, goalNodeUuid, avoidRooms = false)'));
+    check_bool('アプリも道が消えるなら通り抜けを許す', str_contains($kt, 'return searchRoute(graph, nodesByUuid, startNodeUuid, goalNodeUuid, avoidRooms = false'));
 
     $dir = dirname($routeKt);
     $prefs = (string) @file_get_contents($dir . '/MapPreferences.kt');
@@ -6577,6 +6608,9 @@ foreach ($selected as $name) {
             break;
         case 'map-calibration':
             km_check_map_calibration();
+            break;
+        case 'app-update':
+            km_check_app_update();
             break;
         case 'account-delete':
             km_check_account_delete();
