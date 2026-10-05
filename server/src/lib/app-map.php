@@ -973,7 +973,32 @@ function km_app_map_build_package(
     if (!is_string($mapJson)) {
         return null;
     }
+    $parts = km_app_map_package_envelope(
+        $withChecksum ? hash('sha256', $mapJson) : null,
+        $slug, $revision, $serverTime, $expiresAt, $activeEventUuid, $routeWeights, $contentLevel, $calibration, $panoramas
+    );
+    return $parts === null ? null : $parts[0] . $mapJson . $parts[1];
+}
 
+/**
+ * パッケージの**地図の前と後ろ**(2026-10-06。lib/app-map-cache.php の作り置きを readfile で流すため)。
+ * 前 + 地図の JSON + 後ろ が、km_app_map_build_package と**同じ文字列**になる。
+ *
+ * @param string|null $mapSha256 地図の JSON の sha256(16 進)。null ならチェックサムを載せない
+ * @return array{0:string, 1:string}|null
+ */
+function km_app_map_package_envelope(
+    ?string $mapSha256,
+    string $slug,
+    int $revision,
+    string $serverTime,
+    string $expiresAt,
+    ?string $activeEventUuid,
+    ?array $routeWeights = null,
+    ?string $contentLevel = null,
+    ?array $calibration = null,
+    ?array $panoramas = null
+): ?array {
     $placeholder = '__KM_APP_MAP_BODY__';
     $package = [
         'format' => KM_APP_MAP_FORMAT,
@@ -984,7 +1009,7 @@ function km_app_map_build_package(
         'expiresAt' => $expiresAt,
         'activeEventUuid' => ($activeEventUuid ?? '') !== '' ? $activeEventUuid : null,
         'serverTime' => $serverTime,
-        'checksum' => $withChecksum ? 'sha256:' . hash('sha256', $mapJson) : null,
+        'checksum' => $mapSha256 !== null ? 'sha256:' . $mapSha256 : null,
         // 地図の外に置く(チェックサムは地図の文字列だけに取っている。重みを変えても版を上げずに済む)
         'routeWeights' => $routeWeights,
         'map' => $placeholder,
@@ -1005,7 +1030,8 @@ function km_app_map_build_package(
     if (!is_string($body)) {
         return null;
     }
-    return str_replace('"' . $placeholder . '"', $mapJson, $body);
+    $parts = explode('"' . $placeholder . '"', $body);
+    return count($parts) === 2 ? [$parts[0], $parts[1]] : null;
 }
 
 /** 中身の段。来場者版・スタッフ版(閲覧不可の地点あり・氏名なし)・氏名入り。 */

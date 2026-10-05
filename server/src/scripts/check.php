@@ -4182,6 +4182,46 @@ function km_check_hardening(): void
         && !isset($panoDecoded['map']['panoramas']));
     $noPanoBody = km_app_map_build_package($panoMap, 'kosen-main', 3, '2026-10-06T00:00:00+09:00', '2026-11-06T00:00:00+09:00', null, true, null, 'visitor', null, []);
     check_bool('配信: 写真が無ければ載せない(今までと同じ形)', !str_contains((string) $noPanoBody, 'panoramas'));
+    /*
+     * ## アプリへ配る地図の作り置き(2026-10-06。lib/app-map-cache.php。計画 E2)
+     * 前 + 作り置き + 後ろ が、その場で組み立てた応答と**同じ文字列**になること。元を差し替えたら作り直すこと。
+     */
+    require_once __DIR__ . '/../lib/app-map-cache.php';
+    $cacheTmp = sys_get_temp_dir() . '/km-appmap-check-' . bin2hex(random_bytes(4));
+    @mkdir($cacheTmp);
+    $cacheSrc = "{$cacheTmp}/src.json";
+    file_put_contents($cacheSrc, '{"version":9,"nodes":[{"uuid":"a","title":"日本語 <x>","occupantName":"架空 太郎"},{"uuid":"b","occupantName":null}],"lines":[],'
+        . '"events":[{"uuid":"e","places":[{"uuid":"p1","staffOnly":true},{"uuid":"p2","staffOnly":false}]}]}');
+    $cacheOkAll = true;
+    foreach (KM_APP_MAP_CONTENT_LEVELS as $cacheLevel) {
+        $cached = km_app_map_cache_get('kosen-main', $cacheSrc, $cacheLevel, "{$cacheTmp}/c");
+        $direct = km_app_map_build_package(km_app_map_for_level(km_app_map_decode_snapshot((string) file_get_contents($cacheSrc)), $cacheLevel), 'kosen-main', 3, 'T', 'E', null, true, null, $cacheLevel, null, ['a' => [['id' => 1]]]);
+        $parts = $cached === null ? null : km_app_map_package_envelope($cached['sha256'], 'kosen-main', 3, 'T', 'E', null, null, $cacheLevel, null, ['a' => [['id' => 1]]]);
+        $cacheOkAll = $cacheOkAll && $parts !== null && $parts[0] . file_get_contents($cached['body']) . $parts[1] === $direct;
+    }
+    check_bool('作り置き: 3 つの段とも、その場で組み立てた応答と同じ文字列', $cacheOkAll);
+    $visitorBody = (string) file_get_contents(km_app_map_cache_get('kosen-main', $cacheSrc, 'visitor', "{$cacheTmp}/c")['body']);
+    $staffBody = (string) file_get_contents(km_app_map_cache_get('kosen-main', $cacheSrc, 'staff', "{$cacheTmp}/c")['body']);
+    $namesBody = (string) file_get_contents(km_app_map_cache_get('kosen-main', $cacheSrc, 'names', "{$cacheTmp}/c")['body']);
+    check_bool('作り置き: 来場者版は氏名と閲覧不可の地点を落とし、スタッフ版は氏名だけ落とす', !str_contains($visitorBody, '架空') && !str_contains($visitorBody, '"p1"')
+        && !str_contains($staffBody, '架空') && str_contains($staffBody, '"p1"') && str_contains($namesBody, '架空'));
+    $firstBody = km_app_map_cache_get('kosen-main', $cacheSrc, 'visitor', "{$cacheTmp}/c")['body'];
+    file_put_contents($cacheSrc, '{"version":9,"nodes":[{"uuid":"z"}],"lines":[]}');
+    touch($cacheSrc, time() + 5);
+    $second = km_app_map_cache_get('kosen-main', $cacheSrc, 'visitor', "{$cacheTmp}/c");
+    check_bool('作り置き: 元を差し替えたら作り直し、古いものは片付ける', $second !== null && $second['body'] !== $firstBody && !is_file($firstBody) && isset($second['uuids']['z']));
+    check_bool('作り置き: 知らない段・おかしな配信 ID は作らない', km_app_map_cache_get('kosen-main', $cacheSrc, 'unknown', "{$cacheTmp}/c") === null
+        && km_app_map_cache_get('../x', $cacheSrc, 'visitor', "{$cacheTmp}/c") === null);
+    foreach (array_merge(glob("{$cacheTmp}/c/*") ?: [], [$cacheSrc]) as $cacheFile) {
+        @unlink($cacheFile);
+    }
+    @rmdir("{$cacheTmp}/c");
+    @rmdir($cacheTmp);
+    check_bool('配信: 作り置きを readfile で流し、使えなければその場で組み立てる', str_contains($appMapApi, "readfile(\$cached['body']);")
+        && strpos($appMapApi, "readfile(\$cached['body']);") < strpos($appMapApi, '$map = $loadDeliveredMap();'));
+    check_bool('作り置きの置き場は cache/ の下(nginx が直接は配らない)', str_contains($file('src/lib/app-map-cache.php'), "return __DIR__ . '/../cache/app-map';")
+        && str_contains($nginx, 'location ~ ^/(lib|config|scripts|uploads|cache|vendor)/ {'));
+
     $panoApi = $file('src/api/panorama.php');
     check_bool('写真そのものはハッシュだけで取る・長くキャッシュ・ETag', str_contains($panoApi, "if (\$method === 'GET' && isset(\$_GET['h'])) {") && str_contains($panoApi, "header('Cache-Control: private, max-age=31536000, immutable');")
         && strpos($panoApi, "isset(\$_GET['h'])") < strpos($panoApi, 'logto_require_principal()'));

@@ -33,6 +33,7 @@ require_once __DIR__ . '/../lib/app-map.php';
 require_once __DIR__ . '/../lib/route-weights.php';
 require_once __DIR__ . '/../lib/map-calibration.php';
 require_once __DIR__ . '/../lib/panorama.php';
+require_once __DIR__ . '/../lib/app-map-cache.php';
 
 require_method('POST');
 
@@ -257,6 +258,17 @@ $loadDeliveredMap = static function () use ($path, $slug, $meta, $privileged, $s
     }
     return $map;
 };
+$panoramasForUuids = static function (array $uuids) use ($pdo, $panoramasEnabled): ?array {
+    if (!$panoramasEnabled) {
+        return null;
+    }
+    try {
+        return km_panorama_manifest($pdo, $uuids);
+    } catch (Throwable $exception) {
+        error_log('api/app-map.php panoramas: ' . $exception->getMessage());
+        return null;
+    }
+};
 $panoramasFor = static function (?stdClass $map) use ($pdo, $panoramasEnabled): ?array {
     if (!$panoramasEnabled || $map === null) {
         return null;
@@ -282,11 +294,45 @@ if (km_app_map_is_up_to_date($slug, $haveMapId, $haveRevision, $revision, $haveL
         'calibration' => $calibration,
         'contentLevel' => $contentLevel,
     ];
-    $panoramas = $panoramasEnabled ? $panoramasFor($loadDeliveredMap()) : null;
+    // 地点の uuid は作り置きから取る(地図を読み解かない)。作り置きが無ければ今までどおり読む
+    $panoramas = null;
+    if ($panoramasEnabled) {
+        $cachedForUuids = $path !== null ? km_app_map_cache_get($slug, $path, $contentLevel) : null;
+        $panoramas = $cachedForUuids !== null ? $panoramasForUuids($cachedForUuids['uuids']) : $panoramasFor($loadDeliveredMap());
+    }
     if ($panoramas !== null && $panoramas !== []) {
         $upToDate['panoramas'] = (object) $panoramas;
     }
     respond($upToDate);
+}
+
+/*
+ * **作り置きを流す**(2026-10-06。lib/app-map-cache.php。計画 E2)。段ごとに作っておいた地図の JSON を
+ * readfile で流し、前後の短い部分だけをここで組み立てる(実測: 毎回組み立てると約 16ms・+5.5MB、流すだけなら約 1ms・+0.5MB)。
+ * 作り置きを使えないとき(置き場に書けない等)は、下で今までどおりその場で組み立てる。
+ */
+$activeEventUuid = is_string($meta['activeEventUuid'] ?? null) ? $meta['activeEventUuid'] : null;
+$cached = $path !== null ? km_app_map_cache_get($slug, $path, $contentLevel) : null;
+if ($cached !== null) {
+    $parts = km_app_map_package_envelope(
+        ($meta['checksum'] ?? true) !== false ? $cached['sha256'] : null,
+        $slug,
+        $revision,
+        $serverTime,
+        $expiresAt->format(DateTimeInterface::ATOM),
+        $activeEventUuid,
+        $routeWeights,
+        $contentLevel,
+        $calibration,
+        $panoramasForUuids($cached['uuids'])
+    );
+    if ($parts !== null) {
+        http_response_code(200);
+        echo $parts[0];
+        readfile($cached['body']);
+        echo $parts[1];
+        exit;
+    }
 }
 
 $map = $loadDeliveredMap();
@@ -300,7 +346,7 @@ $body = km_app_map_build_package(
     $revision,
     $serverTime,
     $expiresAt->format(DateTimeInterface::ATOM),
-    is_string($meta['activeEventUuid'] ?? null) ? $meta['activeEventUuid'] : null,
+    $activeEventUuid,
     ($meta['checksum'] ?? true) !== false,
     $routeWeights,
     $contentLevel,
