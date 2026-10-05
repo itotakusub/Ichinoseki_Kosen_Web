@@ -55,6 +55,8 @@ SEND_LOG_SCRIPT="$PATH_ROOT/scripts/send-log.sh"
 # タスクマネージャーの数値と、使用率の警告(版 7。2026-10-05)
 STATS_SCRIPT="$PATH_ROOT/scripts/host-stats.sh"
 RESOURCE_SCRIPT="$PATH_ROOT/scripts/host-resource-alert.sh"
+# 国単位のアクセス拒否(版 8。2026-10-06)。設定(geoblock.local.conf)が無ければ何もしない
+GEOBLOCK_SCRIPT="$PATH_ROOT/scripts/host-geoblock.sh"
 
 PROBLEMS=0
 note() { echo "  $1"; }
@@ -115,7 +117,7 @@ echo "== 確認スクリプト =="
 # **配備は実行ビットを保たない。** tar 越しに置いた直後は 644 のことがあるので、
 # cron が呼ぶものをまとめて見る(1本ずつ手で chmod すると、必ずどれかを忘れる)。
 # 版 6 で host-cert.sh と、それを包む send-log.sh を足した。版 7 で host-stats.sh と host-resource-alert.sh。
-for _script in "$CHECK_SCRIPT" "$SECURITY_SCRIPT" "$EMERGENCY_SCRIPT" "$BACKUP_SCRIPT" "$CERT_SCRIPT" "$SEND_LOG_SCRIPT" "$STATS_SCRIPT" "$RESOURCE_SCRIPT"; do
+for _script in "$CHECK_SCRIPT" "$SECURITY_SCRIPT" "$EMERGENCY_SCRIPT" "$BACKUP_SCRIPT" "$CERT_SCRIPT" "$SEND_LOG_SCRIPT" "$STATS_SCRIPT" "$RESOURCE_SCRIPT" "$GEOBLOCK_SCRIPT"; do
   if [ -x "$_script" ]; then
     note "あり: $_script"
   elif [ -f "$_script" ]; then
@@ -242,6 +244,9 @@ else
 #
 # nginx が run/visitlog/visit-YYYY-MM-DD.jsonl に書く訪問の記録(IP を含む)は **30 日を過ぎたら消す**
 # (管理画面の訪問者は 30 日までしか見ない。IP を長く持たない)。毎日 4:37、ほかの仕事と時刻を重ねない。
+#
+# 国単位のアクセス拒否(host-geoblock.sh)は、毎月 2 日 4:53 に一覧を取り直して当て直し、再起動のあとにも当て直す
+# (nftables の表は再起動で消える)。**設定(geoblock.local.conf)が無ければ何もしない**ので、使わないホストにも置いてよい。
 SHELL=/bin/sh
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
@@ -258,6 +263,8 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 * * * * *    root  $STATS_SCRIPT --path $PATH_ROOT >>$LOG_DIR/stats.log 2>&1
 */5 * * * *  root  $RESOURCE_SCRIPT --path $PATH_ROOT >>$LOG_DIR/resource-alert.log 2>&1
 
+53 4 2 * *  root  sh $GEOBLOCK_SCRIPT --path $PATH_ROOT update >>$LOG_DIR/geoblock.log 2>&1 && sh $GEOBLOCK_SCRIPT --path $PATH_ROOT apply >>$LOG_DIR/geoblock.log 2>&1
+@reboot     root  sleep 30 && sh $GEOBLOCK_SCRIPT --path $PATH_ROOT apply >>$LOG_DIR/geoblock.log 2>&1
 37 4 * * *  root  find $PATH_ROOT/run/visitlog -maxdepth 1 -type f -name 'visit-*.jsonl' -mtime +30 -delete >>$LOG_DIR/visitlog.log 2>&1
 CONF
     chmod 644 "$CRON_FILE"

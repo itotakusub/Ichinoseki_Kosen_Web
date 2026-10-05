@@ -1,0 +1,22 @@
+# 国単位のアクセス拒否の設定(scripts/host-geoblock.sh。2026-10-06)。
+#
+# **ホストにだけ置く。** この見本を geoblock.local.conf という名前で写し、root の持ち物・600 にする。
+# `*.local.conf` なので、配備(deploy-to-host.ps1)でも GitHub の控えでも送らない。
+#
+#   sudo cp geoblock.local.conf.example geoblock.local.conf
+#   sudo chown root:root geoblock.local.conf && sudo chmod 600 geoblock.local.conf
+#   (編集してから)sudo sh scripts/host-geoblock.sh --path /opt/kosenmap apply --dry-run
+#   sudo sh scripts/host-geoblock.sh --path /opt/kosenmap apply
+#
+# 読むのは `名前=値` の行だけ(シェルとして実行しない)。国は ISO 3166 の 2 文字、空白区切り。
+
+# 拒否する国。空なら国の拒否はしない
+DENY_COUNTRIES=
+
+# 管理用のポート(phpMyAdmin 8281・Logto の Console 3002)に入れる国。空なら絞らない。
+# 日本だけにすると、海外から管理するときは入れない(そのときは remove するか、ここを空にして apply)
+ADMIN_COUNTRIES=jp
+ADMIN_PORTS=8281 3002
+
+# どの国からでも通すポート。**22(SSH)は残すこと** —— 締め出されると直す手段が無くなる
+EXEMPT_PORTS=22

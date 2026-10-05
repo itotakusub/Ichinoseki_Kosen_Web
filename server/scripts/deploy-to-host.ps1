@@ -399,6 +399,9 @@ $include = @(
     # タスクマネージャーと使用率のメール(2026-10-05)。root の cron が呼ぶ(host-updates-setup.sh の版 7)
     './scripts/host-stats.sh'
     './scripts/host-resource-alert.sh'
+    # 国単位のアクセス拒否(2026-10-06)。当てるのは利用者(sudo)。設定 geoblock.local.conf はホストにだけ置く
+    './scripts/host-geoblock.sh'
+    './geoblock.local.conf.example'
     <#
       SSH ログインの知らせと、切る・BAN する道具(2026-09-25)。
       **ここに置くのは原本だけ。** PAM と sudo から root で走るのは、ssh-login-notify-setup.sh --fix が

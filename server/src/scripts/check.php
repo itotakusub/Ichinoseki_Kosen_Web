@@ -4294,6 +4294,18 @@ function km_check_hardening(): void
     $setup = $file('scripts/host-updates-setup.sh');
     // 版 6 で証明書を足し、版 7(2026-10-05)でタスクマネージャーの集計と使用率の警告を、版 8(2026-10-06)で訪問者の記録の片付けを足した
     check_bool('cron は版 8', preg_match('/^CRON_VERSION=8$/m', $setup) === 1);
+    // 国単位のアクセス拒否(2026-10-06)。毎月の取り直しと、再起動のあとの当て直し
+    check_bool('cron(版 8)に国の拒否の取り直しと再起動後の当て直しがある', str_contains($setup, '53 4 2 * *  root  sh $GEOBLOCK_SCRIPT --path $PATH_ROOT update')
+        && str_contains($setup, '@reboot     root  sleep 30 && sh $GEOBLOCK_SCRIPT --path $PATH_ROOT apply'));
+    $geoblock = $file('scripts/host-geoblock.sh');
+    check_bool('国の拒否: 設定はシェルとして実行しない(名前=値だけ読む)', !preg_match('/^\s*(\.|source)\s+"?\$CONF/m', $geoblock) && str_contains($geoblock, 'key="${line%%=*}"'));
+    check_bool('国の拒否: LAN・ループバックと SSH(既定 22)を先に通してから落とす', strpos($geoblock, '192.168.0.0/16') < strpos($geoblock, 'ip saddr @deny4')
+        && strpos($geoblock, 'tcp dport { $exempt } accept') < strpos($geoblock, 'ip saddr @deny4') && str_contains($geoblock, 'EXEMPT_PORTS="22"'));
+    check_bool('国の拒否: Docker の nat より前(prerouting -150)・作り直しは 1 回の読み込みで', str_contains($geoblock, 'type filter hook prerouting priority -150; policy accept;')
+        && str_contains($geoblock, "echo \"table inet \$TABLE {}\"\n  echo \"delete table inet \$TABLE\""));
+    check_bool('国の拒否: 取り直しに失敗したら前の一覧を使う・管理用の国の一覧が空なら当てない', str_contains($geoblock, '前の一覧を使います') && str_contains($geoblock, '誰も入れなくなるので当てません'));
+    check_bool('国の拒否: 設定はリポジトリに置かない(見本だけ)・スクリプトと見本は配備に載る', !is_file(km_check_repo_root() . '/geoblock.local.conf') && is_file(km_check_repo_root() . '/geoblock.local.conf.example')
+        && str_contains($deploy, "'./scripts/host-geoblock.sh'") && str_contains($deploy, "'./geoblock.local.conf.example'"));
     check_bool('cron の証明書は host-cert.sh を指す', str_contains($setup, 'CERT_SCRIPT="$PATH_ROOT/scripts/host-cert.sh"'));
     check_bool('毎日 3:47 に renew、失敗したときだけ送る', preg_match('/^47 3 \* \* \*\s+root\s+\$SEND_LOG_SCRIPT [^\n]*--only-failure --run "\$CERT_SCRIPT --path \$PATH_ROOT renew"/m', $setup) === 1);
     check_bool('毎月1日に status を必ず送る', preg_match('/^7 4 1 \* \*\s+root\s+\$SEND_LOG_SCRIPT (?![^\n]*--only-failure)[^\n]*--run "\$CERT_SCRIPT --path \$PATH_ROOT status"/m', $setup) === 1);
