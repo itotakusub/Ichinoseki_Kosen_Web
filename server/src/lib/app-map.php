@@ -963,7 +963,9 @@ function km_app_map_build_package(
     /** 経路の重み(lib/route-weights.php)。配っていなければ null(アプリは自分の既定で動く) */
     ?array $routeWeights = null,
     /** 中身の段(km_app_map_content_level)。null なら載せない(以前と同じ形) */
-    ?string $contentLevel = null
+    ?string $contentLevel = null,
+    /** 北と距離の補正(lib/map-calibration.php。2026-10-05)。null なら載せない(以前と同じ形) */
+    ?array $calibration = null
 ): ?string {
     $mapJson = json_encode($map, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     if (!is_string($mapJson)) {
@@ -988,6 +990,10 @@ function km_app_map_build_package(
     if ($contentLevel !== null) {
         // どの段の中身か(km_app_map_content_level)。端末が覚えて、次の取得で haveLevel として送る(W-52)
         $package = array_slice($package, 0, -1, true) + ['contentLevel' => $contentLevel, 'map' => $placeholder];
+    }
+    if ($calibration !== null) {
+        // 北と距離の補正。重みと同じく地図の外(チェックサムの外)に置く
+        $package = array_slice($package, 0, -1, true) + ['calibration' => $calibration, 'map' => $placeholder];
     }
     $body = json_encode($package, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     if (!is_string($body)) {
