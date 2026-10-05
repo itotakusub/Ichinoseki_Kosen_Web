@@ -60,6 +60,15 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'GET') {
  * **それは管理者が自分の設定を迂回できるというだけ**で、守るべき相手はそこではない。
  */
 $config = km_map_access_config();
+/*
+ * **お試しの閲覧リンクの仮アカウントは、表から確かめ直してから錠を見る**(2026-10-06、診断 W-54)。
+ * 以前はセッションの印だけを見ていたので、管理者が仮アカウント(またはリンク)を取り消しても、
+ * 同じセッションのままこの口を叩けば、リンクの期限まで錠の内側の見取り図を取れた
+ * (公開ページと api/map-data.php は毎回 km_map_guest_verify() で見直していた)。
+ * 印の無い人は DB を引かない。取り消されていれば、ここで印が外れる(セッションを閉じる前に呼ぶこと)。
+ */
+require_once __DIR__ . '/../lib/map-guest.php';
+km_map_guest_verify();
 $viewUnlocked = km_map_view_unlocked($config) || km_map_admin_session();
 
 /*

@@ -4182,6 +4182,12 @@ function km_check_hardening(): void
         && !isset($panoDecoded['map']['panoramas']));
     $noPanoBody = km_app_map_build_package($panoMap, 'kosen-main', 3, '2026-10-06T00:00:00+09:00', '2026-11-06T00:00:00+09:00', null, true, null, 'visitor', null, []);
     check_bool('配信: 写真が無ければ載せない(今までと同じ形)', !str_contains((string) $noPanoBody, 'panoramas'));
+    // 診断 W-54(2026-10-05): 見取り図の口も、錠を見る前に仮アカウントを表から確かめ直す(セッションを閉じる前に)
+    $floorImage = $file('src/api/floor-image.php');
+    check_bool('W-54: 見取り図の口は錠を見る前に km_map_guest_verify() を呼ぶ', strpos($floorImage, 'km_map_guest_verify();') !== false
+        && strpos($floorImage, 'km_map_guest_verify();') < strpos($floorImage, '$viewUnlocked = km_map_view_unlocked(')
+        && strpos($floorImage, 'km_map_guest_verify();') < strpos($floorImage, 'session_write_close();'));
+
     /*
      * ## アプリへ配る地図の作り置き(2026-10-06。lib/app-map-cache.php。計画 E2)
      * 前 + 作り置き + 後ろ が、その場で組み立てた応答と**同じ文字列**になること。元を差し替えたら作り直すこと。
