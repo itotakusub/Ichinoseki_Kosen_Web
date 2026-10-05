@@ -81,6 +81,9 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     'map.backup_create' => 'がノードをサーバーへバックアップしました',
     'map.backup_restore' => 'がサーバーのバックアップからノードを取り出しました',
     'map.backup_delete' => 'がサーバーのノードのバックアップを消しました',
+    // ストリートビューの写真(2026-10-06、lib/panorama.php)
+    'map.panorama_add' => 'が地点にストリートビューの写真を足しました',
+    'map.panorama_delete' => 'が地点のストリートビューの写真を外しました',
     // ランキングの「調べられた語」を外した(2026-09-25、W-45)。**語そのものは記録しない**(詳細は年だけ)
     'ranking.query_hidden' => 'がランキングの調べられた語を一覧から外しました',
     // お試しの閲覧リンク(2026-09-30、lib/map-guest.php)。発行と取り消しは管理者

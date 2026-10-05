@@ -2608,7 +2608,7 @@ function km_check_route_weights(): void
     $appMapApi = (string) file_get_contents(__DIR__ . '/../api/app-map.php');
     // 重みだけ変えたとき、版を上げずに「更新」で届くように
     check_bool('アプリへ: 地図が最新のときの応答にも載せる', preg_match("/'upToDate' => true,.*?'routeWeights' => \\\$routeWeights,/s", $appMapApi) === 1);
-    check_bool('アプリへ: 本体の応答にも載せる', str_contains($appMapApi, "    \$routeWeights,\n    \$contentLevel,\n    \$calibration\n);"));
+    check_bool('アプリへ: 本体の応答にも載せる', str_contains($appMapApi, "    \$routeWeights,\n    \$contentLevel,\n    \$calibration,\n    \$panoramasFor(\$map)\n);"));
     // 地図の外に置く。チェックサムは地図の文字列だけに取る
     $map = new stdClass();
     $map->nodes = [];
@@ -4140,6 +4140,56 @@ function km_check_hardening(): void
         && !$pathRejected(str_repeat('a', 32) . '.json.gz'));
     check_bool('残すのは新しい方から 20 件', KM_MAP_BACKUP_KEEP === 20 && str_contains($file('src/lib/map-backup.php'), "foreach (array_slice(\$rows, \$keep) as \$row) {\n        km_map_backup_remove_row(\$pdo, \$row);"));
 
+    /*
+     * ## ストリートビューの写真(2026-10-06。lib/panorama.php・api/panorama.php)
+     * 中身で形を確かめる・ハッシュが鍵・配る地図の地点の分だけ・チェックサムの外。
+     */
+    km_check_heading('panorama: 中身で確かめる・ハッシュが鍵・配る地点の分だけ・チェックサムの外');
+    require_once __DIR__ . '/../lib/panorama.php';
+    require_once __DIR__ . '/../lib/app-map.php';
+    $panoOk = static function (string $bytes): bool {
+        try {
+            km_panorama_inspect($bytes);
+            return true;
+        } catch (InvalidArgumentException) {
+            return false;
+        }
+    };
+    if (function_exists('imagecreatetruecolor')) {
+        $img = imagecreatetruecolor(512, 256);
+        ob_start();
+        imagejpeg($img);
+        $jpeg = (string) ob_get_clean();
+        ob_start();
+        imagepng($img);
+        $png = (string) ob_get_clean();
+        $tiny = imagecreatetruecolor(64, 32);
+        ob_start();
+        imagejpeg($tiny);
+        $tinyJpeg = (string) ob_get_clean();
+        check_bool('形: JPEG(512×256)は通し、PNG・小さすぎ・画像でないものは断る', $panoOk($jpeg) && !$panoOk($png) && !$panoOk($tinyJpeg) && !$panoOk('<?php echo 1;'));
+    } else {
+        check_bool('形: GD が無いので画像の検査は飛ばす(本番の web には GD がある)', true);
+    }
+    check_bool('地点の uuid は英数字・ハイフン・下線だけ', km_panorama_valid_node_uuid('3f2a-b_9') && !km_panorama_valid_node_uuid('../x') && !km_panorama_valid_node_uuid(''));
+    $panoMap = json_decode('{"version":8,"nodes":[{"uuid":"n1"},{"uuid":"n2"}],"lines":[]}');
+    check_bool('配る地図の地点だけを拾う', km_panorama_uuids_of_map($panoMap) === ['n1' => true, 'n2' => true]);
+    $panoBody = km_app_map_build_package($panoMap, 'kosen-main', 3, '2026-10-06T00:00:00+09:00', '2026-11-06T00:00:00+09:00', null, true, null, 'visitor', null, ['123' => [['id' => 1, 'sha256' => str_repeat('a', 64), 'bytes' => 10, 'width' => 512, 'height' => 256, 'heading' => null]]]);
+    $panoDecoded = json_decode((string) $panoBody, true);
+    $panoMapJson = json_encode($panoMap, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    check_bool('配信: 一覧は地図の外・数字だけの uuid でも object・チェックサムは地図だけ', is_array($panoDecoded) && isset($panoDecoded['panoramas']['123'][0]['sha256'])
+        && str_contains((string) $panoBody, '"panoramas":{"123":') && $panoDecoded['checksum'] === 'sha256:' . hash('sha256', (string) $panoMapJson)
+        && !isset($panoDecoded['map']['panoramas']));
+    $noPanoBody = km_app_map_build_package($panoMap, 'kosen-main', 3, '2026-10-06T00:00:00+09:00', '2026-11-06T00:00:00+09:00', null, true, null, 'visitor', null, []);
+    check_bool('配信: 写真が無ければ載せない(今までと同じ形)', !str_contains((string) $noPanoBody, 'panoramas'));
+    $panoApi = $file('src/api/panorama.php');
+    check_bool('写真そのものはハッシュだけで取る・長くキャッシュ・ETag', str_contains($panoApi, "if (\$method === 'GET' && isset(\$_GET['h'])) {") && str_contains($panoApi, "header('Cache-Control: private, max-age=31536000, immutable');")
+        && strpos($panoApi, "isset(\$_GET['h'])") < strpos($panoApi, 'logto_require_principal()'));
+    check_bool('上げる・一覧・外すは管理者だけ', preg_match('/\$principal = logto_require_principal\(\);\nlogto_assert_permissions\(\$principal, LOGTO_ADMIN_PERMISSIONS\);/', $panoApi) === 1
+        && str_contains($panoApi, "'map.panorama_add'") && str_contains($panoApi, "'map.panorama_delete'"));
+    check_bool('nginx: クエリ(ハッシュ)をログに書かない・本文 11m・回数を数える', str_contains($nginx, "location = /api/panorama.php {\n        access_log /var/log/nginx/access.log km_no_query;\n        client_max_body_size 11m;\n        limit_req zone=km_api burst=120 nodelay;"));
+    check_bool('配信: 来場者版は閲覧不可の地点を落とした地図から一覧を作る', str_contains($appMapApi, 'km_panorama_manifest($pdo, km_panorama_uuids_of_map($map))')
+        && preg_match('/\$loadDeliveredMap = static function \(\).*?km_app_map_strip_staff_only\(\$map\).*?return \$map;/s', $appMapApi) === 1);
     $baseCompose = $file('compose.yaml');
     check_bool('入口と地図の正本はスワップを使わず、最後まで守る', preg_match('/\n  mariadb:\n(?:(?!\n  [a-z0-9-]+:\n)[\s\S])*?memswap_limit: 512m\n    oom_score_adj: -500\n/', $baseCompose) === 1
         && preg_match('/\n  reverse-proxy:\n(?:(?!\n  [a-z0-9-]+:\n)[\s\S])*?memswap_limit: 128m\n    oom_score_adj: -500\n/', $baseCompose) === 1);

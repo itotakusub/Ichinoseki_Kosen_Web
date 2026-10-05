@@ -701,6 +701,17 @@ server {
         proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
     }
 
+    # ストリートビューの写真(2026-10-06、lib/panorama.php)。写真は ?h=<ハッシュ> で取る ——
+    # **ハッシュが鍵**(地図の配信で一覧を受け取った人だけが知る)なので、クエリをログに書かない。
+    # 上げるのは管理者だけ(1 枚 10MB。multipart の分の余裕を足す)。回数は km_api で数える
+    location = /api/panorama.php {
+        access_log /var/log/nginx/access.log km_no_query;
+        client_max_body_size 11m;
+        limit_req zone=km_api burst=120 nodelay;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+
     location = /api/app-map.php {
         limit_req zone=km_appmap burst=30 nodelay;
         include /etc/nginx/km/proxy-web.conf;

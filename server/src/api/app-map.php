@@ -32,6 +32,7 @@ require_once __DIR__ . '/../lib/app-secret.php';
 require_once __DIR__ . '/../lib/app-map.php';
 require_once __DIR__ . '/../lib/route-weights.php';
 require_once __DIR__ . '/../lib/map-calibration.php';
+require_once __DIR__ . '/../lib/panorama.php';
 
 require_method('POST');
 
@@ -217,10 +218,61 @@ $privileged = $isStaff || $isTeacher;
 $sendNames = $privileged && km_app_map_may_send_occupant_names($privileged, $isTeacher);
 $contentLevel = km_app_map_content_level($privileged, $sendNames);
 
+/*
+ * ストリートビューの写真の一覧(2026-10-06。lib/panorama.php)。**配る地図に入っている地点の分だけ**載せる ——
+ * 来場者版では閲覧不可の地点を落とすので、その地点の写真のハッシュも渡さない。
+ * 重みと同じく地図の外に置き、地図が最新のときの応答にも載せる(写真だけ足したときに版を上げずに届く)。
+ * 写真が 1 枚も無ければ地図を読まない(今までと同じ重さ)。
+ */
+$panoramasEnabled = false;
+try {
+    $panoramasEnabled = km_panorama_any($pdo);
+} catch (Throwable $exception) {
+    error_log('api/app-map.php panoramas: ' . $exception->getMessage());
+}
+
+$path = km_app_map_storage_path($config, (string) ($meta['file'] ?? ''));
+$loadDeliveredMap = static function () use ($path, $slug, $meta, $privileged, $sendNames): ?stdClass {
+    if ($path === null) {
+        error_log("api/app-map.php: 実体が見つかりません: {$slug} (" . ($meta['file'] ?? '') . ')');
+        return null;
+    }
+    $map = km_app_map_decode_snapshot((string) file_get_contents($path));
+    if ($map === null) {
+        error_log("api/app-map.php: 地図 JSON として読めません: {$slug}");
+        return null;
+    }
+    // 何を落とすかは上で決めた段($contentLevel)と同じ判定
+    if (!$privileged) {
+        $map = km_app_map_strip_staff_only($map);
+    } elseif (!$sendNames) {
+        /*
+         * **staff でも、氏名だけは別に判断する。**
+         *
+         * 「地図データ公開設定」が `hidden` のときは誰にも配らない —— Web で隠している
+         * ものを、アプリ経由で取れるようにしてしまうと、錠が2つある状態になる。
+         * 一時地点(staffOnly)は staff に見せてよいので、そちらは落とさない。
+         */
+        km_app_map_strip_occupant_names($map);
+    }
+    return $map;
+};
+$panoramasFor = static function (?stdClass $map) use ($pdo, $panoramasEnabled): ?array {
+    if (!$panoramasEnabled || $map === null) {
+        return null;
+    }
+    try {
+        return km_panorama_manifest($pdo, km_panorama_uuids_of_map($map));
+    } catch (Throwable $exception) {
+        error_log('api/app-map.php panoramas: ' . $exception->getMessage());
+        return null;
+    }
+};
+
 if (km_app_map_is_up_to_date($slug, $haveMapId, $haveRevision, $revision, $haveLevel, $contentLevel)) {
     // 本体を返さない場合でも serverTime は必ず返す。端末はこれで時計を合わせ、
     // 有効期限の判定に端末の時計を使わずに済む。
-    respond([
+    $upToDate = [
         'upToDate' => true,
         'mapId' => $slug,
         'revision' => $revision,
@@ -229,33 +281,17 @@ if (km_app_map_is_up_to_date($slug, $haveMapId, $haveRevision, $revision, $haveL
         'routeWeights' => $routeWeights,
         'calibration' => $calibration,
         'contentLevel' => $contentLevel,
-    ]);
+    ];
+    $panoramas = $panoramasEnabled ? $panoramasFor($loadDeliveredMap()) : null;
+    if ($panoramas !== null && $panoramas !== []) {
+        $upToDate['panoramas'] = (object) $panoramas;
+    }
+    respond($upToDate);
 }
 
-$path = km_app_map_storage_path($config, (string) ($meta['file'] ?? ''));
-if ($path === null) {
-    error_log("api/app-map.php: 実体が見つかりません: {$slug} (" . ($meta['file'] ?? '') . ')');
-    respond(['success' => false, 'message' => 'このマップはまだ配置されていません。'], 500);
-}
-
-$map = km_app_map_decode_snapshot((string) file_get_contents($path));
+$map = $loadDeliveredMap();
 if ($map === null) {
-    error_log("api/app-map.php: 地図 JSON として読めません: {$slug}");
-    respond(['success' => false, 'message' => 'マップを準備できませんでした。'], 500);
-}
-
-// 何を落とすかは上で決めた段($contentLevel)と同じ判定
-if (!$privileged) {
-    $map = km_app_map_strip_staff_only($map);
-} elseif (!$sendNames) {
-    /*
-     * **staff でも、氏名だけは別に判断する。**
-     *
-     * 「地図データ公開設定」が `hidden` のときは誰にも配らない —— Web で隠している
-     * ものを、アプリ経由で取れるようにしてしまうと、錠が2つある状態になる。
-     * 一時地点(staffOnly)は staff に見せてよいので、そちらは落とさない。
-     */
-    km_app_map_strip_occupant_names($map);
+    respond(['success' => false, 'message' => $path === null ? 'このマップはまだ配置されていません。' : 'マップを準備できませんでした。'], 500);
 }
 
 $body = km_app_map_build_package(
@@ -268,7 +304,8 @@ $body = km_app_map_build_package(
     ($meta['checksum'] ?? true) !== false,
     $routeWeights,
     $contentLevel,
-    $calibration
+    $calibration,
+    $panoramasFor($map)
 );
 if ($body === null) {
     error_log("api/app-map.php: パッケージを組み立てられません: {$slug}");

@@ -965,7 +965,9 @@ function km_app_map_build_package(
     /** 中身の段(km_app_map_content_level)。null なら載せない(以前と同じ形) */
     ?string $contentLevel = null,
     /** 北と距離の補正(lib/map-calibration.php。2026-10-05)。null なら載せない(以前と同じ形) */
-    ?array $calibration = null
+    ?array $calibration = null,
+    /** ストリートビューの写真の一覧(lib/panorama.php。2026-10-06)。空・null なら載せない(以前と同じ形) */
+    ?array $panoramas = null
 ): ?string {
     $mapJson = json_encode($map, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     if (!is_string($mapJson)) {
@@ -994,6 +996,10 @@ function km_app_map_build_package(
     if ($calibration !== null) {
         // 北と距離の補正。重みと同じく地図の外(チェックサムの外)に置く
         $package = array_slice($package, 0, -1, true) + ['calibration' => $calibration, 'map' => $placeholder];
+    }
+    if ($panoramas !== null && $panoramas !== []) {
+        // ストリートビューの写真の一覧。重みと同じく地図の外(チェックサムの外)。uuid が数字だけでも object にする
+        $package = array_slice($package, 0, -1, true) + ['panoramas' => (object) $panoramas, 'map' => $placeholder];
     }
     $body = json_encode($package, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     if (!is_string($body)) {
