@@ -8,6 +8,7 @@ require_once dirname(__DIR__) . '/lib/db.php';
 require_once dirname(__DIR__) . '/lib/table-manage.php';
 require_once dirname(__DIR__) . '/lib/admin-log.php';
 require_once dirname(__DIR__) . '/lib/logto-management.php';
+require_once dirname(__DIR__) . '/lib/tasks.php';
 
 /*
  * タイルの数値。取得できないものは「—」のままにして画面自体は必ず出す
@@ -30,6 +31,27 @@ try {
     $userCount = count(km_logto_users(100));
 } catch (Throwable $exception) {
     error_log('admin/index.php user tile failed: ' . $exception->getMessage());
+}
+
+/*
+ * 「次フェーズの作業」は、かんばん・プロジェクト状況と同じ表(km_tasks)から出す(2026-10-05、利用者の指示)。
+ * 以前は 4 行の決め打ちで、ボードで進めても変わらなかった。
+ * 並びは「進行中 → 要判断 → 未着手」、同じ状態の中はボードの並び(sort_order)。完了は出さない。
+ */
+$nextTasks = null;
+$taskStatusLabel = ['progress' => '進行中', 'decision' => '要判断', 'todo' => '未着手'];
+$taskStatusBadge = ['progress' => 'text-bg-info', 'decision' => 'text-bg-warning', 'todo' => 'text-bg-secondary'];
+try {
+    $rank = ['progress' => 0, 'decision' => 1, 'todo' => 2];
+    $open = array_values(array_filter(
+        km_tasks_all(km_db()),
+        static fn (array $task): bool => isset($rank[$task['status']])
+    ));
+    usort($open, static fn (array $a, array $b): int =>
+        [$rank[$a['status']], (int) $a['sortOrder'], (int) $a['id']] <=> [$rank[$b['status']], (int) $b['sortOrder'], (int) $b['id']]);
+    $nextTasks = array_slice($open, 0, 5);
+} catch (Throwable $exception) {
+    error_log('admin/index.php next tasks failed: ' . $exception->getMessage());
 }
 
 $KM_PAGE = [
@@ -188,37 +210,35 @@ require __DIR__ . '/_inc/partials/page-header.php';
               <div class="col-12">
                 <!--begin::Card-->
                 <div class="card">
-                  <div class="card-header">
+                  <div class="card-header d-flex align-items-center">
                     <h3 class="card-title" data-i18n="page.index.nextTitle">次フェーズの作業</h3>
+                    <div class="ms-auto">
+                      <a href="./kanban.php" class="btn btn-sm btn-outline-secondary" data-i18n="page.index.nextKanban">かんばん</a>
+                      <a href="./projects.php" class="btn btn-sm btn-outline-secondary" data-i18n="page.index.nextProjects">プロジェクト状況</a>
+                    </div>
                   </div>
                   <!-- /.card-header -->
                   <div class="card-body p-0">
+                    <?php if ($nextTasks === null): ?>
+                      <p class="text-body-secondary m-3" data-i18n="page.index.nextError">作業の一覧を読み込めませんでした。</p>
+                    <?php elseif ($nextTasks === []): ?>
+                      <p class="text-body-secondary m-3" data-i18n="page.index.nextEmpty">残っている作業はありません。</p>
+                    <?php else: ?>
                     <ul class="list-group list-group-flush">
-                      <li class="list-group-item d-flex align-items-start">
-                        <i class="bi bi-1-circle-fill me-2 mt-1 text-primary" aria-hidden="true"></i>
-                        <span data-i18n="page.index.next1"
-                          >VPS とドメインを用意し、Let's Encrypt へ移行する (準備は 1.0.1 で完了済み)</span
-                        >
+                      <?php foreach ($nextTasks as $i => $task): ?>
+                      <li class="list-group-item d-flex align-items-center gap-2">
+                        <i class="bi bi-<?= (int) $i + 1 ?>-circle-fill text-primary" aria-hidden="true"></i>
+                        <span class="flex-grow-1"><?= km_e((string) $task['title']) ?></span>
+                        <span class="badge <?= km_e($taskStatusBadge[$task['status']]) ?>"
+                          data-i18n="page.projects.status.<?= km_e((string) $task['status']) ?>"
+                          ><?= km_e($taskStatusLabel[$task['status']]) ?></span>
+                        <div class="progress km-progress-sm km-w-8rem flex-shrink-0" role="progressbar" aria-valuenow="<?= (int) $task['progress'] ?>" aria-valuemin="0" aria-valuemax="100">
+                          <div class="progress-bar" data-km-progress="<?= (int) $task['progress'] ?>"></div>
+                        </div>
                       </li>
-                      <li class="list-group-item d-flex align-items-start">
-                        <i class="bi bi-2-circle-fill me-2 mt-1 text-primary" aria-hidden="true"></i>
-                        <span data-i18n="page.index.next2"
-                          >sign-in.php の新規登録画面 (InteractionMode::signUp) を一般サイトからも外すか判断する</span
-                        >
-                      </li>
-                      <li class="list-group-item d-flex align-items-start">
-                        <i class="bi bi-3-circle-fill me-2 mt-1 text-primary" aria-hidden="true"></i>
-                        <span data-i18n="page.index.next3"
-                          >Logto の MFA (2段階認証) を有効にする (Logto Console 側の設定)</span
-                        >
-                      </li>
-                      <li class="list-group-item d-flex align-items-start">
-                        <i class="bi bi-4-circle-fill me-2 mt-1 text-primary" aria-hidden="true"></i>
-                        <span data-i18n="page.index.next4"
-                          >監査ログ用に DB ユーザーを分ける (利用者側で実施予定。アプリは接続をもう1本持つ改修が要る)</span
-                        >
-                      </li>
+                      <?php endforeach; ?>
                     </ul>
+                    <?php endif; ?>
                   </div>
                   <!-- /.card-body -->
                 </div>
@@ -230,4 +250,10 @@ require __DIR__ . '/_inc/partials/page-header.php';
           <!--end::Container-->
         </div>
         <!--end::App Content-->
+        <?php // 進み具合の幅は動く値なので data 属性で渡し、ここで style へ入れる(CSP で style 属性が使えない。projects.php と同じ) ?>
+        <script<?= km_csp_nonce_attr() ?>>
+          document.querySelectorAll('[data-km-progress]').forEach((bar) => {
+            bar.style.width = bar.dataset.kmProgress + '%';
+          });
+        </script>
 <?php require __DIR__ . '/_inc/partials/footer.php'; ?>

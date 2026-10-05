@@ -12,7 +12,8 @@ COPY --from=composer:2@sha256:4d71c3c2109c61d5415544264b59ad4087e4c5b72444817236
 # 以前は pdo_pgsql と、そのための libpq-dev を入れていたが、PHP は Postgres を一度も使わない
 # (src を grep して 0 件。Logto の DB は Logto だけが触る)。mysqli・pdo_mysql は追加のライブラリが要らないので
 # apt も要らない。
+# status は管理画面のタスクマネージャーが /server-status?auto を読むため(2026-10-05)。見せる範囲は apache-km.conf
 RUN docker-php-ext-install mysqli pdo_mysql \
-    && a2enmod rewrite
+    && a2enmod rewrite status
 
 WORKDIR /var/www/html

@@ -177,6 +177,13 @@ $parentLink = static fn(string $id): string => 'nav-link' . ($openMenu === $id ?
                   <p data-i18n="side.monitor">サービス監視</p>
                 </a>
               </li>
+              <?php // タスクマネージャー(2026-10-05)。nginx で IP を絞ってあるので、許可していない場所からは開けない ?>
+              <li class="nav-item">
+                <a href="./taskmgr.php" class="<?= $link('taskmgr') ?>">
+                  <i class="nav-icon bi bi-cpu"></i>
+                  <p data-i18n="side.taskmgr">タスクマネージャー</p>
+                </a>
+              </li>
 
               <li class="nav-header" data-i18n="side.headerContent">コンテンツ</li>
               <li class="<?= $parentItem('content') ?>">

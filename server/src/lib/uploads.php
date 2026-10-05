@@ -184,3 +184,41 @@ function km_upload_delete(PDO $pdo, int $id): void
 
     $pdo->prepare('DELETE FROM km_files WHERE id = ?')->execute([$id]);
 }
+
+/**
+ * ファイルを**添付として**送る(管理画面のダウンロードと、共有リンク /share.php が使う)。
+ * 送れなかったら false(呼ぶ側が 404 にする)。admin/api/file-download.php から移した(2026-10-05)。
+ *
+ * - **保存名の形を確かめてからパスにする**(自分で採番した「32 桁の 16 進 + 拡張子」しか入らないはず。
+ *   DB が汚れていたときにパスをはみ出させない。security-review-2026-09-10 の 19)
+ * - 中身が何であれ application/octet-stream 固定 + nosniff。SVG は中に <script> を書けるので、
+ *   ブラウザで直接開かせると保存された XSS になりうる
+ * - ファイル名はヘッダーへ入れるので、改行・"・\ を落とす(同 20)
+ *
+ * @param array{originalName:string, storedName:string} $file
+ */
+function km_upload_send(array $file): bool
+{
+    if (preg_match('/^[0-9a-f]{32}\.[A-Za-z0-9]{1,16}$/', (string) $file['storedName']) !== 1) {
+        error_log('km_upload_send: 保存名の形式が不正です: ' . $file['storedName']);
+        return false;
+    }
+    $path = km_upload_dir() . DIRECTORY_SEPARATOR . $file['storedName'];
+    if (!is_file($path)) {
+        error_log('km_upload_send: row exists but file is missing: ' . $file['storedName']);
+        return false;
+    }
+
+    header('Content-Type: application/octet-stream');
+    header('X-Content-Type-Options: nosniff');
+    header('Content-Length: ' . (string) filesize($path));
+    header('Cache-Control: private, no-store');
+    $safeName = str_replace(["\r", "\n", '"', '\\'], '', (string) $file['originalName']);
+    header(
+        'Content-Disposition: attachment; filename="' . $safeName . '"; '
+        . "filename*=UTF-8''" . rawurlencode((string) $file['originalName'])
+    );
+    readfile($path);
+
+    return true;
+}

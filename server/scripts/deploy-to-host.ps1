@@ -61,6 +61,7 @@
 .PARAMETER GitHub
   配備が済んだあと、GitHub の控えへも出す(2026-09-25、利用者の指示)。既定は all(Android と Website の両方)。
   web / android で片方だけ、none で出さない。中身は scripts\push-github-all.ps1
+  **プルリクエストの説明は既定では作らない**(2026-10-05、利用者の指示)。作るときは -PullRequest。
   (手元の原本を控えへ写す → 秘密の検査 → commit → push → プルリクエストの説明を開く)。
 
   **配備の「あと」に出す。** 本番に置けたものと GitHub の控えを揃えるため。
@@ -131,7 +132,9 @@ param(
     [int]$BackupKeep = 7,
     # 配備のあと GitHub の控えへも出す(理由は .PARAMETER GitHub)
     [ValidateSet('all', 'web', 'android', 'none')]
-    [string]$GitHub = 'all'
+    [string]$GitHub = 'all',
+    # GitHub へ出すときに、プルリクエストの説明(docs/pull-requests/)も作る。既定は作らない(2026-10-05)
+    [switch]$PullRequest
 )
 
 $ErrorActionPreference = 'Stop'
@@ -393,6 +396,9 @@ $include = @(
     './scripts/host-local.sh'
     # 機密なしのコピー: 控えから戻した MariaDB から氏名・記録・鍵を抜く。**KM_ENV=local でなければ止まる**(docs/13)
     './scripts/local-sanitize.sh'
+    # タスクマネージャーと使用率のメール(2026-10-05)。root の cron が呼ぶ(host-updates-setup.sh の版 7)
+    './scripts/host-stats.sh'
+    './scripts/host-resource-alert.sh'
     <#
       SSH ログインの知らせと、切る・BAN する道具(2026-09-25)。
       **ここに置くのは原本だけ。** PAM と sudo から root で走るのは、ssh-login-notify-setup.sh --fix が
@@ -426,6 +432,8 @@ $excludes = @(
     # 個人の固定 IP。リポジトリに所在情報を残さないため、ホスト側が正本
     # (見本は nginx/km/allow-admin-home.local.conf.example)
     './nginx/km/allow-admin-home.local.conf'
+    # タスクマネージャーに入れる IP(2026-10-05)。**ホスト側が正本**(見本は nginx/km/taskmgr-allow.local.conf.example)
+    './nginx/km/taskmgr-allow.local.conf'
 )
 
 # アーカイブが正しいことを組み立て直後に確かめる。パターンの解釈違いで
@@ -976,7 +984,9 @@ if ($GitHub -ne 'none') {
     Write-Host ''
     Write-Host "GitHub の控えへ出します($GitHub)" -ForegroundColor Cyan
     try {
-        & pwsh -NoProfile -File $pushAll -Target $GitHub -Message "配備に合わせて写す($(Get-Date -Format 'yyyy-MM-dd HH:mm'))"
+        $pushAllArgs = @('-NoProfile', '-File', $pushAll, '-Target', $GitHub, '-Message', "配備に合わせて写す($(Get-Date -Format 'yyyy-MM-dd HH:mm'))")
+        if ($PullRequest) { $pushAllArgs += '-PullRequest' }
+        & pwsh @pushAllArgs
         if ($LASTEXITCODE -ne 0) { throw "push-github-all.ps1 が $LASTEXITCODE で終わりました" }
         $githubNote = 'GitHub の控えへ出しました。'
     } catch {

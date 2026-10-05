@@ -410,6 +410,12 @@ server {
         return 404;
     }
 
+    # Apache の状態(2026-10-05)。web の中の PHP が 127.0.0.1 で読むだけ。**外からは見せない**
+    # (Apache 側も Require local。docker/php/apache-km.conf)
+    location ^~ /server-status {
+        return 404;
+    }
+
     # ---------------------------------------------------------------------
     # 見取り図の直リンクを塞ぐ。
     #
@@ -551,6 +557,46 @@ server {
 
         include /etc/nginx/km/proxy-web.conf;
         proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+
+    # ファイル管理の共有リンク(2026-10-05、lib/file-share.php)。guest.php と同じく
+    # **URL にリンクの中身が乗るのでログには残さず**、参照元も渡さず、入口で回数を絞る
+    location = /share.php {
+        access_log /var/log/nginx/access.log km_no_query;
+        limit_req zone=km_public burst=5 nodelay;
+
+        add_header X-Content-Type-Options nosniff always;
+        add_header X-Frame-Options SAMEORIGIN always;
+        add_header Referrer-Policy no-referrer always;
+        add_header Permissions-Policy $km_permissions_policy always;
+        add_header Content-Security-Policy $km_csp_fallback always;
+        include /etc/nginx/km/hsts-*.conf;
+
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+
+    # タスクマネージャー(2026-10-05、利用者の指示)。**管理者のサインインの上に IP の制限を重ねる。**
+    # 許可する送り元は taskmgr-allow*.local.conf(**ホスト側が正本。リポジトリに IP を書かない**。
+    # 見本は nginx/km/taskmgr-allow.local.conf.example)。**ファイルが無ければ誰も入れない**(deny all だけが残る)。
+    # 名前を allow-* にしないこと —— 管理ポートの許可(allow-*.conf)に混ざる。
+    # 許可していない送り元には応答を書かずに切る(444。管理ポートと同じく「何かある」と名乗らない)
+    location = /admin/taskmgr.php {
+        include /etc/nginx/km/taskmgr-allow*.local.conf;
+        deny all;
+        error_page 403 = @km_taskmgr_hide;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+    location = /admin/api/taskmgr-data.php {
+        include /etc/nginx/km/taskmgr-allow*.local.conf;
+        deny all;
+        error_page 403 = @km_taskmgr_hide;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+    location @km_taskmgr_hide {
+        return 444;
     }
 
     # 管理画面はファイル管理(10MB)の分だけ広げる。

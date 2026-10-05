@@ -11,6 +11,18 @@
 # **ボリュームの実体名は `test_` のまま**にしてある(下の volumes: の注記を読むこと)。
 name: kosenmap
 
+# ================================================================
+# **ログの回転**(2026-10-05、利用者の指示)。それまで logging: が無く、json-file のログが
+# 上限なしに伸びていた(ホストの daemon.json の設定は Old/ にしか残っていない)。
+# 1 ファイル 10MB × 3 世代まで。サービスごとに `logging: *km-logging` で使う。
+# **効かせるにはコンテナの作り直しが要る**(deploy-to-host.ps1 -Action up)。
+# ================================================================
+x-km-logging: &km-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   # ================================================================
   # **コンテナごとの上限**(2026-09-14 の診断で追加。各サービスの security_opt / mem_limit / pids_limit)。
@@ -61,6 +73,10 @@ services:
       - no-new-privileges:true
     mem_limit: 256m
     pids_limit: 200
+    # スワップ: **使わない**(memswap_limit = mem_limit。メモリのみ)。OOM の順: -300(Logto の DB。止まると誰もサインインできない)。2026-10-05
+    memswap_limit: 256m
+    oom_score_adj: -300
+    logging: *km-logging
     # 書くのはデータのボリュームとソケットの置き場だけ
     read_only: true
     tmpfs:
@@ -117,6 +133,10 @@ services:
     # 起動時に db seed と移行を走らせるので、他より少し広めに取る
     mem_limit: 512m
     pids_limit: 256
+    # スワップ: mem_limit の 2 倍まで(スワップに逃がしてよい)。OOM の順: 300(大きいが、止まっても公開の地図は見られる。スワップに逃がしてよい)。2026-10-05
+    memswap_limit: 1024m
+    oom_score_adj: 300
+    logging: *km-logging
     # イメージの中で書くのは 3 か所だけ(2026-09-15 に本番の DB の写しで起動して確かめた):
     #   /etc/logto/packages/cli/alteration-scripts … 起動時の `db seed` が移行スクリプトを**毎回ここへ写す**
     #                                                (無いと EROFS で起動しない。中身は packages/schemas から作り直される)
@@ -174,6 +194,10 @@ services:
       - no-new-privileges:true
     mem_limit: 512m
     pids_limit: 200
+    # スワップ: **使わない**(memswap_limit = mem_limit。メモリのみ)。OOM の順: -500(地図の正本。最後まで守る)。2026-10-05
+    memswap_limit: 512m
+    oom_score_adj: -500
+    logging: *km-logging
     read_only: true
     tmpfs:
       - /run/mysqld
@@ -247,6 +271,10 @@ services:
       - no-new-privileges:true
     mem_limit: 256m
     pids_limit: 200
+    # スワップ: mem_limit の 2 倍まで(スワップに逃がしてよい)。OOM の順: 500(人が使うときだけ要る。真っ先に止めてよい)。2026-10-05
+    memswap_limit: 512m
+    oom_score_adj: 500
+    logging: *km-logging
     # **read_only にしない。** イメージの起動スクリプトが /etc/phpmyadmin/config.secret.inc.php(Cookie の暗号鍵)と
     # /usr/local/etc/php/conf.d/phpmyadmin-misc.ini(UPLOAD_LIMIT)を**毎回その場で書く**。
     # tmpfs で覆うと、同じ場所にあるイメージの設定(config.inc.php・拡張の ini)まで消える。
@@ -306,6 +334,10 @@ services:
       - no-new-privileges:true
     mem_limit: 384m
     pids_limit: 200
+    # スワップ: **使わない**(memswap_limit = mem_limit。メモリのみ)。OOM の順: -200(公開ページと API。遅くなると全員に効くのでスワップに出さない)。2026-10-05
+    memswap_limit: 384m
+    oom_score_adj: -200
+    logging: *km-logging
     # イメージの中へは書かない。書くのは tmpfs(PHP のセッション・一時ファイル・合成した CA・Apache の pid)と、
     # 下の volumes で書けるようにした src の一部だけ。
     # **PHP のセッションは /tmp にある** —— web を作り直すと全員が一度ログアウトされる(以前もコンテナを
@@ -449,6 +481,8 @@ services:
       - ./src/config/app-map.local.php:/var/www/html/config/app-map.local.php
       - ./src/config/map-access.local.php:/var/www/html/config/map-access.local.php
       - ./certs/rootCA.pem:/etc/ssl/certs/mariadb-rootCA.pem:ro
+      # ホストの使用量(scripts/host-stats.sh が root の cron で書く)。タスクマネージャーが読むだけ(2026-10-05)
+      - ./run/hoststats:/var/www/hoststats:ro
 
       # mkcert のルート CA。**certs/rootCA.pem と同一のファイル**(SHA256 が一致することを
       # 確認済み)なので、プロジェクトの中を指す。以前は mkcert の既定の置き場所
@@ -504,10 +538,12 @@ services:
       timeout: 5s
       retries: 3
     # edge … nginx から・Logto の公開 URL と reCAPTCHA へ出る / appdb … MariaDB / mail … 問い合わせの通知を送る
+    # monitor … Glances の API を読む(タスクマネージャー。2026-10-05)
     networks:
       - edge
       - appdb
       - mail
+      - monitor
     command:
       - sh
       - /usr/local/bin/start-with-local-ca.sh
@@ -529,6 +565,10 @@ services:
       - no-new-privileges:true
     mem_limit: 128m
     pids_limit: 200
+    # スワップ: **使わない**(memswap_limit = mem_limit。メモリのみ)。OOM の順: -500(入口。止まると全部止まる)。2026-10-05
+    memswap_limit: 128m
+    oom_score_adj: -500
+    logging: *km-logging
     # 書くのは tmpfs だけ:
     #   /etc/nginx/conf.d  … 起動時にテンプレートを展開した先(**conf.d を直接 mount しない**注記は下の volumes)
     #   /var/cache/nginx   … 本文の一時ファイル・プロキシの一時ファイル
@@ -619,6 +659,10 @@ services:
       - no-new-privileges:true
     mem_limit: 256m
     pids_limit: 200
+    # スワップ: **使わない**(memswap_limit = mem_limit。メモリのみ)。OOM の順: 0(チャット。遅延に弱いのでスワップに出さない)。2026-10-05
+    memswap_limit: 256m
+    oom_score_adj: 0
+    logging: *km-logging
     # 書くのは /tmp(pm2 の置き場。Dockerfile の PM2_HOME)だけ。node 利用者で動き、特権は要らない
     read_only: true
     tmpfs:
@@ -682,6 +726,10 @@ services:
       - no-new-privileges:true
     mem_limit: 128m
     pids_limit: 200
+    # スワップ: mem_limit の 2 倍まで(スワップに逃がしてよい)。OOM の順: 500(検証用のメール置き場。真っ先に止めてよい)。2026-10-05
+    memswap_limit: 256m
+    oom_score_adj: 500
+    logging: *km-logging
     # 受けたメールは /tmp の中の DB に置く(再起動で消える。検証用なのでそれでよい)
     read_only: true
     tmpfs:
@@ -702,6 +750,41 @@ services:
       - edge
       - mail
 
+  glances:
+    # ホストの使用量(タスクマネージャー。2026-10-05、利用者の指示)。**API だけ**を出し、Web 画面は出さない。
+    # 4.5.7(2026-09-26 の latest)。タグを残すのは check-updates.sh が新しい版を読むため(postgres と同じ)
+    image: nicolargo/glances:latest@sha256:0d955eb3cff5e2d5ecb34e873e5448acd4741c765d1a11e032f081bcaa75eaa5
+    container_name: km-glances
+    restart: unless-stopped
+    # **ホスト全体だけを見る。docker.sock は渡さない**(利用者の決定。読み取りでも root 相当の口になる)。
+    # コンテナごとの数値は scripts/host-stats.sh が cgroup から集める。
+    # pid: host でホストのプロセスと /proc の値(メモリ・CPU・負荷)が見える。
+    pid: host
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    pids_limit: 64
+    # スワップ: mem_limit の 2 倍まで(スワップに逃がしてよい)。OOM の順: 500(監視。止まっても地図は動く)。2026-10-05
+    memswap_limit: 256m
+    oom_score_adj: 500
+    logging: *km-logging
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    cap_drop:
+      - ALL
+    environment:
+      TZ: Asia/Tokyo
+      # network と fs は、コンテナの中から見るとホストの値にならないので切る(host-stats.sh が集める)。
+      # 使わないものも切る(実測 79MB。全部入りより軽い)
+      GLANCES_OPT: >-
+        -w --disable-webui --disable-check-update
+        --disable-plugin containers,sensors,wifi,cloud,raid,smart,gpu,ip,ports,folders,irq,connections,programlist,network,fs
+    expose:
+      - "61208"
+    # **monitor だけ。** internal なので外へ出られず、publish もしない。読むのは web だけ
+    networks:
+      - monitor
 # ================================================================
 # **網を用途ごとに分ける**(2026-09-15。ファイル先頭の「多層防御の底上げ」の 1)。
 #
@@ -739,6 +822,13 @@ networks:
     ipam:
       config:
         - subnet: 172.30.4.0/24
+  # Glances と web だけ(2026-10-05)。**internal**(外へ出られない)
+  monitor:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.30.5.0/24
 
 volumes:
   # ================================================================

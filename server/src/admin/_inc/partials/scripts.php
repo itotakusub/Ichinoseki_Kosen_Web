@@ -91,6 +91,8 @@ $isApp = ($KM_PAGE['layout'] ?? 'app') === 'app';
     <script src="<?= km_e(km_asset('./assets/js/i18n.js')) ?>"></script>
     <?php if ($isApp): ?>
     <script src="<?= km_e(km_asset('./assets/js/services.js')) ?>"></script>
+    <?php // お知らせを ✗ で閉じる(閉じたものはブラウザに覚える。2026-10-05) ?>
+    <script src="<?= km_e(km_asset('./assets/js/km-notice.js')) ?>"></script>
     <?php endif; ?>
     <!--end::KosenMap Admin(i18n)-->
     <!--end::Script-->

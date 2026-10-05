@@ -32,6 +32,8 @@ $values = [];
 $occupantWith = 0;
 $occupantWithout = 0;
 $dbError = null;
+$rankingQueries = [];
+$rankingPlaces = [];
 
 try {
     $pdo = km_db();
@@ -54,6 +56,40 @@ try {
         if (array_key_exists($ym, $values)) {
             $values[$ym] = (int) $row['c'];
         }
+    }
+
+    /*
+     * ランキングの語とよく行く場所(2026-10-05、利用者の指示)。今年の上位 10 件。
+     * 隠した語(km_map_ranking_hidden_queries)は出さない。表がまだ無ければ空のまま(ランキングを一度も使っていない)。
+     */
+    $year = (int) date('Y');
+    try {
+        $stmt = $pdo->prepare(
+            'SELECT q.normalized_query AS label, SUM(q.searches) AS c
+               FROM km_map_ranking_queries q
+               LEFT JOIN km_map_ranking_hidden_queries h
+                 ON h.normalized_query = q.normalized_query AND h.year = q.year
+              WHERE q.year = ? AND h.normalized_query IS NULL
+              GROUP BY q.normalized_query
+              ORDER BY c DESC, label
+              LIMIT 10'
+        );
+        $stmt->execute([$year]);
+        $rankingQueries = $stmt->fetchAll();
+
+        $stmt = $pdo->prepare(
+            'SELECT COALESCE(NULLIF(n.title, \'\'), NULLIF(n.name, \'\'), p.node_uuid) AS label, SUM(p.visits) AS c
+               FROM km_map_ranking_places p
+               LEFT JOIN km_map_nodes n ON n.uuid = p.node_uuid
+              WHERE p.year = ?
+              GROUP BY p.node_uuid, label
+              ORDER BY c DESC, label
+              LIMIT 10'
+        );
+        $stmt->execute([$year]);
+        $rankingPlaces = $stmt->fetchAll();
+    } catch (PDOException $exception) {
+        error_log('charts.php ranking skipped: ' . $exception->getMessage());
     }
 
     // ドーナツは map-settings.php が既に使っている2つの COUNT をそのまま流用する
@@ -79,6 +115,11 @@ $occupantWithoutPercent = $occupantTotal > 0 ? round(100 - $occupantWithPercent,
 $barWidth = 44;
 $gap = 24;
 $chartHeight = 160;
+/*
+ * 棒の上の数字のための余白(2026-10-05)。以前はいちばん高い棒の数字が y=-6 に描かれ、
+ * SVG の枠の外に出て消えていた(「200 件を超えると見えない」と報告された。200 という数そのものは関係ない)。
+ */
+$chartTop = 20;
 $chartWidth = max(1, count($values)) * ($barWidth + $gap) + $gap;
 
 require __DIR__ . '/_inc/partials/head.php';
@@ -114,9 +155,9 @@ require __DIR__ . '/_inc/partials/page-header.php';
                   <!-- /.card-header -->
                   <div class="card-body">
                     <svg
-                      viewBox="0 0 <?= $chartWidth ?> <?= $chartHeight + 30 ?>"
+                      viewBox="0 0 <?= $chartWidth ?> <?= $chartTop + $chartHeight + 30 ?>"
                       role="img"
-                      aria-label="月別ログイン回数の棒グラフ"
+                      aria-label="月別の操作件数の棒グラフ"
                       data-i18n-attr="aria-label:page.charts.barTitle"
                       class="w-100 km-chart-bar"
                     >
@@ -124,7 +165,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
                         <?php
                         $barHeight = (int) round(($value / $max) * $chartHeight);
                         $x = $gap + $i * ($barWidth + $gap);
-                        $y = $chartHeight - $barHeight;
+                        $y = $chartTop + $chartHeight - $barHeight;
                         ?>
                         <rect
                           x="<?= $x ?>"
@@ -145,7 +186,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
                         ><?= $value ?></text>
                         <text
                           x="<?= $x + $barWidth / 2 ?>"
-                          y="<?= $chartHeight + 20 ?>"
+                          y="<?= $chartTop + $chartHeight + 20 ?>"
                           text-anchor="middle"
                           font-size="12"
                           fill="currentColor"
@@ -205,6 +246,53 @@ require __DIR__ . '/_inc/partials/page-header.php';
               </div>
             </div>
             <!--end::Row-->
+
+            <?php
+            /*
+             * ランキングの語・よく行く場所(今年の上位 10 件)。横棒は割合を data 属性で渡し、下のスクリプトが幅に入れる。
+             * 語は利用者が打った文字列なので、必ず km_e で出す。
+             */
+            $rankingCard = static function (string $titleKey, string $title, string $emptyKey, array $rows): void {
+                $top = 0;
+                foreach ($rows as $row) {
+                    $top = max($top, (int) $row['c']);
+                }
+                ?>
+                <div class="col-12 col-xl-6">
+                  <div class="card mb-4">
+                    <div class="card-header">
+                      <h3 class="card-title" data-i18n="<?= km_e($titleKey) ?>"><?= km_e($title) ?></h3>
+                    </div>
+                    <div class="card-body">
+                      <?php if ($rows === []): ?>
+                        <p class="text-body-secondary fs-7 mb-0" data-i18n="<?= km_e($emptyKey) ?>">まだありません。</p>
+                      <?php else: ?>
+                        <ol class="list-unstyled mb-0">
+                          <?php foreach ($rows as $i => $row): ?>
+                            <li class="mb-2">
+                              <div class="d-flex justify-content-between fs-7">
+                                <span class="text-truncate me-2"><?= (int) $i + 1 ?>. <?= km_e((string) $row['label']) ?></span>
+                                <strong><?= (int) $row['c'] ?></strong>
+                              </div>
+                              <div class="progress km-progress-sm" role="progressbar" aria-valuenow="<?= (int) $row['c'] ?>" aria-valuemin="0" aria-valuemax="<?= $top ?>">
+                                <div class="progress-bar" data-km-progress="<?= $top > 0 ? (int) round((int) $row['c'] / $top * 100) : 0 ?>"></div>
+                              </div>
+                            </li>
+                          <?php endforeach; ?>
+                        </ol>
+                      <?php endif; ?>
+                    </div>
+                  </div>
+                </div>
+                <?php
+            };
+            ?>
+            <!--begin::Row(ランキング)-->
+            <div class="row">
+              <?php $rankingCard('page.charts.rankingQueriesTitle', '今年よく検索された語', 'page.charts.rankingEmpty', $rankingQueries); ?>
+              <?php $rankingCard('page.charts.rankingPlacesTitle', '今年よく行かれた場所', 'page.charts.rankingEmpty', $rankingPlaces); ?>
+            </div>
+            <!--end::Row(ランキング)-->
           </div>
           <!--end::Container-->
         </div>
@@ -214,6 +302,9 @@ require __DIR__ . '/_inc/partials/page-header.php';
         <script<?= km_csp_nonce_attr() ?>>
           document.querySelectorAll('[data-km-donut]').forEach((el) => {
             el.style.setProperty('--km-donut', el.dataset.kmDonut + '%');
+          });
+          document.querySelectorAll('[data-km-progress]').forEach((bar) => {
+            bar.style.width = bar.dataset.kmProgress + '%';
           });
         </script>
 <?php require __DIR__ . '/_inc/partials/footer.php'; ?>

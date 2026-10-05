@@ -88,6 +88,11 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     'guest.account_revoke' => 'がお試しの閲覧の仮アカウントを止めました',
     'guest.account_names_allow' => 'がお試しの閲覧の仮アカウントに教員名を見せるようにしました',
     'guest.account_names_deny' => 'がお試しの閲覧の仮アカウントの教員名を隠しました',
+    // 機能のスイッチと表のロック(2026-10-05)
+    'guest.feature_enable' => 'がお試しの閲覧リンクを有効にしました',
+    'guest.feature_disable' => 'がお試しの閲覧リンクを無効にしました',
+    'guest.tables_lock' => 'がお試しの閲覧の表を読み取り専用にしました',
+    'guest.tables_unlock' => 'がお試しの閲覧の表の読み取り専用を外しました',
     // 実行者(公開ページの利用者)を頭に置く前提なので「が」から始める
     'map.unlock_failed' => 'が教職員氏名のパスワード解除に失敗しました',
     'task.create' => 'がタスクを追加しました',
@@ -137,6 +142,10 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     'account.deleted' => 'が削除されたアカウントの情報を片付けました',
     'file.upload' => 'がファイルをアップロードしました',
     'file.delete' => 'がファイルを削除しました',
+    // 共有リンク(2026-10-05、lib/file-share.php)。受け取りは公開ページの利用者なので実行者は無く、IP だけ残る
+    'file.share_create' => 'がファイルの共有リンクを作りました',
+    'file.share_revoke' => 'がファイルの共有リンクを取り消しました',
+    'file.share_download' => 'が共有リンクからファイルを受け取りました',
     'map.node_create' => 'が地図に地点を追加しました',
     'map.node_update' => 'が地図の地点を編集しました',
     'map.node_move' => 'が地図の地点を移動しました',

@@ -43,7 +43,7 @@ done
 APT_CONF="/etc/apt/apt.conf.d/52kosenmap-unattended"
 CRON_FILE="/etc/cron.d/kosenmap-updates"
 # **並びを変えたら上げること。** 古いホストの cron を書き直す合図になる
-CRON_VERSION=6
+CRON_VERSION=7
 LOG_DIR="/var/log/kosenmap"
 CHECK_SCRIPT="$PATH_ROOT/scripts/check-updates.sh"
 SECURITY_SCRIPT="$PATH_ROOT/scripts/host-security-check.sh"
@@ -52,6 +52,9 @@ BACKUP_SCRIPT="$PATH_ROOT/scripts/host-backup.sh"
 # 証明書の更新(版 6)。cron は send-log.sh 越しに呼ぶので、**2本とも実行ビットが要る**
 CERT_SCRIPT="$PATH_ROOT/scripts/host-cert.sh"
 SEND_LOG_SCRIPT="$PATH_ROOT/scripts/send-log.sh"
+# タスクマネージャーの数値と、使用率の警告(版 7。2026-10-05)
+STATS_SCRIPT="$PATH_ROOT/scripts/host-stats.sh"
+RESOURCE_SCRIPT="$PATH_ROOT/scripts/host-resource-alert.sh"
 
 PROBLEMS=0
 note() { echo "  $1"; }
@@ -111,8 +114,8 @@ echo ""
 echo "== 確認スクリプト =="
 # **配備は実行ビットを保たない。** tar 越しに置いた直後は 644 のことがあるので、
 # cron が呼ぶものをまとめて見る(1本ずつ手で chmod すると、必ずどれかを忘れる)。
-# 版 6 で host-cert.sh と、それを包む send-log.sh を足した。
-for _script in "$CHECK_SCRIPT" "$SECURITY_SCRIPT" "$EMERGENCY_SCRIPT" "$BACKUP_SCRIPT" "$CERT_SCRIPT" "$SEND_LOG_SCRIPT"; do
+# 版 6 で host-cert.sh と、それを包む send-log.sh を足した。版 7 で host-stats.sh と host-resource-alert.sh。
+for _script in "$CHECK_SCRIPT" "$SECURITY_SCRIPT" "$EMERGENCY_SCRIPT" "$BACKUP_SCRIPT" "$CERT_SCRIPT" "$SEND_LOG_SCRIPT" "$STATS_SCRIPT" "$RESOURCE_SCRIPT"; do
   if [ -x "$_script" ]; then
     note "あり: $_script"
   elif [ -f "$_script" ]; then
@@ -225,6 +228,15 @@ else
 # 毎月 1 日 4:07 は status を**必ず**送る —— 残り日数と、nginx が出している証明書が一致しているかを
 # 沈黙ではなく便りで確かめる。バックアップ(2:40)とも更新の確認(4:17)とも時刻を重ねない。
 # certbot コンテナのループと重なったときは、host-cert.sh が待ってやり直す。
+#
+# ## タスクマネージャーと使用率の警告(版 7 で足した。2026-10-05)
+#
+# host-stats.sh は **1 分ごと**に、コンテナごとの cgroup の値とログの大きさを run/hoststats/stats.json へ書く
+# (管理画面のタスクマネージャーが読む。docker.sock を Glances に渡さない代わり。root が要るのはログの大きさを読むため)。
+# 書くだけで送らない。記録は失敗したときの手がかりにだけ使う。
+#
+# host-resource-alert.sh は **5 分ごと**に、メモリ・スワップ・負荷・メモリ不足での停止を見て、
+# 閾値を超えたときだけ送る。同じ中身は 1 時間に 1 回まで(止まったコンテナはいつでも)。
 SHELL=/bin/sh
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
@@ -237,6 +249,9 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 23 4 1 * *  root  $CHECK_SCRIPT --path $PATH_ROOT --notify --heartbeat >>$LOG_DIR/updates.log 2>&1
 23 8 * * *  root  $SECURITY_SCRIPT --path $PATH_ROOT --notify >>$LOG_DIR/security.log 2>&1
 29 8 1 * *  root  $SECURITY_SCRIPT --path $PATH_ROOT --notify --heartbeat >>$LOG_DIR/security.log 2>&1
+
+* * * * *    root  $STATS_SCRIPT --path $PATH_ROOT >>$LOG_DIR/stats.log 2>&1
+*/5 * * * *  root  $RESOURCE_SCRIPT --path $PATH_ROOT >>$LOG_DIR/resource-alert.log 2>&1
 CONF
     chmod 644 "$CRON_FILE"
     chown root:root "$CRON_FILE"

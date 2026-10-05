@@ -1,0 +1,12 @@
+# タスクマネージャー(/admin/taskmgr.php とそのデータの口)に入れる送り元(2026-10-05)。
+#
+# **ホストにだけ置く。** この見本を taskmgr-allow.local.conf という名前で写し、下の行を自分の回線の IP にする。
+# リポジトリには IP を書かない(deploy-to-host.ps1 は taskmgr-allow.local.conf を送らない・GitHub の控えにも写らない)。
+#
+#   cp nginx/km/taskmgr-allow.local.conf.example nginx/km/taskmgr-allow.local.conf
+#   (編集してから)docker compose exec reverse-proxy nginx -t && docker compose exec reverse-proxy nginx -s reload
+#
+# **このファイルが無ければ誰も入れない**(nginx の側は deny all だけになる)。
+# 管理ポートの許可(allow-*.conf)とは別のファイル。名前を allow-* にしないこと(そちらに混ざる)。
+
+# allow 203.0.113.10;

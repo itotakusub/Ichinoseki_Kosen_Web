@@ -158,6 +158,40 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
   既にある表には初回に列を足す。許す・隠すは、相手が地図を開き直したときに効く(`km_map_guest_verify` が表から読み直す)。記録は `guest.account_names_allow` / `_deny`(番号だけ)
 - 配備先の check で `nginx に /guest.php の location がある` が FAIL になっていたのを直した(配備先には `nginx/` が無いので SKIP)
 
+### 2026-10-05 夜の依頼のうち、済んだもの(利用者の指示)
+
+- **スクリプト**: 既定でプルリクエストの説明を作らない(`-PullRequest` で作る)。`*.local.conf` を GitHub の控えへ写さない
+- **管理画面**:
+  - お知らせを ✗ で閉じる
+  - 「次フェーズの作業」をかんばんから取る
+  - 地図の配信の字を直す
+  - ファイルの共有リンク(`/share.php`)
+  - チャート: 一番高い棒の数字が切れるのを直し、検索語と場所を足す
+  - お試しリンクの「有効・無効」「表の読み取り専用」
+  - 「マップへ」ボタン
+- **Docker**:
+  - ログの回転(10MB × 3)
+  - スワップの規則: nginx・MariaDB・web・Postgres・Soketi はメモリのみ。ほかは 2 倍まで
+  - OOM の順
+  - Apache の `/server-status`(中からだけ)
+- **タスクマネージャー**(`/admin/taskmgr.php`):
+  - 中身: Glances(ホスト全体だけ・`monitor` の網・約 80MB)+ `host-stats.sh`(コンテナ別。cron 版 7・1 分ごと)
+  - 変換はブラウザで行う
+  - **IP の制限は `nginx/km/taskmgr-allow.local.conf`(ホストにだけ置く)。無ければ誰も入れない**
+- **使用率の警告**: `host-resource-alert.sh`(cron 版 7・5 分ごと)。検証機の Mailpit に届くのを確かめた
+- **本番に当てるには**(利用者):
+  1. `free -h` で空きを見る
+  2. `.\deploy-to-host.ps1 -Action up -Yes`
+  3. web の作り直し(Dockerfile を変えた)
+  4. `sudo sh scripts/host-updates-setup.sh --fix`(cron 版 7)
+  5. タスクマネージャーの IP のファイルを置いて reload
+- **残り**:
+  - 訪問者の一覧と位置
+  - 国単位の拒否
+  - Android のクラウドバックアップとストリートビュー
+  - メモリを減らす処理
+  - Cloudflare の移行計画と、写真から部屋の形を作る調査
+
 ### LAN の検証機に機密なしのコピー(2026-10-05、利用者の指示)
 
 - 本番の配備は利用者が済ませた(15 項目)。続けて LAN の検証機に**機密なしのコピー**を立てた(名前は sslip.io、`KM_ENV=local`)

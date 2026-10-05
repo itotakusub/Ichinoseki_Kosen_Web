@@ -25,10 +25,14 @@ GitHub へ出す前に、秘密が混じっていないかを確かめてから 
 最初の commit はすべて新しいファイルなので、何も検査されずに素通りする(2026-09-25 に気づいた)。
 当たったら stage を戻して止める。誤検知だと分かっているときだけ -Force。
 
-## プルリクエストの説明(Markdown)
+## プルリクエストの説明(Markdown)— **既定では作らない**(2026-10-05、利用者の指示)
 
-`docs/pull-requests/` に**今日の日付の説明が無ければ、下書きを作って一緒に commit する。**
+`-PullRequest` を付けたときだけ、`docs/pull-requests/` に**今日の日付の説明が無ければ下書きを作って一緒に commit する。**
 push が済んだら、その説明を開く(-NoOpen で開かない)。PR の画面へ貼る文として使う。
+付けなければ、説明も `git fetch` も作らず・行わず、commit と push だけをする。
+
+.PARAMETER PullRequest
+プルリクエストの説明を作る・足す・開く(以前の既定の動き)。
 
 .PARAMETER Message
 コミットの一言。省略すると、変更があるときだけ日付入りの既定文になる。
@@ -60,7 +64,9 @@ param(
     [switch]$Force,
     [switch]$NoOpen,
     [switch]$CheckOnly,
-    [switch]$ScanAll
+    [switch]$ScanAll,
+    # プルリクエストの説明を作る(既定は作らない。2026-10-05)
+    [switch]$PullRequest
 )
 
 $ErrorActionPreference = 'Stop'
@@ -315,7 +321,14 @@ if ($CheckOnly) {
   作ったもの・足したものは同じ commit に入れる(説明と変更が別々に散らない)。
 #>
 $prFile = $null
-if (-not $NoCommit) {
+if (-not $NoCommit -and -not $PullRequest) {
+    if ($Message -eq '') {
+        $Message = "Update ($today)"
+    }
+    git commit -m $Message
+    if ($LASTEXITCODE -ne 0) { throw 'commit に失敗しました。' }
+}
+elseif (-not $NoCommit) {
     if ($Message -eq '') {
         $Message = "Update ($today)"
     }
@@ -392,7 +405,7 @@ Write-Host ''
 Write-Host "push しました: $Branch" -ForegroundColor Green
 # SSH の送り先(git@github-kosen-web:owner/repo.git)も、画面で開ける https の形に直す
 $remote = (git remote get-url origin).Trim() -replace '\.git$', '' -replace '^git@[^:]+:', 'https://github.com/'
-if ($Branch -ne 'main') {
+if ($Branch -ne 'main' -and $PullRequest) {
     Write-Host "プルリクエストはこちらから: $remote/compare/main...$Branch"
 }
 
@@ -402,7 +415,7 @@ if ($Branch -ne 'main') {
   開くのは**いま作った・足した説明**。今回 commit しなかったとき(既にある commit を出しただけ)は、
   今日の説明、それも無ければ一番新しいもの。既定のアプリで開き、.md に結び付いたアプリが無ければメモ帳で開く。
 #>
-if (-not $NoOpen) {
+if ($PullRequest -and -not $NoOpen) {
     $target = $null
     if ($prFile -and (Test-Path -LiteralPath $prFile)) {
         $target = Get-Item -LiteralPath $prFile

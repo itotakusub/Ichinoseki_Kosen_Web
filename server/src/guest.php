@@ -49,7 +49,10 @@ $created = null;      // 作ったばかりの仮アカウント(再入場コー
 try {
     $pdo = km_db();
 
-    if ($method === 'POST' && !km_csrf_verify()) {
+    if (!km_map_guest_enabled($pdo)) {
+        // 管理画面で無効にしている(2026-10-05)。何も消していないので、有効に戻せば同じリンクとコードで入れる
+        $message = 'お試しの閲覧は、いま停止しています。';
+    } elseif ($method === 'POST' && !km_csrf_verify()) {
         $message = 'ページの有効期限が切れました。受け取ったリンクをもう一度開いてください。';
     } elseif ($action === 'create') {
         try {
@@ -59,9 +62,12 @@ try {
                 (string) ($_POST['name'] ?? ''),
                 (string) ($_POST['affiliation'] ?? '')
             );
-        } catch (InvalidArgumentException $exception) {
+        } catch (InvalidArgumentException | KmUserError $exception) {
+            // KmUserError: 表が読み取り専用(管理画面で切り替える)。入り直しはできる
             $account = false;
-            $formError = $exception->getMessage();
+            $formError = $exception instanceof KmUserError
+                ? 'いまは新しい仮アカウントを作れません。作ってある方は、再入場コードで入れます。'
+                : $exception->getMessage();
         }
         if ($account === null) {
             $formError = 'このリンクでは、もう仮アカウントを作れません(使える台数を超えたか、期限切れ・取り消し済みです)。';
