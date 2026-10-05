@@ -3937,6 +3937,7 @@ function km_check_hardening(): void
     check_bool('local-sanitize.sh は氏名をダミーに・記録と鍵を空にする', str_contains($sanitize, "SET occupant_name = CONCAT('教員'") && str_contains($sanitize, 'km_admin_log') && str_contains($sanitize, 'km_app_secrets') && str_contains($sanitize, 'km_staff_requests'));
     check_bool('local-sanitize.sh は部屋・施設の名前もダミーにする(分類+連番)', str_contains($sanitize, "WHERE type IN ('room', 'facility')") && str_contains($sanitize, "' D', LPAD(@n := @n + 1, 3, '0')"));
     check_bool('local-sanitize.sh はパスワードを引数に載せない(MYSQL_PWD)', str_contains($sanitize, 'MYSQL_PWD="$MARIADB_ROOT_PASSWORD"') && !preg_match('/-p"?\$MARIADB/', $sanitize));
+    check_bool('compose は Android のアプリ ID を渡し、空なら本番の既定に落ちる(KM_ANDROID_APP_ID)', str_contains($file('compose.yaml'), 'KOSENMAP_LOGTO_APP_ID: ${KM_ANDROID_APP_ID:-}') && str_contains($file('src/logto_config.php'), "'KOSENMAP_LOGTO_APP_ID',"));
     check_bool('配備物に local-sanitize.sh がある', str_contains($deploy, "'./scripts/local-sanitize.sh'"));
 
     /*

@@ -419,6 +419,10 @@ services:
       # リソースの名前で、変わるとトークンの audience が合わず、管理画面にも Android の管理版にも入れなくなる。
       LOGTO_API_RESOURCE: ${KM_API_RESOURCE:-https://192.168.3.29:9443/api}
       KOSENMAP_LOGTO_AUDIENCE: ${KM_API_RESOURCE:-https://192.168.3.29:9443/api}
+      # Android アプリ(Logto のネイティブアプリ)の ID。logto_guard.php がトークンの client_id と照らす。
+      # **空なら logto_config.php の既定(本番のネイティブアプリ)**。Logto を空から立てた検証機だけ .env に書く(2026-10-05。
+      # 渡していなかったので、検証機のアプリのトークンが「アプリ ID が違う」で全部断られた)。秘密ではない
+      KOSENMAP_LOGTO_APP_ID: ${KM_ANDROID_APP_ID:-}
       # 教職員の権限(Logto の組織。docs/15-staff-org.ipynb・lib/staff-org.php。2026-09-18)。
       # **組織 ID が空なら、この機能は無いものとして動く**(付けない・判定しない)。秘密ではない
       KM_LOGTO_ORG_ID: ${KM_LOGTO_ORG_ID:-}
