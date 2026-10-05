@@ -97,6 +97,16 @@ $guestViewing = km_map_guest_verify();
 $guestUntil = $guestViewing ? (int) $_SESSION[KM_MAP_GUEST_SESSION_KEY]['until'] : null;
 $guestName = $guestViewing ? km_map_guest_name() : null;
 
+// 訪問者の記録に、閲覧者の種別を渡す(lib/visit-log.php。nginx がログに書き、利用者には返さない)
+require_once __DIR__ . '/lib/visit-log.php';
+if ($guestViewing) {
+    km_visit_mark_viewer('guest', (string) ($_SESSION[KM_MAP_GUEST_SESSION_KEY]['account'] ?? ''));
+} elseif ($loggedIn && isset($claims->sub)) {
+    km_visit_mark_viewer('user', (string) $claims->sub);
+} else {
+    km_visit_mark_viewer('anon');
+}
+
 function km_home_e(?string $value): string
 {
     return htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');

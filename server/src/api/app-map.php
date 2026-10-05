@@ -201,6 +201,9 @@ $calibration = km_map_calibration_stored($pdo);
  */
 $principal = logto_optional_principal();
 $permissions = is_array($principal) ? ($principal['permissions'] ?? []) : [];
+// 訪問者の記録に、閲覧者の種別を渡す(lib/visit-log.php。nginx がログに書き、端末には返さない)
+require_once dirname(__DIR__) . '/lib/visit-log.php';
+km_visit_mark_viewer(is_array($principal) ? 'app' : 'anon', is_array($principal) ? (string) ($principal['subject'] ?? '') : null);
 /*
  * 教職員(docs/15 段 D。2026-09-18)。組織トークンで、こちらの組織の教職員の権限を持つ人
  * (logto_guard.php が組織 ID を照合したうえで is_teacher を立てる)。

@@ -293,6 +293,39 @@ map $http_origin $km_ws_origin_denied {
 log_format km_no_query '$remote_addr - - [$time_local] "$request_method $uri $server_protocol" '
                        '$status $body_bytes_sent "$http_referer" "$http_user_agent"';
 
+# 訪問者の記録(2026-10-05 の計画 B、利用者の指示「外国からのアクセスを確かめる」)。
+#
+# **サーバーは書くだけ。** 数える・まとめる・位置に直すのは管理画面を開いたブラウザ(admin/visitors.php)。
+# 1 行 1 つの JSON で、日ごとのファイル(/var/log/km-visit/visit-YYYY-MM-DD.jsonl。ホストの run/visitlog)へ書く。
+#   - **公開のページだけ**($km_visit_page)。画像・CSS・JS・管理画面は書かない
+#   - **クエリは書かない**($uri)。参照元もクエリより前だけ($km_visit_ref)。リンクの中身を残さない
+#   - 閲覧者の種別は PHP が X-KM-Viewer で渡す(anon / guest:<仮アカウント> / user:<鍵つきの印> / app:<鍵つきの印>)。
+#     利用者には返さない(nginx/km/proxy-web.conf の proxy_hide_header)
+#   - **30 日を過ぎたファイルはホストの cron が消す**(scripts/host-updates-setup.sh の版 8)
+# ファイル名に変数を使うので、書くのは worker(nginx 利用者)。置き場の持ち主は compose の reverse-proxy の
+# entrypoint が起動のたびに直す(web の www-data が読めるよう、グループは 33)。
+log_format km_visit escape=json '{"t":"$time_iso8601","ip":"$remote_addr","m":"$request_method","p":"$uri",'
+                                '"s":$status,"b":$body_bytes_sent,"v":"$upstream_http_x_km_viewer",'
+                                '"ua":"$http_user_agent","ref":"$km_visit_ref"}';
+map $time_iso8601 $km_visit_day {
+    "~^(?<km_day>\d{4}-\d{2}-\d{2})T" $km_day;
+    default                           "unknown";
+}
+map $uri $km_visit_page {
+    default              0;
+    "/"                  1;
+    "/index.php"         1;
+    "/guest.php"         1;
+    "/share.php"         1;
+    "/faq.php"           1;
+    "/contact.php"       1;
+    "/api/app-map.php"   1;
+}
+map $http_referer $km_visit_ref {
+    "~^(?<km_ref>[^?#]*)" $km_ref;
+    default               "";
+}
+
 # HTTP:80 -> Webアプリ HTTPS
 server {
     listen 80;
@@ -328,6 +361,18 @@ server {
     # 100 本は学校の NAT を考えた広め(HTTP/2 では同時リクエストの数で数える)。
     keepalive_timeout 30s;
     limit_conn km_conn 100;
+
+    # アクセスログ。**server に 1 つでも access_log を書くと http の既定は継承されない**ので、
+    # 既定(公式イメージの nginx.conf の main・docker logs へ出る)も書き直す。
+    # 2 本目は訪問者の記録(http の log_format km_visit の注記)。公開のページだけを書く。
+    # **access_log を持つ location(verify・guest・share・callback)には効かない** —— そちらにも書くこと
+    access_log /var/log/nginx/access.log main;
+    access_log /var/log/km-visit/visit-$km_visit_day.jsonl km_visit if=$km_visit_page;
+    open_log_file_cache max=4 inactive=60s valid=60s;
+    # **書き先に変数を使うと、nginx は書く前に root のディレクトリがあるかを確かめる**(無ければ書かずに error.log へ)。
+    # この server には root が無く、既定の /etc/nginx/html はイメージに無い(2026-10-06 に検証機で 1 行も書かれなかった)。
+    # 中身が空で読み取り専用の /var/empty を指す —— ここから配るものは無い(どの location も web へ渡すか、返すだけ)
+    root /var/empty;
 
     # 管理画面を別オリジンにしたときの振り分け(http の $km_host_role の注記)。
     # server の直下の if は location を選ぶより前に評価されるので、下のどの location にも先んじて効く。
@@ -545,6 +590,7 @@ server {
     # 参照元も渡さない(verify.php と同じ)。トークンの総当たりに備えて入口でも回数を絞る。
     location = /guest.php {
         access_log /var/log/nginx/access.log km_no_query;
+        access_log /var/log/km-visit/visit-$km_visit_day.jsonl km_visit;
         limit_req zone=km_public burst=5 nodelay;
 
         # ここで add_header を書くと server ブロックの add_header は継承されない(上の verify.php と同じ)
@@ -563,6 +609,7 @@ server {
     # **URL にリンクの中身が乗るのでログには残さず**、参照元も渡さず、入口で回数を絞る
     location = /share.php {
         access_log /var/log/nginx/access.log km_no_query;
+        access_log /var/log/km-visit/visit-$km_visit_day.jsonl km_visit;
         limit_req zone=km_public burst=5 nodelay;
 
         add_header X-Content-Type-Options nosniff always;

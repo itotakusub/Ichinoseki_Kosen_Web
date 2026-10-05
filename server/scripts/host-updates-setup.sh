@@ -43,7 +43,7 @@ done
 APT_CONF="/etc/apt/apt.conf.d/52kosenmap-unattended"
 CRON_FILE="/etc/cron.d/kosenmap-updates"
 # **並びを変えたら上げること。** 古いホストの cron を書き直す合図になる
-CRON_VERSION=7
+CRON_VERSION=8
 LOG_DIR="/var/log/kosenmap"
 CHECK_SCRIPT="$PATH_ROOT/scripts/check-updates.sh"
 SECURITY_SCRIPT="$PATH_ROOT/scripts/host-security-check.sh"
@@ -237,6 +237,11 @@ else
 #
 # host-resource-alert.sh は **5 分ごと**に、メモリ・スワップ・負荷・メモリ不足での停止を見て、
 # 閾値を超えたときだけ送る。同じ中身は 1 時間に 1 回まで(止まったコンテナはいつでも)。
+#
+# ## 訪問者の記録の片付け(版 8 で足した。2026-10-06)
+#
+# nginx が run/visitlog/visit-YYYY-MM-DD.jsonl に書く訪問の記録(IP を含む)は **30 日を過ぎたら消す**
+# (管理画面の訪問者は 30 日までしか見ない。IP を長く持たない)。毎日 4:37、ほかの仕事と時刻を重ねない。
 SHELL=/bin/sh
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
@@ -252,6 +257,8 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 * * * * *    root  $STATS_SCRIPT --path $PATH_ROOT >>$LOG_DIR/stats.log 2>&1
 */5 * * * *  root  $RESOURCE_SCRIPT --path $PATH_ROOT >>$LOG_DIR/resource-alert.log 2>&1
+
+37 4 * * *  root  find $PATH_ROOT/run/visitlog -maxdepth 1 -type f -name 'visit-*.jsonl' -mtime +30 -delete >>$LOG_DIR/visitlog.log 2>&1
 CONF
     chmod 644 "$CRON_FILE"
     chown root:root "$CRON_FILE"

@@ -3956,13 +3956,27 @@ function km_check_hardening(): void
     check_bool('お知らせを閉じる: 情報のお知らせだけ・ブラウザに覚える', str_contains($adminScripts, "./assets/js/km-notice.js") && str_contains($noticeJs, ".alert.alert-info.d-flex.align-items-start") && str_contains($noticeJs, "'kmadmin-dismissed'") && !str_contains($noticeJs, 'fetch('));
     $dashboard = $file('src/admin/index.php');
     check_bool('次フェーズの作業はかんばんの表から出す(決め打ちを残さない)', str_contains($dashboard, 'km_tasks_all(km_db())') && !str_contains($dashboard, 'page.index.next1'));
+    // サービス監視の「今後の拡張」もタスクの分類から出す(2026-10-06)
+    $monitorPage = $file('src/admin/monitor.php');
+    $tasksLib = $file('src/lib/tasks.php');
+    check_bool('サービス監視の「今後の拡張」はタスクの分類 monitor から出す(決め打ちを残さない)', str_contains($monitorPage, "km_tasks_by_topic(km_db(), 'monitor')")
+        && !str_contains($monitorPage, 'page.monitor.plan1') && !str_contains($file('src/admin/assets/i18n/ja.js'), '"page.monitor.plan1"'));
+    check_bool('分類は決めた値だけ(作る・直すの両方で確かめる)', substr_count($tasksLib, 'km_tasks_validate_topic($topic);') === 2
+        && str_contains($tasksLib, "if (!array_key_exists(\$topic, KM_TASK_TOPICS))"));
+    check_bool('分類の列は古い表にも足し、3 行は列を足したときだけ入れる(消したら戻さない)', str_contains($tasksLib, "ADD COLUMN IF NOT EXISTS topic VARCHAR(32) NOT NULL DEFAULT ''")
+        && preg_match('/function km_tasks_ensure_topic_column\(.*?\n\}/s', $tasksLib, $topicFn) === 1
+        && strpos($topicFn[0], 'ALTER TABLE') < strpos($topicFn[0], 'km_tasks_seed_monitor($pdo)')
+        && str_contains($tasksLib, "WHERE NOT EXISTS (SELECT 1 FROM km_tasks WHERE topic = 'monitor' AND title = ?)"));
+    check_bool('かんばんの絞り込みは隠すだけ(並び順の保存でカードを落とさない)', str_contains($file('src/admin/kanban.php'), "card.classList.toggle('d-none'"));
+    check_bool('辞書: 分類の訳が日英の両方にある', str_contains($file('src/admin/assets/i18n/ja.js'), '"page.projects.topic.monitor"') && str_contains($file('src/admin/assets/i18n/en.js'), '"page.projects.topic.monitor"')
+        && str_contains($file('src/admin/assets/i18n/en.js'), '"page.projects.topic.none"'));
     $publishPage = $file('src/admin/map-publish.php');
     check_bool('地図の配信: 表のセル全体を等幅にしない・見出しは h3.card-title', !str_contains($publishPage, '<td class="font-monospace">') && !str_contains($publishPage, '<h4'));
     $share = $file('src/lib/file-share.php');
     $sharePage = $file('src/share.php');
     check_bool('共有リンク: トークンは sha256 だけを置き、回数は 1 本の UPDATE で数える', str_contains($share, "hash('sha256', 'km-file-share|' . \$token)") && str_contains($share, 'SET uses = uses + 1') && str_contains($share, 'uses < max_uses'));
     check_bool('共有リンク: GET では数えない(POST と CSRF で渡す)', str_contains($sharePage, "if (\$method === 'POST') {") && str_contains($sharePage, 'km_csrf_verify()') && strpos($sharePage, 'km_file_share_use(') > strpos($sharePage, "if (\$method === 'POST') {"));
-    check_bool('共有リンク: nginx はクエリを記録せず回数を絞る', str_contains($nginx, "location = /share.php {\n        access_log /var/log/nginx/access.log km_no_query;\n        limit_req zone=km_public"));
+    check_bool('共有リンク: nginx はクエリを記録せず回数を絞る', str_contains($nginx, "location = /share.php {\n        access_log /var/log/nginx/access.log km_no_query;\n        access_log /var/log/km-visit/visit-\$km_visit_day.jsonl km_visit;\n        limit_req zone=km_public"));
     check_bool('共有リンク: ファイルを消したらリンクも止める', str_contains($file('src/admin/file-manager.php'), 'km_file_share_revoke_for_file($pdo, $id);'));
     $charts = $file('src/admin/charts.php');
     check_bool('チャート: 棒の上の数字の余白を取る(いちばん高い棒の数字が切れない)', str_contains($charts, '$chartTop = 20;') && str_contains($charts, '$y = $chartTop + $chartHeight - $barHeight;'));
@@ -4015,13 +4029,79 @@ function km_check_hardening(): void
         && str_contains($deploy, "'./nginx/km/taskmgr-allow.local.conf'"));
     $taskmgrData = $file('src/admin/api/taskmgr-data.php');
     check_bool('データの口は生の値を束ねるだけ(json_decode して組み直さない)', str_contains($taskmgrData, 'json_validate($text)') && !str_contains($taskmgrData, 'json_decode('));
-    check_bool('ブラウザが変換する(taskmgr.js)・タブが隠れたら止める', str_contains($file('src/admin/assets/js/taskmgr.js'), "document.addEventListener('visibilitychange'"));
+    $taskmgrJs = $file('src/admin/assets/js/taskmgr.js');
+    check_bool('ブラウザが変換する(taskmgr.js)・タブが隠れたら止める', str_contains($taskmgrJs, "document.addEventListener('visibilitychange'"));
+    // 間隔は 1〜10 秒で選べる(2026-10-06)。前回が終わってから次を予約する(要求を重ねない)
+    check_bool('タスクマネージャーの間隔は 1〜10 秒から選び、範囲外は既定に戻す', str_contains($taskmgrJs, 'n >= 1 && n <= 10 ? n : INTERVAL_DEFAULT')
+        && str_contains($file('src/admin/taskmgr.php'), 'for ($s = 1; $s <= 10; $s++)')
+        && str_contains($taskmgrJs, 'window.setTimeout(() => tick(mine), seconds * 1000)')
+        && !str_contains($taskmgrJs, 'setInterval('));
     $hostUpdates = $file('scripts/host-updates-setup.sh');
-    check_bool('cron の版 7 に host-stats(1 分)と host-resource-alert(5 分)がある', str_contains($hostUpdates, 'CRON_VERSION=7')
+    check_bool('cron(版 7 以降)に host-stats(1 分)と host-resource-alert(5 分)がある', preg_match('/^CRON_VERSION=([7-9]|[1-9][0-9])$/m', $hostUpdates) === 1
         && str_contains($hostUpdates, '* * * * *    root  $STATS_SCRIPT --path $PATH_ROOT')
         && str_contains($hostUpdates, '*/5 * * * *  root  $RESOURCE_SCRIPT --path $PATH_ROOT'));
     check_bool('配備物に host-stats.sh と host-resource-alert.sh がある', str_contains($deploy, "'./scripts/host-stats.sh'") && str_contains($deploy, "'./scripts/host-resource-alert.sh'"));
     check_bool('web はホストの集計を読み取り専用で受ける(compose と VPS の両方)', str_contains($file('compose.yaml'), '- ./run/hoststats:/var/www/hoststats:ro') && str_contains($file('compose.vps.yaml'), '- ./run/hoststats:/var/www/hoststats:ro'));
+
+    /*
+     * ## 訪問者の記録(2026-10-06。lib/visit-log.php)
+     * nginx が公開のページだけを JSON で書き(クエリなし)、web は読むだけ。まとめと位置はブラウザ。30 日で消す。
+     */
+    km_check_heading('visit-log: 訪問者の記録・生の行・位置はブラウザ・30 日');
+    check_bool('nginx: 訪問の記録は JSON で、パスはクエリなし・参照元もクエリより前だけ', str_contains($nginx, "log_format km_visit escape=json")
+        && preg_match('/log_format km_visit[^;]*"p":"\$uri"/s', $nginx) === 1 && preg_match('/log_format km_visit[^;]*\$km_visit_ref/s', $nginx) === 1
+        && preg_match('/log_format km_visit[^;]*\$(request|request_uri|args|query_string|http_referer)\b/s', $nginx) !== 1
+        && str_contains($nginx, '"~^(?<km_ref>[^?#]*)" $km_ref;'));
+    check_bool('nginx: 書くのは公開のページだけ(管理画面は書かない)', preg_match('/map \$uri \$km_visit_page \{[^}]*"\/"\s+1;[^}]*\}/s', $nginx) === 1
+        && preg_match('/map \$uri \$km_visit_page \{[^}]*admin[^}]*\}/s', $nginx) !== 1);
+    check_bool('nginx: server に既定のログと訪問の記録の両方を書く・guest と share にも書く', str_contains($nginx, "access_log /var/log/nginx/access.log main;\n    access_log /var/log/km-visit/visit-\$km_visit_day.jsonl km_visit if=\$km_visit_page;")
+        && substr_count($nginx, 'access_log /var/log/km-visit/visit-$km_visit_day.jsonl km_visit;') === 2);
+    // 変数入りの書き先は root のディレクトリの有無を見てから書く(無いと 1 行も書かれない。2026-10-06 に検証機で踏んだ)
+    check_bool('nginx: 443 の server は空の root を持つ(変数入りの書き先のため)', str_contains($nginx, "open_log_file_cache max=4 inactive=60s valid=60s;\n")
+        && preg_match('/km_visit if=\$km_visit_page;[\s\S]{0,600}?\n    root \/var\/empty;\n/', $nginx) === 1);
+    check_bool('閲覧者の種別は利用者に返さない(proxy_hide_header)', str_contains($file('nginx/km/proxy-web.conf'), 'proxy_hide_header X-KM-Viewer;'));
+    $vpsCompose = $file('compose.vps.yaml');
+    check_bool('compose: nginx が書き、web は読むだけ(基底と VPS の両方)', str_contains($file('compose.yaml'), '- ./run/visitlog:/var/log/km-visit') && str_contains($vpsCompose, '- ./run/visitlog:/var/log/km-visit')
+        && str_contains($file('compose.yaml'), '- ./run/visitlog:/var/www/visitlog:ro') && str_contains($vpsCompose, '- ./run/visitlog:/var/www/visitlog:ro'));
+    check_bool('compose: 置き場は起動のたびに nginx(101)の持ち物・グループは www-data(33)・ほかは読めない', str_contains($file('compose.yaml'), 'chown 0:33 /var/log/km-visit && chmod 750 /var/log/km-visit \
+          && chown 101:33 /var/log/km-visit')
+        && str_contains($file('compose.yaml'), 'exec /docker-entrypoint.sh "$$@"') && str_contains($file('compose.yaml'), 'command: ["nginx", "-g", "daemon off;"]'));
+    $visitLib = $file('src/lib/visit-log.php');
+    check_bool('サインインした人は鍵つきの印にする(sub をそのまま書かない)', str_contains($visitLib, "km_app_keyed_hash(km_app_secret(km_db(), 'visit'), 'visit-viewer', \$id)")
+        && str_contains($file('src/index.php'), "km_visit_mark_viewer('user', (string) \$claims->sub)")
+        && str_contains($file('src/api/app-map.php'), "km_visit_mark_viewer(is_array(\$principal) ? 'app' : 'anon'"));
+    check_bool('記録の口は生の行をそのまま渡す(PHP で読み解かない)', !str_contains($visitLib, 'json_decode(') && str_contains($visitLib, 'fpassthru($handle)')
+        && str_contains($file('src/admin/api/visit-log.php'), "require dirname(__DIR__) . '/_inc/guard.php';"));
+    $csp = $file('src/lib/csp.php');
+    // 宛先は admin-geo の塊の中にだけ書く(ほかのプロファイルに混ざらない)
+    $geoBlock = preg_match("/    if \(\\\$profile === 'admin-geo'\) \{.*?\n    \}\n/s", $csp, $geoMatch) === 1 ? $geoMatch[0] : '';
+    check_bool('位置の外部はこのページだけ connect-src に足す', str_contains($file('src/admin/visitors.php'), "km_csp_send('admin-geo');")
+        && str_contains($geoBlock, "\$connect[] = 'https://ipwho.is';") && str_contains($geoBlock, "\$connect[] = 'https://api.country.is';")
+        && !str_contains(str_replace($geoBlock, '', $csp), "'https://ipwho.is'") && !str_contains(str_replace($geoBlock, '', $csp), "'https://api.country.is'"));
+    $visitorsJs = $file('src/admin/assets/js/visitors.js');
+    check_bool('位置は既定で引かない(スイッチを入れたときだけ)・文字は textContent', str_contains($visitorsJs, "pref.get(PREF_GEO, '0') === '1'") && !str_contains($visitorsJs, 'innerHTML'));
+    check_bool('cron(版 8)が 30 日を過ぎた記録を消す', str_contains($hostUpdates, "find \$PATH_ROOT/run/visitlog -maxdepth 1 -type f -name 'visit-*.jsonl' -mtime +30 -delete"));
+    // 振る舞い: 上限を超えたら新しい方を残し、古い方は行の頭から送る
+    require_once __DIR__ . '/../lib/visit-log.php';
+    $visitTmp = sys_get_temp_dir() . '/km-visit-check-' . bin2hex(random_bytes(4));
+    @mkdir($visitTmp);
+    $dayOld = (new DateTimeImmutable('today'))->modify('-1 day')->format('Y-m-d');
+    $dayNew = (new DateTimeImmutable('today'))->format('Y-m-d');
+    file_put_contents("{$visitTmp}/visit-{$dayOld}.jsonl", "{\"n\":1}\n{\"n\":2}\n{\"n\":3}\n");
+    file_put_contents("{$visitTmp}/visit-{$dayNew}.jsonl", "{\"n\":4}\n");
+    file_put_contents("{$visitTmp}/visit-other.txt", "x\n");
+    $visitFiles = km_visit_log_files(7, $visitTmp);
+    $visitPlan = km_visit_log_plan($visitFiles, 20);
+    ob_start();
+    km_visit_log_send($visitPlan['plan']);
+    $visitOut = (string) ob_get_clean();
+    check_bool('記録: 日付の名前のファイルだけを古い順に拾う', count($visitFiles) === 2 && str_ends_with($visitFiles[1], "visit-{$dayNew}.jsonl"));
+    check_bool('記録: 上限を超えたら古い方を行の頭から切り、新しい方は全部送る', $visitPlan['truncated'] === true && $visitOut === "{\"n\":3}\n{\"n\":4}\n", json_encode($visitOut));
+    check_bool('記録: 上限に収まれば全部・切らない', km_visit_log_plan($visitFiles)['truncated'] === false);
+    foreach (glob("{$visitTmp}/*") ?: [] as $visitFile) {
+        unlink($visitFile);
+    }
+    @rmdir($visitTmp);
 
     $baseCompose = $file('compose.yaml');
     check_bool('入口と地図の正本はスワップを使わず、最後まで守る', preg_match('/\n  mariadb:\n(?:(?!\n  [a-z0-9-]+:\n)[\s\S])*?memswap_limit: 512m\n    oom_score_adj: -500\n/', $baseCompose) === 1
@@ -4085,8 +4165,8 @@ function km_check_hardening(): void
     check_bool('配備の $include に host-cert.sh と host-domain.sh', str_contains($include, "'./scripts/host-cert.sh'") && str_contains($include, "'./scripts/host-domain.sh'"));
     check_bool('配備の $mustContain に2本と logto-domain.php', str_contains($mustContain, "'./scripts/host-cert.sh'") && str_contains($mustContain, "'./scripts/host-domain.sh'") && str_contains($mustContain, "'./src/scripts/logto-domain.php'"));
     $setup = $file('scripts/host-updates-setup.sh');
-    // 版 6 で証明書を足し、版 7(2026-10-05)でタスクマネージャーの集計と使用率の警告を足した
-    check_bool('cron は版 7', preg_match('/^CRON_VERSION=7$/m', $setup) === 1);
+    // 版 6 で証明書を足し、版 7(2026-10-05)でタスクマネージャーの集計と使用率の警告を、版 8(2026-10-06)で訪問者の記録の片付けを足した
+    check_bool('cron は版 8', preg_match('/^CRON_VERSION=8$/m', $setup) === 1);
     check_bool('cron の証明書は host-cert.sh を指す', str_contains($setup, 'CERT_SCRIPT="$PATH_ROOT/scripts/host-cert.sh"'));
     check_bool('毎日 3:47 に renew、失敗したときだけ送る', preg_match('/^47 3 \* \* \*\s+root\s+\$SEND_LOG_SCRIPT [^\n]*--only-failure --run "\$CERT_SCRIPT --path \$PATH_ROOT renew"/m', $setup) === 1);
     check_bool('毎月1日に status を必ず送る', preg_match('/^7 4 1 \* \*\s+root\s+\$SEND_LOG_SCRIPT (?![^\n]*--only-failure)[^\n]*--run "\$CERT_SCRIPT --path \$PATH_ROOT status"/m', $setup) === 1);

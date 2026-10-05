@@ -483,6 +483,8 @@ services:
       - ./certs/rootCA.pem:/etc/ssl/certs/mariadb-rootCA.pem:ro
       # ホストの使用量(scripts/host-stats.sh が root の cron で書く)。タスクマネージャーが読むだけ(2026-10-05)
       - ./run/hoststats:/var/www/hoststats:ro
+      # 訪問者の記録(reverse-proxy の nginx が書く。2026-10-06)。管理画面の訪問者が読むだけ
+      - ./run/visitlog:/var/www/visitlog:ro
 
       # mkcert のルート CA。**certs/rootCA.pem と同一のファイル**(SHA256 が一致することを
       # 確認済み)なので、プロジェクトの中を指す。以前は mkcert の既定の置き場所
@@ -622,6 +624,26 @@ services:
       - ./nginx/km:/etc/nginx/km:ro
       - ./certs/192.168.3.29.pem:/etc/nginx/certs/192.168.3.29.pem:ro
       - ./certs/192.168.3.29-key.pem:/etc/nginx/certs/192.168.3.29-key.pem:ro
+      # 訪問者の記録(2026-10-06。nginx/default.conf.template の log_format km_visit)。nginx が書き、web が読むだけ
+      - ./run/visitlog:/var/log/km-visit
+    # **起動のたびに訪問者の記録の置き場の持ち主を直す**(2026-10-06)。
+    # ファイル名に日付の変数を使うので、ファイルを開くのは root の master ではなく worker(nginx 利用者 101)。
+    # 置き場が root のままだと書けず、nginx は error.log に書くだけで黙って捨てる。置き場のグループを web の www-data(33)にして
+    # 750 にする(web は入れる・ホストのほかの利用者は入れない)。ファイルは nginx が 644 で作るので、入れれば読める。
+    # **いったん root の持ち物に戻してから chmod し、最後に 101 へ渡す。** 持ち主が 101 のままだと、FOWNER を持たない
+    # このコンテナの root には chmod が許されない(2026-10-06 に検証機で 755 のまま残った。2 回目の起動でも同じ)。
+    # 失敗しても起動は止めない(記録が残らないだけ。地図は出す)。
+    # entrypoint を書き直すと既定の command も消えるので、command も書く(compose.vps.yaml は command だけを置き換える)
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        mkdir -p /var/log/km-visit && chown 0:33 /var/log/km-visit && chmod 750 /var/log/km-visit \
+          && chown 101:33 /var/log/km-visit \
+          || echo "km: 訪問者の記録の置き場を用意できませんでした" >&2
+        exec /docker-entrypoint.sh "$$@"
+      - km-entrypoint
+    command: ["nginx", "-g", "daemon off;"]
     depends_on:
       web:
         condition: service_started

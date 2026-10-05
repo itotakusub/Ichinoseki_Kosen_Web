@@ -39,10 +39,19 @@ require __DIR__ . '/_inc/partials/page-header.php';
             <div class="alert alert-info d-flex align-items-start" role="alert">
               <i class="bi bi-info-circle-fill me-2 mt-1" aria-hidden="true"></i>
               <div data-i18n="page.taskmgr.notice">
-                5 秒ごとに読み直します(このタブを開いている間だけ)。数値の計算と表示はこのブラウザで行い、サーバーは生の値を渡すだけです。
+                下で選んだ間隔で読み直します(このタブを開いている間だけ)。数値の計算と表示はこのブラウザで行い、サーバーは生の値を渡すだけです。
               </div>
             </div>
-            <p class="text-body-secondary fs-7" data-km-tm="status">読み込み中…</p>
+            <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+              <label class="form-label fs-7 mb-0" for="km-taskmgr-interval" data-i18n="page.taskmgr.interval">更新の間隔</label>
+              <?php // 1〜10 秒(利用者の指示 2026-10-06)。選んだ値は taskmgr.js がこのブラウザに覚える ?>
+              <select class="form-select form-select-sm w-auto" id="km-taskmgr-interval">
+                <?php for ($s = 1; $s <= 10; $s++): ?>
+                  <option value="<?= $s ?>"<?= $s === 5 ? ' selected' : '' ?>><?= $s ?> s</option>
+                <?php endfor; ?>
+              </select>
+              <span class="text-body-secondary fs-7" data-km-tm="status">読み込み中…</span>
+            </div>
 
             <!--begin::Row(タイル)-->
             <div class="row">

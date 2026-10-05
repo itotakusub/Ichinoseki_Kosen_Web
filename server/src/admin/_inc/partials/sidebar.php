@@ -184,6 +184,13 @@ $parentLink = static fn(string $id): string => 'nav-link' . ($openMenu === $id ?
                   <p data-i18n="side.taskmgr">タスクマネージャー</p>
                 </a>
               </li>
+              <?php // 訪問者と大まかな位置(2026-10-06)。位置はこのページを開いたブラウザが引く ?>
+              <li class="nav-item">
+                <a href="./visitors.php" class="<?= $link('visitors') ?>">
+                  <i class="nav-icon bi bi-globe2"></i>
+                  <p data-i18n="side.visitors">訪問者</p>
+                </a>
+              </li>
 
               <li class="nav-header" data-i18n="side.headerContent">コンテンツ</li>
               <li class="<?= $parentItem('content') ?>">

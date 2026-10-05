@@ -82,6 +82,8 @@ services:
       - ./certs/rootCA.pem:/etc/ssl/certs/mariadb-rootCA.pem:ro
       # ホストの使用量(タスクマネージャー。2026-10-05)。compose.yaml と同じものをここにも書く
       - ./run/hoststats:/var/www/hoststats:ro
+      # 訪問者の記録(2026-10-06)。nginx が書いたものを読むだけ
+      - ./run/visitlog:/var/www/visitlog:ro
       - type: bind
         source: ./docker/php/99-timezone.ini
         target: /usr/local/etc/php/conf.d/99-timezone.ini
@@ -232,6 +234,8 @@ services:
       - ./nginx/km:/etc/nginx/km:ro
       - letsencrypt:/etc/letsencrypt:ro
       - certbot_webroot:/var/www/certbot:ro
+      # 訪問者の記録(2026-10-06)。compose.yaml と同じものをここにも書く(この一覧は `!override`)
+      - ./run/visitlog:/var/log/km-visit
     # 証明書が更新されても、nginx は**読み込み直すまで古いものを使い続ける**。
     # certbot 側から docker を叩かずに済むよう、こちらで定期的に reload する
     # (12時間ごと。reload なので接続は切れない)。

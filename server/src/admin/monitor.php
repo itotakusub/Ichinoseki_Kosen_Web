@@ -5,8 +5,37 @@ declare(strict_types=1);
 define('KM_ADMIN', true);
 require __DIR__ . '/_inc/guard.php';
 
+require_once dirname(__DIR__) . '/lib/db.php';
+require_once dirname(__DIR__) . '/lib/tasks.php';
+
 // リアルタイム更新用。秘密ではない(SOKETI_APP_SECRET はサーバー側にしか出さない)
 $soketiAppKey = getenv('SOKETI_APP_KEY') ?: null;
+
+/*
+ * 「今後の拡張」は、かんばん・プロジェクト状況のタスクのうち分類「サービス監視」のもの(2026-10-06、利用者の指示)。
+ * 以前はこのファイルに 3 行を直接書いていた(lib/tasks.php の KM_TASK_MONITOR_SEED に移した)。
+ * DB に繋がらなくても監視の画面そのものは出す(この欄だけ「表示できません」にする)。
+ */
+$monitorPlans = [];
+$monitorPlansError = false;
+try {
+    $monitorPlans = km_tasks_by_topic(km_db(), 'monitor');
+} catch (Throwable $exception) {
+    error_log('monitor.php plans failed: ' . $exception->getMessage());
+    $monitorPlansError = true;
+}
+$planIcon = [
+    'done' => 'bi-check-circle-fill text-success',
+    'progress' => 'bi-arrow-repeat text-info',
+    'decision' => 'bi-question-circle-fill text-warning',
+    'todo' => 'bi-circle text-secondary',
+];
+$planStatusLabel = [
+    'done' => '完了',
+    'progress' => '進行中',
+    'decision' => '要判断',
+    'todo' => '未着手',
+];
 
 $KM_PAGE = [
     'nav' => 'monitor',
@@ -81,32 +110,40 @@ require __DIR__ . '/_inc/partials/page-header.php';
               <div class="col-12">
                 <!--begin::Card-->
                 <div class="card">
-                  <div class="card-header">
-                    <h3 class="card-title" data-i18n="page.monitor.planTitle">今後の拡張</h3>
+                  <div class="card-header d-flex flex-wrap align-items-center gap-2">
+                    <h3 class="card-title mb-0" data-i18n="page.monitor.planTitle">今後の拡張</h3>
+                    <div class="card-tools ms-auto d-flex gap-1">
+                      <a href="./kanban.php?topic=monitor" class="btn btn-sm btn-outline-secondary">
+                        <i class="bi bi-kanban me-1" aria-hidden="true"></i>
+                        <span data-i18n="page.monitor.planKanban">かんばんで見る</span>
+                      </a>
+                      <a href="./projects.php?topic=monitor" class="btn btn-sm btn-outline-primary">
+                        <i class="bi bi-pencil me-1" aria-hidden="true"></i>
+                        <span data-i18n="page.monitor.planEdit">追加・編集</span>
+                      </a>
+                    </div>
                   </div>
                   <!-- /.card-header -->
                   <div class="card-body p-0">
                     <ul class="list-group list-group-flush">
-                      <li class="list-group-item d-flex align-items-start text-body-secondary">
-                        <i class="bi bi-check-circle-fill me-2 mt-1 text-success" aria-hidden="true"></i>
-                        <span data-i18n="page.monitor.plan1"
-                          >9443 の PHP に死活監視用エンドポイントを追加し、各サービスへサーバー間で
-                          接続する(実装済み)</span
-                        >
-                      </li>
-                      <li class="list-group-item d-flex align-items-start text-body-secondary">
-                        <i class="bi bi-check-circle-fill me-2 mt-1 text-success" aria-hidden="true"></i>
-                        <span data-i18n="page.monitor.plan2"
-                          >MariaDB は HTTP ではないため、TCP 接続の可否で判定する(実装済み)</span
-                        >
-                      </li>
-                      <li class="list-group-item d-flex align-items-start text-body-secondary">
-                        <i class="bi bi-check-circle-fill me-2 mt-1 text-success" aria-hidden="true"></i>
-                        <span data-i18n="page.monitor.plan3"
-                          >誰かが確認した結果を Soketi で全員へ配る(実装済み)。定期実行の仕組みは
-                          作らず、自動更新を入れた人がそのまま配信役になる</span
-                        >
-                      </li>
+                      <?php if ($monitorPlansError): ?>
+                        <li class="list-group-item text-body-secondary" data-i18n="page.monitor.planDbError">
+                          データベースに接続できないため、表示できません。
+                        </li>
+                      <?php elseif ($monitorPlans === []): ?>
+                        <li class="list-group-item text-body-secondary" data-i18n="page.monitor.planEmpty">
+                          まだありません。「追加・編集」から分類「サービス監視」のタスクを足すと、ここに並びます。
+                        </li>
+                      <?php endif; ?>
+                      <?php foreach ($monitorPlans as $plan): ?>
+                        <?php $planStatus = (string) $plan['status']; ?>
+                        <li class="list-group-item d-flex align-items-start<?= $planStatus === 'done' ? ' text-body-secondary' : '' ?>">
+                          <i class="bi <?= km_e($planIcon[$planStatus] ?? 'bi-circle text-secondary') ?> me-2 mt-1" aria-hidden="true"></i>
+                          <?php // 利用者が入れた自由文なので data-i18n は付けない(状態のラベルだけ訳す) ?>
+                          <span class="flex-grow-1"><?= km_e((string) $plan['title']) ?></span>
+                          <span class="badge text-bg-light border ms-2" data-i18n="page.projects.status.<?= km_e($planStatus) ?>"><?= km_e($planStatusLabel[$planStatus] ?? $planStatus) ?></span>
+                        </li>
+                      <?php endforeach; ?>
                     </ul>
                   </div>
                   <!-- /.card-body -->

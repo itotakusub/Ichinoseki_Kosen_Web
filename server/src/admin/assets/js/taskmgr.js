@@ -8,7 +8,9 @@
  *   apache  … /server-status?auto のテキスト
  *   host    … scripts/host-stats.sh の JSON(1 分ごと。コンテナ別の CPU は前回との差から出す)
  *
- * 5 秒ごとに読む。**タブが隠れている間は読まない**(誰も見ていないのにサーバーを叩かない)。
+ * 1〜10 秒(画面で選ぶ。既定 5 秒・このブラウザに覚える)ごとに読む。
+ * **タブが隠れている間は読まない**(誰も見ていないのにサーバーを叩かない)。
+ * 前の読み込みが終わるまで次を出さない(遅い回線で 1 秒にしても要求が積み上がらない)。
  * 文字はすべて textContent で入れる(コンテナ名・プロセス名を HTML として読まない)。
  */
 (() => {
@@ -16,7 +18,8 @@
   if (!root) {
     return;
   }
-  const INTERVAL_MS = 5000;
+  const INTERVAL_KEY = 'kmadmin-taskmgr-interval';
+  const INTERVAL_DEFAULT = 5;
   const HISTORY = 60;
   const history = { cpu: [], mem: [], swap: [] };
   let previousHost = null;
@@ -249,18 +252,67 @@
     }
   };
 
+  // 間隔(秒)。1〜10 の整数だけを受け付け、それ以外は既定に戻す。
+  // localStorage は設定や閲覧モードによって例外を投げる。覚えられなくても画面は動かす
+  const clampSeconds = (value) => {
+    const n = Number.parseInt(value, 10);
+    return Number.isInteger(n) && n >= 1 && n <= 10 ? n : INTERVAL_DEFAULT;
+  };
+  const loadSeconds = () => {
+    try {
+      return clampSeconds(localStorage.getItem(INTERVAL_KEY));
+    } catch {
+      return INTERVAL_DEFAULT;
+    }
+  };
+  const saveSeconds = (seconds) => {
+    try {
+      localStorage.setItem(INTERVAL_KEY, String(seconds));
+    } catch {
+      // 覚えられないだけ。次に開いたときは既定の 5 秒に戻る
+    }
+  };
+  let seconds = loadSeconds();
+  let running = false;
+  // 止めて動かし直したとき、読み込み中だった古い回が次を予約しないよう、回ごとに番号を持たせる
+  let generation = 0;
+
+  // 前回が終わってから次を予約する(setInterval だと遅い応答のときに要求が重なる)
+  const tick = async (mine) => {
+    timer = null;
+    await load();
+    if (running && mine === generation && !document.hidden) {
+      timer = window.setTimeout(() => tick(mine), seconds * 1000);
+    }
+  };
   const start = () => {
-    if (timer === null) {
-      load();
-      timer = window.setInterval(load, INTERVAL_MS);
+    if (!running) {
+      running = true;
+      generation += 1;
+      tick(generation);
     }
   };
   const stop = () => {
+    running = false;
     if (timer !== null) {
-      window.clearInterval(timer);
+      window.clearTimeout(timer);
       timer = null;
     }
   };
+
+  const select = document.getElementById('km-taskmgr-interval');
+  if (select) {
+    select.value = String(seconds);
+    select.addEventListener('change', () => {
+      seconds = clampSeconds(select.value);
+      select.value = String(seconds);
+      saveSeconds(seconds);
+      // 新しい間隔で数え直す(今すぐ 1 回読む)
+      stop();
+      start();
+    });
+  }
+
   document.addEventListener('visibilitychange', () => (document.hidden ? stop() : start()));
   start();
 })();
