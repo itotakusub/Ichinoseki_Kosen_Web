@@ -4103,6 +4103,43 @@ function km_check_hardening(): void
     }
     @rmdir($visitTmp);
 
+    /*
+     * ## ノードのクラウドバックアップ(2026-10-06。lib/map-backup.php・api/map-backup.php)
+     * 管理者だけ。中身は読み解かず形だけ確かめる。保存名は表からだけ。20 件を残す。
+     */
+    km_check_heading('map-backup: 管理者だけ・形だけ確かめる・保存名は表から・20 件');
+    $backupApi = $file('src/api/map-backup.php');
+    check_bool('管理者の権限を、どの方法でも最初に確かめる', preg_match('/\$principal = logto_require_principal\(\);\nlogto_assert_permissions\(\$principal, LOGTO_ADMIN_PERMISSIONS\);/', $backupApi) === 1
+        && strpos($backupApi, 'logto_assert_permissions') < strpos($backupApi, 'km_map_backup_list('));
+    check_bool('置いた・戻した・消したをタイムラインに残す', str_contains($backupApi, "'map.backup_create'") && str_contains($backupApi, "'map.backup_restore'") && str_contains($backupApi, "'map.backup_delete'"));
+    check_bool('nginx: 専用の口で本文を 16m まで・回数を数える', str_contains($nginx, "location = /api/map-backup.php {\n        client_max_body_size 16m;\n        limit_req zone=km_api burst=120 nodelay;"));
+    require_once __DIR__ . '/../lib/map-backup.php';
+    $backupOk = static function (string $json): bool {
+        try {
+            km_map_backup_validate($json);
+            return true;
+        } catch (InvalidArgumentException) {
+            return false;
+        }
+    };
+    check_bool('形: アプリのノードの書き出しは通す', $backupOk('{"format":"kosenmap-map","formatVersion":2,"exportedAt":"2026-10-06T00:00:00+09:00","map":{"nodes":[]}}'));
+    check_bool('形: 設定・全体・Wi-Fi 学習・壊れた JSON・空は断る', !$backupOk('{"format":"kosenmap-settings","formatVersion":2}')
+        && !$backupOk('{"format":"kosenmap-backup","formatVersion":2,"map":{}}')
+        && !$backupOk('{"format":"kosenmap-learning","formatVersion":1}')
+        && !$backupOk('{"format":"kosenmap-map","formatVersion":2,"map":{')
+        && !$backupOk(''));
+    $pathRejected = static function (string $name): bool {
+        try {
+            km_map_backup_path(['stored_name' => $name]);
+            return false;
+        } catch (RuntimeException) {
+            return true;
+        }
+    };
+    check_bool('保存名は 32 桁の 16 進 + .json.gz だけ(../ などを通さない)', $pathRejected('../../config/db.local.php') && $pathRejected('a.json.gz')
+        && !$pathRejected(str_repeat('a', 32) . '.json.gz'));
+    check_bool('残すのは新しい方から 20 件', KM_MAP_BACKUP_KEEP === 20 && str_contains($file('src/lib/map-backup.php'), "foreach (array_slice(\$rows, \$keep) as \$row) {\n        km_map_backup_remove_row(\$pdo, \$row);"));
+
     $baseCompose = $file('compose.yaml');
     check_bool('入口と地図の正本はスワップを使わず、最後まで守る', preg_match('/\n  mariadb:\n(?:(?!\n  [a-z0-9-]+:\n)[\s\S])*?memswap_limit: 512m\n    oom_score_adj: -500\n/', $baseCompose) === 1
         && preg_match('/\n  reverse-proxy:\n(?:(?!\n  [a-z0-9-]+:\n)[\s\S])*?memswap_limit: 128m\n    oom_score_adj: -500\n/', $baseCompose) === 1);

@@ -77,6 +77,10 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     'route.weights_reset' => 'が経路の重みを配るのをやめました(各端末は既定に戻ります)',
     'map.calibration_publish' => 'が地図の北と距離の補正を全員の端末に配りました',
     'map.calibration_unpublish' => 'が地図の北と距離の補正を配るのをやめました',
+    // ノードのクラウドバックアップ(2026-10-06、lib/map-backup.php)。管理アプリから api/map-backup.php で
+    'map.backup_create' => 'がノードをサーバーへバックアップしました',
+    'map.backup_restore' => 'がサーバーのバックアップからノードを取り出しました',
+    'map.backup_delete' => 'がサーバーのノードのバックアップを消しました',
     // ランキングの「調べられた語」を外した(2026-09-25、W-45)。**語そのものは記録しない**(詳細は年だけ)
     'ranking.query_hidden' => 'がランキングの調べられた語を一覧から外しました',
     // お試しの閲覧リンク(2026-09-30、lib/map-guest.php)。発行と取り消しは管理者

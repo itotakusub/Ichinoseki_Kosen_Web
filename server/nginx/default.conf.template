@@ -692,6 +692,15 @@ server {
 
     # アプリの地図の取得(2026-09-14 の診断で追加。ゾーンの注記は http の km_appmap)。
     # 以前は location / に入り、入口では何も絞られていなかった(critic 0)
+    # ノードのクラウドバックアップ(2026-10-06、lib/map-backup.php)。管理者のトークンが要る。
+    # 本文は数 MB まであるので、ここだけ広げる(PHP の上限 KM_MAP_BACKUP_MAX_BYTES と揃える)。回数は km_api で数える
+    location = /api/map-backup.php {
+        client_max_body_size 16m;
+        limit_req zone=km_api burst=120 nodelay;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+
     location = /api/app-map.php {
         limit_req zone=km_appmap burst=30 nodelay;
         include /etc/nginx/km/proxy-web.conf;

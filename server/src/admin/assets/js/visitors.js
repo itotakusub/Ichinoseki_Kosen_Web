@@ -246,7 +246,9 @@
     if (!ua) {
       return '';
     }
-    const os = /Android [\d.]+|iPhone OS [\d_]+|iPad|Windows NT [\d.]+|Mac OS X [\d_]+|Linux|CrOS/.exec(ua)?.[0] || '';
+    // 順に見る(1 本の正規表現だと、Android の UA にある先の「Linux」に当たってしまう)
+    const os = [/Android [\d.]+/, /iPhone OS [\d_]+/, /iPad/, /Windows NT [\d.]+/, /Mac OS X [\d_]+/, /CrOS/, /Linux/]
+      .map((re) => re.exec(ua)?.[0]).find((x) => x) || '';
     const app = /KosenMap[^\s]*|okhttp\/[\d.]+|Edg\/[\d.]+|Chrome\/\d+|Firefox\/\d+|Version\/[\d.]+ Mobile\/\S+ Safari|Safari\/\d+|bot|crawler|spider|curl\/[\d.]+/i.exec(ua)?.[0] || '';
     const text = [os.replace(/_/g, '.'), app].filter((x) => x).join(' · ');
     return text || ua.slice(0, 60);
