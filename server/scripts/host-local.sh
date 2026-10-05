@@ -11,6 +11,11 @@
 #   --admin-domain 管理画面を別オリジンにするときの名前(省略可)
 #   --ip           この検証機の LAN の IPv4(省略すると hostname -I の先頭)
 #   --lan          管理系ポート(8281・3002・8025)に入れる範囲(省略すると --ip の /24)
+#   --fresh-secrets  **機密なしのコピー**を立てるとき(2026-10-05)。本番の env.txt を持ち込まず、
+#                  空の秘密(MariaDB・Postgres・Soketi)を乱数で埋め、DB と利用者の名前も既定で埋める。
+#                  **値が入っているキーには触らない**(何度流しても同じ秘密のまま)。
+#                  KM_API_RESOURCE は https://<--domain>/api(空の Logto に、この名前で API リソースを作る)。
+#                  Logto のアプリの ID と秘密・webhook の署名鍵は、Console で作ってから書く(docs/13)
 #
 # ## なぜ要るのか(2026-09-17)
 #
@@ -46,6 +51,7 @@ DOMAIN=""
 ADMIN=""
 IP=""
 LAN=""
+FRESH=0
 
 # 本番のドメイン。**ローカルの .env にこの名前が残っていたら空にする**(画面のリンクが本番を指すため)。
 # 2026-09-17 に ito8795.com → ito4.jp へ移した。旧ドメインも本番の証明書や控えに残っているので、どちらもローカルに使わせない
@@ -71,6 +77,7 @@ while [ $# -gt 0 ]; do
     --admin-domain) ADMIN="$2"; shift 2 ;;
     --ip) IP="$2"; shift 2 ;;
     --lan) LAN="$2"; shift 2 ;;
+    --fresh-secrets) FRESH=1; shift ;;
     init|status) CMD="$1"; shift ;;
     -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
     *) echo "知らない引数: $1" >&2; exit 2 ;;
@@ -206,6 +213,46 @@ issue_server() {
   install -m 644 "$_t/cert.pem" "$CERTS/$1.pem"
   install -m 640 "$_t/key.pem" "$CERTS/$1-key.pem"
   find "$_t" -delete
+}
+
+# 英数字だけの乱数(48 文字)。.env・URL・SQL のどこに置いても引用が要らない形にする
+random_secret() {
+  od -An -N24 -tx1 /dev/urandom | tr -d ' \n'
+}
+
+# 空のときだけ埋める。**値が入っているキーには触らない**
+fill_if_empty() {
+  if [ -z "$(env_value "$1")" ]; then
+    set_env "$1" "$2"
+    if [ "$3" = "secret" ]; then
+      did "$1 を乱数で作りました"
+    else
+      did "$1=$2"
+    fi
+  fi
+}
+
+# --fresh-secrets: 本番の秘密を持ち込まずに立てる(機密なしのコピー。2026-10-05)
+fresh_secrets() {
+  fill_if_empty MARIADB_DATABASE kosenmap name
+  fill_if_empty MARIADB_USER kosenmap name
+  fill_if_empty MARIADB_ROOT_PASSWORD "$(random_secret)" secret
+  fill_if_empty MARIADB_PASSWORD "$(random_secret)" secret
+  fill_if_empty POSTGRES_USER logto name
+  fill_if_empty POSTGRES_DB logto name
+  fill_if_empty POSTGRES_PASSWORD "$(random_secret)" secret
+  fill_if_empty SOKETI_APP_ID kosenmap name
+  fill_if_empty SOKETI_APP_KEY "$(random_secret)" secret
+  fill_if_empty SOKETI_APP_SECRET "$(random_secret)" secret
+  # 空の Logto には、この名前で API リソースを作る(本番の名前は使わない)
+  fill_if_empty KM_API_RESOURCE "https://$DOMAIN/api" name
+  # compose が既定なしで読むキー。空の行を置いて「設定されていない」の警告を止める(値は Console で作ってから書く)
+  for _key in LOGTO_APP_ID LOGTO_APP_SECRET LOGTO_M2M_APP_ID LOGTO_M2M_APP_SECRET RECAPTCHA_SITE_KEY RECAPTCHA_PROJECT_ID RECAPTCHA_API_KEY RECAPTCHA_SECRET_KEY; do
+    if ! grep -q "^$_key=" .env; then
+      printf '%s=\n' "$_key" >> .env
+    fi
+  done
+  chmod 600 .env
 }
 
 # ---------------------------------------------------------------------------
@@ -351,7 +398,14 @@ DNS:$ADMIN"
     note "控え: $_bak"
   else
     ( umask 077 && : > .env )
-    did ".env を作りました(秘密の値は控えの env.txt から足してください)"
+    if [ "$FRESH" = "1" ]; then
+      did ".env を作りました(秘密は下で新しく作ります)"
+    else
+      did ".env を作りました(秘密の値は控えの env.txt から足してください)"
+    fi
+  fi
+  if [ "$FRESH" = "1" ]; then
+    fresh_secrets
   fi
   set_env KM_ENV local
   set_env KM_DOMAIN "$DOMAIN"

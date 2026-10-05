@@ -158,6 +158,22 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
   既にある表には初回に列を足す。許す・隠すは、相手が地図を開き直したときに効く(`km_map_guest_verify` が表から読み直す)。記録は `guest.account_names_allow` / `_deny`(番号だけ)
 - 配備先の check で `nginx に /guest.php の location がある` が FAIL になっていたのを直した(配備先には `nginx/` が無いので SKIP)
 
+### LAN の検証機に機密なしのコピー(2026-10-05、利用者の指示)
+
+- 本番の配備は利用者が済ませた(15 項目)。続けて LAN の検証機に**機密なしのコピー**を立てた(名前は sslip.io、`KM_ENV=local`)
+- 持ち込んだのは **MariaDB だけ**(2026-10-04 の控え)。`.env`・`config/*.local.php`・Logto・`uploads/` は持ち込まない
+- 秘密は `host-local.sh init --fresh-secrets` で新しく作った(空のキーだけを乱数で埋める)
+- 取り込んだ直後に `scripts/local-sanitize.sh` を流した:
+  - 氏名 → 「教員A001」の連番。地点のメモ → 空
+  - 記録・申請・利用者の表など 24 表 → 空
+  - FAQ のメール → ダミー
+- 手元の氏名一覧とメールの形で突き合わせて **0 件**
+- 8 サービスが healthy、再起動は 0 回
+- 残り:
+  - 空の Logto の初期設定(Console は利用者)
+  - 地図の配信の発行
+  - 手順は docs/13 §4-2。check の組 `local-copy`
+
 ### アプリの 15 項目(2026-10-05、利用者の指示)
 
 - **北と距離の補正を全員の端末に配る**: 新しい表 `km_map_calibration`(初回に自動で作る)・`api/map-calibration.php`(書きは管理者のトークン)。
