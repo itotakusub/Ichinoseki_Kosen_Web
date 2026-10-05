@@ -1,0 +1,22 @@
+対照: 正しいトークン → HTTP 204
+  none → HTTP 401 {"success":false,"message":"Logtoセッションを確認できません。"}
+  none-upper → HTTP 401 {"success":false,"message":"Logtoセッションを確認できません。"}
+  hs256-pem → HTTP 401 {"success":false,"message":"Logtoセッションを確認できません。"}
+  hs256-n → HTTP 401 {"success":false,"message":"Logtoセッションを確認できません。"}
+  hs256-nokid → HTTP 401 {"success":false,"message":"Logtoセッションを確認できません。"}
+  rs512 → HTTP 401 {"success":false,"message":"Logtoセッションを確認できません。"}
+  unknown-kid → HTTP 401 {"success":false,"message":"Logtoセッションを確認できません。"}
+  no-kid → HTTP 401 {"success":false,"message":"Logtoセッションを確認できません。"}
+  tampered → HTTP 401 {"success":false,"message":"Logtoセッションを確認できません。"}
+  embedded-jwk → HTTP 401 {"success":false,"message":"Logtoセッションを確認できません。"}
+  expired → HTTP 401 {"success":false,"message":"Logtoセッションを確認できません。"}
+[判定] WA-07: 成り立たない —— alg=none・HS256(公開鍵を HMAC の鍵に)・RS512・未知の kid・kid 無し・中身の改ざん・埋め込み jwk・期限切れの 11 種が全部 401
+断った理由(JWT::decode の例外):
+  none          UnexpectedValueException: Algorithm not supported
+  hs256-pem     UnexpectedValueException: Incorrect key for this algorithm
+  rs512         UnexpectedValueException: Incorrect key for this algorithm
+  unknown-kid   UnexpectedValueException: "kid" invalid, unable to lookup correct key
+  no-kid        UnexpectedValueException: "kid" empty, unable to lookup correct key
+  tampered      Firebase\JWT\SignatureInvalidException: Signature verification failed
+  embedded-jwk  Firebase\JWT\SignatureInvalidException: Signature verification failed
+  expired       Firebase\JWT\ExpiredException: Expired token

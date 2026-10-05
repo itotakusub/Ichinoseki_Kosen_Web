@@ -1,0 +1,12 @@
+1) セッション無しで見取り図 → 403
+km_db(): KM_DB_ALLOW_UNVERIFIED_TLS=1 のため、証明書検証なしで接続します。
+2) 仮アカウントを作った(セッション ID は作り直された)
+./lib.sh: line 56: warning: command substitution: ignored null byte in input
+3) 仮アカウントで見取り図 → 200
+km_db(): KM_DB_ALLOW_UNVERIFIED_TLS=1 のため、証明書検証なしで接続します。
+4) 管理者が仮アカウントを取り消した
+./lib.sh: line 56: warning: command substitution: ignored null byte in input
+5) 取り消した後、同じセッションで見取り図 → 200
+6) 同じセッションで地図データ → mapLocked=true(ここで見直しが走る)
+7) 地図データを開いた後の見取り図 → 403
+[判定] N-GUEST: 成り立つ —— 取り消した仮アカウントのセッションで、見取り図(錠の内側)をリンクの期限まで取れる。地図データ(map-data・公開ページ)を開くと見直しが走って閉じる(その後は 403)

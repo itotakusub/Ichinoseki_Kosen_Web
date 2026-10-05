@@ -1,0 +1,9 @@
+websrc/
+keys/
+mapstore/
+sessions/
+logs/
+mock/jwks.json
+mock/state.json
+results/*.tsv.tmp
+__pycache__/

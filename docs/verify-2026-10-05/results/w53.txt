@@ -1,0 +1,21 @@
+照合に使う氏名: 54 人(値は出さない)
+今のファイル(HEAD): 0 件
+  heads/Uploads    氏名: 0 人
+  heads/claude/loving-heisenberg-ptngxh 氏名: 0 人
+  heads/main       氏名: 0 人
+  pull/1           氏名: 4 人
+  pull/2           氏名: 4 人
+  pull/3           氏名: 4 人
+  pull/4           氏名: 4 人
+  pull/5           氏名: 4 人
+  pull/6           氏名: 4 人
+  pull/7           氏名: 0 人
+  pull/8           氏名: 0 人
+  pull/9           氏名: 0 人
+  pull/10          氏名: 0 人
+  pull/11          氏名: 0 人
+  pull/12          氏名: 0 人
+  pull/13          氏名: 0 人
+[判定] W-53: 成り立たない —— 公開リポジトリの今のファイルには教職員の氏名が無い
+[判定] W-53h: 成り立たない —— どのブランチの履歴にも無い(書き換え済み)
+[判定] W-53pr: 成り立つ —— PR の参照(持ち主には消せない)に残っている: pull/1(4 人), pull/2(4 人), pull/3(4 人), pull/4(4 人), pull/5(4 人), pull/6(4 人)。GitHub Support に消してもらう必要がある

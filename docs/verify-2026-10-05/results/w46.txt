@@ -1,0 +1,7 @@
+   [設定] 氏名の錠 = password、パスワード = PassA
+1) Cookie なし: occupantName=null
+2) A で解除したセッション: occupantName="架空 太郎"
+   [設定] 氏名の錠 = password、パスワード = PassB
+3) 新しいセッションで古いパスワード A: HTTP 401
+4) B に替えた後、A で解除した元のセッション: occupantName=null
+[判定] W-46: 成り立たない —— パスワードを替えると、前の解除では氏名が出ない

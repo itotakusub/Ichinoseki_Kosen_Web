@@ -1,0 +1,7 @@
+1) visitor・トークン無し → 200 {"success":true,"available":false}
+2) admin・トークン無し → 401
+3) admin・権限の無いトークン → 403
+4) admin・管理者のトークン → 200 {"success":true,"available":false}
+5) flavor=x → 400 / flavor[]=admin → 400
+6) 管理用 APK の取得: トークン無し → 401 / 権限無し → 403 / 定義外の slug → 404
+[判定] N-UPDATE: 成り立たない —— 管理用の更新の確認・APK の取得はトークン無し 401・権限無し 403。おかしな flavor は 400、定義外の slug は 404

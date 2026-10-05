@@ -1,0 +1,20 @@
+今のファイル(HEAD): 0 件
+  heads/Uploads    公開の IPv4: 無し
+  heads/claude/loving-heisenberg-ptngxh 公開の IPv4: 無し
+  heads/main       公開の IPv4: 無し
+  pull/1           公開の IPv4: 60.*.*.*
+  pull/2           公開の IPv4: 60.*.*.*
+  pull/3           公開の IPv4: 60.*.*.*
+  pull/4           公開の IPv4: 60.*.*.*
+  pull/5           公開の IPv4: 60.*.*.*
+  pull/6           公開の IPv4: 60.*.*.*
+  pull/7           公開の IPv4: 無し
+  pull/8           公開の IPv4: 無し
+  pull/9           公開の IPv4: 無し
+  pull/10          公開の IPv4: 無し
+  pull/11          公開の IPv4: 無し
+  pull/12          公開の IPv4: 無し
+  pull/13          公開の IPv4: 無し
+[判定] W-47: 成り立たない —— 今のファイルには公開の IPv4 が無い
+[判定] W-47h: 成り立たない —— どのブランチの履歴にも無い(書き換え済み)
+[判定] W-47pr: 成り立つ —— PR の参照(持ち主には消せない)に残っている: pull/1, pull/2, pull/3, pull/4, pull/5, pull/6。GitHub Support に消してもらう必要がある
