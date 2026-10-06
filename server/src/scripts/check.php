@@ -2592,11 +2592,18 @@ function km_check_ar_capture(): void
     $admin = $read('admin/ar-captures.php');
     check_bool('zip を落とす画面は管理者の画面(guard)・消すのは CSRF を確かめてから', str_contains($admin, "require __DIR__ . '/_inc/guard.php';")
         && strpos($admin, 'km_csrf_verify()') < strpos($admin, 'km_ar_delete_session('));
-    check_bool('画像の置き場は外から読めない(uploads は nginx で塞いである)', str_contains(km_ar_capture_dir(), '/uploads/')
-        && str_contains((string) @file_get_contents($src . '/../nginx/default.conf.template'), 'location ~ ^/(lib|config|scripts|uploads|cache|vendor)/ {'));
-    $nginx = (string) @file_get_contents($src . '/../nginx/default.conf.template');
-    check_bool('nginx: 1 枚(画像 3MB + 深度 1MB)を受けられる', preg_match('#location = /api/ar-capture\.php \{\s*client_max_body_size 5m;#', $nginx) === 1
-        && KM_AR_IMAGE_MAX_BYTES + KM_AR_DEPTH_MAX_BYTES < 5 * 1024 * 1024);
+    check_bool('画像の置き場は uploads の下', str_contains(km_ar_capture_dir(), '/uploads/'));
+    // nginx の設定は手元の作業ツリーにだけある(本番の web コンテナには src/ しか見えない。2026-10-07 に本番で FAIL)
+    $nginxPath = $src . '/../nginx/default.conf.template';
+    if (!is_file($nginxPath)) {
+        check_skip('画像の置き場は外から読めない(uploads は nginx で塞いである)', '手元の作業ツリーで確認する。配備先のコンテナに nginx/ は無い');
+        check_skip('nginx: 1 枚(画像 3MB + 深度 1MB)を受けられる', '手元の作業ツリーで確認する。配備先のコンテナに nginx/ は無い');
+    } else {
+        $nginx = (string) file_get_contents($nginxPath);
+        check_bool('画像の置き場は外から読めない(uploads は nginx で塞いである)', str_contains($nginx, 'location ~ ^/(lib|config|scripts|uploads|cache|vendor)/ {'));
+        check_bool('nginx: 1 枚(画像 3MB + 深度 1MB)を受けられる', preg_match('#location = /api/ar-capture\.php \{\s*client_max_body_size 5m;#', $nginx) === 1
+            && KM_AR_IMAGE_MAX_BYTES + KM_AR_DEPTH_MAX_BYTES < 5 * 1024 * 1024);
+    }
     check_bool('地図の配信と一般のアプリには載せない', !str_contains($read('api/app-map.php'), 'ar-capture') && !str_contains($read('lib/app-map.php'), 'ar-capture'));
     require_once $src . '/lib/admin-log.php';
     check_bool('記録の文言', isset(KM_ADMIN_LOG_ACTION_LABELS['ar.capture_upload'], KM_ADMIN_LOG_ACTION_LABELS['ar.capture_download'], KM_ADMIN_LOG_ACTION_LABELS['ar.capture_delete']));
