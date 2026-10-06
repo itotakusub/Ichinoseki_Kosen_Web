@@ -5,7 +5,7 @@ declare(strict_types=1);
 /**
  * AR の撮影(2026-10-06、lib/ar-capture.php)。管理アプリの「AR 実測」で置いた記録と画像を、撮影ごとに一覧・zip で落とす・消す。
  *
- * **画像には人が写りうる**(利用者の決定: PC でぼかす)。zip は PC で scripts/pc/ar-blur-faces.ps1 を通してから使い、
+ * **画像には人が写りうる**(利用者の決定: PC でぼかす)。zip は PC で scripts/ar-blur-faces.ps1 を通してから使い、
  * 処理が済んだらここで消す。一般のアプリと地図の配信には載らない。
  */
 
@@ -130,7 +130,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
               <i class="bi bi-person-bounding-box me-2 mt-1" aria-hidden="true"></i>
               <div data-i18n="page.arCaptures.privacy">
                 画像には人が写っていることがあります(サーバーには元の画像のまま置いています)。
-                zip を落としたら、PC で scripts\pc\ar-blur-faces.ps1 を通して顔をぼかしてから使ってください。
+                zip を落としたら、PC で scripts\ar-blur-faces.ps1 を通して顔をぼかしてから使ってください。
                 3D・疑似ストリートビューの処理が済んだら、ここで消してください。一般のアプリと地図の配信には載りません。
               </div>
             </div>

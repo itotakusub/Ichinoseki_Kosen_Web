@@ -600,7 +600,7 @@ function km_ar_zip_readme(): string
         ============================
 
         IMPORTANT: the images may show people. Blur faces BEFORE using or sharing them:
-          scripts\pc\ar-blur-faces.ps1 -Zip <this zip>
+          scripts\ar-blur-faces.ps1 -Zip <this zip>
         Delete the capture on the server (admin > AR captures) once it is processed.
 
         images/frame_NNNN.jpg   camera images (sensor orientation, as read out by ARCore)

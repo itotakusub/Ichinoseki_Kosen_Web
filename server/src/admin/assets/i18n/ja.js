@@ -132,7 +132,7 @@ globalThis.KM_I18N.ja = {
   "page.arCaptures.empty": "まだありません。管理アプリの地図で AR 測位モードを ON にし、「実測」から撮影してください。",
   "page.arCaptures.h1": "AR の撮影",
   "page.arCaptures.listTitle": "撮影の一覧",
-  "page.arCaptures.privacy": "画像には人が写っていることがあります(サーバーには元の画像のまま置いています)。zip を落としたら、PC で scripts\\pc\\ar-blur-faces.ps1 を通して顔をぼかしてから使ってください。3D・疑似ストリートビューの処理が済んだら、ここで消してください。一般のアプリと地図の配信には載りません。",
+  "page.arCaptures.privacy": "画像には人が写っていることがあります(サーバーには元の画像のまま置いています)。zip を落としたら、PC で scripts\\ar-blur-faces.ps1 を通して顔をぼかしてから使ってください。3D・疑似ストリートビューの処理が済んだら、ここで消してください。一般のアプリと地図の配信には載りません。",
   "page.arCaptures.title": "AR の撮影 | KosenMap 管理",
   "page.arCaptures.usage": "使っている容量",
   "page.calendar.add": "予定を追加",

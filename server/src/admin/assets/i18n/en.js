@@ -131,7 +131,7 @@ globalThis.KM_I18N.en = {
   "page.arCaptures.empty": "Nothing yet. In the admin app, turn on AR positioning on the map and start a capture from \"Survey\".",
   "page.arCaptures.h1": "AR captures",
   "page.arCaptures.listTitle": "Captures",
-  "page.arCaptures.privacy": "Images may show people (the server keeps the originals). After downloading the zip, blur faces on the PC with scripts\\pc\\ar-blur-faces.ps1 before using it. Delete the capture here once the 3D / street-view processing is done. Captures are never sent to the public app or map distribution.",
+  "page.arCaptures.privacy": "Images may show people (the server keeps the originals). After downloading the zip, blur faces on the PC with scripts\\ar-blur-faces.ps1 before using it. Delete the capture here once the 3D / street-view processing is done. Captures are never sent to the public app or map distribution.",
   "page.arCaptures.title": "AR captures | KosenMap admin",
   "page.arCaptures.usage": "Storage used",
   "page.calendar.add": "Add event",

@@ -2600,6 +2600,26 @@ function km_check_ar_capture(): void
     check_bool('地図の配信と一般のアプリには載せない', !str_contains($read('api/app-map.php'), 'ar-capture') && !str_contains($read('lib/app-map.php'), 'ar-capture'));
     require_once $src . '/lib/admin-log.php';
     check_bool('記録の文言', isset(KM_ADMIN_LOG_ACTION_LABELS['ar.capture_upload'], KM_ADMIN_LOG_ACTION_LABELS['ar.capture_download'], KM_ADMIN_LOG_ACTION_LABELS['ar.capture_delete']));
+
+    // アプリ(positioning/ArCapture.kt)の上限と揃っているか。片方だけ変えると、撮れても送れない
+    $kotlin = 'C:/Users/itota/Documents/Test/app/src/main/java/com/ito/kosenmap/positioning/ArCapture.kt';
+    if (!is_file($kotlin)) {
+        check_skip('ar-capture: アプリと突き合わせ', 'アプリの原本が無い(本番のホストなど)');
+        return;
+    }
+    km_check_heading('ar-capture: アプリと突き合わせ');
+    $kt = (string) file_get_contents($kotlin);
+    $constant = static function (string $name) use ($kt): ?int {
+        if (preg_match('/const val ' . $name . ' = ([0-9 *]+?)L?\s*$/m', $kt, $m) !== 1) {
+            return null;
+        }
+        return (int) array_product(array_map('intval', array_map('trim', explode('*', $m[1]))));
+    };
+    check('1 回の撮影の枚数', KM_AR_FRAMES_PER_SESSION, $constant('AR_CAPTURE_MAX_FRAMES'));
+    check('画像 1 枚の上限', KM_AR_IMAGE_MAX_BYTES, $constant('AR_CAPTURE_IMAGE_MAX_BYTES'));
+    check('深度 1 枚の上限', KM_AR_DEPTH_MAX_BYTES, $constant('AR_CAPTURE_DEPTH_MAX_BYTES'));
+    check_bool('付帯情報の形(timestampMillis・pose の t と q・intrinsics)', str_contains($kt, 'addProperty("timestampMillis"') && str_contains($kt, 'add("t",')
+        && str_contains($kt, 'add("q",') && str_contains($kt, 'addProperty("fx"') && str_contains($kt, 'addProperty("width"'));
 }
 
 /**
