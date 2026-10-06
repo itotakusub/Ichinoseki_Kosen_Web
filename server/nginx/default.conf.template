@@ -36,6 +36,7 @@ server_tokens off;
 #   /admin/downloads.php(APK の差し替え)・8281(phpMyAdmin のインポート)・6001(WebSocket)・3001/3002
 # 地図の取り込みと配信(/admin/map-sync.php・/admin/map-publish.php)は PHP が set_time_limit(120) を
 # 明示しているので、そちらに合わせて 180 秒にする(60 秒で切ると、PHP は最後まで書き込むのに画面だけ 504 になる)。
+# AR の撮影の zip(/admin/ar-captures.php)は set_time_limit(840) なので 900 秒(2026-10-06)。
 # **PHP で set_time_limit を足したら、ここにも例外を足すこと。**
 # **proxy-web.conf に書き戻さないこと**(理由はあちらに書いてある)。
 # ---------------------------------------------------------------------------
@@ -684,6 +685,16 @@ server {
         proxy_read_timeout 180s;
     }
 
+    # AR の撮影の zip(2026-10-06、lib/ar-capture.php)。1 回で 1GB 近くになりうるので、PHP が set_time_limit(840) で
+    # 流しながら書く。nginx は溜めずにそのまま流す(一時ファイルに 1GB を書かない)。待ちは PHP より長く
+    location = /admin/ar-captures.php {
+        client_max_body_size 12m;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+        proxy_buffering off;
+        proxy_read_timeout 900s;
+    }
+
     # アプリのランキングへの記録(POST だけ数える。取得の GET は数えない)
     location = /api/app-ranking.php {
         limit_req zone=km_app burst=60 nodelay;
@@ -708,6 +719,15 @@ server {
     location = /api/panorama.php {
         access_log /var/log/nginx/access.log km_no_query;
         client_max_body_size 11m;
+        limit_req zone=km_api burst=120 nodelay;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+
+    # AR 実測の記録と画像(2026-10-06、lib/ar-capture.php)。読み書きは管理者だけ。
+    # 1 枚 = 画像 3MB + 深度 1MB(multipart の分の余裕を足す)。回数は km_api で数える
+    location = /api/ar-capture.php {
+        client_max_body_size 5m;
         limit_req zone=km_api burst=120 nodelay;
         include /etc/nginx/km/proxy-web.conf;
         proxy_set_header X-Forwarded-Port ${KM_APP_PORT};

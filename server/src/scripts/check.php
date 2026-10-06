@@ -77,6 +77,8 @@ const KM_CHECK_PURE = [
     'positioning-params',
     // Wi-Fi の学習データと評価をサーバーに置く(2026-10-06)
     'learning-data',
+    // AR 実測の記録と画像(2026-10-06)
+    'ar-capture',
     // アプリの自動更新(2026-10-05)
     'app-update',
     'ssh-roles',
@@ -2449,6 +2451,155 @@ function km_check_learning_data(): void
     check_bool('消した記録を送り直したら生き返らせる(deleted は最後に書く)', preg_match('/seq = IF\(deleted = 1, VALUES\(seq\), seq\),\s*deleted = 0/', $lib) === 1);
     check_bool('消しても行は残し、番号を振り直す(端末が消えたと知るため)', str_contains($lib, 'SET deleted = 1, seq = ?'));
     check_bool('1 回に返す量を絞る(アプリは 1MB まで読む)', KM_LEARNING_PAGE_BYTES <= 700 * 1024);
+}
+
+/**
+ * AR 実測の記録と画像(2026-10-06、lib/ar-capture.php)。DB は使わない(検め方・COLMAP の変換・zip の作り・口の守り)。
+ * 表の読み書きは本番ホストの使い捨ての MariaDB で確かめた(docs/20)。
+ */
+function km_check_ar_capture(): void
+{
+    $src = __DIR__ . '/..';
+    require_once $src . '/lib/ar-capture.php';
+    require_once $src . '/lib/apk-version.php';
+    km_check_heading('ar-capture: 記録と画像の検め方');
+    $record = ['version' => 1, 'uuid' => '0F8FAD5B-D9CB-469F-A165-70867728950E', 'floor' => '3F', 'startedAtMillis' => 1791270100702,
+        'track' => [[1791270100800, 0.1, -0.2, null]], 'marks' => [['nodeUuid' => 'n1', 't' => 1791270100900, 'x' => 0.0, 'z' => 0.0]], 'depthHits' => []];
+    $ok = km_ar_normalize_record(gzencode((string) json_encode($record)));
+    check('記録: uuid は小文字・印の数を数える', ['0f8fad5b-d9cb-469f-a165-70867728950e', '3F', 1], [$ok['uuid'], $ok['floor'], $ok['marks']]);
+    $rejectsRecord = static function (string $gz): bool {
+        try {
+            km_ar_normalize_record($gz);
+            return false;
+        } catch (InvalidArgumentException) {
+            return true;
+        }
+    };
+    check_bool('記録: gzip でない・JSON でない・形が違うものは断る', $rejectsRecord('plain') && $rejectsRecord(gzencode('nope'))
+        && $rejectsRecord(gzencode((string) json_encode(['uuid' => 'x'] + $record)))
+        && $rejectsRecord(gzencode((string) json_encode(['floor' => '../3F'] + $record)))
+        && $rejectsRecord(gzencode((string) json_encode(['track' => 'x'] + $record))));
+    check_bool('記録: ほどくと大きすぎるもの(gzip 爆弾)は断る', $rejectsRecord(gzencode(str_repeat(' ', KM_AR_RECORD_MAX_JSON_BYTES + 10))));
+
+    $meta = ['timestampMillis' => 1791270100702, 'pose' => ['t' => [1, 2.5, -3], 'q' => [0, 0, 0, 1.2]],
+        'intrinsics' => ['fx' => 500.5, 'fy' => 500, 'cx' => 320, 'cy' => 240, 'width' => 640, 'height' => 480]];
+    $clean = km_ar_normalize_frame_meta($meta);
+    check('付帯情報: 向きは長さ 1 に揃える・位置は数に', [[1.0, 2.5, -3.0], [0.0, 0.0, 0.0, 1.0], null], [$clean['pose']['t'], $clean['pose']['q'], $clean['map']]);
+    $rejectsMeta = static function (array $override) use ($meta): bool {
+        try {
+            km_ar_normalize_frame_meta(array_replace_recursive($meta, $override));
+            return false;
+        } catch (InvalidArgumentException) {
+            return true;
+        }
+    };
+    check_bool('付帯情報: 回転でない q・欠けた t・負の fx・大きすぎる幅は断る', $rejectsMeta(['pose' => ['q' => [0, 0, 0, 0]]])
+        && $rejectsMeta(['pose' => ['t' => [1, 2, 3, 4]]]) && $rejectsMeta(['intrinsics' => ['fx' => -1]])
+        && $rejectsMeta(['intrinsics' => ['width' => 99999]]) && $rejectsMeta(['timestampMillis' => '1']));
+
+    // 中身で形を見る(拡張子は信じない)。最小の JPEG(SOF0 だけ)と PNG(IHDR だけ)
+    $jpeg = "\xFF\xD8\xFF\xC0" . pack('n', 17) . "\x08" . pack('nn', 480, 640) . "\x03\x01\x22\x00\x02\x11\x01\x03\x11\x01" . "\xFF\xD9";
+    $png = "\x89PNG\r\n\x1a\n" . pack('N', 13) . 'IHDR' . pack('NN', 160, 120) . "\x10\x00\x00\x00\x00" . "\x00\x00\x00\x00";
+    check('画像は JPEG の中身から大きさを読む', ['width' => 640, 'height' => 480, 'ext' => 'jpg'], km_ar_inspect_image($jpeg, false));
+    check('深度は 16bit PNG の中身から', ['width' => 160, 'height' => 120, 'ext' => 'png'], km_ar_inspect_image($png, true));
+    $rejectsImage = static function (string $bytes, bool $depth): bool {
+        try {
+            km_ar_inspect_image($bytes, $depth);
+            return false;
+        } catch (InvalidArgumentException) {
+            return true;
+        }
+    };
+    check_bool('画像の欄に PNG・深度の欄に JPEG・中身の無いものは断る', $rejectsImage($png, false) && $rejectsImage($jpeg, true) && $rejectsImage('<?php ', false));
+
+    km_check_heading('ar-capture: COLMAP の姿勢');
+    $pose = km_ar_colmap_pose([1.0, 2.0, 3.0], [0.0, 0.0, 0.0, 1.0]);
+    check('向きを変えていないカメラ: x 軸まわりに 180 度・t = -R·C', [[0.0, 1.0, 0.0, 0.0], [-1.0, 2.0, 3.0]],
+        [array_map(static fn ($v) => round($v, 9) + 0.0, $pose['qvec']), array_map(static fn ($v) => round($v, 9) + 0.0, $pose['tvec'])]);
+    // どんな向きでも: AR のカメラの前(-z)に d m の点は、COLMAP のカメラでは (0, 0, d)。上(+y)は COLMAP の -y
+    $rotate = static function (array $q, array $v): array {
+        [$x, $y, $z, $w] = $q;
+        $m = [[1 - 2 * ($y * $y + $z * $z), 2 * ($x * $y - $z * $w), 2 * ($x * $z + $y * $w)],
+            [2 * ($x * $y + $z * $w), 1 - 2 * ($x * $x + $z * $z), 2 * ($y * $z - $x * $w)],
+            [2 * ($x * $z - $y * $w), 2 * ($y * $z + $x * $w), 1 - 2 * ($x * $x + $y * $y)]];
+        return [$m[0][0] * $v[0] + $m[0][1] * $v[1] + $m[0][2] * $v[2], $m[1][0] * $v[0] + $m[1][1] * $v[1] + $m[1][2] * $v[2], $m[2][0] * $v[0] + $m[2][1] * $v[1] + $m[2][2] * $v[2]];
+    };
+    $worst = 0.0;
+    foreach ([[0.1, 0.7, -0.2, 0.67], [0.5, -0.5, 0.5, 0.5], [0.0, 0.0, 1.0, 0.0], [0.3, 0.1, 0.0, -0.95]] as $q) {
+        $n = sqrt(array_sum(array_map(static fn ($v) => $v * $v, $q)));
+        $q = array_map(static fn ($v) => $v / $n, $q);
+        $c = [0.4, 1.5, -2.0];
+        $p = km_ar_colmap_pose($c, $q);
+        [$qw, $qx, $qy, $qz] = $p['qvec'];
+        foreach ([[[0, 0, -2.0], [0, 0, 2.0]], [[0, 1.0, 0], [0, -1.0, 0]], [[1.0, 0, 0], [1.0, 0, 0]]] as [$inAr, $inColmap]) {
+            $world = array_map(static fn ($a, $b) => $a + $b, $c, $rotate($q, $inAr));
+            $cam = array_map(static fn ($a, $b) => $a + $b, $rotate([$qx, $qy, $qz, $qw], $world), $p['tvec']);
+            $worst = max($worst, abs($cam[0] - $inColmap[0]), abs($cam[1] - $inColmap[1]), abs($cam[2] - $inColmap[2]));
+        }
+    }
+    check_bool('どんな向きでも、前は +z・上は -y・右は +x になる', $worst < 1e-9, sprintf('最大のずれ %.2e', $worst));
+    $text = km_ar_colmap_text([['name' => 'frame_0000.jpg', 'meta' => $clean], ['name' => 'frame_0001.jpg', 'meta' => $clean]]);
+    check_bool('内部の値が同じ画像は 1 つのカメラにまとめる', substr_count($text['cameras'], ' PINHOLE ') === 1
+        && str_contains($text['cameras'], "1 PINHOLE 640 480 500.5 500 320 240\n"));
+    check_bool('画像の行は「番号 qw qx qy qz tx ty tz カメラ 名前」と空行', preg_match('/^2 (\S+ ){7}1 frame_0001\.jpg\n\n\z/m', $text['images']) === 1);
+
+    km_check_heading('ar-capture: zip(圧縮しない・流しながら書く)');
+    $tmp = tempnam(sys_get_temp_dir(), 'kmzip');
+    $file = tempnam(sys_get_temp_dir(), 'kmimg');
+    file_put_contents($file, random_bytes(3000));
+    $out = fopen($tmp, 'wb');
+    $written = km_zip_stream_stored([
+        ['name' => 'survey.json', 'data' => '{"a":1}'],
+        ['name' => 'images/frame_0000.jpg', 'path' => $file],
+        ['name' => 'sparse/0/points3D.txt', 'data' => ''],
+    ], static function (string $bytes) use ($out): void {
+        fwrite($out, $bytes);
+    }, mktime(12, 34, 56, 10, 6, 2026));
+    fclose($out);
+    check('書いたバイト数 = ファイルの大きさ', filesize($tmp), $written);
+    check_bool('中身を zip として読み返せる(中央ディレクトリから)', km_apk_read_entry($tmp, 'survey.json') === '{"a":1}'
+        && km_apk_read_entry($tmp, 'images/frame_0000.jpg') === file_get_contents($file)
+        && km_apk_read_entry($tmp, 'sparse/0/points3D.txt') === '');
+    $zip = (string) file_get_contents($tmp);
+    $local = unpack('Vsig/vver/vflag/vmethod/vtime/vdate/Vcrc', substr($zip, 0, 18));
+    check('CRC は中身の CRC32・格納(圧縮なし)', [0x04034b50, 0, (int) hexdec(hash('crc32b', '{"a":1}'))], [$local['sig'], $local['method'], $local['crc']]);
+    if (class_exists('ZipArchive')) {
+        $archive = new ZipArchive();
+        check_bool('ZipArchive でも開けて CRC が合う', $archive->open($tmp, ZipArchive::CHECKCONS) === true && $archive->numFiles === 3);
+        $archive->close();
+    } else {
+        check_skip('ZipArchive でも開けて CRC が合う', 'zip 拡張のある PHP');
+    }
+    @unlink($tmp);
+    @unlink($file);
+    $rejectsName = static function (string $name): bool {
+        try {
+            km_zip_stream_stored([['name' => $name, 'data' => 'x']], static function (string $b): void {});
+            return false;
+        } catch (InvalidArgumentException) {
+            return true;
+        }
+    };
+    check_bool('zip の名前: 上へ戻る・絶対パス・空白は断る', $rejectsName('../x') && $rejectsName('/etc/x') && $rejectsName('a b') && $rejectsName('a/../b'));
+
+    km_check_heading('ar-capture: 口の守り');
+    $read = static fn (string $path): string => (string) @file_get_contents($src . '/' . $path);
+    $api = $read('api/ar-capture.php');
+    $assertAt = strpos($api, 'logto_assert_permissions($principal, LOGTO_ADMIN_PERMISSIONS);');
+    check_bool('読み書きはすべて管理者のトークン(どの操作よりも先に確かめる)', $assertAt !== false
+        && $assertAt < (int) strpos($api, 'km_db()') && $assertAt < (int) strpos($api, 'km_ar_list_sessions(')
+        && $assertAt < (int) strpos($api, 'km_ar_session_record(') && $assertAt < (int) strpos($api, 'km_ar_put_frame('));
+    $admin = $read('admin/ar-captures.php');
+    check_bool('zip を落とす画面は管理者の画面(guard)・消すのは CSRF を確かめてから', str_contains($admin, "require __DIR__ . '/_inc/guard.php';")
+        && strpos($admin, 'km_csrf_verify()') < strpos($admin, 'km_ar_delete_session('));
+    check_bool('画像の置き場は外から読めない(uploads は nginx で塞いである)', str_contains(km_ar_capture_dir(), '/uploads/')
+        && str_contains((string) @file_get_contents($src . '/../nginx/default.conf.template'), 'location ~ ^/(lib|config|scripts|uploads|cache|vendor)/ {'));
+    $nginx = (string) @file_get_contents($src . '/../nginx/default.conf.template');
+    check_bool('nginx: 1 枚(画像 3MB + 深度 1MB)を受けられる', preg_match('#location = /api/ar-capture\.php \{\s*client_max_body_size 5m;#', $nginx) === 1
+        && KM_AR_IMAGE_MAX_BYTES + KM_AR_DEPTH_MAX_BYTES < 5 * 1024 * 1024);
+    check_bool('地図の配信と一般のアプリには載せない', !str_contains($read('api/app-map.php'), 'ar-capture') && !str_contains($read('lib/app-map.php'), 'ar-capture'));
+    require_once $src . '/lib/admin-log.php';
+    check_bool('記録の文言', isset(KM_ADMIN_LOG_ACTION_LABELS['ar.capture_upload'], KM_ADMIN_LOG_ACTION_LABELS['ar.capture_download'], KM_ADMIN_LOG_ACTION_LABELS['ar.capture_delete']));
 }
 
 /**
@@ -7125,6 +7276,9 @@ foreach ($selected as $name) {
             break;
         case 'learning-data':
             km_check_learning_data();
+            break;
+        case 'ar-capture':
+            km_check_ar_capture();
             break;
         case 'app-update':
             km_check_app_update();

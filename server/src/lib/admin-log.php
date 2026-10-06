@@ -91,6 +91,10 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     'positioning.params_unpublish' => 'がアプリの測位のパラメータを配るのをやめました',
     // Wi-Fi の学習データ・評価をサーバーから消した(2026-10-06、lib/learning-data.php)。詳細は種類・件数・範囲
     'learning.delete' => 'が Wi-Fi の学習データをサーバーから消しました',
+    // AR 実測の記録と画像(2026-10-06、lib/ar-capture.php)。詳細は撮影の uuid と階・枚数だけ
+    'ar.capture_upload' => 'が AR 実測の記録を置きました',
+    'ar.capture_download' => 'が AR の撮影を zip で落としました',
+    'ar.capture_delete' => 'が AR の撮影を消しました',
     // 今月の公開の一覧を写し取った(2026-10-06、W-45 の承認制)。詳細は「月 / 語の数」だけ
     'ranking.queries_published' => 'がランキングの調べられた語の今月の一覧を公開しました',
     // お試しの閲覧リンク(2026-09-30、lib/map-guest.php)。発行と取り消しは管理者
