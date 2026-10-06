@@ -68,6 +68,7 @@ if (isset($options['all-queries'])) {
     $removed = $pdo->exec('DELETE FROM km_map_ranking_queries');
     // 公開中の月の写しも消す(2026-10-06、W-45 の承認制。写しが残ると公開の一覧に出続ける)
     $pdo->exec('DELETE FROM km_map_ranking_published_queries');
+    $pdo->exec('DELETE FROM km_map_ranking_publications');
     echo "調べられた語を {$removed} 行消しました(場所と利用者の記録は残っています)。\n\n";
     show($pdo, $year);
     exit(0);
@@ -96,7 +97,7 @@ if (isset($options['all'])) {
         fwrite(STDERR, "--all には --yes も付けてください(全件消えます)。\n");
         exit(1);
     }
-    foreach (['km_map_ranking_places', 'km_map_ranking_queries', 'km_map_ranking_users', 'km_map_ranking_published_queries'] as $table) {
+    foreach (['km_map_ranking_places', 'km_map_ranking_queries', 'km_map_ranking_users', 'km_map_ranking_published_queries', 'km_map_ranking_publications'] as $table) {
         $pdo->exec("DELETE FROM {$table}");
     }
     echo "全件消しました。\n";

@@ -154,6 +154,18 @@ function km_ranking_ensure_tables(PDO $pdo): void
             INDEX idx_km_ranking_published_year (year, period)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         SQL);
+
+    // 公開した月。**語が 0 でも 1 行残す** —— 写しの表だけで「いちばん新しい月」を決めると、
+    // 何も選ばずに公開した月に、前の月の一覧が戻ってしまう
+    $pdo->exec(<<<'SQL'
+        CREATE TABLE IF NOT EXISTS km_map_ranking_publications (
+            period CHAR(7) NOT NULL PRIMARY KEY,
+            year SMALLINT NOT NULL,
+            word_count SMALLINT NOT NULL,
+            published_at DATETIME NOT NULL,
+            INDEX idx_km_ranking_publications_year (year, period)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        SQL);
 }
 
 /** 今の月('YYYY-MM')。 */
@@ -216,6 +228,10 @@ function km_ranking_publish_queries(PDO $pdo, array $selected, ?string $period =
         foreach ($rows as $row) {
             $insert->execute([$period, $year, (string) $row['normalized_query'], (int) $row['searches']]);
         }
+        $pdo->prepare(
+            'INSERT INTO km_map_ranking_publications (period, year, word_count, published_at) VALUES (?, ?, ?, NOW())
+             ON DUPLICATE KEY UPDATE word_count = VALUES(word_count), published_at = NOW()'
+        )->execute([$period, $year, count($rows)]);
         $pdo->commit();
     } catch (Throwable $exception) {
         $pdo->rollBack();
@@ -234,8 +250,7 @@ function km_ranking_latest_publication(PDO $pdo, int $year): ?array
 {
     km_ranking_ensure_tables($pdo);
     $statement = $pdo->prepare(
-        'SELECT period, MAX(published_at) AS published_at FROM km_map_ranking_published_queries
-         WHERE year = ? GROUP BY period ORDER BY period DESC LIMIT 1'
+        'SELECT period, published_at FROM km_map_ranking_publications WHERE year = ? ORDER BY period DESC LIMIT 1'
     );
     $statement->execute([$year]);
     $latest = $statement->fetch();
@@ -581,7 +596,7 @@ function km_ranking_public_user_key(string $secret, string $userId, int $year): 
 function km_ranking_purge_old(PDO $pdo, int $currentYear): void
 {
     $oldest = $currentYear - KM_RANKING_RETENTION_YEARS;
-    foreach (['km_map_ranking_places', 'km_map_ranking_queries', 'km_map_ranking_query_sources', 'km_map_ranking_users', 'km_map_ranking_hidden_queries', 'km_map_ranking_published_queries'] as $table) {
+    foreach (['km_map_ranking_places', 'km_map_ranking_queries', 'km_map_ranking_query_sources', 'km_map_ranking_users', 'km_map_ranking_hidden_queries', 'km_map_ranking_published_queries', 'km_map_ranking_publications'] as $table) {
         $pdo->prepare("DELETE FROM {$table} WHERE year < ?")->execute([$oldest]);
     }
 }
@@ -636,7 +651,7 @@ function km_ranking_queries(PDO $pdo, int $year, int $limit = 20): array
     km_ranking_ensure_tables($pdo);
     $statement = $pdo->prepare(
         'SELECT p.normalized_query, p.searches FROM km_map_ranking_published_queries p
-         WHERE p.period = (SELECT MAX(period) FROM km_map_ranking_published_queries WHERE year = ?)
+         WHERE p.period = (SELECT MAX(period) FROM km_map_ranking_publications WHERE year = ?)
            AND NOT EXISTS (SELECT 1 FROM km_map_ranking_hidden_queries h
                  WHERE h.normalized_query = p.normalized_query AND h.year = p.year)
          ORDER BY p.searches DESC, p.normalized_query ASC LIMIT ?'
