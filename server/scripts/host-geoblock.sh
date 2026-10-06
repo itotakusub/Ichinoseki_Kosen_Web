@@ -5,7 +5,7 @@
 #   sudo sh scripts/host-geoblock.sh --path /opt/kosenmap status      今の設定・一覧・当てているか・落とした数
 #   sudo sh scripts/host-geoblock.sh --path /opt/kosenmap update      国別の一覧を取り直す(当てはしない)
 #   sudo sh scripts/host-geoblock.sh --path /opt/kosenmap apply       一覧から nftables の表を作って当てる(無ければ先に取る)
-#   sudo sh scripts/host-geoblock.sh --path /opt/kosenmap apply --dry-run   当てる中身を出すだけ(nft -c で形も確かめる)
+#   sudo sh scripts/host-geoblock.sh --path /opt/kosenmap apply --dry-run   当てる中身を出すだけ(nft -c で形も確かめる。**一覧は取らない** —— 初回は先に update)
 #   sudo sh scripts/host-geoblock.sh --path /opt/kosenmap remove      表を外す(拒否をやめる)
 #
 # ## 何をするか
@@ -248,6 +248,12 @@ case "$ACTION" in
     if [ "$missing" -eq 1 ] && [ "$DRY_RUN" -eq 0 ]; then
       echo "一覧がまだ無い国があるので取ります"
       do_update
+    fi
+    # --dry-run は何も書き換えないので一覧も取らない。無ければ先に update を案内する(2026-10-06、利用者が詰まった)
+    if [ "$missing" -eq 1 ] && [ "$DRY_RUN" -eq 1 ]; then
+      echo "一覧がまだ無い国があります。--dry-run は一覧を取らないので、先に次を実行してください:" >&2
+      echo "  sudo sh scripts/host-geoblock.sh --path $PATH_ROOT update" >&2
+      exit 1
     fi
     # 管理用ポートを国で絞るのに、その国の一覧が空なら当てない(誰も入れなくなる)
     if [ -n "$ADMIN_COUNTRIES" ] && [ -z "$(elements v4 $ADMIN_COUNTRIES)" ]; then
