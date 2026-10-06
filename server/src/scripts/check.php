@@ -75,6 +75,8 @@ const KM_CHECK_PURE = [
     'map-calibration',
     // アプリの測位のパラメータを配る(2026-10-06)
     'positioning-params',
+    // Wi-Fi の学習データと評価をサーバーに置く(2026-10-06)
+    'learning-data',
     // アプリの自動更新(2026-10-05)
     'app-update',
     'ssh-roles',
@@ -2393,6 +2395,63 @@ function km_check_positioning_params(): void
 }
 
 /**
+ * Wi-Fi の学習データと評価の置き場(2026-10-06、lib/learning-data.php)。DB は使わない(検め方と口の守り)。
+ */
+function km_check_learning_data(): void
+{
+    $src = __DIR__ . '/..';
+    require_once $src . '/lib/learning-data.php';
+    km_check_heading('learning-data: 検め方');
+    $sample = [
+        'sampleUuid' => '0F8FAD5B-D9CB-469F-A165-70867728950E',
+        'nodeUuid' => '5d42d06e-45f5-4109-b6f7-89e3f7518ceb',
+        'floor' => '3F',
+        'x' => 796.91,
+        'y' => 816,
+        'rssiByBssid' => ['78:7d:53:39:34:d7' => -50, '78:7D:53:39:34:D8' => -48],
+        'altitudeMeters' => 98.5,
+        'sampleCount' => 3,
+        'measuredAtMillis' => 1791270100702,
+    ];
+    $ok = km_learning_normalize_sample($sample);
+    check('uuid は小文字に揃える', '0f8fad5b-d9cb-469f-a165-70867728950e', $ok['sampleUuid']);
+    check('BSSID は大文字に揃える', ['78:7D:53:39:34:D7' => -50, '78:7D:53:39:34:D8' => -48], $ok['rssiByBssid']);
+    check('座標は数に', 816.0, $ok['y']);
+    $rejects = static function (array $override) use ($sample): bool {
+        try {
+            km_learning_normalize_sample(array_merge($sample, $override));
+            return false;
+        } catch (InvalidArgumentException) {
+            return true;
+        }
+    };
+    check_bool('uuid の形を確かめる', $rejects(['sampleUuid' => 'x']));
+    check_bool('地点・階の形を確かめる', $rejects(['nodeUuid' => "a'; DROP"]) && $rejects(['floor' => '3F/../']));
+    check_bool('電波の値は BSSID と -127〜0 の整数', $rejects(['rssiByBssid' => ['nope' => -50]]) && $rejects(['rssiByBssid' => ['78:7D:53:39:34:D7' => 5]])
+        && $rejects(['rssiByBssid' => ['78:7D:53:39:34:D7' => '-50']]) && $rejects(['rssiByBssid' => []]));
+    check_bool('時刻と回数の範囲', $rejects(['measuredAtMillis' => 5]) && $rejects(['sampleCount' => 0]) && $rejects(['x' => INF]));
+    $evaluation = km_learning_normalize_evaluation(['uuid' => '0F8FAD5B-D9CB-469F-A165-70867728950E', 'nodeUuid' => 'n-1', 'floor' => '3F', 'algorithm' => 'ハイブリッド法']);
+    check('評価は中身をそのまま保存する', 'ハイブリッド法', json_decode($evaluation['body'], true)['algorithm'] ?? null);
+
+    km_check_heading('learning-data: 口');
+    $read = static fn (string $path): string => (string) @file_get_contents($src . '/' . $path);
+    $api = $read('api/learning.php');
+    $assertAt = strpos($api, "logto_assert_permissions(\$principal, LOGTO_ADMIN_PERMISSIONS);\n\$uploadedBy");
+    check_bool('送る・消すは管理者のトークンだけ', $assertAt !== false && $assertAt < (int) strpos($api, 'km_learning_store(') && $assertAt < (int) strpos($api, 'km_learning_delete('));
+    check_bool('学習データを読むのはアクセスコードか管理者', str_contains($api, "km_learning_code_allowed(\$pdo, (string) (\$input['code'] ?? ''))"));
+    check_bool('評価を読むのは管理者だけ', strpos($api, "if (\$kind === 'evaluations') {") < strpos($api, 'km_learning_changes('));
+    check_bool('コードは URL ではなく本文で受ける(POST だけ)', str_contains($api, "require_method('POST');") && !str_contains($api, '$_GET'));
+    check_bool('消したことを記録する', str_contains($api, "km_admin_log_record('settings', 'learning.delete'"));
+    require_once $src . '/lib/admin-log.php';
+    check_bool('記録の文言', isset(KM_ADMIN_LOG_ACTION_LABELS['learning.delete']));
+    $lib = $read('lib/learning-data.php');
+    check_bool('同じ記録は 2 度入れない(送り直しても増えない)', str_contains($lib, 'UNIQUE KEY uq_km_learning_samples_uuid (sample_uuid)') && str_contains($lib, 'rssi_json = IF(deleted = 1, VALUES(rssi_json), rssi_json)'));
+    check_bool('消した記録を送り直したら生き返らせる(deleted は最後に書く)', preg_match('/seq = IF\(deleted = 1, VALUES\(seq\), seq\),\s*deleted = 0/', $lib) === 1);
+    check_bool('消しても行は残し、番号を振り直す(端末が消えたと知るため)', str_contains($lib, 'SET deleted = 1, seq = ?'));
+    check_bool('1 回に返す量を絞る(アプリは 1MB まで読む)', KM_LEARNING_PAGE_BYTES <= 700 * 1024);
+}
+
+/**
  * 1 台のルーターの複数 BSSID(2026-10-02)。アプリはカンマ区切りで送る。列が狭いと取り込みごと止まる。
  */
 function km_check_router_bssids(): void
@@ -3801,7 +3860,7 @@ function km_check_hardening(): void
     check_bool('include 専用の 404 は `\.php(/|$)`', str_contains($https, 'logto-client)\.php(/|$) {'));
     check_bool('proxy-web.conf に proxy_read_timeout を書かない(location で重複すると起動しない)', !str_contains((string) preg_replace('/^\s*#.*$/m', '', $file('nginx/km/proxy-web.conf')), 'proxy_read_timeout'));
     check('443 で 300s を許すのは downloads.php だけ', 1, substr_count($https, 'proxy_read_timeout 300s;'));
-    check_bool('未認証で重い口を km_api で絞る(メソッドを問わない)', str_contains($https, 'location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update|positioning-params)|logto_me)\.php$ {') && str_contains($https, 'limit_req zone=km_api burst=120 nodelay;'));
+    check_bool('未認証で重い口を km_api で絞る(メソッドを問わない)', str_contains($https, 'location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update|positioning-params|learning)|logto_me)\.php$ {') && str_contains($https, 'limit_req zone=km_api burst=120 nodelay;'));
     check_bool('アプリの地図は km_appmap で絞る', preg_match('#location = /api/app-map\.php \{\s*limit_req zone=km_appmap burst=30 nodelay;#', $https) === 1);
     check_bool('callback.php は認可コードをログに残さない', preg_match('#location = /callback\.php \{\s*access_log [^;]+ km_no_query;#', $https) === 1);
     /*
@@ -7063,6 +7122,9 @@ foreach ($selected as $name) {
             break;
         case 'positioning-params':
             km_check_positioning_params();
+            break;
+        case 'learning-data':
+            km_check_learning_data();
             break;
         case 'app-update':
             km_check_app_update();

@@ -89,6 +89,8 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     // アプリの測位のパラメータ(2026-10-06、lib/positioning-params.php)。詳細は「既定と違う項目の数」だけ
     'positioning.params_publish' => 'がアプリの測位のパラメータを全員に配りました',
     'positioning.params_unpublish' => 'がアプリの測位のパラメータを配るのをやめました',
+    // Wi-Fi の学習データ・評価をサーバーから消した(2026-10-06、lib/learning-data.php)。詳細は種類・件数・範囲
+    'learning.delete' => 'が Wi-Fi の学習データをサーバーから消しました',
     // 今月の公開の一覧を写し取った(2026-10-06、W-45 の承認制)。詳細は「月 / 語の数」だけ
     'ranking.queries_published' => 'がランキングの調べられた語の今月の一覧を公開しました',
     // お試しの閲覧リンク(2026-09-30、lib/map-guest.php)。発行と取り消しは管理者
