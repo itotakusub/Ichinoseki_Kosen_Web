@@ -125,7 +125,9 @@ services:
     # 中身が差し替わっても、移行が走る Logto では気付いたときには戻せない。
     # **タグは消さない。** check-updates.sh はタグから版番号を読んで「新しい版が出たか」を見る
     # (digest だけにすると hex を版番号として読み、毎日「新しい版があります」と言い続ける)。
-    image: ghcr.io/logto-io/logto:1.43.0@sha256:41196a1fadbff35eae337965321c57946936755066bd92625ccf8a5b65d4b1be
+    # 1.44.0 に上げた(2026-10-06、利用者の決定)。移行は 2 つ: 利用者 ID の列を 128 字に広げる(**戻せない** ——
+    # 長い ID ができた後は巻き戻しが失敗する)・SAML の列を足す。先に検証機で上げて確かめた(docs/19)
+    image: ghcr.io/logto-io/logto:1.44.0@sha256:847cdd2759ad60f61b9733af0ea352183c805681dff5c9f8140a80f52d8e1340
     container_name: km-logto
     restart: unless-stopped
     security_opt:

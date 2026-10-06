@@ -2169,7 +2169,7 @@ function km_check_review_0925(): void
     km_check_heading('review-0925 W-45: 調べられた語を管理画面で外せる');
     check_bool('出どころは /64 単位(km_map_rate_limit_key)で数える', str_contains($ranking, 'km_map_rate_limit_key($source)'));
     check_bool('公開の一覧は外した語を出さない', str_contains($ranking, 'NOT EXISTS (SELECT 1 FROM km_map_ranking_hidden_queries h'));
-    check_bool('外した語は年の掃除でも消える', str_contains($ranking, "'km_map_ranking_hidden_queries'] as \$table"));
+    check_bool('外した語は年の掃除でも消える', str_contains($ranking, "'km_map_ranking_hidden_queries', 'km_map_ranking_published_queries'] as \$table"));
     $page = $read('admin/ranking.php');
     check_bool('管理画面は guard.php を通る', str_contains($page, "require __DIR__ . '/_inc/guard.php';"));
     check_bool('外す操作は CSRF を確かめてから', strpos($page, 'km_csrf_verify()') !== false && strpos($page, 'km_csrf_verify()') < strpos($page, 'km_ranking_hide_query('));
@@ -2178,6 +2178,18 @@ function km_check_review_0925(): void
     check_bool('記録の文言がある', isset(KM_ADMIN_LOG_ACTION_LABELS['ranking.query_hidden']));
     check_bool('メニューから開ける', str_contains($read('admin/_inc/partials/sidebar.php'), 'href="./ranking.php"'));
     check_bool('語は画面でエスケープする', str_contains($page, "<?= km_e(\$row['query']) ?>"));
+
+    km_check_heading('review-1005 W-45: 公開するのは管理者が選んだ語だけ(月ごとの写し)');
+    check_bool('公開の一覧は月の写しだけを読む', str_contains($ranking, 'FROM km_map_ranking_published_queries p') && !str_contains($ranking, 'int $minSources'));
+    check_bool('写しに入るのは出どころの条件を満たし、外していない語だけ', str_contains($ranking, "\$statement->execute([\$year, ...\$words, KM_RANKING_QUERY_MIN_SOURCES]);"));
+    check_bool('同じ月に公開し直すと置き換える', str_contains($ranking, "DELETE FROM km_map_ranking_published_queries WHERE period = ?"));
+    check_bool('外した語は公開中の写しからもすぐ消す', str_contains($ranking, "DELETE FROM km_map_ranking_published_queries WHERE normalized_query = ? AND year = ?"));
+    check_bool('写しも年の掃除で消える', str_contains($ranking, "'km_map_ranking_published_queries'] as \$table"));
+    check_bool('公開する操作も CSRF を確かめてから', strpos($page, 'km_csrf_verify()') < strpos($page, 'km_ranking_publish_queries('));
+    check_bool('公開したことを記録する(月と数だけ)', str_contains($page, "km_admin_log_record('content', 'ranking.queries_published', \$period . ' / ' . \$count);"));
+    check_bool('記録の文言がある(公開)', isset(KM_ADMIN_LOG_ACTION_LABELS['ranking.queries_published']));
+    check_bool('今月まだ公開していなければ画面で知らせる', str_contains($page, 'page.ranking.notPublishedThisMonth'));
+    check_bool('リセットの道具は写しも消す', substr_count($read('scripts/reset-app-ranking.php'), 'km_map_ranking_published_queries') === 3);
 
     km_check_heading('review-0925 W-48: 削除した人の ID は他の記録とチャットからも消す');
     require_once $src . '/lib/account-delete.php';

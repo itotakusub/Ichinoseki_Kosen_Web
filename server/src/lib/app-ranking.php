@@ -49,6 +49,15 @@ require_once __DIR__ . '/app-secret.php';
  *   - 語の表は年ごとに KM_RANKING_MAX_QUERY_ROWS 行まで。語ごとの出どころの印も打ち止めにする
  *   - 出どころは IP ではなく km_map_rate_limit_key()(IPv6 は /64)で数える
  *   - 管理画面(admin/ranking.php)で、語を一覧から外せる(km_map_ranking_hidden_queries)
+ *
+ * ## 公開するのは、管理者が選んだ語だけ(2026-10-06、診断 W-45 の残り。利用者の決定「承認制・1 か月ごとに更新」)
+ *
+ * 出どころ 3 つの条件は、回線を 3 つ用意すれば 1 人でも越えられる。外せるようにしても、外すまでは公開の一覧に出た。
+ * いまは **月ごとの写し(km_map_ranking_published_queries)だけを公開する**:
+ *   - 管理画面で、条件(出どころ 3 つ)を満たした語から選び、「今月の一覧を公開」で回数ごと写し取る
+ *   - 公開の一覧(km_ranking_queries)は、その年のいちばん新しい写しを返す。写しが無ければ空
+ *   - 次の月に選び直すまで、回数も語も変わらない(前の月に選んだ語は、次の画面で最初から選ばれている)
+ *   - 外した語は、写しからもすぐ消す
  */
 
 require_once __DIR__ . '/map-rate-limit.php';
@@ -73,6 +82,9 @@ const KM_RANKING_MAX_QUERY_SOURCES = KM_RANKING_QUERY_MIN_SOURCES * 4;
 
 /** 利用者の件数を足す間隔(秒)。これより短い間の送信は、場所の集計には入れるが利用者には足さない。 */
 const KM_RANKING_USER_MIN_INTERVAL = 30;
+
+/** 1 か月の写しに入れられる語の数の上限(公開で出すのは km_ranking_clamp_limit の分まで)。 */
+const KM_RANKING_MAX_PUBLISHED_QUERIES = 100;
 
 function km_ranking_ensure_tables(PDO $pdo): void
 {
@@ -129,6 +141,117 @@ function km_ranking_ensure_tables(PDO $pdo): void
             PRIMARY KEY (normalized_query, year)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         SQL);
+
+    // 公開する語の月ごとの写し(W-45)。**ここに在る語と回数だけが公開の一覧に出る**
+    $pdo->exec(<<<'SQL'
+        CREATE TABLE IF NOT EXISTS km_map_ranking_published_queries (
+            period CHAR(7) NOT NULL,
+            year SMALLINT NOT NULL,
+            normalized_query VARCHAR(64) NOT NULL,
+            searches INT NOT NULL,
+            published_at DATETIME NOT NULL,
+            PRIMARY KEY (period, normalized_query),
+            INDEX idx_km_ranking_published_year (year, period)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        SQL);
+}
+
+/** 今の月('YYYY-MM')。 */
+function km_ranking_current_period(): string
+{
+    return date('Y-m');
+}
+
+/**
+ * 今月の一覧を、選んだ語で写し取る(管理画面から)。**同じ月に 2 度押せば置き換える。**
+ *
+ * 選べるのは、その年の語の表に在り、外しておらず、出どころが条件(KM_RANKING_QUERY_MIN_SOURCES)以上の語だけ。
+ * それ以外が混ざっていたら黙って落とす(画面を通さずに送られても、条件は崩さない)。
+ *
+ * @param array<int, mixed> $selected
+ * @return int 写し取った語の数
+ */
+function km_ranking_publish_queries(PDO $pdo, array $selected, ?string $period = null): int
+{
+    km_ranking_ensure_tables($pdo);
+    $period ??= km_ranking_current_period();
+    if (preg_match('/^(\d{4})-(0[1-9]|1[0-2])$/', $period, $m) !== 1) {
+        throw new InvalidArgumentException('公開する月が正しくありません。');
+    }
+    $year = (int) $m[1];
+
+    $words = [];
+    foreach ($selected as $entry) {
+        $word = trim((string) $entry);
+        if ($word !== '' && mb_strlen($word, 'UTF-8') <= KM_RANKING_MAX_QUERY_LENGTH && !in_array($word, $words, true)) {
+            $words[] = $word;
+        }
+        if (count($words) >= KM_RANKING_MAX_PUBLISHED_QUERIES) {
+            break;
+        }
+    }
+
+    $rows = [];
+    if ($words !== []) {
+        $placeholders = implode(',', array_fill(0, count($words), '?'));
+        $statement = $pdo->prepare(
+            "SELECT q.normalized_query, q.searches FROM km_map_ranking_queries q
+             WHERE q.year = ? AND q.normalized_query IN ({$placeholders})
+               AND (SELECT COUNT(*) FROM km_map_ranking_query_sources s
+                     WHERE s.normalized_query = q.normalized_query AND s.year = q.year) >= ?
+               AND NOT EXISTS (SELECT 1 FROM km_map_ranking_hidden_queries h
+                     WHERE h.normalized_query = q.normalized_query AND h.year = q.year)"
+        );
+        $statement->execute([$year, ...$words, KM_RANKING_QUERY_MIN_SOURCES]);
+        $rows = $statement->fetchAll();
+    }
+
+    $pdo->beginTransaction();
+    try {
+        $pdo->prepare('DELETE FROM km_map_ranking_published_queries WHERE period = ?')->execute([$period]);
+        $insert = $pdo->prepare(
+            'INSERT INTO km_map_ranking_published_queries (period, year, normalized_query, searches, published_at)
+             VALUES (?, ?, ?, ?, NOW())'
+        );
+        foreach ($rows as $row) {
+            $insert->execute([$period, $year, (string) $row['normalized_query'], (int) $row['searches']]);
+        }
+        $pdo->commit();
+    } catch (Throwable $exception) {
+        $pdo->rollBack();
+        throw $exception;
+    }
+
+    return count($rows);
+}
+
+/**
+ * その年のいちばん新しい写し。無ければ null。
+ *
+ * @return array{period:string, publishedAt:string, queries:array<int, string>}|null
+ */
+function km_ranking_latest_publication(PDO $pdo, int $year): ?array
+{
+    km_ranking_ensure_tables($pdo);
+    $statement = $pdo->prepare(
+        'SELECT period, MAX(published_at) AS published_at FROM km_map_ranking_published_queries
+         WHERE year = ? GROUP BY period ORDER BY period DESC LIMIT 1'
+    );
+    $statement->execute([$year]);
+    $latest = $statement->fetch();
+    if ($latest === false) {
+        return null;
+    }
+    $words = $pdo->prepare(
+        'SELECT normalized_query FROM km_map_ranking_published_queries WHERE period = ? ORDER BY searches DESC, normalized_query ASC'
+    );
+    $words->execute([(string) $latest['period']]);
+
+    return [
+        'period' => (string) $latest['period'],
+        'publishedAt' => (string) $latest['published_at'],
+        'queries' => array_map('strval', $words->fetchAll(PDO::FETCH_COLUMN)),
+    ];
 }
 
 // ---------------------------------------------------------------- 記録
@@ -335,6 +458,9 @@ function km_ranking_hide_query(PDO $pdo, string $query, int $year): bool
         $removed->execute([$query, $year]);
         $pdo->prepare('DELETE FROM km_map_ranking_query_sources WHERE normalized_query = ? AND year = ?')
             ->execute([$query, $year]);
+        // 公開中の写しからもすぐ消す(次の月を待たない。W-45)
+        $pdo->prepare('DELETE FROM km_map_ranking_published_queries WHERE normalized_query = ? AND year = ?')
+            ->execute([$query, $year]);
         $pdo->commit();
     } catch (Throwable $exception) {
         $pdo->rollBack();
@@ -346,6 +472,7 @@ function km_ranking_hide_query(PDO $pdo, string $query, int $year): bool
 
 /**
  * 管理画面の一覧。**公開の条件に満たない語も出す**(公開される前に外せるように)。
+ * `public` は「出どころの条件を満たし、公開に選べる」。実際に公開中かは km_ranking_latest_publication で見る。
  *
  * @return array<int, array{query:string, searches:int, sources:int, public:bool}>
  */
@@ -454,7 +581,7 @@ function km_ranking_public_user_key(string $secret, string $userId, int $year): 
 function km_ranking_purge_old(PDO $pdo, int $currentYear): void
 {
     $oldest = $currentYear - KM_RANKING_RETENTION_YEARS;
-    foreach (['km_map_ranking_places', 'km_map_ranking_queries', 'km_map_ranking_query_sources', 'km_map_ranking_users', 'km_map_ranking_hidden_queries'] as $table) {
+    foreach (['km_map_ranking_places', 'km_map_ranking_queries', 'km_map_ranking_query_sources', 'km_map_ranking_users', 'km_map_ranking_hidden_queries', 'km_map_ranking_published_queries'] as $table) {
         $pdo->prepare("DELETE FROM {$table} WHERE year < ?")->execute([$oldest]);
     }
 }
@@ -499,29 +626,23 @@ function km_ranking_places(PDO $pdo, int $year, int $limit = 20): array
 }
 
 /**
- * 調べられた語。**KM_RANKING_QUERY_MIN_SOURCES 以上の出どころから来た語だけ。**
+ * 調べられた語(公開の一覧)。**管理者が公開した、その年のいちばん新しい月の写しだけ**(W-45)。
+ * 回数は写し取ったときのもの。写しが無ければ空。
  *
  * @return array<int, array{query:string, searches:int}>
  */
-function km_ranking_queries(
-    PDO $pdo,
-    int $year,
-    int $limit = 20,
-    int $minSources = KM_RANKING_QUERY_MIN_SOURCES
-): array {
+function km_ranking_queries(PDO $pdo, int $year, int $limit = 20): array
+{
     km_ranking_ensure_tables($pdo);
     $statement = $pdo->prepare(
-        'SELECT q.normalized_query, q.searches FROM km_map_ranking_queries q
-         WHERE q.year = ?
-           AND (SELECT COUNT(*) FROM km_map_ranking_query_sources s
-                 WHERE s.normalized_query = q.normalized_query AND s.year = q.year) >= ?
+        'SELECT p.normalized_query, p.searches FROM km_map_ranking_published_queries p
+         WHERE p.period = (SELECT MAX(period) FROM km_map_ranking_published_queries WHERE year = ?)
            AND NOT EXISTS (SELECT 1 FROM km_map_ranking_hidden_queries h
-                 WHERE h.normalized_query = q.normalized_query AND h.year = q.year)
-         ORDER BY q.searches DESC, q.normalized_query ASC LIMIT ?'
+                 WHERE h.normalized_query = p.normalized_query AND h.year = p.year)
+         ORDER BY p.searches DESC, p.normalized_query ASC LIMIT ?'
     );
     $statement->bindValue(1, $year, PDO::PARAM_INT);
-    $statement->bindValue(2, max(1, $minSources), PDO::PARAM_INT);
-    $statement->bindValue(3, km_ranking_clamp_limit($limit), PDO::PARAM_INT);
+    $statement->bindValue(2, km_ranking_clamp_limit($limit), PDO::PARAM_INT);
     $statement->execute();
 
     $rows = [];
