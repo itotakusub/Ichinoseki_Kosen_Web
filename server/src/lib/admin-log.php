@@ -86,6 +86,9 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     'map.panorama_delete' => 'が地点のストリートビューの写真を外しました',
     // ランキングの「調べられた語」を外した(2026-09-25、W-45)。**語そのものは記録しない**(詳細は年だけ)
     'ranking.query_hidden' => 'がランキングの調べられた語を一覧から外しました',
+    // アプリの測位のパラメータ(2026-10-06、lib/positioning-params.php)。詳細は「既定と違う項目の数」だけ
+    'positioning.params_publish' => 'がアプリの測位のパラメータを全員に配りました',
+    'positioning.params_unpublish' => 'がアプリの測位のパラメータを配るのをやめました',
     // 今月の公開の一覧を写し取った(2026-10-06、W-45 の承認制)。詳細は「月 / 語の数」だけ
     'ranking.queries_published' => 'がランキングの調べられた語の今月の一覧を公開しました',
     // お試しの閲覧リンク(2026-09-30、lib/map-guest.php)。発行と取り消しは管理者

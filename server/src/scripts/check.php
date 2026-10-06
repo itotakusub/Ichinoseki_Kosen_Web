@@ -73,6 +73,8 @@ const KM_CHECK_PURE = [
     'router-bssids',
     // 地図の北と距離の補正を配る(2026-10-05)
     'map-calibration',
+    // アプリの測位のパラメータを配る(2026-10-06)
+    'positioning-params',
     // アプリの自動更新(2026-10-05)
     'app-update',
     'ssh-roles',
@@ -2327,6 +2329,70 @@ function km_check_map_calibration(): void
 }
 
 /**
+ * アプリの測位のパラメータ(2026-10-06、lib/positioning-params.php)。DB は使わない(検め方・口の守り・アプリとの突き合わせ)。
+ */
+function km_check_positioning_params(): void
+{
+    $src = __DIR__ . '/..';
+    require_once $src . '/lib/positioning-params.php';
+    km_check_heading('positioning-params: 検め方');
+    $all = km_positioning_params_normalize([]);
+    check('空なら全部既定で埋める', count(KM_POSITIONING_PARAM_SPECS), count($all));
+    check('既定の粒子の数', 500, $all['particle_count']);
+    $ok = km_positioning_params_normalize(['knn_k' => 6, 'path_loss_exponent' => 3.1]);
+    check('整数の項目は整数に', 6, $ok['knn_k']);
+    check('小数の項目はそのまま', 3.1, $ok['path_loss_exponent']);
+    $rejects = static function (array $input): bool {
+        try {
+            km_positioning_params_normalize($input);
+            return false;
+        } catch (InvalidArgumentException) {
+            return true;
+        }
+    };
+    check_bool('範囲の外は断る', $rejects(['knn_k' => 11]) && $rejects(['particle_count' => 50]));
+    check_bool('数でないものは断る', $rejects(['knn_k' => '4']) && $rejects(['rtt_enabled' => true]) && $rejects(['ls_iterations' => INF]));
+    check_bool('知らない項目は断る(版の食い違い)', $rejects(['unknown_param' => 1]));
+
+    km_check_heading('positioning-params: 口');
+    $read = static fn (string $path): string => (string) @file_get_contents($src . '/' . $path);
+    $api = $read('api/positioning-params.php');
+    $assertAt = strpos($api, 'logto_assert_permissions($principal, LOGTO_ADMIN_PERMISSIONS);');
+    check_bool('書き込みは管理者のトークンだけ', $assertAt !== false && strpos($api, "require_method('POST');") < $assertAt
+        && $assertAt < (int) strpos($api, 'km_positioning_params_publish(') && $assertAt < (int) strpos($api, 'km_positioning_params_reset('));
+    check_bool('読みは権限なしで返す(秘密ではない)', strpos($api, "=== 'GET'") < $assertAt);
+    check_bool('本文は 8KB まで', str_contains($api, 'km_api_json_body(8 * 1024)'));
+    require_once $src . '/lib/admin-log.php';
+    check_bool('記録の文言', isset(KM_ADMIN_LOG_ACTION_LABELS['positioning.params_publish'], KM_ADMIN_LOG_ACTION_LABELS['positioning.params_unpublish']));
+    check_bool('専用の表(km_settings の 255 字に入らない)', str_contains($read('lib/positioning-params.php'), 'CREATE TABLE IF NOT EXISTS km_positioning_params'));
+
+    $kotlin = 'C:/Users/itota/Documents/Test/app/src/main/java/com/ito/kosenmap/positioning/PositioningParams.kt';
+    if (!is_file($kotlin)) {
+        check_skip('positioning-params: アプリと突き合わせ', 'アプリの原本が無い(本番のホストなど)');
+        return;
+    }
+    km_check_heading('positioning-params: アプリと突き合わせ');
+    $kt = (string) file_get_contents($kotlin);
+    preg_match_all(
+        '/PositioningParamSpec\(\s*"([a-z_]+)",\s*"[^"]*",\s*"[^"]*",\s*"[^"]*",\s*(-?[0-9.]+),\s*(-?[0-9.]+),\s*(-?[0-9.]+)(,\s*integer = true)?/u',
+        $kt,
+        $matches,
+        PREG_SET_ORDER
+    );
+    $app = [];
+    foreach ($matches as $m) {
+        $app[$m[1]] = [(float) $m[2], (float) $m[3], (float) $m[4], ($m[5] ?? '') !== ''];
+    }
+    check('項目の並びと数が同じ', array_keys(KM_POSITIONING_PARAM_SPECS), array_keys($app));
+    foreach (KM_POSITIONING_PARAM_SPECS as $key => [$min, $max, $default, $integer]) {
+        check("$key の範囲・既定・整数か", [(float) $min, (float) $max, (float) $default, $integer], $app[$key] ?? null);
+    }
+    $dir = dirname($kotlin, 2);
+    $prefs = (string) @file_get_contents($dir . '/MapPreferences.kt');
+    check_bool('手元の値を読むのは管理ビルドだけ', str_contains($prefs, 'return (if (adminBuild) read(POSITIONING_PARAMS_LOCAL_KEY) else null)'));
+}
+
+/**
  * 1 台のルーターの複数 BSSID(2026-10-02)。アプリはカンマ区切りで送る。列が狭いと取り込みごと止まる。
  */
 function km_check_router_bssids(): void
@@ -3735,7 +3801,7 @@ function km_check_hardening(): void
     check_bool('include 専用の 404 は `\.php(/|$)`', str_contains($https, 'logto-client)\.php(/|$) {'));
     check_bool('proxy-web.conf に proxy_read_timeout を書かない(location で重複すると起動しない)', !str_contains((string) preg_replace('/^\s*#.*$/m', '', $file('nginx/km/proxy-web.conf')), 'proxy_read_timeout'));
     check('443 で 300s を許すのは downloads.php だけ', 1, substr_count($https, 'proxy_read_timeout 300s;'));
-    check_bool('未認証で重い口を km_api で絞る(メソッドを問わない)', str_contains($https, 'location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update)|logto_me)\.php$ {') && str_contains($https, 'limit_req zone=km_api burst=120 nodelay;'));
+    check_bool('未認証で重い口を km_api で絞る(メソッドを問わない)', str_contains($https, 'location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update|positioning-params)|logto_me)\.php$ {') && str_contains($https, 'limit_req zone=km_api burst=120 nodelay;'));
     check_bool('アプリの地図は km_appmap で絞る', preg_match('#location = /api/app-map\.php \{\s*limit_req zone=km_appmap burst=30 nodelay;#', $https) === 1);
     check_bool('callback.php は認可コードをログに残さない', preg_match('#location = /callback\.php \{\s*access_log [^;]+ km_no_query;#', $https) === 1);
     /*
@@ -6994,6 +7060,9 @@ foreach ($selected as $name) {
             break;
         case 'map-calibration':
             km_check_map_calibration();
+            break;
+        case 'positioning-params':
+            km_check_positioning_params();
             break;
         case 'app-update':
             km_check_app_update();
