@@ -312,7 +312,7 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
   - 控え → Logto 1.44.0(移行 2 つ)→ 像の更新 → web・soketi の作り直し → 全サービス healthy・自己検査 1160 件。手順と確認は [19](19-security-fixes-2026-10-06.ipynb) §4
   - **`-Action up` は像を作り直さない**(`docker compose build --pull web soketi` が別に要る)
 - **残り(利用者)**:
-  - W-55: GitHub Support に送った(2026-10-06)。返事待ち
+  - ~~W-55~~ **済(2026-10-08)**: GitHub Support が PR #1〜#6 と参照の無いコミットを消した。書き換え前の 8 本が引けない(422)ことを確かめた
   - sudo: `host-updates-setup.sh --fix`(cron 版 8)・(使うなら)geoblock
   - 本番で動いたままの Mailpit を片付けるか
   - A-35-offline を直した APK の配布(署名)
