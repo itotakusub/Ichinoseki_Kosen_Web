@@ -4410,6 +4410,23 @@ function km_check_hardening(): void
     check('色分け: POST を受けるページ(お問い合わせ・お試し・共有・アプリの地図)', ['/api/app-map.php', '/contact.php', '/guest.php', '/share.php'], $postPages);
     check_bool('色分け: 外国はチェックボックスで表示・非表示(既定は表示)', str_contains($visitorsPage, 'id="km-visitors-show-foreign" checked')
         && str_contains($visitorsJs, "pref.get(PREF_FOREIGN, '1') === '1'"));
+    // 点数(2026-10-08 の 2 回目、利用者の指示「① ISP/ASN 〜 ⑦ 過去の挙動 を計算する・件数は 10/50/100/200・国は ▽ で開く・Excel へ書き出す」)
+    check_bool('点数: 60 点以上は危険・25 点以上は怪しい・① 〜 ⑦ の見方がそろう', str_contains($threatsJs, 'const DANGER_SCORE = 60;')
+        && str_contains($threatsJs, 'const SUSPECT_SCORE = 25;')
+        && count(array_filter(['① ISP/ASN', '② User-Agent', '③ IP 種別', '④ アクセス頻度', '⑤ HTTP ステータス', '⑥ URL・メソッド', '⑦ 過去の挙動'], static fn ($s) => str_contains($threatsJs, "'$s'"))) === 7);
+    check_bool('点数: 判定は表示のたびに、位置・信頼・前の危険を渡して行う', str_contains($visitorsJs, 'threats.classify(visits, { geoOf: (ip) => geo.get(ip), isPrivate, trusted, history })'));
+    check_bool('① ISP/ASN は ipwho.is の connection で引く(ASN の無い古い覚えは引き直す)', str_contains($visitorsJs, 'fields=success,country_code,country,region,city,connection')
+        && str_contains($visitorsJs, "g.src === 'ipwho.is' && !('asn' in g)"));
+    check_bool('⑦ 前の危険は IndexedDB(flags)に 30 日だけ覚える', str_contains($visitorsJs, "indexedDB.open('km-visitors', 2)") && str_contains($visitorsJs, "createObjectStore('flags', { keyPath: 'ip' })")
+        && str_contains($visitorsJs, "await loadStore('flags', history);"));
+    check_bool('信頼する送り元はこのブラウザ(localStorage)だけ・IP をコードに書かない', str_contains($visitorsJs, "const PREF_TRUSTED = 'kmadmin-visitors-trusted';")
+        && preg_match('/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/', $visitorsJs . $threatsJs) === 0);
+    check_bool('最近の訪問は 10・50・100・200 件から選ぶ', str_contains($visitorsJs, "const ROW_CHOICES = ['10', '50', '100', '200'];")
+        && preg_match_all('/<option value="(10|50|100|200)"( selected)?>\1<\/option>/', $visitorsPage) === 4);
+    check_bool('国・地域別は ▷ / ▽ で地域・都市を開く', str_contains($visitorsJs, "toggle.textContent = open ? '▽' : '▷';") && str_contains($visitorsJs, 'expandedCountries'));
+    check_bool('CSV: BOM 付き(Excel で開ける)・式に読まれる値の頭に \'', str_contains($visitorsJs, '`﻿${rows.map((r) => r.map(csvCell).join(\',\')).join(\'\r\n\')}\r\n`')
+        && str_contains($visitorsJs, "if (/^[=+\\-@\\t\\r]/.test(s)) {")
+        && str_contains($visitorsPage, 'id="km-visitors-export-visits"') && str_contains($visitorsPage, 'id="km-visitors-export-ips"'));
     check_bool('cron(版 8)が 30 日を過ぎた記録を消す', str_contains($hostUpdates, "find \$PATH_ROOT/run/visitlog -maxdepth 1 -type f -name 'visit-*.jsonl' -mtime +30 -delete"));
     // 振る舞い: 上限を超えたら新しい方を残し、古い方は行の頭から送る
     require_once __DIR__ . '/../lib/visit-log.php';
