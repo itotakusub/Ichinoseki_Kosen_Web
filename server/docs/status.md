@@ -207,6 +207,14 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
     ① は ipwho.is の `connection`(ASN・組織)。⑦ の「前にも危険」は IndexedDB `km-visitors` / `flags` に 30 日。
     「信頼する」(自分の回線など)はそのブラウザの localStorage だけ(IP をリポジトリに書かない)
   - CSV の書き出し(訪問・送り元。UTF-8 BOM・式に読まれる値の頭に `'`)、最近の訪問は 10・50・100・200 件、国・地域別は ▷ で地域・都市を開く
+  - **世界地図と BAN**(2026-10-08 の 3 回目、利用者の指示): 本書(`Website/index.html`)の `card text-white bg-primary bg-gradient border-primary mb-4`
+    (Sales Value)を写した。地図は本書と同じ jsVectorMap 1.5.3 を `src/admin/vendor/jsvectormap/` に置いた(CSP で CDN を読めない。中身は本書の SRI と同じことを check.php が見る)。
+    小さなグラフは ApexCharts(style 属性を書くので CSP に掛かる)の代わりに SVG(`assets/js/visitors-world.js`)。
+    国ごとの訪問 = 黄〜橙・BAN 中の IP の国 = 赤・国ごと拒否 = 黒。BAN は `scripts/host-stats.sh` が 1 分ごとに `run/hoststats/bans.json` へ
+    (国の拒否の国と落とした数・fail2ban の牢ごとの IP と数・22 番の DROP)、`admin/api/visitor-bans.php` が組み直さずに渡す。
+    BAN 中の IP が訪問の記録に出た回数と、回数制限(429)で断った訪問の数もカードに出す。
+    jsVectorMap は読み込み中だと DOMContentLoaded まで描かないので、`onLoaded` で塗る
+  - 日別・国・地域別・ページ別・世界地図のカードは折りたためる(AdminLTE の card-collapse)
   - 30 日で消す(cron 版 8)
   - 踏んだ罠 2 つ:
     - 書き先に変数を使うと、nginx は `root` のディレクトリがあるかを確かめる。無いと 1 行も書かない → `root /var/empty`

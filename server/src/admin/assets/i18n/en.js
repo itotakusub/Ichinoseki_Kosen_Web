@@ -1024,6 +1024,7 @@ globalThis.KM_I18N.en = {
   "page.visitors.signed": "Trial / signed in / app",
   "page.visitors.byDay": "By day",
   "page.visitors.byCountry": "By country / region",
+  "page.visitors.world": "World map (visits and bans)",
   "page.visitors.byPage": "By page",
   "page.visitors.recent": "Recent visits (newest first)",
   "page.visitors.colDay": "Date",

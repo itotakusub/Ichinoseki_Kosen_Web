@@ -4427,6 +4427,46 @@ function km_check_hardening(): void
     check_bool('CSV: BOM 付き(Excel で開ける)・式に読まれる値の頭に \'', str_contains($visitorsJs, '`﻿${rows.map((r) => r.map(csvCell).join(\',\')).join(\'\r\n\')}\r\n`')
         && str_contains($visitorsJs, "if (/^[=+\\-@\\t\\r]/.test(s)) {")
         && str_contains($visitorsPage, 'id="km-visitors-export-visits"') && str_contains($visitorsPage, 'id="km-visitors-export-ips"'));
+    // 世界地図と BAN・折りたたみ(2026-10-08 の 3 回目、利用者の指示「本書の bg-primary のカードだけを管理画面に・BAN と回数も」)
+    $worldJs = $file('src/admin/assets/js/visitors-world.js');
+    check_bool('折りたたみ: 日別・国・地域別・ページ別のカードに card-collapse', preg_match_all("/\\\$table\('(byDay|byCountry|byPage)',[^\n]*collapsible: true\);/", $visitorsPage) === 3
+        && str_contains($visitorsPage, 'data-lte-toggle="card-collapse"'));
+    check_bool('世界地図: 本書の card text-white bg-primary bg-gradient border-primary mb-4 を写す(地図・小さなグラフ 3 つ・折りたたみ)', str_contains($visitorsPage, '<div class="card text-white bg-primary bg-gradient border-primary mb-4" id="km-visitors-world">')
+        && str_contains($visitorsPage, '<div id="km-visitors-world-map" class="km-world-map"></div>')
+        && substr_count($visitorsPage, 'data-km-vs="spark') === 6
+        && str_contains($visitorsPage, "\$collapseButton('btn btn-primary btn-sm');"));
+    // 地図は本書と同じ版を置いた(CSP で CDN を読めない)。中身が本書の SRI と同じか
+    $jvmSri = [
+        'src/admin/vendor/jsvectormap/js/jsvectormap.min.js' => '/t1nN2956BT869E6H4V1dnt0X5pAQHPytli+1nTZm2Y=',
+        'src/admin/vendor/jsvectormap/maps/world.js' => 'XPpPaZlU8S/HWf7FZLAncLg2SAkP8ScUTII89x9D3lY=',
+        'src/admin/vendor/jsvectormap/css/jsvectormap.min.css' => '+uGLJmmTKOqBr+2E6KDYs/NRsHxSkONXFHUL0fy2O/4=',
+    ];
+    check_bool('世界地図: jsVectorMap 1.5.3 は本書と同じ中身(SRI の sha256)', count(array_filter($jvmSri, static fn ($sri, $rel) => is_file(km_check_repo_root() . "/$rel")
+        && base64_encode(hash_file('sha256', km_check_repo_root() . "/$rel", true)) === $sri, ARRAY_FILTER_USE_BOTH)) === 3);
+    check_bool('世界地図: 部品は地図 → 描く側 → 判定 → 画面の順に読む・CSS はこのページだけ', strpos($visitorsPage, 'jsvectormap.min.js') < strpos($visitorsPage, 'maps/world.js')
+        && strpos($visitorsPage, 'maps/world.js') < strpos($visitorsPage, "assets/js/visitors-world.js'")
+        && strpos($visitorsPage, "assets/js/visitors-world.js'") < strpos($visitorsPage, "assets/js/visitors.js'")
+        && str_contains($visitorsPage, "'css' => ['./vendor/jsvectormap/css/jsvectormap.min.css'],")
+        && str_contains($file('src/admin/_inc/partials/head.php'), "foreach (\$KM_PAGE['css'] ?? [] as \$href)"));
+    // ApexCharts は style 属性を書くので使わない。吹き出しは textContent(tooltip.text に HTML の印を渡さない)
+    check_bool('世界地図: 小さなグラフは SVG・文字は textContent・IP をコードに書かない', str_contains($worldJs, "document.createElementNS(SVG_NS, 'polyline')")
+        && !str_contains($worldJs, 'innerHTML') && !str_contains($worldJs, 'ApexCharts(') && !str_contains($worldJs, "setAttribute('style'")
+        && str_contains($worldJs, 'tooltip.text(tips.get(code) || helpers.countryName(code));')
+        && preg_match('/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/', $worldJs) === 0);
+    check_bool('世界地図: jsVectorMap が描き終えて(onLoaded)から塗る(読み込み中は DOMContentLoaded まで描かない)', str_contains($worldJs, 'onLoaded() {')
+        && str_contains($worldJs, 'pending = [byCountry, denySet, bannedCountries];'));
+    $bansApi = $file('src/admin/api/visitor-bans.php');
+    check_bool('BAN: 口は管理者だけ・ホストの bans.json を組み直さずに渡す', str_contains($bansApi, "require dirname(__DIR__) . '/_inc/guard.php';")
+        && str_contains($bansApi, "const KM_VISITOR_BANS_FILE = '/var/www/hoststats/bans.json';")
+        && str_contains($bansApi, 'json_validate($read)') && !str_contains($bansApi, 'json_decode(')
+        && str_contains($visitorsPage, 'data-bans-src="./api/visitor-bans.php"'));
+    $hostStats = $file('scripts/host-stats.sh');
+    check_bool('BAN: host-stats.sh が stats.json のあとに bans.json を書く(一時ファイルから mv)', strpos($hostStats, 'mv "$TMP" "$OUT_DIR/stats.json"') !== false
+        && strpos($hostStats, 'mv "$TMP" "$OUT_DIR/stats.json"') < strpos($hostStats, 'mv "$BANS_TMP" "$OUT_DIR/bans.json"')
+        && str_contains($hostStats, 'nft list chain inet km_geoblock pre') && str_contains($hostStats, 'fail2ban-client status "$_jail"')
+        && str_contains($hostStats, "''|*[!A-Za-z0-9_.-]*) continue ;;"));
+    check_bool('BAN: 国ごと拒否の色は当てているときだけ・BAN の IP も位置を引く(スイッチが入っているとき)', str_contains($visitorsJs, 'bans?.geoblock?.active ? bans.geoblock.deny || [] : []')
+        && str_contains($visitorsJs, 'bannedList().forEach(({ ip }) => {'));
     check_bool('cron(版 8)が 30 日を過ぎた記録を消す', str_contains($hostUpdates, "find \$PATH_ROOT/run/visitlog -maxdepth 1 -type f -name 'visit-*.jsonl' -mtime +30 -delete"));
     // 振る舞い: 上限を超えたら新しい方を残し、古い方は行の頭から送る
     require_once __DIR__ . '/../lib/visit-log.php';

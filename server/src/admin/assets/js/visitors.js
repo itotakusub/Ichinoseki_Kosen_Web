@@ -25,6 +25,11 @@
  * ## 書き出し(2026-10-08、利用者の指示「Excel などにエクスポート」)
  * いま表示している訪問(外国を隠していれば隠したまま)と、送り元ごとのまとめを CSV にする(UTF-8 の BOM 付き。Excel でそのまま開ける)。
  * = + - @ で始まる値は、Excel が式として読まないよう頭に ' を付ける(CSV インジェクション)。
+ *
+ * ## 世界地図と BAN(2026-10-08、利用者の指示)
+ * 本書の Sales Value のカードを写した世界地図(描くのは assets/js/visitors-world.js)へ、国ごとの数・日ごとの数・BAN を渡す。
+ * BAN は admin/api/visitor-bans.php(ホストの cron が書く bans.json)。BAN している IP が訪問の記録に何回出たかをここで数える。
+ * 「位置を調べる」が入っていれば、BAN している IP の国も、訪問の IP のあとに引く。
  */
 (() => {
   const root = document.getElementById('km-visitors');
@@ -287,6 +292,8 @@
 
   // ---- 読み込みと集計 ----
   let visits = [];
+  let bans = null;        // admin/api/visitor-bans.php の bans(まだ無ければ null)
+  let bansError = '';
   /** 判定(visits と同じ順の rows と、送り元ごとの ips)。表示のたびに作る(位置・ASN が分かると点が変わる) */
   let judged = { rows: [], ips: new Map() };
   let geoQueueToken = 0;
@@ -295,6 +302,16 @@
   const foreignCheck = document.getElementById('km-visitors-show-foreign');
   const daysSelect = document.getElementById('km-visitors-days');
   const rowsSelect = document.getElementById('km-visitors-rows');
+  const world = window.KmVisitorWorld ? window.KmVisitorWorld.create(root, { countryName }) : null;
+
+  /** BAN している IP と、その仕組み(fail2ban の牢・22 番の DROP)。形の合わない値は捨てる */
+  const bannedList = () => {
+    const out = [];
+    const okIp = (ip) => typeof ip === 'string' && /^[0-9A-Fa-f:.]+$/.test(ip) && /[.:]/.test(ip);
+    (bans?.fail2ban?.jails || []).forEach((j) => (j.ips || []).filter(okIp).forEach((ip) => out.push({ ip, how: `fail2ban(${j.name})`, packets: null })));
+    (bans?.iptables || []).filter((r) => okIp(r?.ip)).forEach((r) => out.push({ ip: r.ip, how: '22 番の DROP', packets: Number(r.packets) || 0 }));
+    return out;
+  };
 
   const place = (ip) => {
     if (isPrivate(ip)) {
@@ -465,6 +482,63 @@
       }
     });
     fill('byCountry', countryRows, '記録がありません');
+
+    // 世界地図のカード(国ごとの数・日ごとの数・BAN)
+    if (world) {
+      const days = Number(daysSelect?.value || 7);
+      const keys = [];
+      const keyOf = days === 1 ? (v) => (v.t || '').slice(11, 13) : (v) => (v.t || '').slice(0, 10);
+      if (days === 1) {
+        for (let h = 0; h < 24; h += 1) {
+          keys.push(String(h).padStart(2, '0'));
+        }
+      } else {
+        const p = (n) => String(n).padStart(2, '0');
+        for (let i = days - 1; i >= 0; i -= 1) {
+          const d = new Date(Date.now() - i * 86400000);
+          keys.push(`${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`);
+        }
+      }
+      const buckets = new Map(keys.map((k) => [k, { n: 0, ips: new Set(), danger: 0 }]));
+      list.forEach((v) => {
+        const b = buckets.get(keyOf(v));
+        if (b) {
+          b.n += 1;
+          b.ips.add(v.ip);
+          if (judgeOf(v).level === 'danger') {
+            b.danger += 1;
+          }
+        }
+      });
+      const series = [...buckets.values()];
+      const mapCounts = new Map();
+      byCountry.forEach((d, code) => {
+        if (/^[A-Z]{2}$/.test(code)) {
+          mapCounts.set(code, { n: d.n, ips: d.ips.size });
+        }
+      });
+      const visitsByIp = new Map();
+      visits.forEach((v) => visitsByIp.set(v.ip, (visitsByIp.get(v.ip) || 0) + 1));
+      const banned = bannedList().map((r) => ({ ...r, place: place(r.ip).label, visits: visitsByIp.get(r.ip) || 0 }));
+      const bannedCountries = new Map();
+      new Set(banned.map((r) => r.ip)).forEach((ip) => {
+        const code = place(ip).code;
+        if (code && /^[A-Z]{2}$/.test(code)) {
+          bannedCountries.set(code, (bannedCountries.get(code) || 0) + 1);
+        }
+      });
+      world.render({
+        byCountry: mapCounts,
+        deny: new Set((bans?.geoblock?.active ? bans.geoblock.deny || [] : []).map((c) => String(c).toUpperCase())),
+        bannedCountries,
+        series: { visits: series.map((b) => b.n), ips: series.map((b) => b.ips.size), danger: series.map((b) => b.danger) },
+        totals: { visits: list.length, ips: ips.size, danger: list.filter((v) => judgeOf(v).level === 'danger').length },
+        bans,
+        bansError,
+        banned,
+        limited: list.filter((v) => Number(v.s) === 429).length,
+      });
+    }
 
     // ページ別
     const byPage = new Map();
@@ -649,6 +723,13 @@
       }
       seen.add(ip);
     }
+    // BAN している IP の国も(地図の赤)。訪問の IP のあと
+    bannedList().forEach(({ ip }) => {
+      if (!seen.has(ip) && needsLookup(ip) && !isPrivate(ip)) {
+        queue.push(ip);
+      }
+      seen.add(ip);
+    });
     let done = 0;
     for (const ip of queue.slice(0, GEO_MAX_PER_LOAD)) {
       if (token !== geoQueueToken || geoSwitch?.checked !== true) {
@@ -669,10 +750,30 @@
     }
   };
 
+  /** BAN の様子。読めなくても訪問の表は出す */
+  const loadBans = async () => {
+    if (!root.dataset.bansSrc) {
+      return;
+    }
+    try {
+      const res = await fetch(root.dataset.bansSrc, { credentials: 'same-origin', cache: 'no-store' });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      bans = data && typeof data.bans === 'object' ? data.bans : null;
+      bansError = '';
+    } catch (error) {
+      bans = null;
+      bansError = error.message;
+    }
+  };
+
   const load = async () => {
     geoQueueToken += 1;
     const days = Number(daysSelect?.value || 7);
     setText('status', '読み込み中…');
+    const bansDone = loadBans();
     try {
       const res = await fetch(`${root.dataset.src}?days=${days}`, { credentials: 'same-origin', cache: 'no-store' });
       if (!res.ok) {
@@ -697,6 +798,7 @@
         }
       });
       visits = parsed;
+      await bansDone;
       const notes = [];
       if (res.headers.get('X-KM-Visit-Log') === 'missing') {
         notes.push('記録の置き場がありません(reverse-proxy と web の作り直しが要ります)');

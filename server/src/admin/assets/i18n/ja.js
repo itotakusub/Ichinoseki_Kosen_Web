@@ -1025,6 +1025,7 @@ globalThis.KM_I18N.ja = {
   "page.visitors.signed": "お試し・サインイン・アプリ",
   "page.visitors.byDay": "日別",
   "page.visitors.byCountry": "国・地域別",
+  "page.visitors.world": "世界地図(訪問と BAN)",
   "page.visitors.byPage": "ページ別",
   "page.visitors.recent": "最近の訪問(新しい順)",
   "page.visitors.colDay": "日付",
