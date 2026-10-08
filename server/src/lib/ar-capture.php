@@ -611,9 +611,15 @@ function km_ar_zip_readme(): string
                                 World = ARCore world (y up, metres). points3D.txt is empty:
                                 colmap feature_extractor / exhaustive_matcher, then
                                 colmap point_triangulator --input_path sparse/0 (known poses), then dense reconstruction.
-        survey.json             the AR survey record (track, marks on map nodes, depth hits)
+        survey.json             the AR survey record (track, marks on map nodes, depth hits, and "alignment":
+                                per tracking segment, ARCore x/z -> east/north metres from the first marked node)
 
-        RealityScan / RealityCapture: import images/ ; the poses in frames.json can be used as priors.
+        RealityScan (positions for the images; see docs/20 "RealityScan で 3D を作る"):
+          scripts\ar-realityscan-prep.ps1 -Dir <unzipped and blurred folder> [-OriginLat <deg> -OriginLon <deg> [-WriteExif]]
+          -> realityscan\trajectory_local.csv (name,x,y,z: east, north, up in metres) for Import Metadata > Trajectory
+             with the project coordinate system local:1 - Euclidean; or GPS written into the images' EXIF for the Map Wizard;
+             ground_control_*.csv = the marked map nodes (ground control points).
+          Images in tracking segments with fewer than 2 marks get no position (listed in excluded.txt).
         Blender: import the mesh exported from RealityScan / COLMAP.
         TXT;
 }

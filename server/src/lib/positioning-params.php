@@ -39,6 +39,8 @@ const KM_POSITIONING_PARAM_SPECS = [
     'outlier_gate_sigma' => [1.0, 10.0, 3.0, false],
     'outlier_min_m' => [1.0, 30.0, 6.0, false],
     'walkable_max_m' => [0.5, 20.0, 4.0, false],
+    // 部屋・出入口の点のまわりを歩ける所にする半径(2026-10-08。部屋の中の候補が外れ値にされていた)
+    'room_radius_m' => [1.0, 20.0, 5.0, false],
     'particle_count' => [100.0, 3000.0, 500.0, true],
     'particle_drift_mps' => [0.0, 3.0, 0.5, false],
     'particle_resample_ess' => [0.1, 1.0, 0.5, false],
