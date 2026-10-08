@@ -4395,6 +4395,21 @@ function km_check_hardening(): void
         && !str_contains(str_replace($geoBlock, '', $csp), "'https://ipwho.is'") && !str_contains(str_replace($geoBlock, '', $csp), "'https://api.country.is'"));
     $visitorsJs = $file('src/admin/assets/js/visitors.js');
     check_bool('位置は既定で引かない(スイッチを入れたときだけ)・文字は textContent', str_contains($visitorsJs, "pref.get(PREF_GEO, '0') === '1'") && !str_contains($visitorsJs, 'innerHTML'));
+    // 色分け(2026-10-08、利用者の指示「危険は赤・怪しいは黄・危険リスト・外国はチェックボックスで表示・非表示」)
+    $threatsJs = $file('src/admin/assets/js/visitors-threats.js');
+    $visitorsPage = $file('src/admin/visitors.php');
+    check_bool('色分け: 判定の決まりは visitors-threats.js(画面より先に読む)・赤と黄の行', strpos($visitorsPage, 'visitors-threats.js') !== false
+        && strpos($visitorsPage, 'visitors-threats.js') < strpos($visitorsPage, "assets/js/visitors.js'")
+        && str_contains($visitorsJs, "danger: 'table-danger', suspect: 'table-warning'") && !str_contains($threatsJs, 'innerHTML'));
+    check_bool('色分け: RedTail(libredtail-http)と POST を受けないページへの POST は危険', str_contains($threatsJs, '/libredtail|redtail/i')
+        && str_contains($threatsJs, "test: (v) => v.m === 'POST' && !POST_PAGES.has(v.p)"));
+    // POST を受けるページの一覧が、実際に POST を受けるページと揃っているか(足し忘れると正しい送信を赤にする)
+    preg_match("/const POST_PAGES = new Set\(\[([^\]]*)\]\)/", $threatsJs, $postMatch);
+    $postPages = array_map(static fn ($s) => trim($s, " '"), explode(',', $postMatch[1] ?? ''));
+    sort($postPages);
+    check('色分け: POST を受けるページ(お問い合わせ・お試し・共有・アプリの地図)', ['/api/app-map.php', '/contact.php', '/guest.php', '/share.php'], $postPages);
+    check_bool('色分け: 外国はチェックボックスで表示・非表示(既定は表示)', str_contains($visitorsPage, 'id="km-visitors-show-foreign" checked')
+        && str_contains($visitorsJs, "pref.get(PREF_FOREIGN, '1') === '1'"));
     check_bool('cron(版 8)が 30 日を過ぎた記録を消す', str_contains($hostUpdates, "find \$PATH_ROOT/run/visitlog -maxdepth 1 -type f -name 'visit-*.jsonl' -mtime +30 -delete"));
     // 振る舞い: 上限を超えたら新しい方を残し、古い方は行の頭から送る
     require_once __DIR__ . '/../lib/visit-log.php';

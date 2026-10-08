@@ -15,6 +15,10 @@
  * 問い合わせは 1.2 秒に 1 回・1 回の表示で 150 件まで(外部の無料枠を食い潰さない)。LAN の IP は問い合わせない。
  *
  * 文字はすべて textContent で入れる(端末名・パスを HTML として読まない)。
+ *
+ * ## 色分け(2026-10-08、利用者の指示)
+ * 危険は赤・怪しいは黄。決まり(危険リスト)は assets/js/visitors-threats.js(このページの下にも一覧で出す)。
+ * 外国からの接続は行の色ではなく場所の欄の札にして、チェックボックスで表示・非表示を切り替える。
  */
 (() => {
   const root = document.getElementById('km-visitors');
@@ -28,6 +32,26 @@
   const RECENT_ROWS = 200;
   const PREF_GEO = 'kmadmin-visitors-geo';
   const PREF_DAYS = 'kmadmin-visitors-days';
+  const PREF_FOREIGN = 'kmadmin-visitors-show-foreign';
+  const THREAT_ROWS = 100;
+  const threats = window.KmVisitorThreats || null;
+  const LEVEL_CLASS = { danger: 'table-danger', suspect: 'table-warning' };
+  const LEVEL_BADGE = { danger: 'text-bg-danger', suspect: 'text-bg-warning' };
+  const LEVEL_LABEL = { danger: '危険', suspect: '怪しい' };
+  /** 札(バッジ)。文字は textContent */
+  const badge = (text, cls) => {
+    const span = document.createElement('span');
+    span.className = `badge ${cls} me-1`;
+    span.textContent = text;
+    return span;
+  };
+  /** 文字と札の入ったセル */
+  const cell = (text, badges = []) => {
+    const td = document.createElement('td');
+    badges.forEach((b) => td.appendChild(b));
+    td.appendChild(document.createTextNode(text));
+    return td;
+  };
 
   const $ = (key) => root.querySelector(`[data-km-vs="${key}"]`);
   const setText = (key, text) => {
@@ -218,9 +242,11 @@
 
   // ---- 読み込みと集計 ----
   let visits = [];
+  /** 判定(visits と同じ順の rows と、送り元ごとの ips)。読み込んだときに 1 度だけ作る */
+  let judged = { rows: [], ips: new Map() };
   let geoQueueToken = 0;
   const geoSwitch = document.getElementById('km-visitors-geo');
-  const foreignSwitch = document.getElementById('km-visitors-foreign');
+  const foreignCheck = document.getElementById('km-visitors-show-foreign');
   const daysSelect = document.getElementById('km-visitors-days');
 
   const place = (ip) => {
@@ -265,35 +291,52 @@
   };
 
   const render = () => {
-    const foreignOnly = foreignSwitch?.checked === true;
-    const list = foreignOnly ? visits.filter((v) => place(v.ip).foreign === true) : visits;
+    // 外国からの接続を出すか(チェックボックス。既定は出す)。位置がまだ分からないものは出す
+    const showForeign = foreignCheck ? foreignCheck.checked : true;
+    const list = showForeign ? visits : visits.filter((v) => place(v.ip).foreign !== true);
+    const judgeOf = (v) => v._judge || { level: null, reasons: [] };
 
     const ips = new Set(list.map((v) => v.ip));
     const foreignVisits = visits.filter((v) => place(v.ip).foreign === true);
     const known = visits.filter((v) => place(v.ip).foreign !== null).length;
     const signed = list.filter((v) => v.v && v.v !== 'anon').length;
+    const dangerIps = new Set(list.filter((v) => judgeOf(v).level === 'danger').map((v) => v.ip));
+    const suspectIps = new Set(list.filter((v) => judgeOf(v).level === 'suspect').map((v) => v.ip));
 
     setText('visits', String(list.length));
-    setText('visitsSub', foreignOnly ? '外国からだけを表示中' : '');
+    setText('visitsSub', showForeign ? '' : `外国からの ${foreignVisits.length} 件を隠しています`);
     setText('ips', String(ips.size));
     setText('foreign', String(foreignVisits.length));
     setText('foreignSub', `位置が分かった ${known} / ${visits.length} 件のうち`);
     setText('signed', String(signed));
+    setText('danger', String(dangerIps.size));
+    setText('dangerSub', `送り元・訪問 ${list.filter((v) => judgeOf(v).level === 'danger').length} 件`);
+    setText('suspect', String(suspectIps.size));
+    setText('suspectSub', `送り元・訪問 ${list.filter((v) => judgeOf(v).level === 'suspect').length} 件`);
 
     // 日別
     const byDay = new Map();
     list.forEach((v) => {
       const day = (v.t || '').slice(0, 10);
-      const d = byDay.get(day) || { n: 0, ips: new Set(), foreign: 0 };
+      const d = byDay.get(day) || { n: 0, ips: new Set(), foreign: 0, danger: 0 };
       d.n += 1;
       d.ips.add(v.ip);
       if (place(v.ip).foreign === true) {
         d.foreign += 1;
       }
+      if (judgeOf(v).level === 'danger') {
+        d.danger += 1;
+      }
       byDay.set(day, d);
     });
     fill('byDay', [...byDay.entries()].sort((a, b) => b[0].localeCompare(a[0]))
-      .map(([day, d]) => row([day, String(d.n), String(d.ips.size), String(d.foreign)])), '記録がありません');
+      .map(([day, d]) => {
+        const tr = row([day, String(d.n), String(d.ips.size), String(d.foreign), String(d.danger)]);
+        if (d.danger > 0) {
+          tr.className = 'table-danger';
+        }
+        return tr;
+      }), '記録がありません');
 
     // 国・地域別
     const byCountry = new Map();
@@ -319,27 +362,66 @@
     fill('byPage', [...byPage.entries()].sort((a, b) => b[1].n - a[1].n)
       .map(([page, d]) => row([page, String(d.n), String(d.ips.size)])), '記録がありません');
 
-    // 最近の訪問(新しい順)
+    // 場所の欄(外国なら札を付ける)
+    const placeCell = (ip) => {
+      const p = place(ip);
+      return cell(p.label, p.foreign === true ? [badge('外国', 'text-bg-secondary')] : []);
+    };
+    const levelCell = (judge) => cell('', judge.level ? [badge(LEVEL_LABEL[judge.level], LEVEL_BADGE[judge.level])] : []);
+
+    // 危険・怪しい送り元(重い順・多い順)
+    const threatIps = [...ips].map((ip) => [ip, judged.ips.get(ip)]).filter(([, d]) => d && d.level)
+      .sort((a, b) => (a[1].level === b[1].level ? b[1].count - a[1].count : a[1].level === 'danger' ? -1 : 1))
+      .slice(0, THREAT_ROWS);
+    fill('threats', threatIps.map(([ip, d]) => {
+      const tr = document.createElement('tr');
+      tr.className = LEVEL_CLASS[d.level] || '';
+      tr.append(
+        levelCell(d),
+        cell(ip),
+        placeCell(ip),
+        cell(String(d.count)),
+        cell(d.reasons.join('・')),
+        cell(d.last ? new Date(d.last).toLocaleString() : ''),
+      );
+      tr.cells[3].className = 'text-end';
+      return tr;
+    }), '危険・怪しい送り元はありません');
+
+    // 最近の訪問(新しい順)。危険は赤・怪しいは黄。理由は行に重ねると出る
     const recent = list.slice(-RECENT_ROWS).reverse();
     fill('recent', recent.map((v) => {
-      const p = place(v.ip);
-      const tr = row([
-        new Date(v.t).toLocaleString(),
-        v.ip,
-        p.label,
-        v.p,
-        String(v.s),
-        viewerLabel(v.v),
-        shortUa(v.ua),
-      ], null);
-      tr.title = v.ua || '';
-      if (p.foreign === true) {
-        tr.className = 'table-warning';
-      }
+      const judge = judgeOf(v);
+      const tr = document.createElement('tr');
+      tr.append(
+        cell(new Date(v.t).toLocaleString()),
+        levelCell(judge),
+        cell(v.ip),
+        placeCell(v.ip),
+        cell(v.p),
+        cell(`${v.m && v.m !== 'GET' ? `${v.m} ` : ''}${v.s}`),
+        cell(viewerLabel(v.v)),
+        cell(shortUa(v.ua)),
+      );
+      tr.className = LEVEL_CLASS[judge.level] || '';
+      tr.title = [judge.reasons.join('・'), v.ua || ''].filter((x) => x).join('\n');
       return tr;
     }), '記録がありません');
   };
 
+  // 危険リスト(判定の決まり)を表にする。読み込みのたびに変わらないので 1 度だけ
+  const renderRules = () => {
+    if (!threats) {
+      fill('rules', [], '判定の決まり(visitors-threats.js)を読めませんでした');
+      return;
+    }
+    const rules = [...threats.RULES, ...threats.IP_RULES];
+    fill('rules', rules.map((r) => {
+      const tr = document.createElement('tr');
+      tr.append(cell('', [badge(LEVEL_LABEL[r.level], LEVEL_BADGE[r.level])]), cell(r.name), cell(r.what));
+      return tr;
+    }), '');
+  };
   // まだ位置の分からない IP を、新しい訪問から順に引く。表示を読み直したら前の順番待ちは捨てる
   const runGeoQueue = async () => {
     const token = ++geoQueueToken;
@@ -403,6 +485,11 @@
         }
       });
       visits = parsed;
+      // 色分けの判定(危険リスト)。読み込んだときに 1 度だけ
+      judged = threats ? threats.classify(visits) : { rows: [], ips: new Map() };
+      visits.forEach((v, i) => {
+        v._judge = judged.rows[i];
+      });
       const notes = [];
       if (res.headers.get('X-KM-Visit-Log') === 'missing') {
         notes.push('記録の置き場がありません(reverse-proxy と web の作り直しが要ります)');
@@ -443,7 +530,14 @@
       }
     });
   }
-  foreignSwitch?.addEventListener('change', render);
+  if (foreignCheck) {
+    foreignCheck.checked = pref.get(PREF_FOREIGN, '1') === '1';
+    foreignCheck.addEventListener('change', () => {
+      pref.set(PREF_FOREIGN, foreignCheck.checked ? '1' : '0');
+      render();
+    });
+  }
+  renderRules();
   document.getElementById('km-visitors-reload')?.addEventListener('click', load);
 
   loadGeoCache().then(load);

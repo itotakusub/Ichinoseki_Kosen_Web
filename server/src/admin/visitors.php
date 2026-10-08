@@ -61,9 +61,9 @@ require __DIR__ . '/_inc/partials/page-header.php';
                 <input class="form-check-input" type="checkbox" role="switch" id="km-visitors-geo" />
                 <label class="form-check-label fs-7" for="km-visitors-geo" data-i18n="page.visitors.geo">位置を調べる(外部へ IP を送る)</label>
               </div>
-              <div class="form-check form-switch mb-0">
-                <input class="form-check-input" type="checkbox" role="switch" id="km-visitors-foreign" />
-                <label class="form-check-label fs-7" for="km-visitors-foreign" data-i18n="page.visitors.foreignOnly">外国からだけ</label>
+              <div class="form-check mb-0">
+                <input class="form-check-input" type="checkbox" id="km-visitors-show-foreign" checked />
+                <label class="form-check-label fs-7" for="km-visitors-show-foreign" data-i18n="page.visitors.showForeign">外国からの接続を表示</label>
               </div>
               <button type="button" class="btn btn-sm btn-outline-primary" id="km-visitors-reload">
                 <i class="bi bi-arrow-clockwise me-1" aria-hidden="true"></i>
@@ -71,12 +71,20 @@ require __DIR__ . '/_inc/partials/page-header.php';
               </button>
               <span class="text-body-secondary fs-7" data-km-vs="status">読み込み中…</span>
             </div>
+            <p class="fs-7 mb-3">
+              <span class="badge text-bg-danger me-1" data-i18n="page.visitors.levelDanger">危険</span>
+              <span class="badge text-bg-warning me-1" data-i18n="page.visitors.levelSuspect">怪しい</span>
+              <span class="badge text-bg-secondary me-1" data-i18n="page.visitors.levelForeign">外国</span>
+              <span class="text-body-secondary" data-i18n="page.visitors.legend">
+                行の色: 赤 = 危険・黄 = 怪しい。決まりはページの下の「危険リスト」。名乗りは偽れるので、色が付いていないことは安全の印ではありません。
+              </span>
+            </p>
 
             <div class="row">
               <?php
               $tile = static function (string $key, string $icon, string $color, string $labelKey, string $label): void {
                   ?>
-                  <div class="col-12 col-sm-6 col-xl-3">
+                  <div class="col-12 col-sm-6 col-xl-2">
                     <div class="info-box">
                       <span class="info-box-icon text-bg-<?= km_e($color) ?> shadow-sm"><i class="bi <?= km_e($icon) ?>"></i></span>
                       <div class="info-box-content">
@@ -92,6 +100,8 @@ require __DIR__ . '/_inc/partials/page-header.php';
               $tile('ips', 'bi-pc-display', 'success', 'page.visitors.ips', '送り元(IP)');
               $tile('foreign', 'bi-globe2', 'danger', 'page.visitors.foreign', '外国から');
               $tile('signed', 'bi-person-badge', 'info', 'page.visitors.signed', 'お試し・サインイン・アプリ');
+              $tile('danger', 'bi-exclamation-octagon', 'danger', 'page.visitors.danger', '危険な送り元');
+              $tile('suspect', 'bi-exclamation-triangle', 'warning', 'page.visitors.suspect', '怪しい送り元');
               ?>
             </div>
 
@@ -120,7 +130,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
                   </div>
                   <?php
               };
-              $table('byDay', 'page.visitors.byDay', '日別', [['page.visitors.colDay', '日付'], ['page.visitors.visits', '訪問'], ['page.visitors.ips', '送り元(IP)'], ['page.visitors.foreign', '外国から']]);
+              $table('byDay', 'page.visitors.byDay', '日別', [['page.visitors.colDay', '日付'], ['page.visitors.visits', '訪問'], ['page.visitors.ips', '送り元(IP)'], ['page.visitors.foreign', '外国から'], ['page.visitors.colDanger', '危険']]);
               $table('byCountry', 'page.visitors.byCountry', '国・地域別', [['page.visitors.colCountry', '国・地域'], ['page.visitors.visits', '訪問'], ['page.visitors.ips', '送り元(IP)']]);
               $table('byPage', 'page.visitors.byPage', 'ページ別', [['page.visitors.colPage', 'ページ'], ['page.visitors.visits', '訪問'], ['page.visitors.ips', '送り元(IP)']]);
               ?>
@@ -128,8 +138,22 @@ require __DIR__ . '/_inc/partials/page-header.php';
 
             <div class="row">
               <?php
+              $table('threats', 'page.visitors.threats', '危険・怪しい送り元(重い順・100 件まで)', [
+                  ['page.visitors.colLevel', '判定'],
+                  ['page.visitors.colIp', 'IP'],
+                  ['page.visitors.colPlace', '場所'],
+                  ['page.visitors.visits', '訪問'],
+                  ['page.visitors.colReason', '理由'],
+                  ['page.visitors.colLast', '最後'],
+              ], 'col-12', false);
+              ?>
+            </div>
+
+            <div class="row">
+              <?php
               $table('recent', 'page.visitors.recent', '最近の訪問(新しい順・200 件まで)', [
                   ['page.visitors.colTime', '時刻'],
+                  ['page.visitors.colLevel', '判定'],
                   ['page.visitors.colIp', 'IP'],
                   ['page.visitors.colPlace', '場所'],
                   ['page.visitors.colPage', 'ページ'],
@@ -139,8 +163,20 @@ require __DIR__ . '/_inc/partials/page-header.php';
               ], 'col-12', false);
               ?>
             </div>
+
+            <div class="row">
+              <?php
+              // 危険リスト(判定の決まり。assets/js/visitors-threats.js から作る)
+              $table('rules', 'page.visitors.rules', '危険リスト(判定の決まり)', [
+                  ['page.visitors.colLevel', '判定'],
+                  ['page.visitors.colRule', '名前'],
+                  ['page.visitors.colWhat', '見ているもの'],
+              ], 'col-12', false);
+              ?>
+            </div>
           </div>
         </div>
         <!--end::App Content-->
+        <script src="<?= km_e(km_asset('./assets/js/visitors-threats.js')) ?>"></script>
         <script src="<?= km_e(km_asset('./assets/js/visitors.js')) ?>"></script>
 <?php require __DIR__ . '/_inc/partials/footer.php'; ?>
