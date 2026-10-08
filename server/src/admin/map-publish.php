@@ -287,7 +287,7 @@ $renderCurrent = static function (string $slug) use ($config, $report): void {
     ?>
     <div class="card mb-4">
       <div class="card-header">
-        <h4 class="card-title" data-i18n="page.mapPublish.currentTitle">いま配っているもの</h4>
+        <h3 class="card-title" data-i18n="page.mapPublish.currentTitle">いま配っているもの</h3>
       </div>
       <div class="card-body">
         <?php if ($current === null): ?>
@@ -356,7 +356,7 @@ $renderCodes = static function (string $slug) use ($codesBySlug, $newCode, $newC
     <?php if ($newCode !== null && $newCodeSlug === $slug): ?>
       <div class="card mb-4 border-primary">
         <div class="card-header">
-          <h4 class="card-title" data-i18n="page.mapPublish.newCodeTitle">作ったアクセスコード</h4>
+          <h3 class="card-title" data-i18n="page.mapPublish.newCodeTitle">作ったアクセスコード</h3>
         </div>
         <div class="card-body">
           <p class="fs-2 font-monospace mb-2"><?= km_e($newCode) ?></p>
@@ -379,7 +379,7 @@ $renderCodes = static function (string $slug) use ($codesBySlug, $newCode, $newC
 
     <div class="card mb-4">
       <div class="card-header">
-        <h4 class="card-title" data-i18n="page.mapPublish.codesTitle">アクセスコード</h4>
+        <h3 class="card-title" data-i18n="page.mapPublish.codesTitle">アクセスコード</h3>
       </div>
       <div class="card-body">
         <?php if ($codes === []): ?>
@@ -389,7 +389,7 @@ $renderCodes = static function (string $slug) use ($codesBySlug, $newCode, $newC
             <tbody>
               <?php foreach ($codes as $index => $code): ?>
                 <tr>
-                  <td class="font-monospace">
+                  <td>
                     <?php if ($code['plain'] === ''): ?>
                       <span class="text-body-secondary fs-7"
                             data-i18n="page.mapPublish.codeNotStored">控えを保存していません</span>
@@ -400,7 +400,7 @@ $renderCodes = static function (string $slug) use ($codesBySlug, $newCode, $newC
                        * 肩越しに読まれるのを防ぐ(利用者の要望)。
                        */
                       ?>
-                      <span class="km-code" data-code="<?= km_e($code['plain']) ?>"><?= km_e(str_repeat('•', mb_strlen($code['plain']))) ?></span>
+                      <span class="km-code font-monospace" data-code="<?= km_e($code['plain']) ?>"><?= km_e(str_repeat('•', mb_strlen($code['plain']))) ?></span>
                       <button type="button" class="btn btn-sm btn-link km-code-toggle"
                               data-i18n="page.mapPublish.reveal">見る</button>
                     <?php endif; ?>
@@ -495,12 +495,12 @@ $renderCodes = static function (string $slug) use ($codesBySlug, $newCode, $newC
                       <?php foreach ($orphans as $orphan): ?>
                         <tr>
                           <td><code><?= km_e($orphan['slug'] !== '' ? $orphan['slug'] : '—') ?></code></td>
-                          <td class="font-monospace">
+                          <td>
                             <?php if ($orphan['plain'] === null): ?>
                               <span class="text-body-secondary fs-7"
                                     data-i18n="page.mapPublish.codeNotStored">控えを保存していません</span>
                             <?php else: ?>
-                              <span class="km-code" data-code="<?= km_e($orphan['plain']) ?>"><?= km_e(str_repeat('•', mb_strlen($orphan['plain']))) ?></span>
+                              <span class="km-code font-monospace" data-code="<?= km_e($orphan['plain']) ?>"><?= km_e(str_repeat('•', mb_strlen($orphan['plain']))) ?></span>
                               <button type="button" class="btn btn-sm btn-link km-code-toggle"
                                       data-i18n="page.mapPublish.reveal">見る</button>
                             <?php endif; ?>
@@ -650,7 +650,7 @@ $renderCodes = static function (string $slug) use ($codesBySlug, $newCode, $newC
             <?php endif; ?>
 
             <!--begin::MainRelease-->
-            <h2 class="h5 mt-2 mb-1">
+            <h2 class="h5 fw-normal mt-2 mb-1">
               <span data-i18n="page.mapPublish.mainTitle">Website の正本</span>
               <code class="ms-2 fs-6"><?= km_e($mainSlug) ?></code>
             </h2>
@@ -666,7 +666,7 @@ $renderCodes = static function (string $slug) use ($codesBySlug, $newCode, $newC
               <div class="col-12 col-xl-6">
                 <div class="card mb-4">
                   <div class="card-header">
-                    <h4 class="card-title" data-i18n="page.mapPublish.publishTitle">配信する</h4>
+                    <h3 class="card-title" data-i18n="page.mapPublish.publishTitle">配信する</h3>
                   </div>
                   <div class="card-body">
                     <form method="post"
@@ -720,7 +720,7 @@ $renderCodes = static function (string $slug) use ($codesBySlug, $newCode, $newC
             <!--end::MainRelease-->
 
             <!--begin::EventRelease-->
-            <h2 class="h5 mt-4 mb-1">
+            <h2 class="h5 fw-normal mt-4 mb-1">
               <span data-i18n="page.mapPublish.eventTitle">イベント用の正本</span>
               <code class="ms-2 fs-6"><?= km_e($eventSlug) ?></code>
             </h2>
@@ -736,7 +736,7 @@ $renderCodes = static function (string $slug) use ($codesBySlug, $newCode, $newC
               <div class="col-12 col-xl-6">
                 <div class="card mb-4">
                   <div class="card-header">
-                    <h4 class="card-title" data-i18n="page.mapPublish.publishTitle">配信する</h4>
+                    <h3 class="card-title" data-i18n="page.mapPublish.publishTitle">配信する</h3>
                   </div>
                   <div class="card-body">
                     <form method="post" enctype="multipart/form-data"

@@ -221,7 +221,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
                     <?php if (($spec['needsVersionCode'] ?? false) === true): ?>
                       <div class="mb-2">
                         <label class="form-label fs-7" for="km-code-<?= km_e($slug) ?>" data-i18n="page.downloads.versionCodeField">
-                          版番号(必須。アプリの設定「バージョン」の括弧内の数)
+                          版番号(空なら APK の中から読みます。入れたときは APK の中の値と照らします)
                         </label>
                         <input
                           type="number"
@@ -230,7 +230,6 @@ require __DIR__ . '/_inc/partials/page-header.php';
                           name="version_code"
                           min="1"
                           max="<?= (int) KM_DIST_MAX_VERSION_CODE ?>"
-                          required
                         />
                         <div class="form-text" data-i18n="page.downloads.versionCodeHint">
                           アプリは、この数が自分より大きいときだけ「新しい版があります」と知らせます。SHA-256 はサーバーで計算します。

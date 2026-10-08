@@ -31,19 +31,20 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && !km_csrf_verify()) {
     $title = (string) ($_POST['title'] ?? '');
     $status = (string) ($_POST['status'] ?? '');
     $progress = (int) ($_POST['progress'] ?? 0);
+    $topic = (string) ($_POST['topic'] ?? '');
     $id = (int) ($_POST['id'] ?? 0);
 
     try {
         $pdo = km_db();
 
         if ($action === 'create') {
-            km_tasks_create($pdo, $title, $status, $progress);
+            km_tasks_create($pdo, $title, $status, $progress, $topic);
             km_admin_log_record('content', 'task.create', $title);
             header('Location: ./projects.php?created=1', true, 302);
             exit;
         }
         if ($action === 'update') {
-            km_tasks_update($pdo, $id, $title, $status, $progress);
+            km_tasks_update($pdo, $id, $title, $status, $progress, $topic);
             km_admin_log_record('content', 'task.update', $title);
             header('Location: ./projects.php?updated=1', true, 302);
             exit;
@@ -67,10 +68,19 @@ foreach (['created' => 'createdNotice', 'updated' => 'updatedNotice', 'deleted' 
     }
 }
 
+// 分類で絞る(?topic=monitor。サービス監視の「今後の拡張」から来るときに使う)。知らない値は絞らない
+$topicFilter = (string) ($_GET['topic'] ?? '');
+if ($topicFilter !== '' && !array_key_exists($topicFilter, KM_TASK_TOPICS)) {
+    $topicFilter = '';
+}
+
 $rows = [];
 $dbError = null;
 try {
     $rows = km_tasks_all(km_db());
+    if ($topicFilter !== '') {
+        $rows = array_values(array_filter($rows, static fn (array $row): bool => (string) $row['topic'] === $topicFilter));
+    }
 } catch (Throwable $exception) {
     error_log('projects.php list failed: ' . $exception->getMessage());
     $dbError = $exception->getMessage();
@@ -123,6 +133,17 @@ require __DIR__ . '/_inc/partials/page-header.php';
             <div class="card">
               <div class="card-header d-flex flex-wrap align-items-center gap-2">
                 <h3 class="card-title mb-0" data-i18n="page.projects.cardTitle">タスク一覧</h3>
+                <form method="get" class="d-flex align-items-center gap-1 ms-2">
+                  <label class="fs-7 text-body-secondary" for="km-task-topic-filter" data-i18n="page.projects.fieldTopic">分類</label>
+                  <select class="form-select form-select-sm w-auto" id="km-task-topic-filter" name="topic">
+                    <option value="" data-i18n="page.projects.topicAll">すべて</option>
+                    <?php foreach (KM_TASK_TOPICS as $value => $label): ?>
+                      <?php if ($value === '') { continue; } ?>
+                      <option value="<?= km_e($value) ?>"<?= $topicFilter === $value ? ' selected' : '' ?> data-i18n="page.projects.topic.<?= km_e($value) ?>"><?= km_e($label) ?></option>
+                    <?php endforeach; ?>
+                  </select>
+                  <button type="submit" class="btn btn-sm btn-outline-secondary" data-i18n="page.projects.filter">絞り込む</button>
+                </form>
                 <div class="card-tools ms-auto">
                   <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#km-task-create">
                     <i class="bi bi-plus-lg me-1" aria-hidden="true"></i>
@@ -138,6 +159,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
                       <tr>
                         <th scope="col" data-i18n="page.projects.colTask">タスク</th>
                         <th scope="col" data-i18n="page.projects.colStatus">状態</th>
+                        <th scope="col" data-i18n="page.projects.fieldTopic">分類</th>
                         <th scope="col" class="km-col-progress" data-i18n="page.projects.colProgress">進捗</th>
                         <th scope="col" class="text-end" data-i18n="common.actions">操作</th>
                       </tr>
@@ -145,7 +167,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
                     <tbody>
                       <?php if ($rows === [] && $dbError === null): ?>
                         <tr>
-                          <td colspan="4" class="text-center text-body-secondary py-5" data-i18n="page.projects.empty">
+                          <td colspan="5" class="text-center text-body-secondary py-5" data-i18n="page.projects.empty">
                             タスクがありません。「タスクを追加」から登録してください。
                           </td>
                         </tr>
@@ -161,6 +183,11 @@ require __DIR__ . '/_inc/partials/page-header.php';
                               data-i18n="page.projects.status.<?= km_e((string) $row['status']) ?>"
                               ><?= km_e($statusLabel[$row['status']] ?? (string) $row['status']) ?></span
                             >
+                          </td>
+                          <td>
+                            <?php if ((string) $row['topic'] !== ''): ?>
+                              <span class="badge text-bg-light border" data-i18n="page.projects.topic.<?= km_e((string) $row['topic']) ?>"><?= km_e(KM_TASK_TOPICS[(string) $row['topic']] ?? (string) $row['topic']) ?></span>
+                            <?php endif; ?>
                           </td>
                           <td>
                             <div class="progress km-progress-sm" role="progressbar" aria-valuenow="<?= (int) $row['progress'] ?>" aria-valuemin="0" aria-valuemax="100">
@@ -203,7 +230,9 @@ require __DIR__ . '/_inc/partials/page-header.php';
 
         <?php
           // 追加と編集でほぼ同じフォームなので、1つの無名関数から2回出す。
-          $taskForm = static function (string $id, string $action, string $titleKey, string $titleText) use ($statusLabel) {
+          // 分類で絞っているときは、追加の既定もその分類にする
+          $defaultTopic = $topicFilter;
+          $taskForm = static function (string $id, string $action, string $titleKey, string $titleText) use ($statusLabel, $defaultTopic) {
               ?>
               <div class="modal fade" id="<?= km_e($id) ?>" tabindex="-1" aria-hidden="true">
                 <div class="modal-dialog modal-dialog-centered">
@@ -228,6 +257,14 @@ require __DIR__ . '/_inc/partials/page-header.php';
                           <select class="form-select" id="<?= km_e($id) ?>-status" name="status">
                             <?php foreach ($statusLabel as $value => $label): ?>
                               <option value="<?= km_e($value) ?>" data-i18n="page.projects.status.<?= km_e($value) ?>"><?= km_e($label) ?></option>
+                            <?php endforeach; ?>
+                          </select>
+                        </div>
+                        <div class="mb-3">
+                          <label class="form-label" for="<?= km_e($id) ?>-topic" data-i18n="page.projects.fieldTopic">分類</label>
+                          <select class="form-select" id="<?= km_e($id) ?>-topic" name="topic">
+                            <?php foreach (KM_TASK_TOPICS as $value => $label): ?>
+                              <option value="<?= km_e($value) ?>"<?= $value === $defaultTopic ? ' selected' : '' ?> data-i18n="page.projects.topic.<?= km_e($value === '' ? 'none' : $value) ?>"><?= km_e($label) ?></option>
                             <?php endforeach; ?>
                           </select>
                         </div>
@@ -278,6 +315,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
               document.getElementById('km-task-edit-title').value = task.title ?? '';
               document.getElementById('km-task-edit-status').value = task.status ?? 'todo';
               document.getElementById('km-task-edit-progress').value = task.progress ?? 0;
+              document.getElementById('km-task-edit-topic').value = task.topic ?? '';
             });
           })();
         </script>

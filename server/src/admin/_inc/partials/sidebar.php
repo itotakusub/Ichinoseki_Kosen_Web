@@ -31,6 +31,8 @@ $openMenus = [
     'mailbox' => 'content',
     // ランキングの「調べられた語」を外す(2026-09-25、診断 W-45)
     'ranking' => 'content',
+    // AR 実測の記録と画像(2026-10-06、lib/ar-capture.php)
+    'arCaptures' => 'content',
     // お試しの閲覧リンク(2026-09-30、lib/map-guest.php)
     'guestLinks' => 'content',
     'profile' => 'extra',
@@ -177,6 +179,20 @@ $parentLink = static fn(string $id): string => 'nav-link' . ($openMenu === $id ?
                   <p data-i18n="side.monitor">サービス監視</p>
                 </a>
               </li>
+              <?php // タスクマネージャー(2026-10-05)。nginx で IP を絞ってあるので、許可していない場所からは開けない ?>
+              <li class="nav-item">
+                <a href="./taskmgr.php" class="<?= $link('taskmgr') ?>">
+                  <i class="nav-icon bi bi-cpu"></i>
+                  <p data-i18n="side.taskmgr">タスクマネージャー</p>
+                </a>
+              </li>
+              <?php // 訪問者と大まかな位置(2026-10-06)。位置はこのページを開いたブラウザが引く ?>
+              <li class="nav-item">
+                <a href="./visitors.php" class="<?= $link('visitors') ?>">
+                  <i class="nav-icon bi bi-globe2"></i>
+                  <p data-i18n="side.visitors">訪問者</p>
+                </a>
+              </li>
 
               <li class="nav-header" data-i18n="side.headerContent">コンテンツ</li>
               <li class="<?= $parentItem('content') ?>">
@@ -216,6 +232,12 @@ $parentLink = static fn(string $id): string => 'nav-link' . ($openMenu === $id ?
                     <a href="./ranking.php" class="<?= $link('ranking') ?>">
                       <i class="nav-icon bi bi-trophy"></i>
                       <p data-i18n="side.ranking">ランキングの語</p>
+                    </a>
+                  </li>
+                  <li class="nav-item">
+                    <a href="./ar-captures.php" class="<?= $link('arCaptures') ?>">
+                      <i class="nav-icon bi bi-camera"></i>
+                      <p data-i18n="side.arCaptures">AR の撮影</p>
                     </a>
                   </li>
                   <li class="nav-item">

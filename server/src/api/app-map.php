@@ -32,6 +32,8 @@ require_once __DIR__ . '/../lib/app-secret.php';
 require_once __DIR__ . '/../lib/app-map.php';
 require_once __DIR__ . '/../lib/route-weights.php';
 require_once __DIR__ . '/../lib/map-calibration.php';
+require_once __DIR__ . '/../lib/panorama.php';
+require_once __DIR__ . '/../lib/app-map-cache.php';
 
 require_method('POST');
 
@@ -201,6 +203,9 @@ $calibration = km_map_calibration_stored($pdo);
  */
 $principal = logto_optional_principal();
 $permissions = is_array($principal) ? ($principal['permissions'] ?? []) : [];
+// 訪問者の記録に、閲覧者の種別を渡す(lib/visit-log.php。nginx がログに書き、端末には返さない)
+require_once dirname(__DIR__) . '/lib/visit-log.php';
+km_visit_mark_viewer(is_array($principal) ? 'app' : 'anon', is_array($principal) ? (string) ($principal['subject'] ?? '') : null);
 /*
  * 教職員(docs/15 段 D。2026-09-18)。組織トークンで、こちらの組織の教職員の権限を持つ人
  * (logto_guard.php が組織 ID を照合したうえで is_teacher を立てる)。
@@ -214,10 +219,72 @@ $privileged = $isStaff || $isTeacher;
 $sendNames = $privileged && km_app_map_may_send_occupant_names($privileged, $isTeacher);
 $contentLevel = km_app_map_content_level($privileged, $sendNames);
 
+/*
+ * ストリートビューの写真の一覧(2026-10-06。lib/panorama.php)。**配る地図に入っている地点の分だけ**載せる ——
+ * 来場者版では閲覧不可の地点を落とすので、その地点の写真のハッシュも渡さない。
+ * 重みと同じく地図の外に置き、地図が最新のときの応答にも載せる(写真だけ足したときに版を上げずに届く)。
+ * 写真が 1 枚も無ければ地図を読まない(今までと同じ重さ)。
+ */
+$panoramasEnabled = false;
+try {
+    $panoramasEnabled = km_panorama_any($pdo);
+} catch (Throwable $exception) {
+    error_log('api/app-map.php panoramas: ' . $exception->getMessage());
+}
+
+$path = km_app_map_storage_path($config, (string) ($meta['file'] ?? ''));
+$loadDeliveredMap = static function () use ($path, $slug, $meta, $privileged, $sendNames): ?stdClass {
+    if ($path === null) {
+        error_log("api/app-map.php: 実体が見つかりません: {$slug} (" . ($meta['file'] ?? '') . ')');
+        return null;
+    }
+    $map = km_app_map_decode_snapshot((string) file_get_contents($path));
+    if ($map === null) {
+        error_log("api/app-map.php: 地図 JSON として読めません: {$slug}");
+        return null;
+    }
+    // 何を落とすかは上で決めた段($contentLevel)と同じ判定
+    if (!$privileged) {
+        $map = km_app_map_strip_staff_only($map);
+    } elseif (!$sendNames) {
+        /*
+         * **staff でも、氏名だけは別に判断する。**
+         *
+         * 「地図データ公開設定」が `hidden` のときは誰にも配らない —— Web で隠している
+         * ものを、アプリ経由で取れるようにしてしまうと、錠が2つある状態になる。
+         * 一時地点(staffOnly)は staff に見せてよいので、そちらは落とさない。
+         */
+        km_app_map_strip_occupant_names($map);
+    }
+    return $map;
+};
+$panoramasForUuids = static function (array $uuids) use ($pdo, $panoramasEnabled): ?array {
+    if (!$panoramasEnabled) {
+        return null;
+    }
+    try {
+        return km_panorama_manifest($pdo, $uuids);
+    } catch (Throwable $exception) {
+        error_log('api/app-map.php panoramas: ' . $exception->getMessage());
+        return null;
+    }
+};
+$panoramasFor = static function (?stdClass $map) use ($pdo, $panoramasEnabled): ?array {
+    if (!$panoramasEnabled || $map === null) {
+        return null;
+    }
+    try {
+        return km_panorama_manifest($pdo, km_panorama_uuids_of_map($map));
+    } catch (Throwable $exception) {
+        error_log('api/app-map.php panoramas: ' . $exception->getMessage());
+        return null;
+    }
+};
+
 if (km_app_map_is_up_to_date($slug, $haveMapId, $haveRevision, $revision, $haveLevel, $contentLevel)) {
     // 本体を返さない場合でも serverTime は必ず返す。端末はこれで時計を合わせ、
     // 有効期限の判定に端末の時計を使わずに済む。
-    respond([
+    $upToDate = [
         'upToDate' => true,
         'mapId' => $slug,
         'revision' => $revision,
@@ -226,33 +293,51 @@ if (km_app_map_is_up_to_date($slug, $haveMapId, $haveRevision, $revision, $haveL
         'routeWeights' => $routeWeights,
         'calibration' => $calibration,
         'contentLevel' => $contentLevel,
-    ]);
+    ];
+    // 地点の uuid は作り置きから取る(地図を読み解かない)。作り置きが無ければ今までどおり読む
+    $panoramas = null;
+    if ($panoramasEnabled) {
+        $cachedForUuids = $path !== null ? km_app_map_cache_get($slug, $path, $contentLevel) : null;
+        $panoramas = $cachedForUuids !== null ? $panoramasForUuids($cachedForUuids['uuids']) : $panoramasFor($loadDeliveredMap());
+    }
+    if ($panoramas !== null && $panoramas !== []) {
+        $upToDate['panoramas'] = (object) $panoramas;
+    }
+    respond($upToDate);
 }
 
-$path = km_app_map_storage_path($config, (string) ($meta['file'] ?? ''));
-if ($path === null) {
-    error_log("api/app-map.php: 実体が見つかりません: {$slug} (" . ($meta['file'] ?? '') . ')');
-    respond(['success' => false, 'message' => 'このマップはまだ配置されていません。'], 500);
+/*
+ * **作り置きを流す**(2026-10-06。lib/app-map-cache.php。計画 E2)。段ごとに作っておいた地図の JSON を
+ * readfile で流し、前後の短い部分だけをここで組み立てる(実測: 毎回組み立てると約 16ms・+5.5MB、流すだけなら約 1ms・+0.5MB)。
+ * 作り置きを使えないとき(置き場に書けない等)は、下で今までどおりその場で組み立てる。
+ */
+$activeEventUuid = is_string($meta['activeEventUuid'] ?? null) ? $meta['activeEventUuid'] : null;
+$cached = $path !== null ? km_app_map_cache_get($slug, $path, $contentLevel) : null;
+if ($cached !== null) {
+    $parts = km_app_map_package_envelope(
+        ($meta['checksum'] ?? true) !== false ? $cached['sha256'] : null,
+        $slug,
+        $revision,
+        $serverTime,
+        $expiresAt->format(DateTimeInterface::ATOM),
+        $activeEventUuid,
+        $routeWeights,
+        $contentLevel,
+        $calibration,
+        $panoramasForUuids($cached['uuids'])
+    );
+    if ($parts !== null) {
+        http_response_code(200);
+        echo $parts[0];
+        readfile($cached['body']);
+        echo $parts[1];
+        exit;
+    }
 }
 
-$map = km_app_map_decode_snapshot((string) file_get_contents($path));
+$map = $loadDeliveredMap();
 if ($map === null) {
-    error_log("api/app-map.php: 地図 JSON として読めません: {$slug}");
-    respond(['success' => false, 'message' => 'マップを準備できませんでした。'], 500);
-}
-
-// 何を落とすかは上で決めた段($contentLevel)と同じ判定
-if (!$privileged) {
-    $map = km_app_map_strip_staff_only($map);
-} elseif (!$sendNames) {
-    /*
-     * **staff でも、氏名だけは別に判断する。**
-     *
-     * 「地図データ公開設定」が `hidden` のときは誰にも配らない —— Web で隠している
-     * ものを、アプリ経由で取れるようにしてしまうと、錠が2つある状態になる。
-     * 一時地点(staffOnly)は staff に見せてよいので、そちらは落とさない。
-     */
-    km_app_map_strip_occupant_names($map);
+    respond(['success' => false, 'message' => $path === null ? 'このマップはまだ配置されていません。' : 'マップを準備できませんでした。'], 500);
 }
 
 $body = km_app_map_build_package(
@@ -261,11 +346,12 @@ $body = km_app_map_build_package(
     $revision,
     $serverTime,
     $expiresAt->format(DateTimeInterface::ATOM),
-    is_string($meta['activeEventUuid'] ?? null) ? $meta['activeEventUuid'] : null,
+    $activeEventUuid,
     ($meta['checksum'] ?? true) !== false,
     $routeWeights,
     $contentLevel,
-    $calibration
+    $calibration,
+    $panoramasFor($map)
 );
 if ($body === null) {
     error_log("api/app-map.php: パッケージを組み立てられません: {$slug}");

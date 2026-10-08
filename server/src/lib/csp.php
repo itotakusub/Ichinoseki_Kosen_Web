@@ -67,7 +67,7 @@ function km_csp_nonce_attr(): string
 /**
  * プロファイルごとのディレクティブを組む。
  *
- * @param string $profile 'admin' | 'public' | 'contact'
+ * @param string $profile 'admin' | 'admin-geo' | 'public' | 'contact'
  */
 function km_csp_policy(string $profile): string
 {
@@ -89,12 +89,22 @@ function km_csp_policy(string $profile): string
     $frame = ["'none'"];
     $img = ["'self'", 'data:'];
 
-    if ($profile === 'admin') {
+    if ($profile === 'admin' || $profile === 'admin-geo') {
         // AdminLTE が差し込む reduce-motion 用の <style> を通す
         $style[] = "'" . KM_CSP_ADMINLTE_STYLE_HASH . "'";
         // チャットと死活監視がブラウザから直接 WebSocket を張る先
         $connect[] = 'wss://' . km_site_ws_host() . ':' . km_site_ws_port();
         $connect[] = 'https://' . km_site_ws_host() . ':' . km_site_ws_port();
+    }
+
+    if ($profile === 'admin-geo') {
+        /*
+         * 訪問者の位置(admin/visitors.php だけ。2026-10-06)。**管理者のブラウザが** IP から国・都市を引く
+         * (利用者の指示「変換はクライアントで」)。ipwho.is が使えなければ api.country.is で国だけ。
+         * どちらも鍵なし・CORS あり。**訪問者の IP がこの 2 か所へ渡る**ので、ほかのページには足さない。
+         */
+        $connect[] = 'https://ipwho.is';
+        $connect[] = 'https://api.country.is';
     }
 
     if ($profile === 'contact') {

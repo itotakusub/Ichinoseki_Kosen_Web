@@ -5,7 +5,7 @@
 .DESCRIPTION
 **写すのは「出してよいもの」だけ。** 次は写さない(.gitignore と push-github.ps1 も同じものを弾く):
 
-  - 秘密      … .env / src/config/*.local.php / 鍵・証明書(*.pem *.key *.jks *.p12)
+  - 秘密      … .env / src/config/*.local.php / nginx の *.local.conf(運用者の IP。2026-10-05)/ 鍵・証明書(*.pem *.key *.jks *.p12)
   - 利用者のデータ … src/uploads/(地図の書き出し。教職員氏名を含みうる)・backups/・*.cms・*.tar.gz
   - 生成物・退避 … src/vendor/(composer install で戻る)・Downloaded/(旧サイト)・Old/・out/・*.log
 
@@ -39,7 +39,7 @@ $excludeDirs = @(
 ) | ForEach-Object { Join-Path $Source $_ }
 
 # 名前で写さないファイル。**.env.example は写す**(.env だけを弾く)
-$excludeFiles = @('.env', '*.local.php', '*.pem', '*.key', '*.jks', '*.p12', '*.pfx', '*.cms', '*.tar.gz', '*.log')
+$excludeFiles = @('.env', '*.local.php', '*.local.conf', '*.pem', '*.key', '*.jks', '*.p12', '*.pfx', '*.cms', '*.tar.gz', '*.log')
 
 Write-Host "写す元: $Source"
 Write-Host "写す先: $dest"
@@ -64,7 +64,7 @@ if ($notebooks.Count -gt 0) {
 
 # ---------------------------------------------------- 写さなかったはずのものが無いか
 $leaked = Get-ChildItem $dest -Recurse -Force -File | Where-Object {
-    $_.Name -eq '.env' -or $_.Name -like '*.local.php' -or $_.Extension -in '.pem', '.key', '.jks', '.p12', '.pfx', '.cms'
+    $_.Name -eq '.env' -or $_.Name -like '*.local.php' -or $_.Name -like '*.local.conf' -or $_.Extension -in '.pem', '.key', '.jks', '.p12', '.pfx', '.cms'
 }
 if ($leaked) {
     $leaked | ForEach-Object { Write-Host "  写してはいけないもの: $($_.FullName)" -ForegroundColor Red }

@@ -72,6 +72,22 @@ require __DIR__ . '/_inc/partials/page-header.php';
                 <i class="bi bi-list-check me-1" aria-hidden="true"></i>
                 <span data-i18n="page.kanban.openProjects">一覧で編集する</span>
               </a>
+              <?php
+              // 分類で絞る(2026-10-06)。**隠すだけで DOM からは外さない** —— 移動したレーンは
+              // 中のカードを全部並び順どおりに送るので、外すと隠れたカードの順が崩れる
+              $topicFilter = (string) ($_GET['topic'] ?? '');
+              if (!array_key_exists($topicFilter, KM_TASK_TOPICS)) {
+                  $topicFilter = '';
+              }
+              ?>
+              <label class="fs-7 text-body-secondary ms-2" for="km-kanban-topic" data-i18n="page.projects.fieldTopic">分類</label>
+              <select class="form-select form-select-sm w-auto" id="km-kanban-topic">
+                <option value="" data-i18n="page.projects.topicAll">すべて</option>
+                <?php foreach (KM_TASK_TOPICS as $value => $label): ?>
+                  <?php if ($value === '') { continue; } ?>
+                  <option value="<?= km_e($value) ?>"<?= $topicFilter === $value ? ' selected' : '' ?> data-i18n="page.projects.topic.<?= km_e($value) ?>"><?= km_e($label) ?></option>
+                <?php endforeach; ?>
+              </select>
               <span id="km-kanban-status" class="text-body-secondary fs-7"></span>
             </div>
 
@@ -87,8 +103,11 @@ require __DIR__ . '/_inc/partials/page-header.php';
                     <div class="card-body km-kanban-lane" data-km-lane="<?= km_e($lane) ?>" >
                       <?php foreach ($tasksByLane[$lane] as $task): ?>
                         <?php // タイトルは利用者が入れた自由文なので data-i18n は付けない ?>
-                        <div class="card mb-2 p-2" draggable="true" data-km-task-id="<?= (int) $task['id'] ?>">
+                        <div class="card mb-2 p-2" draggable="true" data-km-task-id="<?= (int) $task['id'] ?>" data-km-topic="<?= km_e((string) $task['topic']) ?>">
                           <?= km_e((string) $task['title']) ?>
+                          <?php if ((string) $task['topic'] !== ''): ?>
+                            <div><span class="badge text-bg-light border" data-i18n="page.projects.topic.<?= km_e((string) $task['topic']) ?>"><?= km_e(KM_TASK_TOPICS[(string) $task['topic']] ?? (string) $task['topic']) ?></span></div>
+                          <?php endif; ?>
                         </div>
                       <?php endforeach; ?>
                     </div>
@@ -202,6 +221,17 @@ require __DIR__ . '/_inc/partials/page-header.php';
               const card = event.target.closest('[data-km-task-id]');
               if (card) card.style.opacity = '';
             });
+
+            // 分類で絞る。隠すだけ(d-none)。並び順の保存はレーンの全カードで行うので崩れない
+            const topicSelect = document.getElementById('km-kanban-topic');
+            const applyTopic = () => {
+              const topic = topicSelect?.value ?? '';
+              board.querySelectorAll('[data-km-task-id]').forEach((card) => {
+                card.classList.toggle('d-none', topic !== '' && card.dataset.kmTopic !== topic);
+              });
+            };
+            topicSelect?.addEventListener('change', applyTopic);
+            applyTopic();
 
             board.querySelectorAll('.km-kanban-lane').forEach((lane) => {
               lane.addEventListener('dragover', (event) => {

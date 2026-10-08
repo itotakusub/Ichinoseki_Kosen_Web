@@ -36,6 +36,7 @@ server_tokens off;
 #   /admin/downloads.php(APK の差し替え)・8281(phpMyAdmin のインポート)・6001(WebSocket)・3001/3002
 # 地図の取り込みと配信(/admin/map-sync.php・/admin/map-publish.php)は PHP が set_time_limit(120) を
 # 明示しているので、そちらに合わせて 180 秒にする(60 秒で切ると、PHP は最後まで書き込むのに画面だけ 504 になる)。
+# AR の撮影の zip(/admin/ar-captures.php)は set_time_limit(840) なので 900 秒(2026-10-06)。
 # **PHP で set_time_limit を足したら、ここにも例外を足すこと。**
 # **proxy-web.conf に書き戻さないこと**(理由はあちらに書いてある)。
 # ---------------------------------------------------------------------------
@@ -293,6 +294,39 @@ map $http_origin $km_ws_origin_denied {
 log_format km_no_query '$remote_addr - - [$time_local] "$request_method $uri $server_protocol" '
                        '$status $body_bytes_sent "$http_referer" "$http_user_agent"';
 
+# 訪問者の記録(2026-10-05 の計画 B、利用者の指示「外国からのアクセスを確かめる」)。
+#
+# **サーバーは書くだけ。** 数える・まとめる・位置に直すのは管理画面を開いたブラウザ(admin/visitors.php)。
+# 1 行 1 つの JSON で、日ごとのファイル(/var/log/km-visit/visit-YYYY-MM-DD.jsonl。ホストの run/visitlog)へ書く。
+#   - **公開のページだけ**($km_visit_page)。画像・CSS・JS・管理画面は書かない
+#   - **クエリは書かない**($uri)。参照元もクエリより前だけ($km_visit_ref)。リンクの中身を残さない
+#   - 閲覧者の種別は PHP が X-KM-Viewer で渡す(anon / guest:<仮アカウント> / user:<鍵つきの印> / app:<鍵つきの印>)。
+#     利用者には返さない(nginx/km/proxy-web.conf の proxy_hide_header)
+#   - **30 日を過ぎたファイルはホストの cron が消す**(scripts/host-updates-setup.sh の版 8)
+# ファイル名に変数を使うので、書くのは worker(nginx 利用者)。置き場の持ち主は compose の reverse-proxy の
+# entrypoint が起動のたびに直す(web の www-data が読めるよう、グループは 33)。
+log_format km_visit escape=json '{"t":"$time_iso8601","ip":"$remote_addr","m":"$request_method","p":"$uri",'
+                                '"s":$status,"b":$body_bytes_sent,"v":"$upstream_http_x_km_viewer",'
+                                '"ua":"$http_user_agent","ref":"$km_visit_ref"}';
+map $time_iso8601 $km_visit_day {
+    "~^(?<km_day>\d{4}-\d{2}-\d{2})T" $km_day;
+    default                           "unknown";
+}
+map $uri $km_visit_page {
+    default              0;
+    "/"                  1;
+    "/index.php"         1;
+    "/guest.php"         1;
+    "/share.php"         1;
+    "/faq.php"           1;
+    "/contact.php"       1;
+    "/api/app-map.php"   1;
+}
+map $http_referer $km_visit_ref {
+    "~^(?<km_ref>[^?#]*)" $km_ref;
+    default               "";
+}
+
 # HTTP:80 -> Webアプリ HTTPS
 server {
     listen 80;
@@ -328,6 +362,18 @@ server {
     # 100 本は学校の NAT を考えた広め(HTTP/2 では同時リクエストの数で数える)。
     keepalive_timeout 30s;
     limit_conn km_conn 100;
+
+    # アクセスログ。**server に 1 つでも access_log を書くと http の既定は継承されない**ので、
+    # 既定(公式イメージの nginx.conf の main・docker logs へ出る)も書き直す。
+    # 2 本目は訪問者の記録(http の log_format km_visit の注記)。公開のページだけを書く。
+    # **access_log を持つ location(verify・guest・share・callback)には効かない** —— そちらにも書くこと
+    access_log /var/log/nginx/access.log main;
+    access_log /var/log/km-visit/visit-$km_visit_day.jsonl km_visit if=$km_visit_page;
+    open_log_file_cache max=4 inactive=60s valid=60s;
+    # **書き先に変数を使うと、nginx は書く前に root のディレクトリがあるかを確かめる**(無ければ書かずに error.log へ)。
+    # この server には root が無く、既定の /etc/nginx/html はイメージに無い(2026-10-06 に検証機で 1 行も書かれなかった)。
+    # 中身が空で読み取り専用の /var/empty を指す —— ここから配るものは無い(どの location も web へ渡すか、返すだけ)
+    root /var/empty;
 
     # 管理画面を別オリジンにしたときの振り分け(http の $km_host_role の注記)。
     # server の直下の if は location を選ぶより前に評価されるので、下のどの location にも先んじて効く。
@@ -410,6 +456,12 @@ server {
         return 404;
     }
 
+    # Apache の状態(2026-10-05)。web の中の PHP が 127.0.0.1 で読むだけ。**外からは見せない**
+    # (Apache 側も Require local。docker/php/apache-km.conf)
+    location ^~ /server-status {
+        return 404;
+    }
+
     # ---------------------------------------------------------------------
     # 見取り図の直リンクを塞ぐ。
     #
@@ -449,9 +501,10 @@ server {
     # 未認証で重い API(2026-09-14 の診断で追加。ゾーンの注記は http の km_api)。
     # route-weights は 2026-09-25 に足した(読みは誰でもできる。書きは管理者のトークンが要る)。
     # map-calibration(北と距離の補正)と app-update(アプリの更新の確認)は 2026-10-05 に足した。
+    # positioning-params(アプリの測位のパラメータ)と learning(Wi-Fi の学習データ)は 2026-10-06 に足した。
     # **メソッドを問わず数える。** 見取り図・APK・人数・アカウント画像・地図のデータは GET でも PHP が毎回働く。
     # 静的資材の正規表現とは重ならない(こちらは `.php` で終わる)ので、並び順はここでよい。
-    location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update)|logto_me)\.php$ {
+    location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update|positioning-params|learning)|logto_me)\.php$ {
         limit_req zone=km_api burst=120 nodelay;
         include /etc/nginx/km/proxy-web.conf;
         proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
@@ -539,6 +592,7 @@ server {
     # 参照元も渡さない(verify.php と同じ)。トークンの総当たりに備えて入口でも回数を絞る。
     location = /guest.php {
         access_log /var/log/nginx/access.log km_no_query;
+        access_log /var/log/km-visit/visit-$km_visit_day.jsonl km_visit;
         limit_req zone=km_public burst=5 nodelay;
 
         # ここで add_header を書くと server ブロックの add_header は継承されない(上の verify.php と同じ)
@@ -551,6 +605,47 @@ server {
 
         include /etc/nginx/km/proxy-web.conf;
         proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+
+    # ファイル管理の共有リンク(2026-10-05、lib/file-share.php)。guest.php と同じく
+    # **URL にリンクの中身が乗るのでログには残さず**、参照元も渡さず、入口で回数を絞る
+    location = /share.php {
+        access_log /var/log/nginx/access.log km_no_query;
+        access_log /var/log/km-visit/visit-$km_visit_day.jsonl km_visit;
+        limit_req zone=km_public burst=5 nodelay;
+
+        add_header X-Content-Type-Options nosniff always;
+        add_header X-Frame-Options SAMEORIGIN always;
+        add_header Referrer-Policy no-referrer always;
+        add_header Permissions-Policy $km_permissions_policy always;
+        add_header Content-Security-Policy $km_csp_fallback always;
+        include /etc/nginx/km/hsts-*.conf;
+
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+
+    # タスクマネージャー(2026-10-05、利用者の指示)。**管理者のサインインの上に IP の制限を重ねる。**
+    # 許可する送り元は taskmgr-allow*.local.conf(**ホスト側が正本。リポジトリに IP を書かない**。
+    # 見本は nginx/km/taskmgr-allow.local.conf.example)。**ファイルが無ければ誰も入れない**(deny all だけが残る)。
+    # 名前を allow-* にしないこと —— 管理ポートの許可(allow-*.conf)に混ざる。
+    # 許可していない送り元には応答を書かずに切る(444。管理ポートと同じく「何かある」と名乗らない)
+    location = /admin/taskmgr.php {
+        include /etc/nginx/km/taskmgr-allow*.local.conf;
+        deny all;
+        error_page 403 = @km_taskmgr_hide;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+    location = /admin/api/taskmgr-data.php {
+        include /etc/nginx/km/taskmgr-allow*.local.conf;
+        deny all;
+        error_page 403 = @km_taskmgr_hide;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+    location @km_taskmgr_hide {
+        return 444;
     }
 
     # 管理画面はファイル管理(10MB)の分だけ広げる。
@@ -590,6 +685,16 @@ server {
         proxy_read_timeout 180s;
     }
 
+    # AR の撮影の zip(2026-10-06、lib/ar-capture.php)。1 回で 1GB 近くになりうるので、PHP が set_time_limit(840) で
+    # 流しながら書く。nginx は溜めずにそのまま流す(一時ファイルに 1GB を書かない)。待ちは PHP より長く
+    location = /admin/ar-captures.php {
+        client_max_body_size 12m;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+        proxy_buffering off;
+        proxy_read_timeout 900s;
+    }
+
     # アプリのランキングへの記録(POST だけ数える。取得の GET は数えない)
     location = /api/app-ranking.php {
         limit_req zone=km_app burst=60 nodelay;
@@ -599,6 +704,35 @@ server {
 
     # アプリの地図の取得(2026-09-14 の診断で追加。ゾーンの注記は http の km_appmap)。
     # 以前は location / に入り、入口では何も絞られていなかった(critic 0)
+    # ノードのクラウドバックアップ(2026-10-06、lib/map-backup.php)。管理者のトークンが要る。
+    # 本文は数 MB まであるので、ここだけ広げる(PHP の上限 KM_MAP_BACKUP_MAX_BYTES と揃える)。回数は km_api で数える
+    location = /api/map-backup.php {
+        client_max_body_size 16m;
+        limit_req zone=km_api burst=120 nodelay;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+
+    # ストリートビューの写真(2026-10-06、lib/panorama.php)。写真は ?h=<ハッシュ> で取る ——
+    # **ハッシュが鍵**(地図の配信で一覧を受け取った人だけが知る)なので、クエリをログに書かない。
+    # 上げるのは管理者だけ(1 枚 10MB。multipart の分の余裕を足す)。回数は km_api で数える
+    location = /api/panorama.php {
+        access_log /var/log/nginx/access.log km_no_query;
+        client_max_body_size 11m;
+        limit_req zone=km_api burst=120 nodelay;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+
+    # AR 実測の記録と画像(2026-10-06、lib/ar-capture.php)。読み書きは管理者だけ。
+    # 1 枚 = 画像 3MB + 深度 1MB(multipart の分の余裕を足す)。回数は km_api で数える
+    location = /api/ar-capture.php {
+        client_max_body_size 5m;
+        limit_req zone=km_api burst=120 nodelay;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+
     location = /api/app-map.php {
         limit_req zone=km_appmap burst=30 nodelay;
         include /etc/nginx/km/proxy-web.conf;

@@ -73,6 +73,12 @@ const KM_CHECK_PURE = [
     'router-bssids',
     // 地図の北と距離の補正を配る(2026-10-05)
     'map-calibration',
+    // アプリの測位のパラメータを配る(2026-10-06)
+    'positioning-params',
+    // Wi-Fi の学習データと評価をサーバーに置く(2026-10-06)
+    'learning-data',
+    // AR 実測の記録と画像(2026-10-06)
+    'ar-capture',
     // アプリの自動更新(2026-10-05)
     'app-update',
     'ssh-roles',
@@ -2169,7 +2175,7 @@ function km_check_review_0925(): void
     km_check_heading('review-0925 W-45: 調べられた語を管理画面で外せる');
     check_bool('出どころは /64 単位(km_map_rate_limit_key)で数える', str_contains($ranking, 'km_map_rate_limit_key($source)'));
     check_bool('公開の一覧は外した語を出さない', str_contains($ranking, 'NOT EXISTS (SELECT 1 FROM km_map_ranking_hidden_queries h'));
-    check_bool('外した語は年の掃除でも消える', str_contains($ranking, "'km_map_ranking_hidden_queries'] as \$table"));
+    check_bool('外した語は年の掃除でも消える', str_contains($ranking, "'km_map_ranking_hidden_queries', 'km_map_ranking_published_queries', 'km_map_ranking_publications'] as \$table"));
     $page = $read('admin/ranking.php');
     check_bool('管理画面は guard.php を通る', str_contains($page, "require __DIR__ . '/_inc/guard.php';"));
     check_bool('外す操作は CSRF を確かめてから', strpos($page, 'km_csrf_verify()') !== false && strpos($page, 'km_csrf_verify()') < strpos($page, 'km_ranking_hide_query('));
@@ -2178,6 +2184,18 @@ function km_check_review_0925(): void
     check_bool('記録の文言がある', isset(KM_ADMIN_LOG_ACTION_LABELS['ranking.query_hidden']));
     check_bool('メニューから開ける', str_contains($read('admin/_inc/partials/sidebar.php'), 'href="./ranking.php"'));
     check_bool('語は画面でエスケープする', str_contains($page, "<?= km_e(\$row['query']) ?>"));
+
+    km_check_heading('review-1005 W-45: 公開するのは管理者が選んだ語だけ(月ごとの写し)');
+    check_bool('公開の一覧は月の写しだけを読む', str_contains($ranking, 'FROM km_map_ranking_published_queries p') && !str_contains($ranking, 'int $minSources'));
+    check_bool('写しに入るのは出どころの条件を満たし、外していない語だけ', str_contains($ranking, "\$statement->execute([\$year, ...\$words, KM_RANKING_QUERY_MIN_SOURCES]);"));
+    check_bool('同じ月に公開し直すと置き換える', str_contains($ranking, "DELETE FROM km_map_ranking_published_queries WHERE period = ?"));
+    check_bool('外した語は公開中の写しからもすぐ消す', str_contains($ranking, "DELETE FROM km_map_ranking_published_queries WHERE normalized_query = ? AND year = ?"));
+    check_bool('公開した月は語が 0 でも残す(前の月に戻らない)', str_contains($ranking, 'INSERT INTO km_map_ranking_publications') && str_contains($ranking, 'SELECT MAX(period) FROM km_map_ranking_publications WHERE year = ?'));
+    check_bool('公開する操作も CSRF を確かめてから', strpos($page, 'km_csrf_verify()') < strpos($page, 'km_ranking_publish_queries('));
+    check_bool('公開したことを記録する(月と数だけ)', str_contains($page, "km_admin_log_record('content', 'ranking.queries_published', \$period . ' / ' . \$count);"));
+    check_bool('記録の文言がある(公開)', isset(KM_ADMIN_LOG_ACTION_LABELS['ranking.queries_published']));
+    check_bool('今月まだ公開していなければ画面で知らせる', str_contains($page, 'page.ranking.notPublishedThisMonth'));
+    check_bool('リセットの道具は写しも消す', substr_count($read('scripts/reset-app-ranking.php'), 'km_map_ranking_published_queries') === 3 && substr_count($read('scripts/reset-app-ranking.php'), 'km_map_ranking_publications') === 2);
 
     km_check_heading('review-0925 W-48: 削除した人の ID は他の記録とチャットからも消す');
     require_once $src . '/lib/account-delete.php';
@@ -2312,6 +2330,303 @@ function km_check_map_calibration(): void
     require_once $src . '/lib/admin-log.php';
     check_bool('記録の文言', isset(KM_ADMIN_LOG_ACTION_LABELS['map.calibration_publish'], KM_ADMIN_LOG_ACTION_LABELS['map.calibration_unpublish']));
     check_bool('専用の表(km_settings の 255 字に入らない)', str_contains($read('lib/map-calibration.php'), 'body MEDIUMTEXT NOT NULL'));
+}
+
+/**
+ * アプリの測位のパラメータ(2026-10-06、lib/positioning-params.php)。DB は使わない(検め方・口の守り・アプリとの突き合わせ)。
+ */
+function km_check_positioning_params(): void
+{
+    $src = __DIR__ . '/..';
+    require_once $src . '/lib/positioning-params.php';
+    km_check_heading('positioning-params: 検め方');
+    $all = km_positioning_params_normalize([]);
+    check('空なら全部既定で埋める', count(KM_POSITIONING_PARAM_SPECS), count($all));
+    check('既定の粒子の数', 500, $all['particle_count']);
+    $ok = km_positioning_params_normalize(['knn_k' => 6, 'path_loss_exponent' => 3.1]);
+    check('整数の項目は整数に', 6, $ok['knn_k']);
+    check('小数の項目はそのまま', 3.1, $ok['path_loss_exponent']);
+    $rejects = static function (array $input): bool {
+        try {
+            km_positioning_params_normalize($input);
+            return false;
+        } catch (InvalidArgumentException) {
+            return true;
+        }
+    };
+    check_bool('範囲の外は断る', $rejects(['knn_k' => 11]) && $rejects(['particle_count' => 50]));
+    check_bool('数でないものは断る', $rejects(['knn_k' => '4']) && $rejects(['rtt_enabled' => true]) && $rejects(['ls_iterations' => INF]));
+    check_bool('知らない項目は断る(版の食い違い)', $rejects(['unknown_param' => 1]));
+
+    km_check_heading('positioning-params: 口');
+    $read = static fn (string $path): string => (string) @file_get_contents($src . '/' . $path);
+    $api = $read('api/positioning-params.php');
+    $assertAt = strpos($api, 'logto_assert_permissions($principal, LOGTO_ADMIN_PERMISSIONS);');
+    check_bool('書き込みは管理者のトークンだけ', $assertAt !== false && strpos($api, "require_method('POST');") < $assertAt
+        && $assertAt < (int) strpos($api, 'km_positioning_params_publish(') && $assertAt < (int) strpos($api, 'km_positioning_params_reset('));
+    check_bool('読みは権限なしで返す(秘密ではない)', strpos($api, "=== 'GET'") < $assertAt);
+    check_bool('本文は 8KB まで', str_contains($api, 'km_api_json_body(8 * 1024)'));
+    require_once $src . '/lib/admin-log.php';
+    check_bool('記録の文言', isset(KM_ADMIN_LOG_ACTION_LABELS['positioning.params_publish'], KM_ADMIN_LOG_ACTION_LABELS['positioning.params_unpublish']));
+    check_bool('専用の表(km_settings の 255 字に入らない)', str_contains($read('lib/positioning-params.php'), 'CREATE TABLE IF NOT EXISTS km_positioning_params'));
+
+    $kotlin = 'C:/Users/itota/Documents/Test/app/src/main/java/com/ito/kosenmap/positioning/PositioningParams.kt';
+    if (!is_file($kotlin)) {
+        check_skip('positioning-params: アプリと突き合わせ', 'アプリの原本が無い(本番のホストなど)');
+        return;
+    }
+    km_check_heading('positioning-params: アプリと突き合わせ');
+    $kt = (string) file_get_contents($kotlin);
+    preg_match_all(
+        '/PositioningParamSpec\(\s*"([a-z_]+)",\s*"[^"]*",\s*"[^"]*",\s*"[^"]*",\s*(-?[0-9.]+),\s*(-?[0-9.]+),\s*(-?[0-9.]+)(,\s*integer = true)?/u',
+        $kt,
+        $matches,
+        PREG_SET_ORDER
+    );
+    $app = [];
+    foreach ($matches as $m) {
+        $app[$m[1]] = [(float) $m[2], (float) $m[3], (float) $m[4], ($m[5] ?? '') !== ''];
+    }
+    check('項目の並びと数が同じ', array_keys(KM_POSITIONING_PARAM_SPECS), array_keys($app));
+    foreach (KM_POSITIONING_PARAM_SPECS as $key => [$min, $max, $default, $integer]) {
+        check("$key の範囲・既定・整数か", [(float) $min, (float) $max, (float) $default, $integer], $app[$key] ?? null);
+    }
+    $dir = dirname($kotlin, 2);
+    $prefs = (string) @file_get_contents($dir . '/MapPreferences.kt');
+    check_bool('手元の値を読むのは管理ビルドだけ', str_contains($prefs, 'return (if (adminBuild) read(POSITIONING_PARAMS_LOCAL_KEY) else null)'));
+}
+
+/**
+ * Wi-Fi の学習データと評価の置き場(2026-10-06、lib/learning-data.php)。DB は使わない(検め方と口の守り)。
+ */
+function km_check_learning_data(): void
+{
+    $src = __DIR__ . '/..';
+    require_once $src . '/lib/learning-data.php';
+    km_check_heading('learning-data: 検め方');
+    $sample = [
+        'sampleUuid' => '0F8FAD5B-D9CB-469F-A165-70867728950E',
+        'nodeUuid' => '5d42d06e-45f5-4109-b6f7-89e3f7518ceb',
+        'floor' => '3F',
+        'x' => 796.91,
+        'y' => 816,
+        'rssiByBssid' => ['78:7d:53:39:34:d7' => -50, '78:7D:53:39:34:D8' => -48],
+        'altitudeMeters' => 98.5,
+        'sampleCount' => 3,
+        'measuredAtMillis' => 1791270100702,
+    ];
+    $ok = km_learning_normalize_sample($sample);
+    check('uuid は小文字に揃える', '0f8fad5b-d9cb-469f-a165-70867728950e', $ok['sampleUuid']);
+    check('BSSID は大文字に揃える', ['78:7D:53:39:34:D7' => -50, '78:7D:53:39:34:D8' => -48], $ok['rssiByBssid']);
+    check('座標は数に', 816.0, $ok['y']);
+    $rejects = static function (array $override) use ($sample): bool {
+        try {
+            km_learning_normalize_sample(array_merge($sample, $override));
+            return false;
+        } catch (InvalidArgumentException) {
+            return true;
+        }
+    };
+    check_bool('uuid の形を確かめる', $rejects(['sampleUuid' => 'x']));
+    check_bool('地点・階の形を確かめる', $rejects(['nodeUuid' => "a'; DROP"]) && $rejects(['floor' => '3F/../']));
+    check_bool('電波の値は BSSID と -127〜0 の整数', $rejects(['rssiByBssid' => ['nope' => -50]]) && $rejects(['rssiByBssid' => ['78:7D:53:39:34:D7' => 5]])
+        && $rejects(['rssiByBssid' => ['78:7D:53:39:34:D7' => '-50']]) && $rejects(['rssiByBssid' => []]));
+    check_bool('時刻と回数の範囲', $rejects(['measuredAtMillis' => 5]) && $rejects(['sampleCount' => 0]) && $rejects(['x' => INF]));
+    $evaluation = km_learning_normalize_evaluation(['uuid' => '0F8FAD5B-D9CB-469F-A165-70867728950E', 'nodeUuid' => 'n-1', 'floor' => '3F', 'algorithm' => 'ハイブリッド法']);
+    check('評価は中身をそのまま保存する', 'ハイブリッド法', json_decode($evaluation['body'], true)['algorithm'] ?? null);
+
+    km_check_heading('learning-data: 口');
+    $read = static fn (string $path): string => (string) @file_get_contents($src . '/' . $path);
+    $api = $read('api/learning.php');
+    $assertAt = strpos($api, "logto_assert_permissions(\$principal, LOGTO_ADMIN_PERMISSIONS);\n\$uploadedBy");
+    check_bool('送る・消すは管理者のトークンだけ', $assertAt !== false && $assertAt < (int) strpos($api, 'km_learning_store(') && $assertAt < (int) strpos($api, 'km_learning_delete('));
+    check_bool('学習データを読むのはアクセスコードか管理者', str_contains($api, "km_learning_code_allowed(\$pdo, (string) (\$input['code'] ?? ''))"));
+    check_bool('評価を読むのは管理者だけ', strpos($api, "if (\$kind === 'evaluations') {") < strpos($api, 'km_learning_changes('));
+    check_bool('コードは URL ではなく本文で受ける(POST だけ)', str_contains($api, "require_method('POST');") && !str_contains($api, '$_GET'));
+    check_bool('消したことを記録する', str_contains($api, "km_admin_log_record('settings', 'learning.delete'"));
+    require_once $src . '/lib/admin-log.php';
+    check_bool('記録の文言', isset(KM_ADMIN_LOG_ACTION_LABELS['learning.delete']));
+    $lib = $read('lib/learning-data.php');
+    check_bool('同じ記録は 2 度入れない(送り直しても増えない)', str_contains($lib, 'UNIQUE KEY uq_km_learning_samples_uuid (sample_uuid)') && str_contains($lib, 'rssi_json = IF(deleted = 1, VALUES(rssi_json), rssi_json)'));
+    check_bool('消した記録を送り直したら生き返らせる(deleted は最後に書く)', preg_match('/seq = IF\(deleted = 1, VALUES\(seq\), seq\),\s*deleted = 0/', $lib) === 1);
+    check_bool('消しても行は残し、番号を振り直す(端末が消えたと知るため)', str_contains($lib, 'SET deleted = 1, seq = ?'));
+    check_bool('1 回に返す量を絞る(アプリは 1MB まで読む)', KM_LEARNING_PAGE_BYTES <= 700 * 1024);
+}
+
+/**
+ * AR 実測の記録と画像(2026-10-06、lib/ar-capture.php)。DB は使わない(検め方・COLMAP の変換・zip の作り・口の守り)。
+ * 表の読み書きは本番ホストの使い捨ての MariaDB で確かめた(docs/20)。
+ */
+function km_check_ar_capture(): void
+{
+    $src = __DIR__ . '/..';
+    require_once $src . '/lib/ar-capture.php';
+    require_once $src . '/lib/apk-version.php';
+    km_check_heading('ar-capture: 記録と画像の検め方');
+    $record = ['version' => 1, 'uuid' => '0F8FAD5B-D9CB-469F-A165-70867728950E', 'floor' => '3F', 'startedAtMillis' => 1791270100702,
+        'track' => [[1791270100800, 0.1, -0.2, null]], 'marks' => [['nodeUuid' => 'n1', 't' => 1791270100900, 'x' => 0.0, 'z' => 0.0]], 'depthHits' => []];
+    $ok = km_ar_normalize_record(gzencode((string) json_encode($record)));
+    check('記録: uuid は小文字・印の数を数える', ['0f8fad5b-d9cb-469f-a165-70867728950e', '3F', 1], [$ok['uuid'], $ok['floor'], $ok['marks']]);
+    $rejectsRecord = static function (string $gz): bool {
+        try {
+            km_ar_normalize_record($gz);
+            return false;
+        } catch (InvalidArgumentException) {
+            return true;
+        }
+    };
+    check_bool('記録: gzip でない・JSON でない・形が違うものは断る', $rejectsRecord('plain') && $rejectsRecord(gzencode('nope'))
+        && $rejectsRecord(gzencode((string) json_encode(['uuid' => 'x'] + $record)))
+        && $rejectsRecord(gzencode((string) json_encode(['floor' => '../3F'] + $record)))
+        && $rejectsRecord(gzencode((string) json_encode(['track' => 'x'] + $record))));
+    check_bool('記録: ほどくと大きすぎるもの(gzip 爆弾)は断る', $rejectsRecord(gzencode(str_repeat(' ', KM_AR_RECORD_MAX_JSON_BYTES + 10))));
+
+    $meta = ['timestampMillis' => 1791270100702, 'pose' => ['t' => [1, 2.5, -3], 'q' => [0, 0, 0, 1.2]],
+        'intrinsics' => ['fx' => 500.5, 'fy' => 500, 'cx' => 320, 'cy' => 240, 'width' => 640, 'height' => 480]];
+    $clean = km_ar_normalize_frame_meta($meta);
+    check('付帯情報: 向きは長さ 1 に揃える・位置は数に', [[1.0, 2.5, -3.0], [0.0, 0.0, 0.0, 1.0], null], [$clean['pose']['t'], $clean['pose']['q'], $clean['map']]);
+    $rejectsMeta = static function (array $override) use ($meta): bool {
+        try {
+            km_ar_normalize_frame_meta(array_replace_recursive($meta, $override));
+            return false;
+        } catch (InvalidArgumentException) {
+            return true;
+        }
+    };
+    check_bool('付帯情報: 回転でない q・欠けた t・負の fx・大きすぎる幅は断る', $rejectsMeta(['pose' => ['q' => [0, 0, 0, 0]]])
+        && $rejectsMeta(['pose' => ['t' => [1, 2, 3, 4]]]) && $rejectsMeta(['intrinsics' => ['fx' => -1]])
+        && $rejectsMeta(['intrinsics' => ['width' => 99999]]) && $rejectsMeta(['timestampMillis' => '1']));
+
+    // 中身で形を見る(拡張子は信じない)。最小の JPEG(SOF0 だけ)と PNG(IHDR だけ)
+    $jpeg = "\xFF\xD8\xFF\xC0" . pack('n', 17) . "\x08" . pack('nn', 480, 640) . "\x03\x01\x22\x00\x02\x11\x01\x03\x11\x01" . "\xFF\xD9";
+    $png = "\x89PNG\r\n\x1a\n" . pack('N', 13) . 'IHDR' . pack('NN', 160, 120) . "\x10\x00\x00\x00\x00" . "\x00\x00\x00\x00";
+    check('画像は JPEG の中身から大きさを読む', ['width' => 640, 'height' => 480, 'ext' => 'jpg'], km_ar_inspect_image($jpeg, false));
+    check('深度は 16bit PNG の中身から', ['width' => 160, 'height' => 120, 'ext' => 'png'], km_ar_inspect_image($png, true));
+    $rejectsImage = static function (string $bytes, bool $depth): bool {
+        try {
+            km_ar_inspect_image($bytes, $depth);
+            return false;
+        } catch (InvalidArgumentException) {
+            return true;
+        }
+    };
+    check_bool('画像の欄に PNG・深度の欄に JPEG・中身の無いものは断る', $rejectsImage($png, false) && $rejectsImage($jpeg, true) && $rejectsImage('<?php ', false));
+
+    km_check_heading('ar-capture: COLMAP の姿勢');
+    $pose = km_ar_colmap_pose([1.0, 2.0, 3.0], [0.0, 0.0, 0.0, 1.0]);
+    check('向きを変えていないカメラ: x 軸まわりに 180 度・t = -R·C', [[0.0, 1.0, 0.0, 0.0], [-1.0, 2.0, 3.0]],
+        [array_map(static fn ($v) => round($v, 9) + 0.0, $pose['qvec']), array_map(static fn ($v) => round($v, 9) + 0.0, $pose['tvec'])]);
+    // どんな向きでも: AR のカメラの前(-z)に d m の点は、COLMAP のカメラでは (0, 0, d)。上(+y)は COLMAP の -y
+    $rotate = static function (array $q, array $v): array {
+        [$x, $y, $z, $w] = $q;
+        $m = [[1 - 2 * ($y * $y + $z * $z), 2 * ($x * $y - $z * $w), 2 * ($x * $z + $y * $w)],
+            [2 * ($x * $y + $z * $w), 1 - 2 * ($x * $x + $z * $z), 2 * ($y * $z - $x * $w)],
+            [2 * ($x * $z - $y * $w), 2 * ($y * $z + $x * $w), 1 - 2 * ($x * $x + $y * $y)]];
+        return [$m[0][0] * $v[0] + $m[0][1] * $v[1] + $m[0][2] * $v[2], $m[1][0] * $v[0] + $m[1][1] * $v[1] + $m[1][2] * $v[2], $m[2][0] * $v[0] + $m[2][1] * $v[1] + $m[2][2] * $v[2]];
+    };
+    $worst = 0.0;
+    foreach ([[0.1, 0.7, -0.2, 0.67], [0.5, -0.5, 0.5, 0.5], [0.0, 0.0, 1.0, 0.0], [0.3, 0.1, 0.0, -0.95]] as $q) {
+        $n = sqrt(array_sum(array_map(static fn ($v) => $v * $v, $q)));
+        $q = array_map(static fn ($v) => $v / $n, $q);
+        $c = [0.4, 1.5, -2.0];
+        $p = km_ar_colmap_pose($c, $q);
+        [$qw, $qx, $qy, $qz] = $p['qvec'];
+        foreach ([[[0, 0, -2.0], [0, 0, 2.0]], [[0, 1.0, 0], [0, -1.0, 0]], [[1.0, 0, 0], [1.0, 0, 0]]] as [$inAr, $inColmap]) {
+            $world = array_map(static fn ($a, $b) => $a + $b, $c, $rotate($q, $inAr));
+            $cam = array_map(static fn ($a, $b) => $a + $b, $rotate([$qx, $qy, $qz, $qw], $world), $p['tvec']);
+            $worst = max($worst, abs($cam[0] - $inColmap[0]), abs($cam[1] - $inColmap[1]), abs($cam[2] - $inColmap[2]));
+        }
+    }
+    check_bool('どんな向きでも、前は +z・上は -y・右は +x になる', $worst < 1e-9, sprintf('最大のずれ %.2e', $worst));
+    $text = km_ar_colmap_text([['name' => 'frame_0000.jpg', 'meta' => $clean], ['name' => 'frame_0001.jpg', 'meta' => $clean]]);
+    check_bool('内部の値が同じ画像は 1 つのカメラにまとめる', substr_count($text['cameras'], ' PINHOLE ') === 1
+        && str_contains($text['cameras'], "1 PINHOLE 640 480 500.5 500 320 240\n"));
+    check_bool('画像の行は「番号 qw qx qy qz tx ty tz カメラ 名前」と空行', preg_match('/^2 (\S+ ){7}1 frame_0001\.jpg\n\n\z/m', $text['images']) === 1);
+
+    km_check_heading('ar-capture: zip(圧縮しない・流しながら書く)');
+    $tmp = tempnam(sys_get_temp_dir(), 'kmzip');
+    $file = tempnam(sys_get_temp_dir(), 'kmimg');
+    file_put_contents($file, random_bytes(3000));
+    $out = fopen($tmp, 'wb');
+    $written = km_zip_stream_stored([
+        ['name' => 'survey.json', 'data' => '{"a":1}'],
+        ['name' => 'images/frame_0000.jpg', 'path' => $file],
+        ['name' => 'sparse/0/points3D.txt', 'data' => ''],
+    ], static function (string $bytes) use ($out): void {
+        fwrite($out, $bytes);
+    }, mktime(12, 34, 56, 10, 6, 2026));
+    fclose($out);
+    check('書いたバイト数 = ファイルの大きさ', filesize($tmp), $written);
+    check_bool('中身を zip として読み返せる(中央ディレクトリから)', km_apk_read_entry($tmp, 'survey.json') === '{"a":1}'
+        && km_apk_read_entry($tmp, 'images/frame_0000.jpg') === file_get_contents($file)
+        && km_apk_read_entry($tmp, 'sparse/0/points3D.txt') === '');
+    $zip = (string) file_get_contents($tmp);
+    $local = unpack('Vsig/vver/vflag/vmethod/vtime/vdate/Vcrc', substr($zip, 0, 18));
+    check('CRC は中身の CRC32・格納(圧縮なし)', [0x04034b50, 0, (int) hexdec(hash('crc32b', '{"a":1}'))], [$local['sig'], $local['method'], $local['crc']]);
+    if (class_exists('ZipArchive')) {
+        $archive = new ZipArchive();
+        check_bool('ZipArchive でも開けて CRC が合う', $archive->open($tmp, ZipArchive::CHECKCONS) === true && $archive->numFiles === 3);
+        $archive->close();
+    } else {
+        check_skip('ZipArchive でも開けて CRC が合う', 'zip 拡張のある PHP');
+    }
+    @unlink($tmp);
+    @unlink($file);
+    $rejectsName = static function (string $name): bool {
+        try {
+            km_zip_stream_stored([['name' => $name, 'data' => 'x']], static function (string $b): void {});
+            return false;
+        } catch (InvalidArgumentException) {
+            return true;
+        }
+    };
+    check_bool('zip の名前: 上へ戻る・絶対パス・空白は断る', $rejectsName('../x') && $rejectsName('/etc/x') && $rejectsName('a b') && $rejectsName('a/../b'));
+
+    km_check_heading('ar-capture: 口の守り');
+    $read = static fn (string $path): string => (string) @file_get_contents($src . '/' . $path);
+    $api = $read('api/ar-capture.php');
+    $assertAt = strpos($api, 'logto_assert_permissions($principal, LOGTO_ADMIN_PERMISSIONS);');
+    check_bool('読み書きはすべて管理者のトークン(どの操作よりも先に確かめる)', $assertAt !== false
+        && $assertAt < (int) strpos($api, 'km_db()') && $assertAt < (int) strpos($api, 'km_ar_list_sessions(')
+        && $assertAt < (int) strpos($api, 'km_ar_session_record(') && $assertAt < (int) strpos($api, 'km_ar_put_frame('));
+    $admin = $read('admin/ar-captures.php');
+    check_bool('zip を落とす画面は管理者の画面(guard)・消すのは CSRF を確かめてから', str_contains($admin, "require __DIR__ . '/_inc/guard.php';")
+        && strpos($admin, 'km_csrf_verify()') < strpos($admin, 'km_ar_delete_session('));
+    check_bool('画像の置き場は uploads の下', str_contains(km_ar_capture_dir(), '/uploads/'));
+    // nginx の設定は手元の作業ツリーにだけある(本番の web コンテナには src/ しか見えない。2026-10-07 に本番で FAIL)
+    $nginxPath = $src . '/../nginx/default.conf.template';
+    if (!is_file($nginxPath)) {
+        check_skip('画像の置き場は外から読めない(uploads は nginx で塞いである)', '手元の作業ツリーで確認する。配備先のコンテナに nginx/ は無い');
+        check_skip('nginx: 1 枚(画像 3MB + 深度 1MB)を受けられる', '手元の作業ツリーで確認する。配備先のコンテナに nginx/ は無い');
+    } else {
+        $nginx = (string) file_get_contents($nginxPath);
+        check_bool('画像の置き場は外から読めない(uploads は nginx で塞いである)', str_contains($nginx, 'location ~ ^/(lib|config|scripts|uploads|cache|vendor)/ {'));
+        check_bool('nginx: 1 枚(画像 3MB + 深度 1MB)を受けられる', preg_match('#location = /api/ar-capture\.php \{\s*client_max_body_size 5m;#', $nginx) === 1
+            && KM_AR_IMAGE_MAX_BYTES + KM_AR_DEPTH_MAX_BYTES < 5 * 1024 * 1024);
+    }
+    check_bool('地図の配信と一般のアプリには載せない', !str_contains($read('api/app-map.php'), 'ar-capture') && !str_contains($read('lib/app-map.php'), 'ar-capture'));
+    require_once $src . '/lib/admin-log.php';
+    check_bool('記録の文言', isset(KM_ADMIN_LOG_ACTION_LABELS['ar.capture_upload'], KM_ADMIN_LOG_ACTION_LABELS['ar.capture_download'], KM_ADMIN_LOG_ACTION_LABELS['ar.capture_delete']));
+
+    // アプリ(positioning/ArCapture.kt)の上限と揃っているか。片方だけ変えると、撮れても送れない
+    $kotlin = 'C:/Users/itota/Documents/Test/app/src/main/java/com/ito/kosenmap/positioning/ArCapture.kt';
+    if (!is_file($kotlin)) {
+        check_skip('ar-capture: アプリと突き合わせ', 'アプリの原本が無い(本番のホストなど)');
+        return;
+    }
+    km_check_heading('ar-capture: アプリと突き合わせ');
+    $kt = (string) file_get_contents($kotlin);
+    $constant = static function (string $name) use ($kt): ?int {
+        if (preg_match('/const val ' . $name . ' = ([0-9 *]+?)L?\s*$/m', $kt, $m) !== 1) {
+            return null;
+        }
+        return (int) array_product(array_map('intval', array_map('trim', explode('*', $m[1]))));
+    };
+    check('1 回の撮影の枚数', KM_AR_FRAMES_PER_SESSION, $constant('AR_CAPTURE_MAX_FRAMES'));
+    check('画像 1 枚の上限', KM_AR_IMAGE_MAX_BYTES, $constant('AR_CAPTURE_IMAGE_MAX_BYTES'));
+    check('深度 1 枚の上限', KM_AR_DEPTH_MAX_BYTES, $constant('AR_CAPTURE_DEPTH_MAX_BYTES'));
+    check_bool('付帯情報の形(timestampMillis・pose の t と q・intrinsics)', str_contains($kt, 'addProperty("timestampMillis"') && str_contains($kt, 'add("t",')
+        && str_contains($kt, 'add("q",') && str_contains($kt, 'addProperty("fx"') && str_contains($kt, 'addProperty("width"'));
 }
 
 /**
@@ -2608,7 +2923,7 @@ function km_check_route_weights(): void
     $appMapApi = (string) file_get_contents(__DIR__ . '/../api/app-map.php');
     // 重みだけ変えたとき、版を上げずに「更新」で届くように
     check_bool('アプリへ: 地図が最新のときの応答にも載せる', preg_match("/'upToDate' => true,.*?'routeWeights' => \\\$routeWeights,/s", $appMapApi) === 1);
-    check_bool('アプリへ: 本体の応答にも載せる', str_contains($appMapApi, "    \$routeWeights,\n    \$contentLevel,\n    \$calibration\n);"));
+    check_bool('アプリへ: 本体の応答にも載せる', str_contains($appMapApi, "    \$routeWeights,\n    \$contentLevel,\n    \$calibration,\n    \$panoramasFor(\$map)\n);"));
     // 地図の外に置く。チェックサムは地図の文字列だけに取る
     $map = new stdClass();
     $map->nodes = [];
@@ -3278,7 +3593,9 @@ function km_check_security_review(): void
     $staleAt = strpos($hook, 'km_logto_webhook_is_stale(');
     $parseAt = strpos($hook, 'km_logto_webhook_parse(');
     check_bool('古さを見てから消す', $staleAt !== false && $parseAt !== false && $staleAt < $parseAt);
-    $download = $code($read('admin/api/file-download.php'));
+    // 送り方は lib/uploads.php の km_upload_send に移した(2026-10-05。共有リンクと同じ道)
+    $download = $code($read('lib/uploads.php'));
+    check_bool('管理画面のダウンロードは km_upload_send を使う', str_contains($code($read('admin/api/file-download.php')), 'km_upload_send($file)'));
     check_bool('保存名の形を確かめる', str_contains($download, '[0-9a-f]{32}\.[A-Za-z0-9]{1,16}'));
     $backslashNeedle = <<<'NEEDLE'
 '"', '\\']
@@ -3721,7 +4038,7 @@ function km_check_hardening(): void
     check_bool('include 専用の 404 は `\.php(/|$)`', str_contains($https, 'logto-client)\.php(/|$) {'));
     check_bool('proxy-web.conf に proxy_read_timeout を書かない(location で重複すると起動しない)', !str_contains((string) preg_replace('/^\s*#.*$/m', '', $file('nginx/km/proxy-web.conf')), 'proxy_read_timeout'));
     check('443 で 300s を許すのは downloads.php だけ', 1, substr_count($https, 'proxy_read_timeout 300s;'));
-    check_bool('未認証で重い口を km_api で絞る(メソッドを問わない)', str_contains($https, 'location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update)|logto_me)\.php$ {') && str_contains($https, 'limit_req zone=km_api burst=120 nodelay;'));
+    check_bool('未認証で重い口を km_api で絞る(メソッドを問わない)', str_contains($https, 'location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update|positioning-params|learning)|logto_me)\.php$ {') && str_contains($https, 'limit_req zone=km_api burst=120 nodelay;'));
     check_bool('アプリの地図は km_appmap で絞る', preg_match('#location = /api/app-map\.php \{\s*limit_req zone=km_appmap burst=30 nodelay;#', $https) === 1);
     check_bool('callback.php は認可コードをログに残さない', preg_match('#location = /callback\.php \{\s*access_log [^;]+ km_no_query;#', $https) === 1);
     /*
@@ -3790,8 +4107,10 @@ function km_check_hardening(): void
     };
     $expectedNetworks = [
         'postgres' => ['authdb'], 'logto' => ['edge', 'authdb', 'mail'], 'mariadb' => ['appdb'],
-        'phpmyadmin' => ['edge', 'appdb'], 'web' => ['edge', 'appdb', 'mail'], 'reverse-proxy' => ['edge'],
+        'phpmyadmin' => ['edge', 'appdb'], 'web' => ['edge', 'appdb', 'mail', 'monitor'], 'reverse-proxy' => ['edge'],
         'soketi' => ['edge'], 'mailpit' => ['edge', 'mail'],
+        // タスクマネージャー(2026-10-05)。Glances は monitor(internal)だけ。web だけが読みに来る
+        'glances' => ['monitor'],
     ];
     $wrongNetworks = [];
     foreach ($expectedNetworks as $serviceName => $networkNames) {
@@ -3935,8 +4254,373 @@ function km_check_hardening(): void
     check_bool('local-sanitize.sh がある', $sanitize !== '');
     check_bool('local-sanitize.sh は KM_ENV=local でなければ・本番の名前なら止まる', str_contains($sanitize, 'if [ "$(env_value KM_ENV)" != "local" ]; then') && str_contains($sanitize, 'PROD_DOMAINS="ito4.jp ito8795.com"'));
     check_bool('local-sanitize.sh は氏名をダミーに・記録と鍵を空にする', str_contains($sanitize, "SET occupant_name = CONCAT('教員'") && str_contains($sanitize, 'km_admin_log') && str_contains($sanitize, 'km_app_secrets') && str_contains($sanitize, 'km_staff_requests'));
+    check_bool('local-sanitize.sh は部屋・施設の名前もダミーにする(分類+連番)', str_contains($sanitize, "WHERE type IN ('room', 'facility')") && str_contains($sanitize, "' D', LPAD(@n := @n + 1, 3, '0')"));
     check_bool('local-sanitize.sh はパスワードを引数に載せない(MYSQL_PWD)', str_contains($sanitize, 'MYSQL_PWD="$MARIADB_ROOT_PASSWORD"') && !preg_match('/-p"?\$MARIADB/', $sanitize));
+    check_bool('compose は Android のアプリ ID を渡し、空なら本番の既定に落ちる(KM_ANDROID_APP_ID)', str_contains($file('compose.yaml'), 'KOSENMAP_LOGTO_APP_ID: ${KM_ANDROID_APP_ID:-}') && str_contains($file('src/logto_config.php'), "'KOSENMAP_LOGTO_APP_ID',"));
     check_bool('配備物に local-sanitize.sh がある', str_contains($deploy, "'./scripts/local-sanitize.sh'"));
+
+    /*
+     * ## 2026-10-05 夜の依頼(スクリプトと管理画面の小さな直し)
+     */
+    km_check_heading('admin-2026-10-05: PR の説明・お知らせ・次フェーズ・地図配信の字・共有リンク・チャート・お試しのスイッチ・マップへ');
+    check_bool('配備は既定でプルリクエストの説明を作らない(-PullRequest のときだけ渡す)', str_contains($deploy, '[switch]$PullRequest') && str_contains($deploy, "if (\$PullRequest) { \$pushAllArgs += '-PullRequest' }"));
+    $pushAll = $file('scripts/push-github-all.ps1');
+    check_bool('push-github-all も -PullRequest を受けて渡す', str_contains($pushAll, '[switch]$PullRequest') && str_contains($pushAll, "if (\$PullRequest) { \$pushArgs += '-PullRequest' }"));
+    $adminScripts = $file('src/admin/_inc/partials/scripts.php');
+    $noticeJs = $file('src/admin/assets/js/km-notice.js');
+    check_bool('お知らせを閉じる: 情報のお知らせだけ・ブラウザに覚える', str_contains($adminScripts, "./assets/js/km-notice.js") && str_contains($noticeJs, ".alert.alert-info.d-flex.align-items-start") && str_contains($noticeJs, "'kmadmin-dismissed'") && !str_contains($noticeJs, 'fetch('));
+    $dashboard = $file('src/admin/index.php');
+    check_bool('次フェーズの作業はかんばんの表から出す(決め打ちを残さない)', str_contains($dashboard, 'km_tasks_all(km_db())') && !str_contains($dashboard, 'page.index.next1'));
+    // サービス監視の「今後の拡張」もタスクの分類から出す(2026-10-06)
+    $monitorPage = $file('src/admin/monitor.php');
+    $tasksLib = $file('src/lib/tasks.php');
+    check_bool('サービス監視の「今後の拡張」はタスクの分類 monitor から出す(決め打ちを残さない)', str_contains($monitorPage, "km_tasks_by_topic(km_db(), 'monitor')")
+        && !str_contains($monitorPage, 'page.monitor.plan1') && !str_contains($file('src/admin/assets/i18n/ja.js'), '"page.monitor.plan1"'));
+    check_bool('分類は決めた値だけ(作る・直すの両方で確かめる)', substr_count($tasksLib, 'km_tasks_validate_topic($topic);') === 2
+        && str_contains($tasksLib, "if (!array_key_exists(\$topic, KM_TASK_TOPICS))"));
+    check_bool('分類の列は古い表にも足し、3 行は列を足したときだけ入れる(消したら戻さない)', str_contains($tasksLib, "ADD COLUMN IF NOT EXISTS topic VARCHAR(32) NOT NULL DEFAULT ''")
+        && preg_match('/function km_tasks_ensure_topic_column\(.*?\n\}/s', $tasksLib, $topicFn) === 1
+        && strpos($topicFn[0], 'ALTER TABLE') < strpos($topicFn[0], 'km_tasks_seed_monitor($pdo)')
+        && str_contains($tasksLib, "WHERE NOT EXISTS (SELECT 1 FROM km_tasks WHERE topic = 'monitor' AND title = ?)"));
+    check_bool('かんばんの絞り込みは隠すだけ(並び順の保存でカードを落とさない)', str_contains($file('src/admin/kanban.php'), "card.classList.toggle('d-none'"));
+    check_bool('辞書: 分類の訳が日英の両方にある', str_contains($file('src/admin/assets/i18n/ja.js'), '"page.projects.topic.monitor"') && str_contains($file('src/admin/assets/i18n/en.js'), '"page.projects.topic.monitor"')
+        && str_contains($file('src/admin/assets/i18n/en.js'), '"page.projects.topic.none"'));
+    $publishPage = $file('src/admin/map-publish.php');
+    check_bool('地図の配信: 表のセル全体を等幅にしない・見出しは h3.card-title', !str_contains($publishPage, '<td class="font-monospace">') && !str_contains($publishPage, '<h4'));
+    $share = $file('src/lib/file-share.php');
+    $sharePage = $file('src/share.php');
+    check_bool('共有リンク: トークンは sha256 だけを置き、回数は 1 本の UPDATE で数える', str_contains($share, "hash('sha256', 'km-file-share|' . \$token)") && str_contains($share, 'SET uses = uses + 1') && str_contains($share, 'uses < max_uses'));
+    check_bool('共有リンク: GET では数えない(POST と CSRF で渡す)', str_contains($sharePage, "if (\$method === 'POST') {") && str_contains($sharePage, 'km_csrf_verify()') && strpos($sharePage, 'km_file_share_use(') > strpos($sharePage, "if (\$method === 'POST') {"));
+    check_bool('共有リンク: nginx はクエリを記録せず回数を絞る', str_contains($nginx, "location = /share.php {\n        access_log /var/log/nginx/access.log km_no_query;\n        access_log /var/log/km-visit/visit-\$km_visit_day.jsonl km_visit;\n        limit_req zone=km_public"));
+    check_bool('共有リンク: ファイルを消したらリンクも止める', str_contains($file('src/admin/file-manager.php'), 'km_file_share_revoke_for_file($pdo, $id);'));
+    $charts = $file('src/admin/charts.php');
+    check_bool('チャート: 棒の上の数字の余白を取る(いちばん高い棒の数字が切れない)', str_contains($charts, '$chartTop = 20;') && str_contains($charts, '$y = $chartTop + $chartHeight - $barHeight;'));
+    check_bool('チャート: ランキングの語(隠した語は除く)とよく行く場所', str_contains($charts, 'km_map_ranking_hidden_queries') && str_contains($charts, 'km_map_ranking_places'));
+    $guestLib = $file('src/lib/map-guest.php');
+    foreach (['km_map_guest_create', 'km_map_guest_revoke', 'km_map_guest_create_account', 'km_map_guest_revoke_account', 'km_map_guest_set_names'] as $writer) {
+        $body = (string) strstr((string) strstr($guestLib, "function {$writer}("), "\n}\n", true);
+        check_bool("お試し: {$writer} は読み取り専用なら断る", str_contains($body, 'km_map_guest_assert_writable($pdo);'));
+    }
+    check_bool('お試し: 無効のあいだは入れない(印は消さない)', str_contains($guestLib, "\$GLOBALS['km_map_guest_suspended'] = true;") && str_contains($file('src/guest.php'), 'if (!km_map_guest_enabled($pdo)) {'));
+    check_bool('マップへ: 公開側の URL へ戻る(相対の / にしない)', str_contains($file('src/admin/_inc/partials/header.php'), "km_site_url(null, '/')"));
+
+    /*
+     * ## Docker のログの回転とスワップの規則(2026-10-05)
+     * mem_limit を持つサービスには、必ず memswap_limit・oom_score_adj・logging を付ける(付け忘れを見張る)。
+     */
+    km_check_heading('docker-resources: ログの回転・スワップの規則・OOM の順');
+    foreach (['compose.yaml', 'compose.vps.yaml'] as $composeFile) {
+        $composeText = $file($composeFile);
+        check_bool("{$composeFile}: ログの回転の定義がある(10MB × 3)", str_contains($composeText, "x-km-logging: &km-logging\n  driver: json-file\n  options:\n    max-size: \"10m\"\n    max-file: \"3\""));
+        $missing = [];
+        if (preg_match_all('/\n  ([a-z0-9-]+):\n((?:(?!\n  [a-z0-9-]+:\n)[\s\S])*)/', $composeText, $blocks, PREG_SET_ORDER)) {
+            foreach ($blocks as [, $service, $block]) {
+                if (!preg_match('/\n    mem_limit: (\d+)m\n/', $block, $mem)) {
+                    continue;
+                }
+                $swapOk = preg_match('/\n    memswap_limit: (\d+)m\n/', $block, $swap) === 1
+                    && in_array((int) $swap[1], [(int) $mem[1], (int) $mem[1] * 2], true);
+                if (!$swapOk || !str_contains($block, "\n    oom_score_adj: ") || !str_contains($block, "\n    logging: *km-logging\n")) {
+                    $missing[] = $service;
+                }
+            }
+        }
+        check_bool("{$composeFile}: mem_limit のあるサービスは全部、スワップの上限・OOM の順・ログの回転を持つ", $missing === [], implode(', ', $missing));
+    }
+    /*
+     * ## タスクマネージャー(2026-10-05)
+     * Glances はホスト全体だけ(docker.sock を渡さない)・monitor の網だけ。ページとデータの口は IP で絞る。
+     * データの口は生の値を束ねるだけ(変換はブラウザ)。
+     */
+    km_check_heading('taskmgr: Glances・ホストの集計・IP の制限・生の値');
+    $glancesBlock = $baseServices['glances'] ?? '';
+    check_bool('Glances は monitor(internal)の網だけで、publish しない', $glancesBlock !== '' && preg_match('/^    ports:/m', $glancesBlock) !== 1
+        && preg_match('/\n  monitor:\n    driver: bridge\n    internal: true\n/', $file('compose.yaml')) === 1);
+    check_bool('Glances に docker.sock を渡さない(ホスト全体だけ)', $glancesBlock !== '' && !str_contains($glancesBlock, 'docker.sock') && str_contains($glancesBlock, '--disable-webui'));
+    $taskmgrAllow = "include /etc/nginx/km/taskmgr-allow*.local.conf;\n        deny all;\n        error_page 403 = @km_taskmgr_hide;";
+    check_bool('タスクマネージャーのページとデータの口は IP で絞る(許可が無ければ誰も入れない)', str_contains($nginx, "location = /admin/taskmgr.php {\n        {$taskmgrAllow}") && str_contains($nginx, "location = /admin/api/taskmgr-data.php {\n        {$taskmgrAllow}"));
+    check_bool('IP の許可はリポジトリに置かない(見本だけ)・配備から除外する', !is_file(km_check_repo_root() . '/nginx/km/taskmgr-allow.local.conf')
+        && is_file(km_check_repo_root() . '/nginx/km/taskmgr-allow.local.conf.example')
+        && str_contains($deploy, "'./nginx/km/taskmgr-allow.local.conf'"));
+    $taskmgrData = $file('src/admin/api/taskmgr-data.php');
+    check_bool('データの口は生の値を束ねるだけ(json_decode して組み直さない)', str_contains($taskmgrData, 'json_validate($text)') && !str_contains($taskmgrData, 'json_decode('));
+    $taskmgrJs = $file('src/admin/assets/js/taskmgr.js');
+    check_bool('ブラウザが変換する(taskmgr.js)・タブが隠れたら止める', str_contains($taskmgrJs, "document.addEventListener('visibilitychange'"));
+    // 間隔は 1〜10 秒で選べる(2026-10-06)。前回が終わってから次を予約する(要求を重ねない)
+    check_bool('タスクマネージャーの間隔は 1〜10 秒から選び、範囲外は既定に戻す', str_contains($taskmgrJs, 'n >= 1 && n <= 10 ? n : INTERVAL_DEFAULT')
+        && str_contains($file('src/admin/taskmgr.php'), 'for ($s = 1; $s <= 10; $s++)')
+        && str_contains($taskmgrJs, 'window.setTimeout(() => tick(mine), seconds * 1000)')
+        && !str_contains($taskmgrJs, 'setInterval('));
+    $hostUpdates = $file('scripts/host-updates-setup.sh');
+    check_bool('cron(版 7 以降)に host-stats(1 分)と host-resource-alert(5 分)がある', preg_match('/^CRON_VERSION=([7-9]|[1-9][0-9])$/m', $hostUpdates) === 1
+        && str_contains($hostUpdates, '* * * * *    root  $STATS_SCRIPT --path $PATH_ROOT')
+        && str_contains($hostUpdates, '*/5 * * * *  root  $RESOURCE_SCRIPT --path $PATH_ROOT'));
+    check_bool('配備物に host-stats.sh と host-resource-alert.sh がある', str_contains($deploy, "'./scripts/host-stats.sh'") && str_contains($deploy, "'./scripts/host-resource-alert.sh'"));
+    check_bool('web はホストの集計を読み取り専用で受ける(compose と VPS の両方)', str_contains($file('compose.yaml'), '- ./run/hoststats:/var/www/hoststats:ro') && str_contains($file('compose.vps.yaml'), '- ./run/hoststats:/var/www/hoststats:ro'));
+
+    /*
+     * ## 訪問者の記録(2026-10-06。lib/visit-log.php)
+     * nginx が公開のページだけを JSON で書き(クエリなし)、web は読むだけ。まとめと位置はブラウザ。30 日で消す。
+     */
+    km_check_heading('visit-log: 訪問者の記録・生の行・位置はブラウザ・30 日');
+    check_bool('nginx: 訪問の記録は JSON で、パスはクエリなし・参照元もクエリより前だけ', str_contains($nginx, "log_format km_visit escape=json")
+        && preg_match('/log_format km_visit[^;]*"p":"\$uri"/s', $nginx) === 1 && preg_match('/log_format km_visit[^;]*\$km_visit_ref/s', $nginx) === 1
+        && preg_match('/log_format km_visit[^;]*\$(request|request_uri|args|query_string|http_referer)\b/s', $nginx) !== 1
+        && str_contains($nginx, '"~^(?<km_ref>[^?#]*)" $km_ref;'));
+    check_bool('nginx: 書くのは公開のページだけ(管理画面は書かない)', preg_match('/map \$uri \$km_visit_page \{[^}]*"\/"\s+1;[^}]*\}/s', $nginx) === 1
+        && preg_match('/map \$uri \$km_visit_page \{[^}]*admin[^}]*\}/s', $nginx) !== 1);
+    check_bool('nginx: server に既定のログと訪問の記録の両方を書く・guest と share にも書く', str_contains($nginx, "access_log /var/log/nginx/access.log main;\n    access_log /var/log/km-visit/visit-\$km_visit_day.jsonl km_visit if=\$km_visit_page;")
+        && substr_count($nginx, 'access_log /var/log/km-visit/visit-$km_visit_day.jsonl km_visit;') === 2);
+    // 変数入りの書き先は root のディレクトリの有無を見てから書く(無いと 1 行も書かれない。2026-10-06 に検証機で踏んだ)
+    check_bool('nginx: 443 の server は空の root を持つ(変数入りの書き先のため)', str_contains($nginx, "open_log_file_cache max=4 inactive=60s valid=60s;\n")
+        && preg_match('/km_visit if=\$km_visit_page;[\s\S]{0,600}?\n    root \/var\/empty;\n/', $nginx) === 1);
+    check_bool('閲覧者の種別は利用者に返さない(proxy_hide_header)', str_contains($file('nginx/km/proxy-web.conf'), 'proxy_hide_header X-KM-Viewer;'));
+    $vpsCompose = $file('compose.vps.yaml');
+    check_bool('compose: nginx が書き、web は読むだけ(基底と VPS の両方)', str_contains($file('compose.yaml'), '- ./run/visitlog:/var/log/km-visit') && str_contains($vpsCompose, '- ./run/visitlog:/var/log/km-visit')
+        && str_contains($file('compose.yaml'), '- ./run/visitlog:/var/www/visitlog:ro') && str_contains($vpsCompose, '- ./run/visitlog:/var/www/visitlog:ro'));
+    check_bool('compose: 置き場は起動のたびに nginx(101)の持ち物・グループは www-data(33)・ほかは読めない', str_contains($file('compose.yaml'), 'chown 0:33 /var/log/km-visit && chmod 750 /var/log/km-visit \
+          && chown 101:33 /var/log/km-visit')
+        && str_contains($file('compose.yaml'), 'exec /docker-entrypoint.sh "$$@"') && str_contains($file('compose.yaml'), 'command: ["nginx", "-g", "daemon off;"]'));
+    $visitLib = $file('src/lib/visit-log.php');
+    check_bool('サインインした人は鍵つきの印にする(sub をそのまま書かない)', str_contains($visitLib, "km_app_keyed_hash(km_app_secret(km_db(), 'visit'), 'visit-viewer', \$id)")
+        && str_contains($file('src/index.php'), "km_visit_mark_viewer('user', (string) \$claims->sub)")
+        && str_contains($file('src/api/app-map.php'), "km_visit_mark_viewer(is_array(\$principal) ? 'app' : 'anon'"));
+    check_bool('記録の口は生の行をそのまま渡す(PHP で読み解かない)', !str_contains($visitLib, 'json_decode(') && str_contains($visitLib, 'fpassthru($handle)')
+        && str_contains($file('src/admin/api/visit-log.php'), "require dirname(__DIR__) . '/_inc/guard.php';"));
+    $csp = $file('src/lib/csp.php');
+    // 宛先は admin-geo の塊の中にだけ書く(ほかのプロファイルに混ざらない)
+    $geoBlock = preg_match("/    if \(\\\$profile === 'admin-geo'\) \{.*?\n    \}\n/s", $csp, $geoMatch) === 1 ? $geoMatch[0] : '';
+    check_bool('位置の外部はこのページだけ connect-src に足す', str_contains($file('src/admin/visitors.php'), "km_csp_send('admin-geo');")
+        && str_contains($geoBlock, "\$connect[] = 'https://ipwho.is';") && str_contains($geoBlock, "\$connect[] = 'https://api.country.is';")
+        && !str_contains(str_replace($geoBlock, '', $csp), "'https://ipwho.is'") && !str_contains(str_replace($geoBlock, '', $csp), "'https://api.country.is'"));
+    $visitorsJs = $file('src/admin/assets/js/visitors.js');
+    check_bool('位置は既定で引かない(スイッチを入れたときだけ)・文字は textContent', str_contains($visitorsJs, "pref.get(PREF_GEO, '0') === '1'") && !str_contains($visitorsJs, 'innerHTML'));
+    // 色分け(2026-10-08、利用者の指示「危険は赤・怪しいは黄・危険リスト・外国はチェックボックスで表示・非表示」)
+    $threatsJs = $file('src/admin/assets/js/visitors-threats.js');
+    $visitorsPage = $file('src/admin/visitors.php');
+    check_bool('色分け: 判定の決まりは visitors-threats.js(画面より先に読む)・赤と黄の行', strpos($visitorsPage, 'visitors-threats.js') !== false
+        && strpos($visitorsPage, 'visitors-threats.js') < strpos($visitorsPage, "assets/js/visitors.js'")
+        && str_contains($visitorsJs, "danger: 'table-danger', suspect: 'table-warning'") && !str_contains($threatsJs, 'innerHTML'));
+    check_bool('色分け: RedTail(libredtail-http)と POST を受けないページへの POST は危険', str_contains($threatsJs, '/libredtail|redtail/i')
+        && str_contains($threatsJs, "test: (v) => v.m === 'POST' && !POST_PAGES.has(v.p)"));
+    // POST を受けるページの一覧が、実際に POST を受けるページと揃っているか(足し忘れると正しい送信を赤にする)
+    preg_match("/const POST_PAGES = new Set\(\[([^\]]*)\]\)/", $threatsJs, $postMatch);
+    $postPages = array_map(static fn ($s) => trim($s, " '"), explode(',', $postMatch[1] ?? ''));
+    sort($postPages);
+    check('色分け: POST を受けるページ(お問い合わせ・お試し・共有・アプリの地図)', ['/api/app-map.php', '/contact.php', '/guest.php', '/share.php'], $postPages);
+    check_bool('色分け: 外国はチェックボックスで表示・非表示(既定は表示)', str_contains($visitorsPage, 'id="km-visitors-show-foreign" checked')
+        && str_contains($visitorsJs, "pref.get(PREF_FOREIGN, '1') === '1'"));
+    // 点数(2026-10-08 の 2 回目、利用者の指示「① ISP/ASN 〜 ⑦ 過去の挙動 を計算する・件数は 10/50/100/200・国は ▽ で開く・Excel へ書き出す」)
+    check_bool('点数: 60 点以上は危険・25 点以上は怪しい・① 〜 ⑦ の見方がそろう', str_contains($threatsJs, 'const DANGER_SCORE = 60;')
+        && str_contains($threatsJs, 'const SUSPECT_SCORE = 25;')
+        && count(array_filter(['① ISP/ASN', '② User-Agent', '③ IP 種別', '④ アクセス頻度', '⑤ HTTP ステータス', '⑥ URL・メソッド', '⑦ 過去の挙動'], static fn ($s) => str_contains($threatsJs, "'$s'"))) === 7);
+    check_bool('点数: 判定は表示のたびに、位置・信頼・前の危険を渡して行う', str_contains($visitorsJs, 'threats.classify(visits, { geoOf: (ip) => geo.get(ip), isPrivate, trusted, history })'));
+    check_bool('① ISP/ASN は ipwho.is の connection で引く(ASN の無い古い覚えは引き直す)', str_contains($visitorsJs, 'fields=success,country_code,country,region,city,connection')
+        && str_contains($visitorsJs, "g.src === 'ipwho.is' && !('asn' in g)"));
+    check_bool('⑦ 前の危険は IndexedDB(flags)に 30 日だけ覚える', str_contains($visitorsJs, "indexedDB.open('km-visitors', 2)") && str_contains($visitorsJs, "createObjectStore('flags', { keyPath: 'ip' })")
+        && str_contains($visitorsJs, "await loadStore('flags', history);"));
+    check_bool('信頼する送り元はこのブラウザ(localStorage)だけ・IP をコードに書かない', str_contains($visitorsJs, "const PREF_TRUSTED = 'kmadmin-visitors-trusted';")
+        && preg_match('/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/', $visitorsJs . $threatsJs) === 0);
+    check_bool('最近の訪問は 10・50・100・200 件から選ぶ', str_contains($visitorsJs, "const ROW_CHOICES = ['10', '50', '100', '200'];")
+        && preg_match_all('/<option value="(10|50|100|200)"( selected)?>\1<\/option>/', $visitorsPage) === 4);
+    check_bool('国・地域別は ▷ / ▽ で地域・都市を開く', str_contains($visitorsJs, "toggle.textContent = open ? '▽' : '▷';") && str_contains($visitorsJs, 'expandedCountries'));
+    check_bool('CSV: BOM 付き(Excel で開ける)・式に読まれる値の頭に \'', str_contains($visitorsJs, '`﻿${rows.map((r) => r.map(csvCell).join(\',\')).join(\'\r\n\')}\r\n`')
+        && str_contains($visitorsJs, "if (/^[=+\\-@\\t\\r]/.test(s)) {")
+        && str_contains($visitorsPage, 'id="km-visitors-export-visits"') && str_contains($visitorsPage, 'id="km-visitors-export-ips"'));
+    check_bool('cron(版 8)が 30 日を過ぎた記録を消す', str_contains($hostUpdates, "find \$PATH_ROOT/run/visitlog -maxdepth 1 -type f -name 'visit-*.jsonl' -mtime +30 -delete"));
+    // 振る舞い: 上限を超えたら新しい方を残し、古い方は行の頭から送る
+    require_once __DIR__ . '/../lib/visit-log.php';
+    $visitTmp = sys_get_temp_dir() . '/km-visit-check-' . bin2hex(random_bytes(4));
+    @mkdir($visitTmp);
+    $dayOld = (new DateTimeImmutable('today'))->modify('-1 day')->format('Y-m-d');
+    $dayNew = (new DateTimeImmutable('today'))->format('Y-m-d');
+    file_put_contents("{$visitTmp}/visit-{$dayOld}.jsonl", "{\"n\":1}\n{\"n\":2}\n{\"n\":3}\n");
+    file_put_contents("{$visitTmp}/visit-{$dayNew}.jsonl", "{\"n\":4}\n");
+    file_put_contents("{$visitTmp}/visit-other.txt", "x\n");
+    $visitFiles = km_visit_log_files(7, $visitTmp);
+    $visitPlan = km_visit_log_plan($visitFiles, 20);
+    ob_start();
+    km_visit_log_send($visitPlan['plan']);
+    $visitOut = (string) ob_get_clean();
+    check_bool('記録: 日付の名前のファイルだけを古い順に拾う', count($visitFiles) === 2 && str_ends_with($visitFiles[1], "visit-{$dayNew}.jsonl"));
+    check_bool('記録: 上限を超えたら古い方を行の頭から切り、新しい方は全部送る', $visitPlan['truncated'] === true && $visitOut === "{\"n\":3}\n{\"n\":4}\n", json_encode($visitOut));
+    check_bool('記録: 上限に収まれば全部・切らない', km_visit_log_plan($visitFiles)['truncated'] === false);
+    foreach (glob("{$visitTmp}/*") ?: [] as $visitFile) {
+        unlink($visitFile);
+    }
+    @rmdir($visitTmp);
+
+    /*
+     * ## ノードのクラウドバックアップ(2026-10-06。lib/map-backup.php・api/map-backup.php)
+     * 管理者だけ。中身は読み解かず形だけ確かめる。保存名は表からだけ。20 件を残す。
+     */
+    km_check_heading('map-backup: 管理者だけ・形だけ確かめる・保存名は表から・20 件');
+    $backupApi = $file('src/api/map-backup.php');
+    check_bool('管理者の権限を、どの方法でも最初に確かめる', preg_match('/\$principal = logto_require_principal\(\);\nlogto_assert_permissions\(\$principal, LOGTO_ADMIN_PERMISSIONS\);/', $backupApi) === 1
+        && strpos($backupApi, 'logto_assert_permissions') < strpos($backupApi, 'km_map_backup_list('));
+    check_bool('置いた・戻した・消したをタイムラインに残す', str_contains($backupApi, "'map.backup_create'") && str_contains($backupApi, "'map.backup_restore'") && str_contains($backupApi, "'map.backup_delete'"));
+    check_bool('nginx: 専用の口で本文を 16m まで・回数を数える', str_contains($nginx, "location = /api/map-backup.php {\n        client_max_body_size 16m;\n        limit_req zone=km_api burst=120 nodelay;"));
+    require_once __DIR__ . '/../lib/map-backup.php';
+    $backupOk = static function (string $json): bool {
+        try {
+            km_map_backup_validate($json);
+            return true;
+        } catch (InvalidArgumentException) {
+            return false;
+        }
+    };
+    check_bool('形: アプリのノードの書き出しは通す', $backupOk('{"format":"kosenmap-map","formatVersion":2,"exportedAt":"2026-10-06T00:00:00+09:00","map":{"nodes":[]}}'));
+    check_bool('形: 設定・全体・Wi-Fi 学習・壊れた JSON・空は断る', !$backupOk('{"format":"kosenmap-settings","formatVersion":2}')
+        && !$backupOk('{"format":"kosenmap-backup","formatVersion":2,"map":{}}')
+        && !$backupOk('{"format":"kosenmap-learning","formatVersion":1}')
+        && !$backupOk('{"format":"kosenmap-map","formatVersion":2,"map":{')
+        && !$backupOk(''));
+    $pathRejected = static function (string $name): bool {
+        try {
+            km_map_backup_path(['stored_name' => $name]);
+            return false;
+        } catch (RuntimeException) {
+            return true;
+        }
+    };
+    check_bool('保存名は 32 桁の 16 進 + .json.gz だけ(../ などを通さない)', $pathRejected('../../config/db.local.php') && $pathRejected('a.json.gz')
+        && !$pathRejected(str_repeat('a', 32) . '.json.gz'));
+    check_bool('残すのは新しい方から 20 件', KM_MAP_BACKUP_KEEP === 20 && str_contains($file('src/lib/map-backup.php'), "foreach (array_slice(\$rows, \$keep) as \$row) {\n        km_map_backup_remove_row(\$pdo, \$row);"));
+
+    /*
+     * ## ストリートビューの写真(2026-10-06。lib/panorama.php・api/panorama.php)
+     * 中身で形を確かめる・ハッシュが鍵・配る地図の地点の分だけ・チェックサムの外。
+     */
+    km_check_heading('panorama: 中身で確かめる・ハッシュが鍵・配る地点の分だけ・チェックサムの外');
+    require_once __DIR__ . '/../lib/panorama.php';
+    require_once __DIR__ . '/../lib/app-map.php';
+    $panoOk = static function (string $bytes): bool {
+        try {
+            km_panorama_inspect($bytes);
+            return true;
+        } catch (InvalidArgumentException) {
+            return false;
+        }
+    };
+    if (function_exists('imagecreatetruecolor')) {
+        $img = imagecreatetruecolor(512, 256);
+        ob_start();
+        imagejpeg($img);
+        $jpeg = (string) ob_get_clean();
+        ob_start();
+        imagepng($img);
+        $png = (string) ob_get_clean();
+        $tiny = imagecreatetruecolor(64, 32);
+        ob_start();
+        imagejpeg($tiny);
+        $tinyJpeg = (string) ob_get_clean();
+        check_bool('形: JPEG(512×256)は通し、PNG・小さすぎ・画像でないものは断る', $panoOk($jpeg) && !$panoOk($png) && !$panoOk($tinyJpeg) && !$panoOk('<?php echo 1;'));
+    } else {
+        check_bool('形: GD が無いので画像の検査は飛ばす(本番の web には GD がある)', true);
+    }
+    check_bool('地点の uuid は英数字・ハイフン・下線だけ', km_panorama_valid_node_uuid('3f2a-b_9') && !km_panorama_valid_node_uuid('../x') && !km_panorama_valid_node_uuid(''));
+    $panoMap = json_decode('{"version":8,"nodes":[{"uuid":"n1"},{"uuid":"n2"}],"lines":[]}');
+    check_bool('配る地図の地点だけを拾う', km_panorama_uuids_of_map($panoMap) === ['n1' => true, 'n2' => true]);
+    $panoBody = km_app_map_build_package($panoMap, 'kosen-main', 3, '2026-10-06T00:00:00+09:00', '2026-11-06T00:00:00+09:00', null, true, null, 'visitor', null, ['123' => [['id' => 1, 'sha256' => str_repeat('a', 64), 'bytes' => 10, 'width' => 512, 'height' => 256, 'heading' => null]]]);
+    $panoDecoded = json_decode((string) $panoBody, true);
+    $panoMapJson = json_encode($panoMap, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    check_bool('配信: 一覧は地図の外・数字だけの uuid でも object・チェックサムは地図だけ', is_array($panoDecoded) && isset($panoDecoded['panoramas']['123'][0]['sha256'])
+        && str_contains((string) $panoBody, '"panoramas":{"123":') && $panoDecoded['checksum'] === 'sha256:' . hash('sha256', (string) $panoMapJson)
+        && !isset($panoDecoded['map']['panoramas']));
+    $noPanoBody = km_app_map_build_package($panoMap, 'kosen-main', 3, '2026-10-06T00:00:00+09:00', '2026-11-06T00:00:00+09:00', null, true, null, 'visitor', null, []);
+    check_bool('配信: 写真が無ければ載せない(今までと同じ形)', !str_contains((string) $noPanoBody, 'panoramas'));
+    // 診断の「情報」(2026-10-05): PHP が書いた設定は OPcache にすぐ読み直させる(錠・パスワード・配信の停止が 2 秒遅れない)
+    check_bool('設定を書いたら OPcache に読み直させる(地図の錠・アプリの配信)', substr_count($file('src/lib/map-access.php'), 'km_opcache_forget($path);') === 2
+        && substr_count($file('src/lib/app-map.php'), 'km_opcache_forget($path);') === 2 && str_contains($file('src/lib/opcache.php'), '@opcache_invalidate($path, true);'));
+    // 診断の「情報」(2026-10-05): 配布物の版番号は APK の中から読み、入力と照らす(lib/apk-version.php)
+    require_once __DIR__ . '/../lib/apk-version.php';
+    $axml = static function (int $code, bool $deflate) : string {
+        // 文字列表(UTF-16。"versionCode" 1 つ)+ 要素の始まり(属性 1 つ: 名前 0・型 0x10・値 $code)
+        $str = 'versionCode';
+        $u16 = pack('v', strlen($str)) . mb_convert_encoding($str, 'UTF-16LE', 'UTF-8') . "\0\0";
+        $pool = pack('vvVVVVVV', 0x0001, 28, 28 + 4 + strlen($u16), 1, 0, 0, 28 + 4, 0) . pack('V', 0) . $u16;
+        $attr = pack('VVVvCCV', 0xFFFFFFFF, 0, 0xFFFFFFFF, 8, 0, 0x10, $code);
+        $tag = pack('vvVVV', 0x0102, 16, 16 + 20 + strlen($attr), 1, 0xFFFFFFFF) . pack('VVvvvvvv', 0xFFFFFFFF, 0, 20, 20, 1, 0, 0, 0) . $attr;
+        $body = $pool . $tag;
+        $xml = pack('vvV', 0x0003, 8, 8 + strlen($body)) . $body;
+        $data = $deflate ? (string) gzdeflate($xml) : $xml;
+        $name = 'AndroidManifest.xml';
+        $crc = crc32($xml);
+        $method = $deflate ? 8 : 0;
+        $local = "PK\x03\x04" . pack('vvvvvVVVvv', 20, 0, $method, 0, 0, $crc, strlen($data), strlen($xml), strlen($name), 0) . $name . $data;
+        $central = "PK\x01\x02" . pack('vvvvvvVVVvvvvvVV', 20, 20, 0, $method, 0, 0, $crc, strlen($data), strlen($xml), strlen($name), 0, 0, 0, 0, 0, 0) . $name;
+        return $local . $central . "PK\x05\x06" . pack('vvvvVVv', 0, 0, 1, 1, strlen($central), strlen($local), 0);
+    };
+    $apkTmp = tempnam(sys_get_temp_dir(), 'kmapk');
+    file_put_contents($apkTmp, $axml(401816, true));
+    $apkDeflated = km_apk_version_code($apkTmp);
+    file_put_contents($apkTmp, $axml(7, false));
+    $apkStored = km_apk_version_code($apkTmp);
+    file_put_contents($apkTmp, 'not a zip');
+    $apkBroken = km_apk_version_code($apkTmp);
+    unlink($apkTmp);
+    check_bool('APK の版番号: deflate・格納のどちらでも読め、壊れたものは null', $apkDeflated === 401816 && $apkStored === 7 && $apkBroken === null,
+        var_export([$apkDeflated, $apkStored, $apkBroken], true));
+    $distLib = $file('src/lib/distributables.php');
+    check_bool('配布物: 入力と APK の版番号が違えば断り、空なら APK の値を使う', str_contains($distLib, '$versionCode !== null && $versionCode !== $apkVersionCode')
+        && str_contains($distLib, '$versionCode = $apkVersionCode;'));
+    // 診断 W-54(2026-10-05): 見取り図の口も、錠を見る前に仮アカウントを表から確かめ直す(セッションを閉じる前に)
+    $floorImage = $file('src/api/floor-image.php');
+    check_bool('W-54: 見取り図の口は錠を見る前に km_map_guest_verify() を呼ぶ', strpos($floorImage, 'km_map_guest_verify();') !== false
+        && strpos($floorImage, 'km_map_guest_verify();') < strpos($floorImage, '$viewUnlocked = km_map_view_unlocked(')
+        && strpos($floorImage, 'km_map_guest_verify();') < strpos($floorImage, 'session_write_close();'));
+
+    /*
+     * ## アプリへ配る地図の作り置き(2026-10-06。lib/app-map-cache.php。計画 E2)
+     * 前 + 作り置き + 後ろ が、その場で組み立てた応答と**同じ文字列**になること。元を差し替えたら作り直すこと。
+     */
+    require_once __DIR__ . '/../lib/app-map-cache.php';
+    $cacheTmp = sys_get_temp_dir() . '/km-appmap-check-' . bin2hex(random_bytes(4));
+    @mkdir($cacheTmp);
+    $cacheSrc = "{$cacheTmp}/src.json";
+    file_put_contents($cacheSrc, '{"version":9,"nodes":[{"uuid":"a","title":"日本語 <x>","occupantName":"架空 太郎"},{"uuid":"b","occupantName":null}],"lines":[],'
+        . '"events":[{"uuid":"e","places":[{"uuid":"p1","staffOnly":true},{"uuid":"p2","staffOnly":false}]}]}');
+    $cacheOkAll = true;
+    foreach (KM_APP_MAP_CONTENT_LEVELS as $cacheLevel) {
+        $cached = km_app_map_cache_get('kosen-main', $cacheSrc, $cacheLevel, "{$cacheTmp}/c");
+        $direct = km_app_map_build_package(km_app_map_for_level(km_app_map_decode_snapshot((string) file_get_contents($cacheSrc)), $cacheLevel), 'kosen-main', 3, 'T', 'E', null, true, null, $cacheLevel, null, ['a' => [['id' => 1]]]);
+        $parts = $cached === null ? null : km_app_map_package_envelope($cached['sha256'], 'kosen-main', 3, 'T', 'E', null, null, $cacheLevel, null, ['a' => [['id' => 1]]]);
+        $cacheOkAll = $cacheOkAll && $parts !== null && $parts[0] . file_get_contents($cached['body']) . $parts[1] === $direct;
+    }
+    check_bool('作り置き: 3 つの段とも、その場で組み立てた応答と同じ文字列', $cacheOkAll);
+    $visitorBody = (string) file_get_contents(km_app_map_cache_get('kosen-main', $cacheSrc, 'visitor', "{$cacheTmp}/c")['body']);
+    $staffBody = (string) file_get_contents(km_app_map_cache_get('kosen-main', $cacheSrc, 'staff', "{$cacheTmp}/c")['body']);
+    $namesBody = (string) file_get_contents(km_app_map_cache_get('kosen-main', $cacheSrc, 'names', "{$cacheTmp}/c")['body']);
+    check_bool('作り置き: 来場者版は氏名と閲覧不可の地点を落とし、スタッフ版は氏名だけ落とす', !str_contains($visitorBody, '架空') && !str_contains($visitorBody, '"p1"')
+        && !str_contains($staffBody, '架空') && str_contains($staffBody, '"p1"') && str_contains($namesBody, '架空'));
+    $firstBody = km_app_map_cache_get('kosen-main', $cacheSrc, 'visitor', "{$cacheTmp}/c")['body'];
+    file_put_contents($cacheSrc, '{"version":9,"nodes":[{"uuid":"z"}],"lines":[]}');
+    touch($cacheSrc, time() + 5);
+    $second = km_app_map_cache_get('kosen-main', $cacheSrc, 'visitor', "{$cacheTmp}/c");
+    check_bool('作り置き: 元を差し替えたら作り直し、古いものは片付ける', $second !== null && $second['body'] !== $firstBody && !is_file($firstBody) && isset($second['uuids']['z']));
+    check_bool('作り置き: 知らない段・おかしな配信 ID は作らない', km_app_map_cache_get('kosen-main', $cacheSrc, 'unknown', "{$cacheTmp}/c") === null
+        && km_app_map_cache_get('../x', $cacheSrc, 'visitor', "{$cacheTmp}/c") === null);
+    foreach (array_merge(glob("{$cacheTmp}/c/*") ?: [], [$cacheSrc]) as $cacheFile) {
+        @unlink($cacheFile);
+    }
+    @rmdir("{$cacheTmp}/c");
+    @rmdir($cacheTmp);
+    check_bool('配信: 作り置きを readfile で流し、使えなければその場で組み立てる', str_contains($appMapApi, "readfile(\$cached['body']);")
+        && strpos($appMapApi, "readfile(\$cached['body']);") < strpos($appMapApi, '$map = $loadDeliveredMap();'));
+    check_bool('作り置きの置き場は cache/ の下(nginx が直接は配らない)', str_contains($file('src/lib/app-map-cache.php'), "return __DIR__ . '/../cache/app-map';")
+        && str_contains($nginx, 'location ~ ^/(lib|config|scripts|uploads|cache|vendor)/ {'));
+
+    $panoApi = $file('src/api/panorama.php');
+    check_bool('写真そのものはハッシュだけで取る・長くキャッシュ・ETag', str_contains($panoApi, "if (\$method === 'GET' && isset(\$_GET['h'])) {") && str_contains($panoApi, "header('Cache-Control: private, max-age=31536000, immutable');")
+        && strpos($panoApi, "isset(\$_GET['h'])") < strpos($panoApi, 'logto_require_principal()'));
+    check_bool('上げる・一覧・外すは管理者だけ', preg_match('/\$principal = logto_require_principal\(\);\nlogto_assert_permissions\(\$principal, LOGTO_ADMIN_PERMISSIONS\);/', $panoApi) === 1
+        && str_contains($panoApi, "'map.panorama_add'") && str_contains($panoApi, "'map.panorama_delete'"));
+    check_bool('nginx: クエリ(ハッシュ)をログに書かない・本文 11m・回数を数える', str_contains($nginx, "location = /api/panorama.php {\n        access_log /var/log/nginx/access.log km_no_query;\n        client_max_body_size 11m;\n        limit_req zone=km_api burst=120 nodelay;"));
+    check_bool('配信: 来場者版は閲覧不可の地点を落とした地図から一覧を作る', str_contains($appMapApi, 'km_panorama_manifest($pdo, km_panorama_uuids_of_map($map))')
+        && preg_match('/\$loadDeliveredMap = static function \(\).*?km_app_map_strip_staff_only\(\$map\).*?return \$map;/s', $appMapApi) === 1);
+    $baseCompose = $file('compose.yaml');
+    check_bool('入口と地図の正本はスワップを使わず、最後まで守る', preg_match('/\n  mariadb:\n(?:(?!\n  [a-z0-9-]+:\n)[\s\S])*?memswap_limit: 512m\n    oom_score_adj: -500\n/', $baseCompose) === 1
+        && preg_match('/\n  reverse-proxy:\n(?:(?!\n  [a-z0-9-]+:\n)[\s\S])*?memswap_limit: 128m\n    oom_score_adj: -500\n/', $baseCompose) === 1);
 
     /*
      * ## ドメインの統一(2026-09-17。ito8795.com → ito4.jp)
@@ -3996,7 +4680,20 @@ function km_check_hardening(): void
     check_bool('配備の $include に host-cert.sh と host-domain.sh', str_contains($include, "'./scripts/host-cert.sh'") && str_contains($include, "'./scripts/host-domain.sh'"));
     check_bool('配備の $mustContain に2本と logto-domain.php', str_contains($mustContain, "'./scripts/host-cert.sh'") && str_contains($mustContain, "'./scripts/host-domain.sh'") && str_contains($mustContain, "'./src/scripts/logto-domain.php'"));
     $setup = $file('scripts/host-updates-setup.sh');
-    check_bool('cron は版 6', preg_match('/^CRON_VERSION=6$/m', $setup) === 1);
+    // 版 6 で証明書を足し、版 7(2026-10-05)でタスクマネージャーの集計と使用率の警告を、版 8(2026-10-06)で訪問者の記録の片付けを足した
+    check_bool('cron は版 8', preg_match('/^CRON_VERSION=8$/m', $setup) === 1);
+    // 国単位のアクセス拒否(2026-10-06)。毎月の取り直しと、再起動のあとの当て直し
+    check_bool('cron(版 8)に国の拒否の取り直しと再起動後の当て直しがある', str_contains($setup, '53 4 2 * *  root  sh $GEOBLOCK_SCRIPT --path $PATH_ROOT update')
+        && str_contains($setup, '@reboot     root  sleep 30 && sh $GEOBLOCK_SCRIPT --path $PATH_ROOT apply'));
+    $geoblock = $file('scripts/host-geoblock.sh');
+    check_bool('国の拒否: 設定はシェルとして実行しない(名前=値だけ読む)', !preg_match('/^\s*(\.|source)\s+"?\$CONF/m', $geoblock) && str_contains($geoblock, 'key="${line%%=*}"'));
+    check_bool('国の拒否: LAN・ループバックと SSH(既定 22)を先に通してから落とす', strpos($geoblock, '192.168.0.0/16') < strpos($geoblock, 'ip saddr @deny4')
+        && strpos($geoblock, 'tcp dport { $exempt } accept') < strpos($geoblock, 'ip saddr @deny4') && str_contains($geoblock, 'EXEMPT_PORTS="22"'));
+    check_bool('国の拒否: Docker の nat より前(prerouting -150)・作り直しは 1 回の読み込みで', str_contains($geoblock, 'type filter hook prerouting priority -150; policy accept;')
+        && str_contains($geoblock, "echo \"table inet \$TABLE {}\"\n  echo \"delete table inet \$TABLE\""));
+    check_bool('国の拒否: 取り直しに失敗したら前の一覧を使う・管理用の国の一覧が空なら当てない', str_contains($geoblock, '前の一覧を使います') && str_contains($geoblock, '誰も入れなくなるので当てません'));
+    check_bool('国の拒否: 設定はリポジトリに置かない(見本だけ)・スクリプトと見本は配備に載る', !is_file(km_check_repo_root() . '/geoblock.local.conf') && is_file(km_check_repo_root() . '/geoblock.local.conf.example')
+        && str_contains($deploy, "'./scripts/host-geoblock.sh'") && str_contains($deploy, "'./geoblock.local.conf.example'"));
     check_bool('cron の証明書は host-cert.sh を指す', str_contains($setup, 'CERT_SCRIPT="$PATH_ROOT/scripts/host-cert.sh"'));
     check_bool('毎日 3:47 に renew、失敗したときだけ送る', preg_match('/^47 3 \* \* \*\s+root\s+\$SEND_LOG_SCRIPT [^\n]*--only-failure --run "\$CERT_SCRIPT --path \$PATH_ROOT renew"/m', $setup) === 1);
     check_bool('毎月1日に status を必ず送る', preg_match('/^7 4 1 \* \*\s+root\s+\$SEND_LOG_SCRIPT (?![^\n]*--only-failure)[^\n]*--run "\$CERT_SCRIPT --path \$PATH_ROOT status"/m', $setup) === 1);
@@ -6546,7 +7243,14 @@ if (in_array('app-ranking', $selected, true) && !function_exists('mb_strlen')) {
 
 $package = null;
 
+/*
+ * **組ごとに例外を受け止める**(2026-10-06、診断「1 つの検査が例外を投げると以降が走らない」)。
+ * 以前は 1 つの組の途中で例外(読めないファイル・型の誤りなど)が出ると、残りの組が 1 件も走らずに
+ * 致命的エラーで終わっていた。ここで受け止めて**その組を失敗として数え**、次の組へ進む。
+ * (構文の誤りのように、このファイルそのものが読めないものは受け止められない。それは exit 255 になる)
+ */
 foreach ($selected as $name) {
+    try {
     switch ($name) {
         case 'user-stats':
             km_check_user_stats();
@@ -6626,6 +7330,15 @@ foreach ($selected as $name) {
         case 'map-calibration':
             km_check_map_calibration();
             break;
+        case 'positioning-params':
+            km_check_positioning_params();
+            break;
+        case 'learning-data':
+            km_check_learning_data();
+            break;
+        case 'ar-capture':
+            km_check_ar_capture();
+            break;
         case 'app-update':
             km_check_app_update();
             break;
@@ -6675,6 +7388,12 @@ foreach ($selected as $name) {
             // 環境依存。数えず、終了コードだけを持ち帰る。
             $recaptchaExit = km_check_recaptcha();
             break;
+    }
+    } catch (Throwable $exception) {
+        $failures++;
+        $checks++;
+        echo "  [$name] 組の途中で例外が出ました(ここから先のこの組の検査は走っていません)    FAIL  "
+            . get_class($exception) . ': ' . $exception->getMessage() . ' (' . basename($exception->getFile()) . ':' . $exception->getLine() . ")\n";
     }
 }
 

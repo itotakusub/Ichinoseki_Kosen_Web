@@ -25,10 +25,14 @@ GitHub へ出す前に、秘密が混じっていないかを確かめてから 
 最初の commit はすべて新しいファイルなので、何も検査されずに素通りする(2026-09-25 に気づいた)。
 当たったら stage を戻して止める。誤検知だと分かっているときだけ -Force。
 
-## プルリクエストの説明(Markdown)
+## プルリクエストの説明(Markdown)— **既定では作らない**(2026-10-05、利用者の指示)
 
-`docs/pull-requests/` に**今日の日付の説明が無ければ、下書きを作って一緒に commit する。**
+`-PullRequest` を付けたときだけ、`docs/pull-requests/` に**今日の日付の説明が無ければ下書きを作って一緒に commit する。**
 push が済んだら、その説明を開く(-NoOpen で開かない)。PR の画面へ貼る文として使う。
+付けなければ、説明も `git fetch` も作らず・行わず、commit と push だけをする。
+
+.PARAMETER PullRequest
+プルリクエストの説明を作る・足す・開く(以前の既定の動き)。
 
 .PARAMETER Message
 コミットの一言。省略すると、変更があるときだけ日付入りの既定文になる。
@@ -60,7 +64,9 @@ param(
     [switch]$Force,
     [switch]$NoOpen,
     [switch]$CheckOnly,
-    [switch]$ScanAll
+    [switch]$ScanAll,
+    # プルリクエストの説明を作る(既定は作らない。2026-10-05)
+    [switch]$PullRequest
 )
 
 $ErrorActionPreference = 'Stop'
@@ -152,7 +158,13 @@ $valuePattern = '(?i)(password|passwd|secret|api[_-]?key|access[_-]?token|client
 # 秘密鍵の中身。**印の行だけ**を見る(鍵を見分けるコードの中に印の文字列が出てくるため)
 $pemPattern = '^\+\s*-----BEGIN [A-Z ]*PRIVATE KEY-----\s*$'
 $tokenPattern = 'gh[pousr]_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}'
-$emailPattern = '[A-Za-z0-9._%+-]+@(gmail|yahoo|outlook|hotmail|icloud|me)\.(com|co\.jp|jp)'
+<#
+  メールアドレス(2026-10-06 に広げた。診断「6 つのドメインに限る」)。**どのドメインでも拾い、知らせるだけ**(止めはしない)。
+  見本や自分のサービスの宛先は除く: example.* / *.test / *.invalid / localhost / ito4.jp / sslip.io /
+  GitHub の noreply / コミットの共著者の noreply@anthropic.com。
+#>
+$emailPattern = '[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}'
+$emailAllowed = '(?i)@(?:[A-Za-z0-9-]+\.)*(?:example\.(?:com|org|net|jp|test)|[A-Za-z0-9-]+\.test|[A-Za-z0-9-]+\.invalid|localhost|ito4\.jp|sslip\.io|users\.noreply\.github\.com)$|^noreply@anthropic\.com$'
 
 $diff = if ($NoCommit) {
     git diff "origin/$Branch...HEAD" --unified=0 2>$null
@@ -171,7 +183,8 @@ if ($ScanAll) {
     foreach ($path in @(git ls-files) + @(git diff --cached --name-only --diff-filter=A) | Sort-Object -Unique) {
         if ($path -match $binary) { continue }
         $full = Join-Path $repoRoot $path
-        if (-not (Test-Path -LiteralPath $full -PathType Leaf) -or (Get-Item -LiteralPath $full).Length -gt 20MB) { continue }
+        # -Force: Windows 以外では . で始まるファイル(.gitignore など)が隠しファイル扱いで、無いと見つからずに止まった(診断)
+        if (-not (Test-Path -LiteralPath $full -PathType Leaf) -or (Get-Item -LiteralPath $full -Force).Length -gt 20MB) { continue }
         $no = 0
         foreach ($line in [IO.File]::ReadLines($full)) {
             $no++
@@ -204,7 +217,7 @@ if ($suspicious.Count -gt 0) {
     }
 }
 
-$emails = @($added | ForEach-Object { [regex]::Matches($_, $emailPattern) | ForEach-Object Value } | Sort-Object -Unique)
+$emails = @($added | ForEach-Object { [regex]::Matches($_, $emailPattern) | ForEach-Object Value } | Where-Object { $_ -notmatch $emailAllowed } | Sort-Object -Unique)
 if ($emails.Count -gt 0) {
     Write-Host "--- 個人のメールアドレスらしいもの ($($emails.Count) 種類。止めはしない) ---" -ForegroundColor Yellow
     $emails | ForEach-Object { Write-Host ('  ' + ($_ -replace '^(.{2})[^@]*', '$1***')) -ForegroundColor Yellow }
@@ -315,7 +328,14 @@ if ($CheckOnly) {
   作ったもの・足したものは同じ commit に入れる(説明と変更が別々に散らない)。
 #>
 $prFile = $null
-if (-not $NoCommit) {
+if (-not $NoCommit -and -not $PullRequest) {
+    if ($Message -eq '') {
+        $Message = "Update ($today)"
+    }
+    git commit -m $Message
+    if ($LASTEXITCODE -ne 0) { throw 'commit に失敗しました。' }
+}
+elseif (-not $NoCommit) {
     if ($Message -eq '') {
         $Message = "Update ($today)"
     }
@@ -392,7 +412,7 @@ Write-Host ''
 Write-Host "push しました: $Branch" -ForegroundColor Green
 # SSH の送り先(git@github-kosen-web:owner/repo.git)も、画面で開ける https の形に直す
 $remote = (git remote get-url origin).Trim() -replace '\.git$', '' -replace '^git@[^:]+:', 'https://github.com/'
-if ($Branch -ne 'main') {
+if ($Branch -ne 'main' -and $PullRequest) {
     Write-Host "プルリクエストはこちらから: $remote/compare/main...$Branch"
 }
 
@@ -402,7 +422,7 @@ if ($Branch -ne 'main') {
   開くのは**いま作った・足した説明**。今回 commit しなかったとき(既にある commit を出しただけ)は、
   今日の説明、それも無ければ一番新しいもの。既定のアプリで開き、.md に結び付いたアプリが無ければメモ帳で開く。
 #>
-if (-not $NoOpen) {
+if ($PullRequest -and -not $NoOpen) {
     $target = $null
     if ($prFile -and (Test-Path -LiteralPath $prFile)) {
         $target = Get-Item -LiteralPath $prFile

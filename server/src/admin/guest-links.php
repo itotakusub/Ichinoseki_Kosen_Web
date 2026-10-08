@@ -41,6 +41,19 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && !km_csrf_verify()) {
     $action = (string) ($_POST['action'] ?? '');
     try {
         $pdo = km_db();
+        if ($action === 'switch') {
+            // 機能の有効・無効と、表の読み取り専用(2026-10-05、利用者の指示)。切り替えは記録に残す
+            $name = (string) ($_POST['name'] ?? '');
+            $on = ($_POST['on'] ?? '') === '1';
+            km_map_guest_set_switch($pdo, $name, $on);
+            if ($name === KM_MAP_GUEST_SETTING_ENABLED) {
+                km_admin_log_record('content', $on ? 'guest.feature_enable' : 'guest.feature_disable');
+            } else {
+                km_admin_log_record('content', $on ? 'guest.tables_lock' : 'guest.tables_unlock');
+            }
+            header('Location: ./guest-links.php?switched=1', true, 302);
+            exit;
+        }
         if ($action === 'create') {
             $created = km_map_guest_create(
                 $pdo,
@@ -98,7 +111,9 @@ if (isset($_GET['created'], $_SESSION['km_guest_link_new']) && is_array($_SESSIO
     $newLink = $_SESSION['km_guest_link_new'];
 }
 unset($_SESSION['km_guest_link_new']);
-if (isset($_GET['revoked'])) {
+if (isset($_GET['switched'])) {
+    $notice = ['key' => 'switchedNotice', 'text' => '切り替えました。'];
+} elseif (isset($_GET['revoked'])) {
     $notice = ['key' => 'revokedNotice', 'text' => '取り消しました。'];
 } elseif (isset($_GET['names'])) {
     $notice = ['key' => 'namesNotice', 'text' => '教員名の表示を変えました。相手が地図を開き直すと反映されます。'];
@@ -118,7 +133,11 @@ $configNote = match (true) {
 $links = [];
 $accountsByLink = [];
 $dbError = null;
+$guestEnabled = true;
+$guestReadonly = false;
 try {
+    $guestEnabled = km_map_guest_enabled(km_db());
+    $guestReadonly = km_map_guest_readonly(km_db());
     $links = km_map_guest_list(km_db());
     $accountsByLink = km_map_guest_accounts_by_link(km_db());
 } catch (Throwable $exception) {
@@ -153,6 +172,59 @@ require __DIR__ . '/_inc/partials/page-header.php';
                 データベースに接続できないため、一覧を表示できません。
               </div>
             <?php endif; ?>
+
+            <?php
+            /*
+             * 機能のスイッチ(2026-10-05)。無効 = 入口を止めるだけで何も消さない。
+             * 読み取り専用 = 仮アカウントの表への書き込みを全部断る(入ることはできる)。
+             */
+            $switchForm = static function (string $name, bool $on, string $onKey, string $onText, string $offKey, string $offText, string $confirm): void {
+                ?>
+                <form method="post" class="d-inline" data-km-confirm="<?= km_e($confirm) ?>">
+                  <?= km_csrf_field() ?>
+                  <input type="hidden" name="action" value="switch">
+                  <input type="hidden" name="name" value="<?= km_e($name) ?>">
+                  <input type="hidden" name="on" value="<?= $on ? '0' : '1' ?>">
+                  <?php if ($on): ?>
+                    <button type="submit" class="btn btn-sm btn-outline-danger" data-i18n="<?= km_e($offKey) ?>"><?= km_e($offText) ?></button>
+                  <?php else: ?>
+                    <button type="submit" class="btn btn-sm btn-outline-success" data-i18n="<?= km_e($onKey) ?>"><?= km_e($onText) ?></button>
+                  <?php endif; ?>
+                </form>
+                <?php
+            };
+            ?>
+            <div class="card mb-3">
+              <div class="card-header">
+                <h3 class="card-title" data-i18n="page.guestLinks.switchTitle">機能のスイッチ</h3>
+              </div>
+              <div class="card-body">
+                <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                  <span data-i18n="page.guestLinks.switchEnabled">お試しの閲覧リンク</span>
+                  <?php if ($guestEnabled): ?>
+                    <span class="badge text-bg-success" data-i18n="page.guestLinks.stateEnabled">有効</span>
+                  <?php else: ?>
+                    <span class="badge text-bg-danger" data-i18n="page.guestLinks.stateDisabled">無効(停止中)</span>
+                  <?php endif; ?>
+                  <?php $switchForm(KM_MAP_GUEST_SETTING_ENABLED, $guestEnabled, 'page.guestLinks.enable', '有効にする', 'page.guestLinks.disable', '無効にする',
+                      $guestEnabled ? 'お試しの閲覧を止めます。リンクを開いても入れず、仮アカウントでも地図の錠を通れなくなります(何も消しません)。よろしいですか?' : 'お試しの閲覧を再開します。よろしいですか?'); ?>
+                </div>
+                <div class="d-flex flex-wrap align-items-center gap-2">
+                  <span data-i18n="page.guestLinks.switchReadonly">仮アカウントの表</span>
+                  <?php if ($guestReadonly): ?>
+                    <span class="badge text-bg-warning" data-i18n="page.guestLinks.stateLocked">読み取り専用(ロック中)</span>
+                  <?php else: ?>
+                    <span class="badge text-bg-secondary" data-i18n="page.guestLinks.stateUnlocked">書ける</span>
+                  <?php endif; ?>
+                  <?php $switchForm(KM_MAP_GUEST_SETTING_READONLY, $guestReadonly, 'page.guestLinks.lock', 'ロックする', 'page.guestLinks.unlock', 'ロックを外す',
+                      $guestReadonly ? '仮アカウントの表のロックを外します。よろしいですか?' : '仮アカウントの表を読み取り専用にします。発行・作成・取り消し・教員名の切り替えができなくなります(入ることはできます)。よろしいですか?'); ?>
+                </div>
+                <p class="text-body-secondary fs-7 mt-2 mb-0" data-i18n="page.guestLinks.switchHint">
+                  無効にしても、リンク・仮アカウント・ブラウザの印は消えません。有効に戻すと元どおり入れます。
+                  ロック中は、表への書き込み(発行・仮アカウントの作成・取り消し・教員名の切り替え・最後に見た時刻)をすべて断ります。
+                </p>
+              </div>
+            </div>
 
             <div class="alert alert-info d-flex align-items-start" role="alert">
               <i class="bi bi-info-circle-fill me-2 mt-1" aria-hidden="true"></i>

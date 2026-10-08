@@ -67,6 +67,8 @@
 
 /* 配信の削除で「配信 ID を打つ」入力欄。CSP で style 属性が使えないので class にする。 */
 .km-w-12rem { width: 12rem; }
+/* ダッシュボードの「次フェーズの作業」の進み具合(2026-10-05) */
+.km-w-8rem { width: 8rem; }
 
 /*
  * 監視(services.js)のサービスの小さな印と、配信(map-publish.php)の QR の枠。

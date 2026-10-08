@@ -20,14 +20,36 @@ const KM_TASK_STATUSES = ['done', 'progress', 'decision', 'todo'];
 /** kanban は「要判断」レーンを持たないので、ボード上はこの3つだけを並べる。 */
 const KM_TASK_LANES = ['todo', 'progress', 'done'];
 
+/**
+ * タスクの分類(2026-10-06、利用者の指示「サービス監視の今後の拡張をかんばん等で」)。
+ *
+ * 空文字は「なし」。分類を持つタスクは、その画面(サービス監視の「今後の拡張」など)にも並ぶ。
+ * 日本語を原文として置き、辞書は page.projects.topic.<値> で対訳を持つ。
+ */
+const KM_TASK_TOPICS = [
+    '' => 'なし',
+    'monitor' => 'サービス監視',
+];
+
+/**
+ * サービス監視の「今後の拡張」に、以前 monitor.php へ直接書いていた 3 行。
+ * 分類の列を足したとき(と表を新しく作ったとき)に 1 回だけ入れる。消したら戻さない。
+ */
+const KM_TASK_MONITOR_SEED = [
+    '9443 の PHP に死活監視用エンドポイントを追加し、各サービスへサーバー間で接続する',
+    'MariaDB は HTTP ではないため、TCP 接続の可否で判定する',
+    '誰かが確認した結果を Soketi で全員へ配る(定期実行の仕組みは作らず、自動更新を入れた人が配信役になる)',
+];
+
 function km_tasks_ensure_table(PDO $pdo): void
 {
-    // 表が既に在るなら何もしない(初期データも入れない)。1リクエストで何度も呼ばれるので覚えておく
+    // 1リクエストで何度も呼ばれるので覚えておく
     static $ready = false;
     if ($ready) {
         return;
     }
     if (km_db_table_exists($pdo, 'km_tasks')) {
+        km_tasks_ensure_topic_column($pdo);
         $ready = true;
         return;
     }
@@ -38,16 +60,53 @@ function km_tasks_ensure_table(PDO $pdo): void
             title VARCHAR(255) NOT NULL,
             status VARCHAR(16) NOT NULL,
             progress TINYINT UNSIGNED NOT NULL DEFAULT 0,
+            topic VARCHAR(32) NOT NULL DEFAULT '',
             sort_order INT NOT NULL DEFAULT 0,
             created_at DATETIME NOT NULL,
             updated_at DATETIME NOT NULL,
             INDEX (status),
+            INDEX (topic),
             INDEX (sort_order)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         SQL);
 
     km_tasks_seed_once($pdo);
+    km_tasks_seed_monitor($pdo);
     $ready = true;
+}
+
+/**
+ * 分類の列(2026-10-06)が無い古い表に足し、そのときだけサービス監視の 3 行を入れる。
+ * 表が在るときは毎リクエスト通るので、information_schema を 1 回見るだけにする。
+ */
+function km_tasks_ensure_topic_column(PDO $pdo): void
+{
+    $column = $pdo->query(
+        "SELECT COUNT(*) FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'km_tasks' AND COLUMN_NAME = 'topic'"
+    );
+    if ($column === false || (int) $column->fetchColumn() > 0) {
+        return;
+    }
+    $pdo->exec("ALTER TABLE km_tasks ADD COLUMN IF NOT EXISTS topic VARCHAR(32) NOT NULL DEFAULT '' AFTER progress");
+    $pdo->exec('ALTER TABLE km_tasks ADD INDEX IF NOT EXISTS topic (topic)');
+    km_tasks_seed_monitor($pdo);
+}
+
+/**
+ * 完了として末尾に足す。同時に 2 つのリクエストが列を足しても二重にならないよう、同じ題があれば入れない。
+ */
+function km_tasks_seed_monitor(PDO $pdo): void
+{
+    $next = (int) $pdo->query('SELECT COALESCE(MAX(sort_order), 0) + 10 FROM km_tasks')->fetchColumn();
+    $stmt = $pdo->prepare(
+        "INSERT INTO km_tasks (title, status, progress, topic, sort_order, created_at, updated_at)
+         SELECT ?, 'done', 100, 'monitor', ?, NOW(), NOW() FROM DUAL
+         WHERE NOT EXISTS (SELECT 1 FROM km_tasks WHERE topic = 'monitor' AND title = ?)"
+    );
+    foreach (KM_TASK_MONITOR_SEED as $i => $title) {
+        $stmt->execute([$title, $next + $i * 10, $title]);
+    }
 }
 
 /**
@@ -91,7 +150,7 @@ function km_tasks_seed_once(PDO $pdo): void
  * 時刻は UNIX_TIMESTAMP() の epoch で返す(フェーズ5・9・13の教訓。DB と PHP は
  * Asia/Tokyo に揃えたが、epoch なら設定が食い違っても表示がずれない)。
  *
- * @return array<int, array{id:int, title:string, status:string, progress:int,
+ * @return array<int, array{id:int, title:string, status:string, progress:int, topic:string,
  *                          sortOrder:int, updatedAtEpoch:int}>
  */
 function km_tasks_all(PDO $pdo): array
@@ -99,10 +158,33 @@ function km_tasks_all(PDO $pdo): array
     km_tasks_ensure_table($pdo);
 
     return $pdo->query(
-        'SELECT id, title, status, progress, sort_order AS sortOrder,
+        'SELECT id, title, status, progress, topic, sort_order AS sortOrder,
                 UNIX_TIMESTAMP(updated_at) AS updatedAtEpoch
          FROM km_tasks ORDER BY sort_order, id'
     )->fetchAll();
+}
+
+/**
+ * 分類ごとの一覧(サービス監視の「今後の拡張」など)。並びはかんばんと同じ。
+ *
+ * @return array<int, array{id:int, title:string, status:string, progress:int}>
+ */
+function km_tasks_by_topic(PDO $pdo, string $topic): array
+{
+    km_tasks_ensure_table($pdo);
+
+    $stmt = $pdo->prepare('SELECT id, title, status, progress FROM km_tasks WHERE topic = ? ORDER BY sort_order, id');
+    $stmt->execute([$topic]);
+
+    return $stmt->fetchAll();
+}
+
+/** 分類の値を確かめる。知らない値は断る(画面の選択肢以外を入れさせない)。 */
+function km_tasks_validate_topic(string $topic): void
+{
+    if (!array_key_exists($topic, KM_TASK_TOPICS)) {
+        throw new InvalidArgumentException('分類の指定が不正です。');
+    }
 }
 
 function km_tasks_validate(string $title, string $status, int $progress): void
@@ -121,30 +203,32 @@ function km_tasks_validate(string $title, string $status, int $progress): void
     }
 }
 
-function km_tasks_create(PDO $pdo, string $title, string $status, int $progress): void
+function km_tasks_create(PDO $pdo, string $title, string $status, int $progress, string $topic = ''): void
 {
     km_tasks_ensure_table($pdo);
     km_tasks_validate($title, $status, $progress);
+    km_tasks_validate_topic($topic);
 
     // 末尾に置く
     $next = (int) $pdo->query('SELECT COALESCE(MAX(sort_order), 0) + 10 FROM km_tasks')->fetchColumn();
 
     $stmt = $pdo->prepare(
-        'INSERT INTO km_tasks (title, status, progress, sort_order, created_at, updated_at)
-         VALUES (?, ?, ?, ?, NOW(), NOW())'
+        'INSERT INTO km_tasks (title, status, progress, topic, sort_order, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, NOW(), NOW())'
     );
-    $stmt->execute([trim($title), $status, $progress, $next]);
+    $stmt->execute([trim($title), $status, $progress, $topic, $next]);
 }
 
-function km_tasks_update(PDO $pdo, int $id, string $title, string $status, int $progress): void
+function km_tasks_update(PDO $pdo, int $id, string $title, string $status, int $progress, string $topic = ''): void
 {
     km_tasks_ensure_table($pdo);
     km_tasks_validate($title, $status, $progress);
+    km_tasks_validate_topic($topic);
 
     $stmt = $pdo->prepare(
-        'UPDATE km_tasks SET title = ?, status = ?, progress = ?, updated_at = NOW() WHERE id = ?'
+        'UPDATE km_tasks SET title = ?, status = ?, progress = ?, topic = ?, updated_at = NOW() WHERE id = ?'
     );
-    $stmt->execute([trim($title), $status, $progress, $id]);
+    $stmt->execute([trim($title), $status, $progress, $topic, $id]);
 }
 
 function km_tasks_delete(PDO $pdo, int $id): void

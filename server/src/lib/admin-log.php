@@ -77,8 +77,26 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     'route.weights_reset' => 'が経路の重みを配るのをやめました(各端末は既定に戻ります)',
     'map.calibration_publish' => 'が地図の北と距離の補正を全員の端末に配りました',
     'map.calibration_unpublish' => 'が地図の北と距離の補正を配るのをやめました',
+    // ノードのクラウドバックアップ(2026-10-06、lib/map-backup.php)。管理アプリから api/map-backup.php で
+    'map.backup_create' => 'がノードをサーバーへバックアップしました',
+    'map.backup_restore' => 'がサーバーのバックアップからノードを取り出しました',
+    'map.backup_delete' => 'がサーバーのノードのバックアップを消しました',
+    // ストリートビューの写真(2026-10-06、lib/panorama.php)
+    'map.panorama_add' => 'が地点にストリートビューの写真を足しました',
+    'map.panorama_delete' => 'が地点のストリートビューの写真を外しました',
     // ランキングの「調べられた語」を外した(2026-09-25、W-45)。**語そのものは記録しない**(詳細は年だけ)
     'ranking.query_hidden' => 'がランキングの調べられた語を一覧から外しました',
+    // アプリの測位のパラメータ(2026-10-06、lib/positioning-params.php)。詳細は「既定と違う項目の数」だけ
+    'positioning.params_publish' => 'がアプリの測位のパラメータを全員に配りました',
+    'positioning.params_unpublish' => 'がアプリの測位のパラメータを配るのをやめました',
+    // Wi-Fi の学習データ・評価をサーバーから消した(2026-10-06、lib/learning-data.php)。詳細は種類・件数・範囲
+    'learning.delete' => 'が Wi-Fi の学習データをサーバーから消しました',
+    // AR 実測の記録と画像(2026-10-06、lib/ar-capture.php)。詳細は撮影の uuid と階・枚数だけ
+    'ar.capture_upload' => 'が AR 実測の記録を置きました',
+    'ar.capture_download' => 'が AR の撮影を zip で落としました',
+    'ar.capture_delete' => 'が AR の撮影を消しました',
+    // 今月の公開の一覧を写し取った(2026-10-06、W-45 の承認制)。詳細は「月 / 語の数」だけ
+    'ranking.queries_published' => 'がランキングの調べられた語の今月の一覧を公開しました',
     // お試しの閲覧リンク(2026-09-30、lib/map-guest.php)。発行と取り消しは管理者
     'guest.link_create' => 'がお試しの閲覧リンクを発行しました',
     'guest.link_revoke' => 'がお試しの閲覧リンクを取り消しました',
@@ -88,6 +106,11 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     'guest.account_revoke' => 'がお試しの閲覧の仮アカウントを止めました',
     'guest.account_names_allow' => 'がお試しの閲覧の仮アカウントに教員名を見せるようにしました',
     'guest.account_names_deny' => 'がお試しの閲覧の仮アカウントの教員名を隠しました',
+    // 機能のスイッチと表のロック(2026-10-05)
+    'guest.feature_enable' => 'がお試しの閲覧リンクを有効にしました',
+    'guest.feature_disable' => 'がお試しの閲覧リンクを無効にしました',
+    'guest.tables_lock' => 'がお試しの閲覧の表を読み取り専用にしました',
+    'guest.tables_unlock' => 'がお試しの閲覧の表の読み取り専用を外しました',
     // 実行者(公開ページの利用者)を頭に置く前提なので「が」から始める
     'map.unlock_failed' => 'が教職員氏名のパスワード解除に失敗しました',
     'task.create' => 'がタスクを追加しました',
@@ -137,6 +160,10 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     'account.deleted' => 'が削除されたアカウントの情報を片付けました',
     'file.upload' => 'がファイルをアップロードしました',
     'file.delete' => 'がファイルを削除しました',
+    // 共有リンク(2026-10-05、lib/file-share.php)。受け取りは公開ページの利用者なので実行者は無く、IP だけ残る
+    'file.share_create' => 'がファイルの共有リンクを作りました',
+    'file.share_revoke' => 'がファイルの共有リンクを取り消しました',
+    'file.share_download' => 'が共有リンクからファイルを受け取りました',
     'map.node_create' => 'が地図に地点を追加しました',
     'map.node_update' => 'が地図の地点を編集しました',
     'map.node_move' => 'が地図の地点を移動しました',

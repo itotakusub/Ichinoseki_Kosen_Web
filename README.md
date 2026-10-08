@@ -45,7 +45,7 @@ pwsh -File server/src/scripts/js/run-all.ps1     # 地図の JavaScript(node)
 ## この控えについて
 
 - 正本は手元の作業フォルダ。`tools/sync-from-website.ps1` で `server/` へ写します
-- **写さないもの:** `.env`・`*.local.php`・鍵と証明書・`src/uploads/`(教職員氏名を含みうる)・バックアップ・
+- **写さないもの:** `.env`・`*.local.php`・nginx の `*.local.conf`(運用者の IP)・鍵と証明書・`src/uploads/`(教職員氏名を含みうる)・バックアップ・
   旧サイト(`Downloaded/`)・退避(`Old/`)・ログ
 - **Notebook は実行結果を消して写します**(本番で走らせた結果にメールアドレスなどが残るため)
 - 出すときは `tools/push-github.ps1`。出してはいけない名前・直書きの資格情報を検査し、当たったら止まります
@@ -58,8 +58,9 @@ pwsh -File tools\push-github.ps1 -CheckOnly    # 検査だけ(出さない)
 
 `push-github.ps1` は Android 側の控えと**同じ中身のファイル**です(**全部 stage してから**検査する)。
 
-プルリクエストの説明は `docs/pull-requests/` に Markdown で残します。今日の説明が無ければ下書きを作り
-(開いている PR の説明があればそこへ一言足し)、push のあとに開きます。
+**プルリクエストの説明は、既定では作りません**(2026-10-05)。作るときだけ `-PullRequest` を付けます:
+`docs/pull-requests/` に今日の説明が無ければ下書きを作り(開いている PR の説明があればそこへ一言足し)、push のあとに開きます。
+`push-github-all.ps1` と `deploy-to-host.ps1` も `-PullRequest` を受けて渡します。
 
 ### 両方まとめて
 

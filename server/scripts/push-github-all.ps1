@@ -6,7 +6,8 @@ GitHub の控え2つ(Android と Website)へ、手元の原本を写してから
 2026-09-25、利用者の指示。**1回で両方を出す。** 中でやることは控えごとに同じ:
 
   1. 写す  … Android: scripts\sync-from-app.ps1 / Website: tools\sync-from-website.ps1
-  2. 出す  … それぞれの push-github.ps1(秘密の検査 → commit → push → PR の説明を開く)
+  2. 出す  … それぞれの push-github.ps1(秘密の検査 → commit → push)。
+             **プルリクエストの説明は既定では作らない**(2026-10-05)。作るときは -PullRequest
 
 **片方が止まっても、もう片方は出す。** 最後にまとめて結果を言い、どちらかが止まっていれば 1 で終わる。
 秘密の検査に当たって止まった控えは、中身を確かめてからその控えの push-github.ps1 を -Force で走らせる
@@ -29,7 +30,10 @@ all(既定)/ android / web
 コミットの一言。両方の控えに同じ一言を使う。省略するとそれぞれの既定文。
 
 .PARAMETER NoOpen
-push のあとにプルリクエストの説明を開かない。
+push のあとにプルリクエストの説明を開かない(-PullRequest のときだけ意味がある)。
+
+.PARAMETER PullRequest
+プルリクエストの説明(docs/pull-requests/)を作る・足す・開く。**既定は作らない。**
 
 .PARAMETER NoSync
 写さずに、控えにある変更だけを出す。
@@ -45,6 +49,7 @@ param(
     [switch]$NoOpen,
     [switch]$NoSync,
     [switch]$CheckOnly,
+    [switch]$PullRequest,
     [string]$AndroidMirror = 'F:\Pull\Ichinoseki_Kosen',
     [string]$WebMirror = 'F:\Pull\Ichinoseki_Kosen_Web'
 )
@@ -99,6 +104,7 @@ foreach ($m in $mirrors) {
         if ($Message -ne '') { $pushArgs += @('-Message', $Message) }
         if ($NoOpen) { $pushArgs += '-NoOpen' }
         if ($CheckOnly) { $pushArgs += '-CheckOnly' }
+        if ($PullRequest) { $pushArgs += '-PullRequest' }
         & pwsh @pushArgs
         if ($LASTEXITCODE -ne 0) { throw '検査か push で止まりました(上の出力を確認してください)。' }
 

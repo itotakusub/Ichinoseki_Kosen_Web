@@ -32,6 +32,18 @@
 #
 # 移行の手順そのものは docs/09-new-host.ipynb にある(細部は Old/docs/vps-migration.md)。
 
+# ================================================================
+# **ログの回転**(2026-10-05、利用者の指示)。それまで logging: が無く、json-file のログが
+# 上限なしに伸びていた(ホストの daemon.json の設定は Old/ にしか残っていない)。
+# 1 ファイル 10MB × 3 世代まで。サービスごとに `logging: *km-logging` で使う。
+# **効かせるにはコンテナの作り直しが要る**(deploy-to-host.ps1 -Action up)。
+# ================================================================
+x-km-logging: &km-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   # **MariaDB を publish しない。**
   #
@@ -68,6 +80,10 @@ services:
       # MariaDB との TLS 接続を検証するための CA。**vps-bootstrap.sh が生成する**
       # (mkcert のものではなく、コンテナ間専用の内部 CA)
       - ./certs/rootCA.pem:/etc/ssl/certs/mariadb-rootCA.pem:ro
+      # ホストの使用量(タスクマネージャー。2026-10-05)。compose.yaml と同じものをここにも書く
+      - ./run/hoststats:/var/www/hoststats:ro
+      # 訪問者の記録(2026-10-06)。nginx が書いたものを読むだけ
+      - ./run/visitlog:/var/www/visitlog:ro
       - type: bind
         source: ./docker/php/99-timezone.ini
         target: /usr/local/etc/php/conf.d/99-timezone.ini
@@ -218,6 +234,8 @@ services:
       - ./nginx/km:/etc/nginx/km:ro
       - letsencrypt:/etc/letsencrypt:ro
       - certbot_webroot:/var/www/certbot:ro
+      # 訪問者の記録(2026-10-06)。compose.yaml と同じものをここにも書く(この一覧は `!override`)
+      - ./run/visitlog:/var/log/km-visit
     # 証明書が更新されても、nginx は**読み込み直すまで古いものを使い続ける**。
     # certbot 側から docker を叩かずに済むよう、こちらで定期的に reload する
     # (12時間ごと。reload なので接続は切れない)。
@@ -272,6 +290,10 @@ services:
       - no-new-privileges:true
     mem_limit: 128m
     pids_limit: 200
+    # スワップ: mem_limit の 2 倍まで(スワップに逃がしてよい)。OOM の順: 300(証明書の更新のときだけ動く)。2026-10-05
+    memswap_limit: 256m
+    oom_score_adj: 300
+    logging: *km-logging
     # 書くのは証明書のボリュームと、certbot の作業場所(tmpfs)だけ(2026-09-15)
     read_only: true
     tmpfs:
@@ -354,6 +376,10 @@ services:
     # 上限の考え方は compose.yaml の services: の注記(2026-09-14)
     mem_limit: 192m
     pids_limit: 200
+    # スワップ: mem_limit の 2 倍まで(スワップに逃がしてよい)。OOM の順: 0(送信だけ。遅れても再送される)。2026-10-05
+    memswap_limit: 384m
+    oom_score_adj: 0
+    logging: *km-logging
     # **read_only にしない**(2026-09-15)。イメージの起動スクリプトが env から /etc/postfix と
     # /etc/opendkim の設定を**毎回その場で書き出す**。tmpfs で覆うとイメージの既定の設定まで消える。
     # 特権は Docker の既定から「使わないもの」を落とす形にする(MKNOD・NET_RAW・SETPCAP・SETFCAP・AUDIT_WRITE)。

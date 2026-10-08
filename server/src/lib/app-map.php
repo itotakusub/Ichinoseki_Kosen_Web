@@ -16,6 +16,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/app-secret.php';
 require_once __DIR__ . '/user-error.php';
+require_once __DIR__ . '/opcache.php';
 
 const KM_APP_MAP_FORMAT = 'kosenmap-map-package';
 const KM_APP_MAP_FORMAT_VERSION = 1;
@@ -103,6 +104,8 @@ function km_app_map_write_config(array $config, ?string $path = null): void
                 // rename で作り直すと権限が umask 任せになる。
                 // アクセスコードのハッシュを同じホストの他の利用者に見せない
                 chmod($path, 0640);
+                // 次の要求からすぐ効かせる(停止・削除・コードの変更。lib/opcache.php)
+                km_opcache_forget($path);
 
                 return;
             }
@@ -112,6 +115,8 @@ function km_app_map_write_config(array $config, ?string $path = null): void
         }
 
         if (file_put_contents($path, $php, LOCK_EX) !== false) {
+            km_opcache_forget($path);
+
             return;
         }
     } finally {
@@ -965,13 +970,40 @@ function km_app_map_build_package(
     /** 中身の段(km_app_map_content_level)。null なら載せない(以前と同じ形) */
     ?string $contentLevel = null,
     /** 北と距離の補正(lib/map-calibration.php。2026-10-05)。null なら載せない(以前と同じ形) */
-    ?array $calibration = null
+    ?array $calibration = null,
+    /** ストリートビューの写真の一覧(lib/panorama.php。2026-10-06)。空・null なら載せない(以前と同じ形) */
+    ?array $panoramas = null
 ): ?string {
     $mapJson = json_encode($map, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     if (!is_string($mapJson)) {
         return null;
     }
+    $parts = km_app_map_package_envelope(
+        $withChecksum ? hash('sha256', $mapJson) : null,
+        $slug, $revision, $serverTime, $expiresAt, $activeEventUuid, $routeWeights, $contentLevel, $calibration, $panoramas
+    );
+    return $parts === null ? null : $parts[0] . $mapJson . $parts[1];
+}
 
+/**
+ * パッケージの**地図の前と後ろ**(2026-10-06。lib/app-map-cache.php の作り置きを readfile で流すため)。
+ * 前 + 地図の JSON + 後ろ が、km_app_map_build_package と**同じ文字列**になる。
+ *
+ * @param string|null $mapSha256 地図の JSON の sha256(16 進)。null ならチェックサムを載せない
+ * @return array{0:string, 1:string}|null
+ */
+function km_app_map_package_envelope(
+    ?string $mapSha256,
+    string $slug,
+    int $revision,
+    string $serverTime,
+    string $expiresAt,
+    ?string $activeEventUuid,
+    ?array $routeWeights = null,
+    ?string $contentLevel = null,
+    ?array $calibration = null,
+    ?array $panoramas = null
+): ?array {
     $placeholder = '__KM_APP_MAP_BODY__';
     $package = [
         'format' => KM_APP_MAP_FORMAT,
@@ -982,7 +1014,7 @@ function km_app_map_build_package(
         'expiresAt' => $expiresAt,
         'activeEventUuid' => ($activeEventUuid ?? '') !== '' ? $activeEventUuid : null,
         'serverTime' => $serverTime,
-        'checksum' => $withChecksum ? 'sha256:' . hash('sha256', $mapJson) : null,
+        'checksum' => $mapSha256 !== null ? 'sha256:' . $mapSha256 : null,
         // 地図の外に置く(チェックサムは地図の文字列だけに取っている。重みを変えても版を上げずに済む)
         'routeWeights' => $routeWeights,
         'map' => $placeholder,
@@ -995,11 +1027,16 @@ function km_app_map_build_package(
         // 北と距離の補正。重みと同じく地図の外(チェックサムの外)に置く
         $package = array_slice($package, 0, -1, true) + ['calibration' => $calibration, 'map' => $placeholder];
     }
+    if ($panoramas !== null && $panoramas !== []) {
+        // ストリートビューの写真の一覧。重みと同じく地図の外(チェックサムの外)。uuid が数字だけでも object にする
+        $package = array_slice($package, 0, -1, true) + ['panoramas' => (object) $panoramas, 'map' => $placeholder];
+    }
     $body = json_encode($package, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     if (!is_string($body)) {
         return null;
     }
-    return str_replace('"' . $placeholder . '"', $mapJson, $body);
+    $parts = explode('"' . $placeholder . '"', $body);
+    return count($parts) === 2 ? [$parts[0], $parts[1]] : null;
 }
 
 /** 中身の段。来場者版・スタッフ版(閲覧不可の地点あり・氏名なし)・氏名入り。 */

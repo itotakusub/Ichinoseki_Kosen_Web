@@ -13,7 +13,8 @@
 #
 # ## 何をするか(細かいものはダミーか空にする)
 #
-#   ダミーに替える … 地点の教職員氏名(occupant_name)を「教員A001」のような連番に。地点のメモ(note)は空に
+#   ダミーに替える … 地点の教職員氏名(occupant_name)を「教員A001」のような連番に。地点のメモ(note)は空に。
+#                    部屋・施設の名前を「教員室 D012」(分類+連番)に、副題を「D-012」に
 #   空にする       … 操作記録・問い合わせ・チャット・教職員の申請と割り当て・仮アカウントとリンク・
 #                    利用者の設定と画像・在席・ランキングの利用者と検索語・試行回数・鍵(km_app_secrets。使うときに作り直される)・
 #                    ファイル管理と配布物(実体の uploads/ は写していない)・表の管理の削除控え・タスク
@@ -92,6 +93,8 @@ SELECT CONCAT('  空にする表で行が残っているもの: ', COALESCE(GROU
 SELECT CONCAT('  地点の氏名(ダミー以外): ', COUNT(*)) FROM km_map_nodes
  WHERE COALESCE(occupant_name, '') <> '' AND occupant_name NOT REGEXP '^教員[A-Z][0-9]{3}\$';
 SELECT CONCAT('  地点のメモ: ', COUNT(*)) FROM km_map_nodes WHERE COALESCE(note, '') <> '';
+SELECT CONCAT('  部屋・施設の名前(ダミー以外): ', COUNT(*)) FROM km_map_nodes
+ WHERE type IN ('room', 'facility') AND (COALESCE(title, '') NOT REGEXP ' D[0-9]{3}\$' OR COALESCE(name, '') <> COALESCE(title, ''));
 SELECT CONCAT('  FAQ のメールアドレス(ダミー以外): ', COUNT(*)) FROM km_faq
  WHERE REPLACE(question, 'contact@example.test', '') REGEXP '$EMAIL_RE'
     OR REPLACE(answer, 'contact@example.test', '') REGEXP '$EMAIL_RE';
@@ -130,6 +133,19 @@ UPDATE km_map_nodes
  WHERE COALESCE(occupant_name, '') <> ''
  ORDER BY id;
 UPDATE km_map_nodes SET note = NULL WHERE COALESCE(note, '') <> '';
+SQL
+
+echo "== 2-2. 部屋・施設の名前をダミーに"
+# 「教員室 D012」のように、分類(type2)+連番にする(利用者の指示「部屋名などもダミーに」)。副題(部屋番号など)は「D-012」。
+# 道・階段・出入り口は「1号棟 階段」のような一般の名前なので残す
+run_sql <<'SQL'
+SET @n := 0;
+UPDATE km_map_nodes
+   SET name = CONCAT(COALESCE(NULLIF(type2, ''), IF(type = 'facility', '施設', '部屋')), ' D', LPAD(@n := @n + 1, 3, '0')),
+       title = name,
+       subtitle = IF(COALESCE(subtitle, '') = '', subtitle, CONCAT('D-', LPAD(@n, 3, '0')))
+ WHERE type IN ('room', 'facility')
+ ORDER BY id;
 SQL
 
 echo "== 3. FAQ のメールアドレス"

@@ -344,7 +344,7 @@ head_ 'ホスト側スクリプト'
 
 # cron から呼ぶもの・事故のときに叩くもの・証明書とドメインを扱うもの。deploy-to-host.ps1 の $include と対
 # (host-cert.sh は cron が send-log.sh 越しに呼ぶ。実行ビットが無いと毎日「失敗」のメールになる)
-HOST_SCRIPTS='check-updates.sh host-security-check.sh host-updates-setup.sh host-emergency.sh host-backup.sh send-log.sh host-cert.sh host-domain.sh host-local.sh ssh-backup-gate.sh host-ops-user.sh'
+HOST_SCRIPTS='check-updates.sh host-security-check.sh host-updates-setup.sh host-emergency.sh host-backup.sh send-log.sh host-cert.sh host-domain.sh host-local.sh ssh-backup-gate.sh host-ops-user.sh host-stats.sh host-resource-alert.sh host-geoblock.sh'
 
 for _hs in $HOST_SCRIPTS; do
     if [ ! -f "$PROJECT/scripts/$_hs" ]; then

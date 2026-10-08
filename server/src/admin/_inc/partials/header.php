@@ -73,6 +73,18 @@ $notifyBadge = ($unreadForms ?? 0) + ($unreadChat ?? 0);
               </a>
             </li>
 
+            <?php
+            /*
+             * 公開のマップへ戻る(2026-10-05、利用者の指示「いちいち URL を入力し直さない」)。
+             * **相対の / にしない** —— 管理画面を別オリジンにしているとき、管理用のホストには地図が無い。
+             */
+            ?>
+            <li class="nav-item">
+              <a href="<?= km_e(km_site_url(null, '/')) ?>" class="nav-link" data-km-back-to-map>
+                <i class="bi bi-map me-1" aria-hidden="true"></i>
+                <span data-i18n="nav.backToMap">マップへ</span>
+              </a>
+            </li>
             <li class="nav-item d-none d-md-block">
               <a href="./index.php" class="nav-link">
                 <i class="bi bi-speedometer2 me-1" aria-hidden="true"></i>

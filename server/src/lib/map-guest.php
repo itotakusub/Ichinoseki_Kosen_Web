@@ -39,6 +39,50 @@ declare(strict_types=1);
  */
 
 require_once __DIR__ . '/db.php';
+require_once __DIR__ . '/settings.php';
+require_once __DIR__ . '/user-error.php';
+
+/*
+ * ## 機能のスイッチと、表の読み取り専用(2026-10-05、利用者の指示)
+ *
+ *   無効            … リンクの発行・/guest.php の受付・仮アカウントでの入場を止める。**何も消さない** ——
+ *                     有効に戻せば、開いていたブラウザもそのまま元どおり入れる(セッションの印も消さない)
+ *   読み取り専用    … km_map_guest_* への書き込みを、**書き込む関数の入口で全部断る**
+ *                     (発行・仮アカウントの作成・取り消し・教員名の切り替え・最後に見た時刻)。入ること自体は今までどおり
+ *
+ * どちらも km_settings に置く(管理画面から変える小さな設定)。読めないときは既定(有効・書ける)。
+ */
+const KM_MAP_GUEST_SETTING_ENABLED = 'guest_links_enabled';
+const KM_MAP_GUEST_SETTING_READONLY = 'guest_tables_readonly';
+
+/** 機能が有効か。**既定は有効**(以前からの動き)。 */
+function km_map_guest_enabled(PDO $pdo): bool
+{
+    return km_setting_get($pdo, KM_MAP_GUEST_SETTING_ENABLED, '1') !== '0';
+}
+
+/** 表が読み取り専用か。**既定は書ける**。 */
+function km_map_guest_readonly(PDO $pdo): bool
+{
+    return km_setting_get($pdo, KM_MAP_GUEST_SETTING_READONLY, '0') === '1';
+}
+
+/** 書き込む関数の入口で呼ぶ。読み取り専用なら、画面にそのまま出せる文で断る。 */
+function km_map_guest_assert_writable(PDO $pdo): void
+{
+    if (km_map_guest_readonly($pdo)) {
+        throw new KmUserError('お試しの閲覧リンクの表は読み取り専用になっています。管理画面の「お試しの閲覧リンク」で解除してから操作してください。');
+    }
+}
+
+/** 管理画面のスイッチ。名前は 2 つのどちらかだけ。 */
+function km_map_guest_set_switch(PDO $pdo, string $name, bool $on): void
+{
+    if (!in_array($name, [KM_MAP_GUEST_SETTING_ENABLED, KM_MAP_GUEST_SETTING_READONLY], true)) {
+        throw new InvalidArgumentException('切り替えの名前が正しくありません。');
+    }
+    km_setting_set($pdo, $name, $on ? '1' : '0');
+}
 
 /** 期限の選択肢(日)。管理画面の選択肢と対。 */
 const KM_MAP_GUEST_DAY_CHOICES = [1, 3, 7, 14];
@@ -199,6 +243,10 @@ function km_map_guest_create(PDO $pdo, string $label, int $days, int $maxUses, ?
     }
     $label = km_map_guest_clean_label($label);
 
+    if (!km_map_guest_enabled($pdo)) {
+        throw new KmUserError('お試しの閲覧リンクは無効になっています。有効にしてから発行してください。');
+    }
+    km_map_guest_assert_writable($pdo);
     km_map_guest_ensure_table($pdo);
     $token = bin2hex(random_bytes(24));
     $pdo->prepare(
@@ -261,6 +309,7 @@ function km_map_guest_status(bool $revoked, int $expiresAt, int $uses, int $maxU
 /** 取り消す。**開いているブラウザも、次に公開ページを開いたときに外れる。** */
 function km_map_guest_revoke(PDO $pdo, int $id): bool
 {
+    km_map_guest_assert_writable($pdo);
     km_map_guest_ensure_table($pdo);
     $statement = $pdo->prepare('UPDATE km_map_guest_links SET revoked_at = NOW() WHERE id = ? AND revoked_at IS NULL');
     $statement->execute([$id]);
@@ -310,6 +359,7 @@ function km_map_guest_create_account(PDO $pdo, string $token, string $name, stri
     }
     $affiliation = km_map_guest_clean_text($affiliation, KM_MAP_GUEST_AFFILIATION_MAX);
 
+    km_map_guest_assert_writable($pdo);
     km_map_guest_ensure_table($pdo);
     $hash = km_map_guest_token_hash($token);
     $pdo->beginTransaction();
@@ -385,7 +435,10 @@ function km_map_guest_reenter(PDO $pdo, string $token, string $rawCode): ?array
     if (!is_array($row)) {
         return null;
     }
-    $pdo->prepare('UPDATE km_map_guest_accounts SET last_seen_at = NOW() WHERE id = ?')->execute([(int) $row['id']]);
+    // 読み取り専用のあいだは「最後に見た時刻」も書かない(入ること自体は許す)
+    if (!km_map_guest_readonly($pdo)) {
+        $pdo->prepare('UPDATE km_map_guest_accounts SET last_seen_at = NOW() WHERE id = ?')->execute([(int) $row['id']]);
+    }
 
     return [
         'linkId' => $link['id'],
@@ -417,6 +470,10 @@ function km_map_guest_grant(int $linkId, int $accountId, int $expiresAt, string 
  */
 function km_map_guest_session(): bool
 {
+    // 機能を無効にしているあいだ(km_map_guest_verify が印を立てる)は、印があっても入れない
+    if (($GLOBALS['km_map_guest_suspended'] ?? false) === true) {
+        return false;
+    }
     $mark = $_SESSION[KM_MAP_GUEST_SESSION_KEY] ?? null;
 
     return is_array($mark)
@@ -456,6 +513,12 @@ function km_map_guest_verify(?PDO $pdo = null): bool
         $mark = $_SESSION[KM_MAP_GUEST_SESSION_KEY];
         try {
             $pdo ??= km_db();
+            // 無効のあいだは入れない。**印は消さない** —— 有効に戻せば、開いていたブラウザもそのまま入れる
+            if (!km_map_guest_enabled($pdo)) {
+                // この要求のあいだは km_map_guest_session() も false にする(地図の錠の判定がセッションだけを見るため)
+                $GLOBALS['km_map_guest_suspended'] = true;
+                return false;
+            }
             km_map_guest_ensure_table($pdo);
             $statement = $pdo->prepare(
                 'SELECT a.names_allowed FROM km_map_guest_accounts a
@@ -468,6 +531,8 @@ function km_map_guest_verify(?PDO $pdo = null): bool
             $ok = $namesAllowed !== false;
             if ($ok) {
                 $_SESSION[KM_MAP_GUEST_SESSION_KEY]['names'] = (int) $namesAllowed === 1;
+            }
+            if ($ok && !km_map_guest_readonly($pdo)) {
                 $pdo->prepare(
                     'UPDATE km_map_guest_accounts SET last_seen_at = NOW()
                      WHERE id = ? AND (last_seen_at IS NULL OR last_seen_at < DATE_SUB(NOW(), INTERVAL ? SECOND))'
@@ -517,6 +582,7 @@ function km_map_guest_accounts_by_link(PDO $pdo): array
 /** 仮アカウントを 1 つ止める。**開いているブラウザも、次に地図を開いたときに外れる。** */
 function km_map_guest_revoke_account(PDO $pdo, int $accountId): bool
 {
+    km_map_guest_assert_writable($pdo);
     km_map_guest_ensure_table($pdo);
     $statement = $pdo->prepare('UPDATE km_map_guest_accounts SET revoked_at = NOW() WHERE id = ? AND revoked_at IS NULL');
     $statement->execute([$accountId]);
@@ -530,6 +596,7 @@ function km_map_guest_revoke_account(PDO $pdo, int $accountId): bool
  */
 function km_map_guest_set_names(PDO $pdo, int $accountId, bool $allowed): bool
 {
+    km_map_guest_assert_writable($pdo);
     km_map_guest_ensure_table($pdo);
     $statement = $pdo->prepare(
         'UPDATE km_map_guest_accounts SET names_allowed = ? WHERE id = ? AND revoked_at IS NULL AND names_allowed <> ?'
