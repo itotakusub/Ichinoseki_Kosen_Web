@@ -215,6 +215,11 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
     BAN 中の IP が訪問の記録に出た回数と、回数制限(429)で断った訪問の数もカードに出す。
     jsVectorMap は読み込み中だと DOMContentLoaded まで描かないので、`onLoaded` で塗る
   - 日別・国・地域別・ページ別・世界地図のカードは折りたためる(AdminLTE の card-collapse)
+  - **国の拒否の反転**(2026-10-08 の 4 回目、利用者の指示「特定の国以外は拒否」): `geoblock.local.conf` の `DENY_INVERT=yes` で、
+    `DENY_COUNTRIES` に書いた国だけを通す(`ip saddr != @deny4`)。同時に、こちらからつないだ通信の戻り(`ct state established,related`)を
+    国で落とさないようにした —— prerouting は戻りの包みも通るので、反転すると外国のサーバー(一覧の取得・更新・メールの送り先)との通信が戻らなくなる。
+    Let's Encrypt の確認は海外からも 80 番に来るので、反転するなら `EXEMPT_PORTS=22 80`(無ければ apply が注意)。
+    通す国の IPv4 の一覧が空なら当てない。IPv6 の一覧が無ければ外からの IPv6 は全部落とす。訪問者の地図は通す国以外を黒にする
   - 30 日で消す(cron 版 8)
   - 踏んだ罠 2 つ:
     - 書き先に変数を使うと、nginx は `root` のディレクトリがあるかを確かめる。無いと 1 行も書かない → `root /var/empty`

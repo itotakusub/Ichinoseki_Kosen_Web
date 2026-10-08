@@ -102,7 +102,8 @@ trap - EXIT INT TERM
 # ## BAN の様子(2026-10-08。管理画面の訪問者のページが読む。admin/api/visitor-bans.php)
 #
 # run/hoststats/bans.json に、次を**数と IP と国のコードだけ**書く(どれも形を確かめてから)。
-#   geoblock … 国の拒否(host-geoblock.sh の nftables の表 inet km_geoblock)。拒否する国・当てているか・落とした数
+#   geoblock … 国の拒否(host-geoblock.sh の nftables の表 inet km_geoblock)。拒否する国・当てているか・落とした数・
+#              反転しているか(invert。true なら deny は「通す国」)
 #   fail2ban … 牢ごとの、いま BAN している IP・BAN した数・失敗の数
 #   iptables … kosenmap-ssh-kick が fail2ban なしで足した 22 番の DROP と、落とした数
 # 取れないものは false・空・0。**stats.json を書いたあとに書く**(こちらが落ちてもタスクマネージャーは止めない)。
@@ -122,6 +123,13 @@ gb_countries() {
 
 GB_CONFIGURED=false
 if [ -f "$GB_CONF" ]; then GB_CONFIGURED=true; fi
+# 反転(DENY_INVERT=yes: 書いた国だけ通す。host-geoblock.sh と同じ読み方)
+GB_INVERT=false
+if [ -f "$GB_CONF" ]; then
+  case "$(sed -n 's/^DENY_INVERT=//p' "$GB_CONF" | tail -n 1 | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9')" in
+    yes|1|true|on) GB_INVERT=true ;;
+  esac
+fi
 GB_ACTIVE=false
 GB_COUNTS="0 0 0 0"
 if command -v nft >/dev/null 2>&1 && nft list table inet km_geoblock >/dev/null 2>&1; then
@@ -170,8 +178,8 @@ BANS_TMP="$(mktemp "$OUT_DIR/.bans.XXXXXX")"
 trap 'rm -f "$BANS_TMP"' EXIT INT TERM
 {
   printf '{"generatedAt":%s,' "$(date +%s)"
-  printf '"geoblock":{"configured":%s,"active":%s,"deny":[%s],"admin":[%s],' \
-    "$GB_CONFIGURED" "$GB_ACTIVE" "$(gb_countries DENY_COUNTRIES)" "$(gb_countries ADMIN_COUNTRIES)"
+  printf '"geoblock":{"configured":%s,"active":%s,"invert":%s,"deny":[%s],"admin":[%s],' \
+    "$GB_CONFIGURED" "$GB_ACTIVE" "$GB_INVERT" "$(gb_countries DENY_COUNTRIES)" "$(gb_countries ADMIN_COUNTRIES)"
   printf '"dropped":{"packets":%s,"bytes":%s},"adminDropped":{"packets":%s,"bytes":%s}},' \
     "${GB_DENY_PKTS:-0}" "${GB_DENY_BYTES:-0}" "${GB_ADMIN_PKTS:-0}" "${GB_ADMIN_BYTES:-0}"
   printf '"fail2ban":{"running":%s,"jails":[%s]},' "$F2B_RUNNING" "$F2B_JAILS"

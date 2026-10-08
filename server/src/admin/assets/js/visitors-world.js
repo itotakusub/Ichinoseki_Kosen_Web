@@ -128,21 +128,23 @@
       }
     });
 
-    function paint(byCountry, denySet, bannedCountries) {
+    /** denyInvert = 反転(denySet は「通す国」。書いていない国が拒否) */
+    function paint(byCountry, denySet, bannedCountries, denyInvert = false) {
       const m = ensureMap();
       if (!m) {
         return;
       }
       if (!m.regions || Object.keys(m.regions).length === 0) {
-        pending = [byCountry, denySet, bannedCountries];
+        pending = [byCountry, denySet, bannedCountries, denyInvert];
         return;
       }
       const max = Math.max(1, ...[...byCountry.values()].map((d) => d.n));
       Object.keys(m.regions).forEach((code) => {
         const d = byCountry.get(code);
         const banned = bannedCountries.get(code) || 0;
+        const denied = denyInvert ? !denySet.has(code) : denySet.has(code);
         let color = COLOR_NONE;
-        if (denySet.has(code)) {
+        if (denied) {
           color = COLOR_DENY;
         } else if (banned > 0) {
           color = COLOR_BANNED;
@@ -151,8 +153,10 @@
         }
         const parts = [helpers.countryName(code)];
         parts.push(d ? `訪問 ${num(d.n)} 件・送り元 ${num(d.ips)}` : '訪問なし');
-        if (denySet.has(code)) {
-          parts.push('国ごと拒否');
+        if (denied) {
+          parts.push(denyInvert ? '国ごと拒否(通す国の外)' : '国ごと拒否');
+        } else if (denyInvert) {
+          parts.push('通す国');
         }
         if (banned > 0) {
           parts.push(`BAN 中の IP ${banned}`);
@@ -203,7 +207,9 @@
         if (!g.configured) {
           line('国の拒否: 設定なし(使っていない)');
         } else {
-          line(`国の拒否: ${g.active ? '当てています' : '当てていません'}${(g.deny || []).length ? ` —— ${names(g.deny)}` : ''}`
+          // 反転なら deny は「通す国」(その国以外を拒否)
+          const which = g.invert ? ` —— ${names(g.deny)} 以外を拒否(反転)` : (g.deny || []).length ? ` —— ${names(g.deny)}` : '';
+          line(`国の拒否: ${g.active ? '当てています' : '当てていません'}${which}`
             + `・落とした回数 ${num(g.dropped?.packets)}(${bytes(g.dropped?.bytes)})`);
           if ((g.admin || []).length) {
             line(`管理用のポートは ${names(g.admin)} だけ・ほかから落とした回数 ${num(g.adminDropped?.packets)}`);
@@ -251,12 +257,12 @@
     legend();
     return {
       /**
-       * @param {{ byCountry: Map<string, {n:number, ips:number}>, deny: Set<string>, bannedCountries: Map<string, number>,
+       * @param {{ byCountry: Map<string, {n:number, ips:number}>, deny: Set<string>, denyInvert: boolean, bannedCountries: Map<string, number>,
        *           series: {visits:number[], ips:number[], danger:number[]}, totals: {visits:number, ips:number, danger:number},
        *           bans: object|null, bansError: string, banned: object[], limited: number }} data
        */
       render(data) {
-        paint(data.byCountry, data.deny, data.bannedCountries);
+        paint(data.byCountry, data.deny, data.bannedCountries, data.denyInvert === true);
         sparkline($('spark1'), data.series.visits);
         sparkline($('spark2'), data.series.ips);
         sparkline($('spark3'), data.series.danger);

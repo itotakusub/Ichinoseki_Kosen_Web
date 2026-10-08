@@ -21,11 +21,23 @@
 # 中身は `名前=値` の行だけを読む(**シェルとして実行しない**)。
 #
 #   DENY_COUNTRIES=cn ru kp          拒否する国(ISO 3166 の 2 文字・空白区切り)。空なら国の拒否はしない
+#   DENY_INVERT=yes                  拒否の一覧を反転する: **DENY_COUNTRIES に書いた国だけを通し、ほかの国は全部拒否**
+#                                    (2026-10-08、利用者の指示)。既定は no。yes / 1 / true / on で反転
 #   ADMIN_COUNTRIES=jp               管理用のポートに入れる国。空なら絞らない
 #   ADMIN_PORTS=8281 3002            管理用のポート(phpMyAdmin・Logto の Console)
 #   EXEMPT_PORTS=22                  **どの国からでも通すポート(既定 22 = SSH)。締め出されないために残すこと**
 #
 # LAN・ループバック・Docker の内側(10/8・172.16/12・192.168/16・100.64/10・127/8・fc00::/7・fe80::/10)は常に通す。
+# **こちらから外へつないだ通信の戻り(ct state established,related)も常に通す**(2026-10-08)。
+# prerouting は戻りの包みも通るので、これが無いと、拒否した国にあるサーバー(更新・一覧・メールの送り先)への通信が戻ってこない。
+# 反転したときは日本の外のほとんどがそうなるので、必ず要る。国で見るのは、外から新しくつないでくる包みだけ。
+#
+# ## 反転(DENY_INVERT=yes)の注意
+#
+# - **証明書の更新(Let's Encrypt の HTTP-01)は、海外の確認元から 80 番に来る。** 80 を EXEMPT_PORTS に入れないと更新が失敗する
+#   (80 番は確認のファイルと https への転送だけなので、通しても害は小さい)。入っていなければ apply が注意を出す
+# - IPv6 の一覧が無い国だけを書くと、外からの IPv6 は全部落ちる(反転なので「書いた国の IPv6」が空 = 通す相手なし)
+# - IPv4 の一覧が 1 件も無ければ当てない(SSH 以外の誰も入れなくなる)
 #
 # ## 一覧
 #
@@ -51,7 +63,7 @@ while [ $# -gt 0 ]; do
     --path) PATH_ROOT="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     status|update|apply|remove) ACTION="$1"; shift ;;
-    -h|--help) sed -n '2,45p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,54p' "$0"; exit 0 ;;
     *) echo "知らない引数: $1" >&2; exit 2 ;;
   esac
 done
@@ -68,6 +80,7 @@ V6_URL="https://www.ipdeny.com/ipv6/ipaddresses/aggregated/%s-aggregated.zone"
 
 # ---- 設定を読む(`名前=値` だけ。シェルとして実行しない) ----
 DENY_COUNTRIES=""
+DENY_INVERT=""
 ADMIN_COUNTRIES=""
 ADMIN_PORTS="8281 3002"
 EXEMPT_PORTS="22"
@@ -84,6 +97,7 @@ if [ -f "$CONF" ]; then
     value="$(printf '%s' "$value" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9 \n' ' ' | tr -s ' ' | sed 's/^ //; s/ $//')"
     case "$key" in
       DENY_COUNTRIES) DENY_COUNTRIES="$value" ;;
+      DENY_INVERT) DENY_INVERT="$value" ;;
       ADMIN_COUNTRIES) ADMIN_COUNTRIES="$value" ;;
       ADMIN_PORTS) ADMIN_PORTS="$value" ;;
       EXEMPT_PORTS) EXEMPT_PORTS="$value" ;;
@@ -110,6 +124,24 @@ case " $EXEMPT_PORTS " in
   *" 22 "*) ;;
   *) echo "注意: EXEMPT_PORTS に 22 がありません。拒否した国から SSH できなくなります(締め出しに注意)" >&2 ;;
 esac
+
+# 反転(書いた国だけを通す)。値は英小文字・数字だけになっている
+INVERT=0
+case "$DENY_INVERT" in
+  yes|1|true|on) INVERT=1 ;;
+  ''|no|0|false|off) INVERT=0 ;;
+  *) echo "DENY_INVERT の値が不正です: $DENY_INVERT(yes か no)" >&2; exit 2 ;;
+esac
+if [ "$INVERT" -eq 1 ] && [ -z "$DENY_COUNTRIES" ]; then
+  echo "DENY_INVERT=yes なのに DENY_COUNTRIES が空です。通す国を DENY_COUNTRIES に書いてください(空のままだと誰も入れません)" >&2
+  exit 2
+fi
+if [ "$INVERT" -eq 1 ]; then
+  case " $EXEMPT_PORTS " in
+    *" 80 "*) ;;
+    *) echo "注意: 反転しているのに EXEMPT_PORTS に 80 がありません。証明書の更新(Let's Encrypt の確認は海外からも 80 番に来る)が失敗します" >&2 ;;
+  esac
+fi
 
 need_root() {
   if [ "$(id -u)" -ne 0 ] && [ "$DRY_RUN" -eq 0 ]; then
@@ -188,11 +220,23 @@ build_ruleset() {
   echo "  chain pre {"
   echo "    type filter hook prerouting priority -150; policy accept;"
   printf '%s\n' '    iif "lo" accept'
+  # こちらからつないだ通信の戻り(拒否した国のサーバーへの更新・一覧の取得・メールの送信)は通す
+  echo "    ct state established,related accept"
   echo "    ip saddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 127.0.0.0/8 } accept"
   echo "    ip6 saddr { ::1, fc00::/7, fe80::/10 } accept"
   if [ -n "$exempt" ]; then echo "    tcp dport { $exempt } accept"; fi
-  if [ -n "$deny4" ]; then printf '    ip saddr @deny4 counter drop comment "%s"\n' "km: 拒否する国"; fi
-  if [ -n "$deny6" ]; then printf '    ip6 saddr @deny6 counter drop comment "%s"\n' "km: 拒否する国"; fi
+  if [ "$INVERT" -eq 1 ]; then
+    # 反転: 書いた国の集合に**入っていない**送り元を落とす。IPv6 の一覧が無ければ、外からの IPv6 は全部落とす
+    if [ -n "$deny4" ]; then printf '    ip saddr != @deny4 counter drop comment "%s"\n' "km: 指定の国以外を拒否"; fi
+    if [ -n "$deny6" ]; then
+      printf '    ip6 saddr != @deny6 counter drop comment "%s"\n' "km: 指定の国以外を拒否"
+    else
+      printf '    meta nfproto ipv6 counter drop comment "%s"\n' "km: 指定の国以外を拒否(IPv6 の一覧なし)"
+    fi
+  else
+    if [ -n "$deny4" ]; then printf '    ip saddr @deny4 counter drop comment "%s"\n' "km: 拒否する国"; fi
+    if [ -n "$deny6" ]; then printf '    ip6 saddr @deny6 counter drop comment "%s"\n' "km: 拒否する国"; fi
+  fi
   if [ -n "$adminports" ] && [ -n "$admin4" ]; then printf '    tcp dport { %s } ip saddr != @admin4 counter drop comment "%s"\n' "$adminports" "km: 管理用ポートは指定の国だけ"; fi
   if [ -n "$adminports" ] && [ -n "$admin6" ]; then printf '    tcp dport { %s } ip6 saddr != @admin6 counter drop comment "%s"\n' "$adminports" "km: 管理用ポートは指定の国だけ"; fi
   echo "  }"
@@ -202,7 +246,11 @@ build_ruleset() {
 case "$ACTION" in
   status)
     echo "設定: $CONF $( [ "$HAVE_CONF" -eq 1 ] && echo '(あり)' || echo '(無し → 何もしていない)')"
-    echo "  拒否する国: ${DENY_COUNTRIES:-(なし)}"
+    if [ "$INVERT" -eq 1 ]; then
+      echo "  反転: この国だけ通し、ほかの国は全部拒否: ${DENY_COUNTRIES}"
+    else
+      echo "  拒否する国: ${DENY_COUNTRIES:-(なし)}"
+    fi
     echo "  管理用ポート(${ADMIN_PORTS:-なし})に入れる国: ${ADMIN_COUNTRIES:-(絞らない)}"
     echo "  どこからでも通すポート: ${EXEMPT_PORTS:-(なし)}"
     echo "一覧: $DATA_DIR"
@@ -259,6 +307,14 @@ case "$ACTION" in
     if [ -n "$ADMIN_COUNTRIES" ] && [ -z "$(elements v4 $ADMIN_COUNTRIES)" ]; then
       echo "管理用ポートに入れる国($ADMIN_COUNTRIES)の一覧がありません。誰も入れなくなるので当てません" >&2
       exit 1
+    fi
+    # 反転なのに通す国の一覧が空なら当てない(SSH 以外の誰も入れなくなる)
+    if [ "$INVERT" -eq 1 ] && [ -z "$(elements v4 $DENY_COUNTRIES)" ]; then
+      echo "反転で通す国($DENY_COUNTRIES)の一覧がありません。誰も入れなくなるので当てません" >&2
+      exit 1
+    fi
+    if [ "$INVERT" -eq 1 ] && [ -z "$(elements v6 $DENY_COUNTRIES)" ]; then
+      echo "注意: 通す国の IPv6 の一覧がありません。外からの IPv6 は全部落とします" >&2
     fi
     RULES="$(mktemp)"
     trap 'rm -f "$RULES"' EXIT

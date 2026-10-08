@@ -530,6 +530,8 @@
       world.render({
         byCountry: mapCounts,
         deny: new Set((bans?.geoblock?.active ? bans.geoblock.deny || [] : []).map((c) => String(c).toUpperCase())),
+        // 反転(書いた国だけ通す)なら、deny は「通す国」。地図は書いていない国を黒にする
+        denyInvert: bans?.geoblock?.active === true && bans.geoblock.invert === true,
         bannedCountries,
         series: { visits: series.map((b) => b.n), ips: series.map((b) => b.ips.size), danger: series.map((b) => b.danger) },
         totals: { visits: list.length, ips: ips.size, danger: list.filter((v) => judgeOf(v).level === 'danger').length },

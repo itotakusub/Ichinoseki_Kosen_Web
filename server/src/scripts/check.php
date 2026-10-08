@@ -4454,7 +4454,7 @@ function km_check_hardening(): void
         && str_contains($worldJs, 'tooltip.text(tips.get(code) || helpers.countryName(code));')
         && preg_match('/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/', $worldJs) === 0);
     check_bool('世界地図: jsVectorMap が描き終えて(onLoaded)から塗る(読み込み中は DOMContentLoaded まで描かない)', str_contains($worldJs, 'onLoaded() {')
-        && str_contains($worldJs, 'pending = [byCountry, denySet, bannedCountries];'));
+        && str_contains($worldJs, 'pending = [byCountry, denySet, bannedCountries, denyInvert];'));
     $bansApi = $file('src/admin/api/visitor-bans.php');
     check_bool('BAN: 口は管理者だけ・ホストの bans.json を組み直さずに渡す', str_contains($bansApi, "require dirname(__DIR__) . '/_inc/guard.php';")
         && str_contains($bansApi, "const KM_VISITOR_BANS_FILE = '/var/www/hoststats/bans.json';")
@@ -4731,6 +4731,17 @@ function km_check_hardening(): void
         && strpos($geoblock, 'tcp dport { $exempt } accept') < strpos($geoblock, 'ip saddr @deny4') && str_contains($geoblock, 'EXEMPT_PORTS="22"'));
     check_bool('国の拒否: Docker の nat より前(prerouting -150)・作り直しは 1 回の読み込みで', str_contains($geoblock, 'type filter hook prerouting priority -150; policy accept;')
         && str_contains($geoblock, "echo \"table inet \$TABLE {}\"\n  echo \"delete table inet \$TABLE\""));
+    // 反転(2026-10-08、利用者の指示「特定の国以外は拒否」)。戻りの通信は国で落とさない(反転すると外国のサーバーへの通信がすべて戻らなくなる)
+    check_bool('国の拒否: 反転(DENY_INVERT=yes)は書いた国の集合に無い送り元を落とす・通す国が空なら止める', str_contains($geoblock, "      DENY_INVERT) DENY_INVERT=\"\$value\" ;;")
+        && str_contains($geoblock, "ip saddr != @deny4 counter drop comment")
+        && str_contains($geoblock, 'DENY_INVERT=yes なのに DENY_COUNTRIES が空です')
+        && str_contains($geoblock, '反転で通す国($DENY_COUNTRIES)の一覧がありません。誰も入れなくなるので当てません'));
+    check_bool('国の拒否: こちらからつないだ通信の戻りは国で落とさない(拒否より前)・反転で 80 を通さなければ注意', strpos($geoblock, 'echo "    ct state established,related accept"') !== false
+        && strpos($geoblock, 'echo "    ct state established,related accept"') < strpos($geoblock, "ip saddr != @deny4 counter drop")
+        && strpos($geoblock, 'echo "    ct state established,related accept"') < strpos($geoblock, "ip saddr @deny4 counter drop")
+        && str_contains($geoblock, '反転しているのに EXEMPT_PORTS に 80 がありません'));
+    check_bool('国の拒否: 反転は見本・BAN の集計・訪問者の地図にも通る', str_contains($file('geoblock.local.conf.example'), "\nDENY_INVERT=no\n")
+        && str_contains($file('scripts/host-stats.sh'), '"invert":%s') && str_contains($file('src/admin/assets/js/visitors-world.js'), 'denyInvert'));
     check_bool('国の拒否: 取り直しに失敗したら前の一覧を使う・管理用の国の一覧が空なら当てない', str_contains($geoblock, '前の一覧を使います') && str_contains($geoblock, '誰も入れなくなるので当てません'));
     check_bool('国の拒否: 設定はリポジトリに置かない(見本だけ)・スクリプトと見本は配備に載る', !is_file(km_check_repo_root() . '/geoblock.local.conf') && is_file(km_check_repo_root() . '/geoblock.local.conf.example')
         && str_contains($deploy, "'./scripts/host-geoblock.sh'") && str_contains($deploy, "'./geoblock.local.conf.example'"));
