@@ -604,7 +604,8 @@ function km_ar_zip_readme(): string
         Delete the capture on the server (admin > AR captures) once it is processed.
 
         images/frame_NNNN.jpg   camera images (sensor orientation, as read out by ARCore)
-        depth/frame_NNNN.png    16-bit depth in millimetres (only on devices with ARCore Depth)
+        depth/frame_NNNN.png    16-bit depth in millimetres (only on devices with ARCore Depth).
+                                These look BLACK in photo viewers (2 m = 2000 of 65535). That is normal - do not delete them.
         frames.json             per image: timestampMillis, pose (ARCore camera-to-world: t = position in m,
                                 q = x,y,z,w; camera +x right, +y up, -z forward), intrinsics (fx, fy, cx, cy, width, height)
         sparse/0/*.txt          the same poses as a COLMAP text model (world-to-camera, +z forward).
@@ -621,5 +622,10 @@ function km_ar_zip_readme(): string
              ground_control_*.csv = the marked map nodes (ground control points).
           Images in tracking segments with fewer than 2 marks get no position (listed in excluded.txt).
         Blender: import the mesh exported from RealityScan / COLMAP.
+
+        Point cloud from the depth (rough room shape for Blender; see docs/20 section 18):
+          blender.exe -P scripts\ar-depth-cloud.py -- --dir <unzipped and blurred folder> [--depth-zip <this zip>] [--out room.blend]
+          python scripts\ar-depth-cloud.py --dir <folder>   (no Blender: pointcloud\points.ply, top_view.png, summary.txt)
+          Colours come from the images, so use the folder AFTER blurring faces.
         TXT;
 }

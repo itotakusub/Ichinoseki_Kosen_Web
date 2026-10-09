@@ -137,6 +137,11 @@ $KM_PAGE = ($KM_PAGE ?? []) + [
     <link rel="stylesheet" href="./vendor/adminlte/css/adminlte.css" />
     <!--end::Required Plugin(AdminLTE)-->
 
+    <?php // ページだけで使う部品の CSS($KM_PAGE['css']。訪問者の世界地図など)。自前の CSS より前に読む ?>
+    <?php foreach ($KM_PAGE['css'] ?? [] as $href): ?>
+    <link rel="stylesheet" href="<?= km_e($href) ?>" />
+    <?php endforeach; ?>
+
     <!--begin::KosenMap Admin(自前の追加スタイル。AdminLTE の後に読む)-->
     <?php // CSP を厳格にして style="…" が使えなくなったぶんの行き先。km_asset() でキャッシュを破棄する ?>
     <link rel="stylesheet" href="<?= km_e(km_asset('./assets/css/km-admin.css')) ?>" />

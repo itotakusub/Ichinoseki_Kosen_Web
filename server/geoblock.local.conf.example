@@ -13,10 +13,16 @@
 # 拒否する国。空なら国の拒否はしない
 DENY_COUNTRIES=
 
+# 拒否の一覧を反転する(2026-10-08)。yes にすると、**DENY_COUNTRIES に書いた国だけを通し、ほかの国は全部拒否**する。
+# 例: 日本だけ通す → DENY_COUNTRIES=jp と DENY_INVERT=yes
+# 反転するときは EXEMPT_PORTS に 80 も入れること(証明書の更新の確認が海外から 80 番に来る。入れないと更新が失敗する)
+DENY_INVERT=no
+
 # 管理用のポート(phpMyAdmin 8281・Logto の Console 3002)に入れる国。空なら絞らない。
 # 日本だけにすると、海外から管理するときは入れない(そのときは remove するか、ここを空にして apply)
 ADMIN_COUNTRIES=jp
 ADMIN_PORTS=8281 3002
 
 # どの国からでも通すポート。**22(SSH)は残すこと** —— 締め出されると直す手段が無くなる
+# 反転するなら 80 も: EXEMPT_PORTS=22 80
 EXEMPT_PORTS=22

@@ -207,6 +207,19 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
     ① は ipwho.is の `connection`(ASN・組織)。⑦ の「前にも危険」は IndexedDB `km-visitors` / `flags` に 30 日。
     「信頼する」(自分の回線など)はそのブラウザの localStorage だけ(IP をリポジトリに書かない)
   - CSV の書き出し(訪問・送り元。UTF-8 BOM・式に読まれる値の頭に `'`)、最近の訪問は 10・50・100・200 件、国・地域別は ▷ で地域・都市を開く
+  - **世界地図と BAN**(2026-10-08 の 3 回目、利用者の指示): 本書(`Website/index.html`)の `card text-white bg-primary bg-gradient border-primary mb-4`
+    (Sales Value)を写した。地図は本書と同じ jsVectorMap 1.5.3 を `src/admin/vendor/jsvectormap/` に置いた(CSP で CDN を読めない。中身は本書の SRI と同じことを check.php が見る)。
+    小さなグラフは ApexCharts(style 属性を書くので CSP に掛かる)の代わりに SVG(`assets/js/visitors-world.js`)。
+    国ごとの訪問 = 黄〜橙・BAN 中の IP の国 = 赤・国ごと拒否 = 黒。BAN は `scripts/host-stats.sh` が 1 分ごとに `run/hoststats/bans.json` へ
+    (国の拒否の国と落とした数・fail2ban の牢ごとの IP と数・22 番の DROP)、`admin/api/visitor-bans.php` が組み直さずに渡す。
+    BAN 中の IP が訪問の記録に出た回数と、回数制限(429)で断った訪問の数もカードに出す。
+    jsVectorMap は読み込み中だと DOMContentLoaded まで描かないので、`onLoaded` で塗る
+  - 日別・国・地域別・ページ別・世界地図のカードは折りたためる(AdminLTE の card-collapse)
+  - **国の拒否の反転**(2026-10-08 の 4 回目、利用者の指示「特定の国以外は拒否」): `geoblock.local.conf` の `DENY_INVERT=yes` で、
+    `DENY_COUNTRIES` に書いた国だけを通す(`ip saddr != @deny4`)。同時に、こちらからつないだ通信の戻り(`ct state established,related`)を
+    国で落とさないようにした —— prerouting は戻りの包みも通るので、反転すると外国のサーバー(一覧の取得・更新・メールの送り先)との通信が戻らなくなる。
+    Let's Encrypt の確認は海外からも 80 番に来るので、反転するなら `EXEMPT_PORTS=22 80`(無ければ apply が注意)。
+    通す国の IPv4 の一覧が空なら当てない。IPv6 の一覧が無ければ外からの IPv6 は全部落とす。訪問者の地図は通す国以外を黒にする
   - 30 日で消す(cron 版 8)
   - 踏んだ罠 2 つ:
     - 書き先に変数を使うと、nginx は `root` のディレクトリがあるかを確かめる。無いと 1 行も書かない → `root /var/empty`
@@ -268,6 +281,13 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
 - **AR の跡の直し(2026-10-08)**: 位置の飛び(0.1 秒で 6〜14 m)を切れ目にし、追跡切れと合わせた区間ごとに重ねる。方位のずれを外れに強くした。[20](20-indoor-positioning.ipynb) §16
 - **RealityScan 用の位置データ(2026-10-08)**: 端末が重ね方(alignment)を記録に書き足し、PC の `scripts/ar-realityscan-prep.ps1` が東・北・上(m)の Trajectory・地上点・GPS(EXIF)を作る。[20](20-indoor-positioning.ipynb) §17。
   RealityScan での読み込みは利用者が試す(ローカル座標がマップウィザードで通るかは未確認)- **まだ**: 学校の中を歩いて 4 地点以上に印を付けた実測(地点を動かす候補・北の候補)。深度の確からしさの画像は入れていない。ぼかしは偽の deface で流れだけ確かめた(本物の deface はまだ)
+- **アプリの配布を GitHub の受け箱から(2026-10-09)**: PC の `scripts/apk-push.ps1` が非公開の `itotakusub/kosenmap-apk` に APK 2 つと latest.json を置き、
+  本番ホストの root の cron(`scripts/host-apk-inbox.sh`。cron 版 9・5 分ごと)が取って web が検め(SHA-256・パッケージ名・版・**署名の鍵が今と同じ**)、
+  受け箱に入れて管理者へメール。管理画面「アプリの受け箱」で押して公開(開いただけでは公開しない・取り消し・7 日間は前の版に戻す)。[02](02-deploy.ipynb) §5。
+  **まだ**: 利用者の準備(リポジトリ・読むだけのトークン・`apk-inbox.local.conf`・配備 `-Action up`・cron 版 9)と本番での通し
+- **深さから部屋の点群(2026-10-09)**: PC の `scripts/ar-depth-cloud.py`(Blender の中でも、Blender なしでも)が、深さ・カメラの位置・重ね方から色付きの点群(PLY)・真上の画像・床と天井の高さを作る。[20](20-indoor-positioning.ipynb) §18。
+  アプリは前と同じ・0.1 秒より古い深さを保存しない(10/8 に同じ深さが 85 枚続いた)。1F の実測で床 −1.43 m・天井 +1.32 m を出せたが、壁は 20 cm ほどぼやける(部屋ごとの撮り直しはまだ)。
+  本物の deface でのぼかしは 10/9 に利用者が流して正しく動いた(写真 212 枚の明るさは元と同じ)。「黒い画像」は深さの PNG の見え方で、壊れていなかった
 
 ### 診断(2026-10-05)の反映(2026-10-06、利用者の指示)
 
@@ -299,7 +319,7 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
   - 控え → Logto 1.44.0(移行 2 つ)→ 像の更新 → web・soketi の作り直し → 全サービス healthy・自己検査 1160 件。手順と確認は [19](19-security-fixes-2026-10-06.ipynb) §4
   - **`-Action up` は像を作り直さない**(`docker compose build --pull web soketi` が別に要る)
 - **残り(利用者)**:
-  - W-55: GitHub Support に送った(2026-10-06)。返事待ち
+  - ~~W-55~~ **済(2026-10-08)**: GitHub Support が PR #1〜#6 と参照の無いコミットを消した。書き換え前の 8 本が引けない(422)ことを確かめた
   - sudo: `host-updates-setup.sh --fix`(cron 版 8)・(使うなら)geoblock
   - 本番で動いたままの Mailpit を片付けるか
   - A-35-offline を直した APK の配布(署名)

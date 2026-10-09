@@ -4427,6 +4427,46 @@ function km_check_hardening(): void
     check_bool('CSV: BOM 付き(Excel で開ける)・式に読まれる値の頭に \'', str_contains($visitorsJs, '`﻿${rows.map((r) => r.map(csvCell).join(\',\')).join(\'\r\n\')}\r\n`')
         && str_contains($visitorsJs, "if (/^[=+\\-@\\t\\r]/.test(s)) {")
         && str_contains($visitorsPage, 'id="km-visitors-export-visits"') && str_contains($visitorsPage, 'id="km-visitors-export-ips"'));
+    // 世界地図と BAN・折りたたみ(2026-10-08 の 3 回目、利用者の指示「本書の bg-primary のカードだけを管理画面に・BAN と回数も」)
+    $worldJs = $file('src/admin/assets/js/visitors-world.js');
+    check_bool('折りたたみ: 日別・国・地域別・ページ別のカードに card-collapse', preg_match_all("/\\\$table\('(byDay|byCountry|byPage)',[^\n]*collapsible: true\);/", $visitorsPage) === 3
+        && str_contains($visitorsPage, 'data-lte-toggle="card-collapse"'));
+    check_bool('世界地図: 本書の card text-white bg-primary bg-gradient border-primary mb-4 を写す(地図・小さなグラフ 3 つ・折りたたみ)', str_contains($visitorsPage, '<div class="card text-white bg-primary bg-gradient border-primary mb-4" id="km-visitors-world">')
+        && str_contains($visitorsPage, '<div id="km-visitors-world-map" class="km-world-map"></div>')
+        && substr_count($visitorsPage, 'data-km-vs="spark') === 6
+        && str_contains($visitorsPage, "\$collapseButton('btn btn-primary btn-sm');"));
+    // 地図は本書と同じ版を置いた(CSP で CDN を読めない)。中身が本書の SRI と同じか
+    $jvmSri = [
+        'src/admin/vendor/jsvectormap/js/jsvectormap.min.js' => '/t1nN2956BT869E6H4V1dnt0X5pAQHPytli+1nTZm2Y=',
+        'src/admin/vendor/jsvectormap/maps/world.js' => 'XPpPaZlU8S/HWf7FZLAncLg2SAkP8ScUTII89x9D3lY=',
+        'src/admin/vendor/jsvectormap/css/jsvectormap.min.css' => '+uGLJmmTKOqBr+2E6KDYs/NRsHxSkONXFHUL0fy2O/4=',
+    ];
+    check_bool('世界地図: jsVectorMap 1.5.3 は本書と同じ中身(SRI の sha256)', count(array_filter($jvmSri, static fn ($sri, $rel) => is_file(km_check_repo_root() . "/$rel")
+        && base64_encode(hash_file('sha256', km_check_repo_root() . "/$rel", true)) === $sri, ARRAY_FILTER_USE_BOTH)) === 3);
+    check_bool('世界地図: 部品は地図 → 描く側 → 判定 → 画面の順に読む・CSS はこのページだけ', strpos($visitorsPage, 'jsvectormap.min.js') < strpos($visitorsPage, 'maps/world.js')
+        && strpos($visitorsPage, 'maps/world.js') < strpos($visitorsPage, "assets/js/visitors-world.js'")
+        && strpos($visitorsPage, "assets/js/visitors-world.js'") < strpos($visitorsPage, "assets/js/visitors.js'")
+        && str_contains($visitorsPage, "'css' => ['./vendor/jsvectormap/css/jsvectormap.min.css'],")
+        && str_contains($file('src/admin/_inc/partials/head.php'), "foreach (\$KM_PAGE['css'] ?? [] as \$href)"));
+    // ApexCharts は style 属性を書くので使わない。吹き出しは textContent(tooltip.text に HTML の印を渡さない)
+    check_bool('世界地図: 小さなグラフは SVG・文字は textContent・IP をコードに書かない', str_contains($worldJs, "document.createElementNS(SVG_NS, 'polyline')")
+        && !str_contains($worldJs, 'innerHTML') && !str_contains($worldJs, 'ApexCharts(') && !str_contains($worldJs, "setAttribute('style'")
+        && str_contains($worldJs, 'tooltip.text(tips.get(code) || helpers.countryName(code));')
+        && preg_match('/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/', $worldJs) === 0);
+    check_bool('世界地図: jsVectorMap が描き終えて(onLoaded)から塗る(読み込み中は DOMContentLoaded まで描かない)', str_contains($worldJs, 'onLoaded() {')
+        && str_contains($worldJs, 'pending = [byCountry, denySet, bannedCountries, denyInvert];'));
+    $bansApi = $file('src/admin/api/visitor-bans.php');
+    check_bool('BAN: 口は管理者だけ・ホストの bans.json を組み直さずに渡す', str_contains($bansApi, "require dirname(__DIR__) . '/_inc/guard.php';")
+        && str_contains($bansApi, "const KM_VISITOR_BANS_FILE = '/var/www/hoststats/bans.json';")
+        && str_contains($bansApi, 'json_validate($read)') && !str_contains($bansApi, 'json_decode(')
+        && str_contains($visitorsPage, 'data-bans-src="./api/visitor-bans.php"'));
+    $hostStats = $file('scripts/host-stats.sh');
+    check_bool('BAN: host-stats.sh が stats.json のあとに bans.json を書く(一時ファイルから mv)', strpos($hostStats, 'mv "$TMP" "$OUT_DIR/stats.json"') !== false
+        && strpos($hostStats, 'mv "$TMP" "$OUT_DIR/stats.json"') < strpos($hostStats, 'mv "$BANS_TMP" "$OUT_DIR/bans.json"')
+        && str_contains($hostStats, 'nft list chain inet km_geoblock pre') && str_contains($hostStats, 'fail2ban-client status "$_jail"')
+        && str_contains($hostStats, "''|*[!A-Za-z0-9_.-]*) continue ;;"));
+    check_bool('BAN: 国ごと拒否の色は当てているときだけ・BAN の IP も位置を引く(スイッチが入っているとき)', str_contains($visitorsJs, 'bans?.geoblock?.active ? bans.geoblock.deny || [] : []')
+        && str_contains($visitorsJs, 'bannedList().forEach(({ ip }) => {'));
     check_bool('cron(版 8)が 30 日を過ぎた記録を消す', str_contains($hostUpdates, "find \$PATH_ROOT/run/visitlog -maxdepth 1 -type f -name 'visit-*.jsonl' -mtime +30 -delete"));
     // 振る舞い: 上限を超えたら新しい方を残し、古い方は行の頭から送る
     require_once __DIR__ . '/../lib/visit-log.php';
@@ -4564,6 +4604,97 @@ function km_check_hardening(): void
     $distLib = $file('src/lib/distributables.php');
     check_bool('配布物: 入力と APK の版番号が違えば断り、空なら APK の値を使う', str_contains($distLib, '$versionCode !== null && $versionCode !== $apkVersionCode')
         && str_contains($distLib, '$versionCode = $apkVersionCode;'));
+
+    /*
+     * ## アプリの受け箱(2026-10-09。lib/apk-inbox.php・scripts/host-apk-inbox.sh・scripts/apk-push.ps1)
+     * PC → GitHub の非公開リポジトリ → ホストの root の cron が取る → web が検めて受け箱へ → 管理者が押して公開。
+     * サーバーに外から APK を受け取る口は作らない。試しの APK(パッケージ名・版番号・署名の塊)を組み立てて検めを試す。
+     */
+    km_check_heading('apk-inbox: アプリの受け箱(GitHub から・押して公開)');
+    require_once __DIR__ . '/../lib/apk-inbox.php';
+    $lp = static fn (string $bytes): string => pack('V', strlen($bytes)) . $bytes;
+    $makeApk = static function (int $code, string $package, ?string $cert) use ($lp): string {
+        // 文字列表: 0 versionCode・1 package・2 パッケージ名(UTF-16)
+        $strs = ['versionCode', 'package', $package];
+        $data = '';
+        $offsets = '';
+        foreach ($strs as $s) {
+            $offsets .= pack('V', strlen($data));
+            $data .= pack('v', strlen($s)) . mb_convert_encoding($s, 'UTF-16LE', 'UTF-8') . "\0\0";
+        }
+        $start = 28 + 4 * count($strs);
+        $pool = pack('vvVVVVVV', 0x0001, 28, $start + strlen($data), count($strs), 0, 0, $start, 0) . $offsets . $data;
+        $attrs = pack('VVVvCCV', 0xFFFFFFFF, 0, 0xFFFFFFFF, 8, 0, 0x10, $code) . pack('VVVvCCV', 0xFFFFFFFF, 1, 2, 8, 0, 0x03, 2);
+        $tag = pack('vvVVV', 0x0102, 16, 16 + 20 + strlen($attrs), 1, 0xFFFFFFFF) . pack('VVvvvvvv', 0xFFFFFFFF, 0, 20, 20, 2, 0, 0, 0) . $attrs;
+        $xml = pack('vvV', 0x0003, 8, 8 + strlen($pool . $tag)) . $pool . $tag;
+        $name = 'AndroidManifest.xml';
+        $crc = crc32($xml);
+        $local = "PK\x03\x04" . pack('vvvvvVVVvv', 20, 0, 0, 0, 0, $crc, strlen($xml), strlen($xml), strlen($name), 0) . $name . $xml;
+        $block = '';
+        if ($cert !== null) {
+            // v2: 署名者の並び → 署名者(署名した中身・署名・公開鍵)→ 署名した中身(要約・証明書の並び・属性)
+            $signedData = $lp('') . $lp($lp($cert)) . $lp('');
+            $value = $lp($lp($lp($signedData) . $lp('') . $lp('')));
+            $pairs = pack('P', 4 + strlen($value)) . pack('V', 0x7109871a) . $value;
+            $size = strlen($pairs) + 8 + 16;
+            $block = pack('P', $size) . $pairs . pack('P', $size) . 'APK Sig Block 42';
+        }
+        $central = "PK\x01\x02" . pack('vvvvvvVVVvvvvvVV', 20, 20, 0, 0, 0, 0, $crc, strlen($xml), strlen($xml), strlen($name), 0, 0, 0, 0, 0, 0) . $name;
+        return $local . $block . $central . "PK\x05\x06" . pack('vvvvVVv', 0, 0, 1, 1, strlen($central), strlen($local . $block), 0);
+    };
+    $inboxTmp = sys_get_temp_dir() . '/km-apk-inbox-' . bin2hex(random_bytes(4));
+    @mkdir($inboxTmp);
+    $put = static function (string $name, string $bytes) use ($inboxTmp): string {
+        file_put_contents("$inboxTmp/$name", $bytes);
+        return "$inboxTmp/$name";
+    };
+    $cur = $put('current.apk', $makeApk(1000005, 'com.ito.kosenmap', 'real-cert'));
+    $new = $put('new.apk', $makeApk(1000006, 'com.ito.kosenmap', 'real-cert'));
+    $evil = $put('evil.apk', $makeApk(1000006, 'com.ito.kosenmap', 'other-cert'));
+    $admin = $put('admin.apk', $makeApk(1000006, 'com.ito.kosenmap.admin', 'real-cert'));
+    $unsigned = $put('unsigned.apk', $makeApk(1000006, 'com.ito.kosenmap', null));
+    check_bool('APK の読み取り: パッケージ名・版番号・署名の証明書の SHA-256', km_apk_package_name($new) === 'com.ito.kosenmap'
+        && km_apk_version_code($new) === 1000006 && km_apk_signer_sha256($new) === hash('sha256', 'real-cert')
+        && km_apk_signer_sha256($unsigned) === null && km_apk_signer_sha256($put('broken.apk', 'not a zip')) === null);
+    $current = ['storedName' => 'current.apk', 'versionCode' => 1000005];
+    $inspect = static fn (string $path, int $code = 1000006, string $slug = 'apk') => km_apk_inbox_inspect(
+        $path, ['slug' => $slug, 'name' => basename($path), 'sha256' => hash_file('sha256', $path)], $code, $current, $inboxTmp
+    )['problems'];
+    check_bool('受け箱: 同じ鍵・版が上がる・枠のパッケージ名なら通す(初めての配布も通す)', $inspect($new) === []
+        && km_apk_inbox_inspect($new, ['slug' => 'apk', 'name' => 'new.apk', 'sha256' => hash_file('sha256', $new)], 1000006, null)['problems'] === []);
+    check_bool('受け箱: 違う鍵・署名なし・枠の取り違え・版の下げ・latest.json と違う版を断る', count($inspect($evil)) === 1 && str_contains($inspect($evil)[0], '署名の鍵が今の配布物と違います')
+        && $inspect($unsigned) !== [] && str_contains(implode('', $inspect($admin)), 'パッケージ名が違います')
+        && str_contains(implode('', $inspect($cur, 1000005)), '版番号が今の配布物') && str_contains(implode('', $inspect($new, 1000009)), 'latest.json'));
+    check_bool('受け箱: SHA-256 が latest.json と違えば断る', str_contains(implode('', km_apk_inbox_inspect($new, ['slug' => 'apk', 'name' => 'new.apk', 'sha256' => str_repeat('0', 64)], 1000006, $current, $inboxTmp)['problems']), 'SHA-256'));
+    array_map('unlink', glob("$inboxTmp/*") ?: []);
+    @rmdir($inboxTmp);
+    $manifestProblems = km_apk_inbox_read_manifest('{"format":"kosenmap-apk","versionCode":1000006,"files":[{"slug":"apk","name":"../x.apk"},{"slug":"apk_admin","name":"a/b.apk"}]}')['problems'];
+    check_bool('受け箱: latest.json の名前にパスを入れさせない・2 つ揃っていなければ断る', in_array('latest.json の files に知らない・重なった・名前の不正な項目があります', $manifestProblems, true)
+        && in_array('一般用の APK がありません', $manifestProblems, true) && km_apk_inbox_read_manifest('[]')['problems'] === ['latest.json の形が違います']);
+    check_bool('受け箱: 版の表示は versionName の頭・無ければ 1000000 を引く', km_apk_inbox_label(1000005, '5 (261009.1048)') === '5' && km_apk_inbox_label(1000012, null) === '12');
+    $inboxLib = $file('src/lib/apk-inbox.php');
+    $inboxPage = $file('src/admin/apk-inbox.php');
+    check_bool('受け箱: 開いただけでは公開しない(公開・取り消し・戻すは CSRF つきの POST だけ)', str_contains($inboxPage, "if (!km_csrf_verify()) {")
+        && strpos($inboxPage, 'km_apk_inbox_publish(') > strpos($inboxPage, "=== 'POST'") && substr_count($inboxPage, 'km_csrf_field()') === 3
+        && str_contains($inboxPage, "require __DIR__ . '/_inc/guard.php';"));
+    check_bool('受け箱: 公開の前にもう一度検め、片方が失敗したらもう片方も戻す', strpos($inboxLib, '$recheck = km_apk_inbox_inspect(') < strpos($inboxLib, 'km_dist_store_file(')
+        && str_contains($inboxLib, "\$prev === null ? km_dist_delete(\$pdo, \$slug) : km_dist_restore(\$pdo, \$slug, \$prev, \$by);"));
+    check_bool('受け箱: URL の印は DB に SHA-256 だけ・nginx はこのページのクエリをログに残さない', str_contains($inboxLib, "hash('sha256', \$token)")
+        && str_contains($file('nginx/default.conf.template'), "location = /admin/apk-inbox.php {\n        access_log /var/log/nginx/access.log km_no_query;"));
+    check_bool('受け箱: CLI だけ・ホストの置き場の外は読まない', str_contains($file('src/scripts/apk-inbox.php'), "if (PHP_SAPI !== 'cli') {")
+        && str_contains($file('src/scripts/apk-inbox.php'), "str_starts_with(\$real, '/var/www/apkinbox/')"));
+    check_bool('受け箱: web にはホストの置き場を読み取り専用で渡す(compose と VPS の両方)', str_contains($file('compose.yaml'), '- ./run/apk-inbox:/var/www/apkinbox:ro')
+        && str_contains($file('compose.vps.yaml'), '- ./run/apk-inbox:/var/www/apkinbox:ro'));
+    $inboxSh = $file('scripts/host-apk-inbox.sh');
+    check_bool('受け箱(ホスト): 設定はシェルとして実行しない・鍵は -H @ファイル・www-data で web に渡す', !preg_match('/^\s*(\.|source)\s+"?\$CONF/m', $inboxSh)
+        && str_contains($inboxSh, '-H @"$WORK/auth"') && !str_contains($inboxSh, 'Bearer $GITHUB_TOKEN"') && str_contains($inboxSh, 'docker compose exec -T -u www-data web php scripts/apk-inbox.php stage'));
+    check_bool('受け箱(ホスト): cron 版 9 で 5 分ごと・失敗だけ送る・配備物と実行ビットの一覧にある', preg_match('/^CRON_VERSION=(9|[1-9][0-9])$/m', $file('scripts/host-updates-setup.sh')) === 1
+        && str_contains($file('scripts/host-updates-setup.sh'), '*/5 * * * *  root  $SEND_LOG_SCRIPT --path $PATH_ROOT --label アプリの受け箱 --only-failure --run "$APK_INBOX_SCRIPT --path $PATH_ROOT"')
+        && str_contains($file('scripts/deploy-to-host.ps1'), "'./scripts/host-apk-inbox.sh'") && str_contains($file('scripts/host-setup.sh'), 'host-apk-inbox.sh\'')
+        && !is_file(km_check_repo_root() . '/apk-inbox.local.conf') && is_file(km_check_repo_root() . '/apk-inbox.local.conf.example'));
+    $pushPs = $file('scripts/apk-push.ps1');
+    check_bool('受け箱(PC): 2 つが同じ鍵・枠のパッケージ名・同じ版でなければ送らない・3 つのファイルだけ', str_contains($pushPs, "throw '2 つが違う鍵で署名されています'")
+        && str_contains($pushPs, "\$allowed = @('KosenMap-admin.apk', 'KosenMap.apk', 'README.md', 'latest.json')") && str_starts_with($pushPs, "\u{FEFF}"));
     // 診断 W-54(2026-10-05): 見取り図の口も、錠を見る前に仮アカウントを表から確かめ直す(セッションを閉じる前に)
     $floorImage = $file('src/api/floor-image.php');
     check_bool('W-54: 見取り図の口は錠を見る前に km_map_guest_verify() を呼ぶ', strpos($floorImage, 'km_map_guest_verify();') !== false
@@ -4680,8 +4811,9 @@ function km_check_hardening(): void
     check_bool('配備の $include に host-cert.sh と host-domain.sh', str_contains($include, "'./scripts/host-cert.sh'") && str_contains($include, "'./scripts/host-domain.sh'"));
     check_bool('配備の $mustContain に2本と logto-domain.php', str_contains($mustContain, "'./scripts/host-cert.sh'") && str_contains($mustContain, "'./scripts/host-domain.sh'") && str_contains($mustContain, "'./src/scripts/logto-domain.php'"));
     $setup = $file('scripts/host-updates-setup.sh');
-    // 版 6 で証明書を足し、版 7(2026-10-05)でタスクマネージャーの集計と使用率の警告を、版 8(2026-10-06)で訪問者の記録の片付けを足した
-    check_bool('cron は版 8', preg_match('/^CRON_VERSION=8$/m', $setup) === 1);
+    // 版 6 で証明書を足し、版 7(2026-10-05)でタスクマネージャーの集計と使用率の警告を、版 8(2026-10-06)で訪問者の記録の片付けを、
+    // 版 9(2026-10-09)でアプリの受け箱を足した
+    check_bool('cron は版 9', preg_match('/^CRON_VERSION=9$/m', $setup) === 1);
     // 国単位のアクセス拒否(2026-10-06)。毎月の取り直しと、再起動のあとの当て直し
     check_bool('cron(版 8)に国の拒否の取り直しと再起動後の当て直しがある', str_contains($setup, '53 4 2 * *  root  sh $GEOBLOCK_SCRIPT --path $PATH_ROOT update')
         && str_contains($setup, '@reboot     root  sleep 30 && sh $GEOBLOCK_SCRIPT --path $PATH_ROOT apply'));
@@ -4691,6 +4823,17 @@ function km_check_hardening(): void
         && strpos($geoblock, 'tcp dport { $exempt } accept') < strpos($geoblock, 'ip saddr @deny4') && str_contains($geoblock, 'EXEMPT_PORTS="22"'));
     check_bool('国の拒否: Docker の nat より前(prerouting -150)・作り直しは 1 回の読み込みで', str_contains($geoblock, 'type filter hook prerouting priority -150; policy accept;')
         && str_contains($geoblock, "echo \"table inet \$TABLE {}\"\n  echo \"delete table inet \$TABLE\""));
+    // 反転(2026-10-08、利用者の指示「特定の国以外は拒否」)。戻りの通信は国で落とさない(反転すると外国のサーバーへの通信がすべて戻らなくなる)
+    check_bool('国の拒否: 反転(DENY_INVERT=yes)は書いた国の集合に無い送り元を落とす・通す国が空なら止める', str_contains($geoblock, "      DENY_INVERT) DENY_INVERT=\"\$value\" ;;")
+        && str_contains($geoblock, "ip saddr != @deny4 counter drop comment")
+        && str_contains($geoblock, 'DENY_INVERT=yes なのに DENY_COUNTRIES が空です')
+        && str_contains($geoblock, '反転で通す国($DENY_COUNTRIES)の一覧がありません。誰も入れなくなるので当てません'));
+    check_bool('国の拒否: こちらからつないだ通信の戻りは国で落とさない(拒否より前)・反転で 80 を通さなければ注意', strpos($geoblock, 'echo "    ct state established,related accept"') !== false
+        && strpos($geoblock, 'echo "    ct state established,related accept"') < strpos($geoblock, "ip saddr != @deny4 counter drop")
+        && strpos($geoblock, 'echo "    ct state established,related accept"') < strpos($geoblock, "ip saddr @deny4 counter drop")
+        && str_contains($geoblock, '反転しているのに EXEMPT_PORTS に 80 がありません'));
+    check_bool('国の拒否: 反転は見本・BAN の集計・訪問者の地図にも通る', str_contains($file('geoblock.local.conf.example'), "\nDENY_INVERT=no\n")
+        && str_contains($file('scripts/host-stats.sh'), '"invert":%s') && str_contains($file('src/admin/assets/js/visitors-world.js'), 'denyInvert'));
     check_bool('国の拒否: 取り直しに失敗したら前の一覧を使う・管理用の国の一覧が空なら当てない', str_contains($geoblock, '前の一覧を使います') && str_contains($geoblock, '誰も入れなくなるので当てません'));
     check_bool('国の拒否: 設定はリポジトリに置かない(見本だけ)・スクリプトと見本は配備に載る', !is_file(km_check_repo_root() . '/geoblock.local.conf') && is_file(km_check_repo_root() . '/geoblock.local.conf.example')
         && str_contains($deploy, "'./scripts/host-geoblock.sh'") && str_contains($deploy, "'./geoblock.local.conf.example'"));

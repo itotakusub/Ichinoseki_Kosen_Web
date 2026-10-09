@@ -487,6 +487,9 @@ services:
       - ./run/hoststats:/var/www/hoststats:ro
       # 訪問者の記録(reverse-proxy の nginx が書く。2026-10-06)。管理画面の訪問者が読むだけ
       - ./run/visitlog:/var/www/visitlog:ro
+      # アプリの受け箱(2026-10-09)。ホストの root の cron(scripts/host-apk-inbox.sh)が GitHub から取って置く。
+      # web は読むだけで、検めて uploads/apk-inbox/ へ写す(lib/apk-inbox.php)
+      - ./run/apk-inbox:/var/www/apkinbox:ro
 
       # mkcert のルート CA。**certs/rootCA.pem と同一のファイル**(SHA256 が一致することを
       # 確認済み)なので、プロジェクトの中を指す。以前は mkcert の既定の置き場所

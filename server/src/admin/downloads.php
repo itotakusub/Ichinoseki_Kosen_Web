@@ -148,6 +148,15 @@ foreach ([
     }
 }
 
+// アプリの受け箱(2026-10-09。lib/apk-inbox.php)。読めなくても画面は出す
+$inboxRecent = [];
+try {
+    require_once dirname(__DIR__) . '/lib/apk-inbox.php';
+    $inboxRecent = km_apk_inbox_recent(km_db(), 3);
+} catch (Throwable $exception) {
+    error_log('downloads.php inbox failed: ' . $exception->getMessage());
+}
+
 $dist = [];
 try {
     $dist = km_dist_all(km_db());
@@ -667,6 +676,31 @@ require __DIR__ . '/_inc/partials/page-header.php';
             <!--begin::Row-->
             <div class="row">
               <div class="col-12 col-xl-8">
+                <!--begin::Card アプリの受け箱(2026-10-09)-->
+                <div class="card mb-4 border-primary-subtle">
+                  <div class="card-header">
+                    <h3 class="card-title">アプリの受け箱(GitHub から)</h3>
+                  </div>
+                  <div class="card-body fs-7">
+                    <?php $waiting = array_values(array_filter($inboxRecent, static fn (array $r): bool => $r['status'] === 'waiting')); ?>
+                    <?php if ($waiting !== []): ?>
+                      <?php foreach ($waiting as $w): ?>
+                        <div class="alert alert-warning d-flex flex-wrap align-items-center gap-2 mb-2" role="alert">
+                          <span>公開を待っている届け #<?= (int) $w['id'] ?>(版 <?= km_e((string) ($w['version_label'] ?? '?')) ?>)</span>
+                          <a class="btn btn-sm btn-primary ms-auto" href="./apk-inbox.php?id=<?= (int) $w['id'] ?>">開いて公開する</a>
+                        </div>
+                      <?php endforeach; ?>
+                    <?php else: ?>
+                      <p class="mb-2 text-body-secondary">
+                        公開を待っている届けはありません。PC で <code>scripts\apk-push.ps1</code> を流すと、5 分ほどで届いてメールが来ます。
+                      </p>
+                    <?php endif; ?>
+                    <a href="./apk-inbox.php">受け箱の一覧</a>
+                    ・下のフォームから手で置き換えることもできます(今までどおり)。
+                  </div>
+                </div>
+                <!--end::Card-->
+
                 <!--begin::Card-->
                 <div class="card mb-4">
                   <div class="card-header">

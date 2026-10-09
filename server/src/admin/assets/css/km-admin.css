@@ -77,3 +77,15 @@
  */
 .km-svc-icon { width: 2.25rem; height: 2.25rem; font-size: 1rem; }
 .km-qr-box { max-width: 240px; }
+
+/*
+ * 訪問者の世界地図のカード(2026-10-08。本書 index.html の「Sales Value」のカードを写したもの)。
+ * 本書は style="height: 220px" だが、CSP で style 属性が使えないので class にする。
+ * 小さなグラフ(本書は ApexCharts)は visitors-world.js が SVG で描く。
+ */
+.km-world-map { height: 220px; }
+.km-sparkline { display: block; width: 100%; height: 50px; }
+.km-world-ban-scroll { max-height: 14rem; overflow: auto; }
+/* 地図の吹き出しは body の直下に出るので、カードの色ではなく本書の色に合わせる */
+.jvm-tooltip { background-color: rgba(33, 37, 41, 0.92); font-family: inherit; font-size: 0.8125rem; z-index: 1080; }/* カードの青の上に置く BAN の表(表の色を透かして白い字にする) */
+.km-world-ban-table { --bs-table-bg: transparent; --bs-table-color: #fff; --bs-table-border-color: rgba(255, 255, 255, 0.25); }

@@ -15,6 +15,12 @@ require __DIR__ . '/_inc/guard.php';
  * - **外部で引くのはスイッチを入れたときだけ**(訪問者の IP が外部へ渡るため。既定は切)
  * - 色分けは ① ISP/ASN 〜 ⑦ 過去の挙動 の点数(assets/js/visitors-threats.js。2026-10-08)
  * - CSV の書き出し・表示する件数(10/50/100/200)・国の行の ▷ で地域・都市を開く も、すべてブラウザ(2026-10-08)
+ * - 世界地図のカード(2026-10-08、利用者の指示): 本書(Website/index.html)の
+ *   `card text-white bg-primary bg-gradient border-primary mb-4`(Sales Value)を写し、国ごとの訪問と BAN を載せる。
+ *   地図は本書と同じ jsVectorMap 1.5.3(vendor/jsvectormap。CSP で外の CDN を読めないので置いた)。
+ *   小さなグラフは本書の ApexCharts の代わりに SVG で描く(assets/js/visitors-world.js)。
+ *   BAN は admin/api/visitor-bans.php(scripts/host-stats.sh が root の cron で書く bans.json)
+ * - 日別・国・地域別・ページ別のカードは折りたためる(AdminLTE の card-collapse)
  *
  * CSP はこのページだけ 2 つの宛先を connect-src に足す(lib/csp.php の 'admin-geo')。
  * bootstrap.php が送った 'admin' のヘッダを、同じ名前で上書きする。
@@ -30,6 +36,7 @@ $KM_PAGE = [
     'crumbs' => [
         ['key' => 'page.visitors.h1', 'text' => '訪問者'],
     ],
+    'css' => ['./vendor/jsvectormap/css/jsvectormap.min.css'],
 ];
 
 require __DIR__ . '/_inc/partials/head.php';
@@ -39,7 +46,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
 ?>
         <!--begin::App Content-->
         <div class="app-content">
-          <div class="container-fluid" id="km-visitors" data-src="./api/visit-log.php">
+          <div class="container-fluid" id="km-visitors" data-src="./api/visit-log.php" data-bans-src="./api/visitor-bans.php">
             <div class="alert alert-info d-flex align-items-start" role="alert">
               <i class="bi bi-info-circle-fill me-2 mt-1" aria-hidden="true"></i>
               <div data-i18n="page.visitors.notice">
@@ -118,16 +125,33 @@ require __DIR__ . '/_inc/partials/page-header.php';
               ?>
             </div>
 
-            <div class="row">
-              <?php
-              $table = static function (string $key, string $titleKey, string $title, array $columns, string $col = 'col-12 col-xl-4', bool $numeric = true, ?callable $tools = null): void {
-                  ?>
+            <?php
+            // 折りたたむボタン(AdminLTE の card-collapse。ダッシュボードのサービス一覧と同じ形)
+            $collapseButton = static function (string $class = 'btn btn-tool'): void {
+                ?>
+                <button
+                  type="button"
+                  class="<?= km_e($class) ?>"
+                  data-lte-toggle="card-collapse"
+                  aria-label="カードを折りたたむ"
+                  data-i18n-attr="aria-label:a11y.collapseCard"
+                >
+                  <i data-lte-icon="expand" class="bi bi-plus-lg"></i>
+                  <i data-lte-icon="collapse" class="bi bi-dash-lg"></i>
+                </button>
+                <?php
+            };
+            $table = static function (string $key, string $titleKey, string $title, array $columns, string $col = 'col-12 col-xl-4', bool $numeric = true, ?callable $tools = null, bool $collapsible = false) use ($collapseButton): void {
+                ?>
                   <div class="<?= km_e($col) ?>">
                     <div class="card mb-4">
                       <div class="card-header">
                         <h3 class="card-title" data-i18n="<?= km_e($titleKey) ?>"><?= km_e($title) ?></h3>
-                        <?php if ($tools !== null): ?>
-                          <div class="card-tools d-flex align-items-center gap-2"><?php $tools(); ?></div>
+                        <?php if ($tools !== null || $collapsible): ?>
+                          <div class="card-tools d-flex align-items-center gap-2">
+                            <?php if ($tools !== null) { $tools(); } ?>
+                            <?php if ($collapsible) { $collapseButton(); } ?>
+                          </div>
                         <?php endif; ?>
                       </div>
                       <div class="card-body p-0 table-responsive">
@@ -145,10 +169,54 @@ require __DIR__ . '/_inc/partials/page-header.php';
                     </div>
                   </div>
                   <?php
-              };
-              $table('byDay', 'page.visitors.byDay', '日別', [['page.visitors.colDay', '日付'], ['page.visitors.visits', '訪問'], ['page.visitors.ips', '送り元(IP)'], ['page.visitors.foreign', '外国から'], ['page.visitors.colDanger', '危険']]);
-              $table('byCountry', 'page.visitors.byCountry', '国・地域別', [['page.visitors.colCountry', '国・地域'], ['page.visitors.visits', '訪問'], ['page.visitors.ips', '送り元(IP)']]);
-              $table('byPage', 'page.visitors.byPage', 'ページ別', [['page.visitors.colPage', 'ページ'], ['page.visitors.visits', '訪問'], ['page.visitors.ips', '送り元(IP)']]);
+            };
+            ?>
+
+            <div class="row">
+              <!--begin::World(本書 index.html の Sales Value のカードを写したもの。中身は visitors-world.js)-->
+              <div class="col-12 col-xl-5">
+                <div class="card text-white bg-primary bg-gradient border-primary mb-4" id="km-visitors-world">
+                  <div class="card-header border-0">
+                    <h3 class="card-title" data-i18n="page.visitors.world">世界地図(訪問と BAN)</h3>
+                    <div class="card-tools">
+                      <?php $collapseButton('btn btn-primary btn-sm'); ?>
+                    </div>
+                  </div>
+                  <div class="card-body">
+                    <div id="km-visitors-world-map" class="km-world-map"></div>
+                    <div class="fs-7 mt-2" data-km-vs="worldLegend"></div>
+                  </div>
+                  <div class="card-footer border-0">
+                    <!--begin::Row-->
+                    <div class="row">
+                      <div class="col-4 text-center">
+                        <div data-km-vs="spark1" class="text-dark"></div>
+                        <div class="text-white"><span data-i18n="page.visitors.visits">訪問</span> <span data-km-vs="spark1Total"></span></div>
+                      </div>
+                      <div class="col-4 text-center">
+                        <div data-km-vs="spark2" class="text-dark"></div>
+                        <div class="text-white"><span data-i18n="page.visitors.ips">送り元(IP)</span> <span data-km-vs="spark2Total"></span></div>
+                      </div>
+                      <div class="col-4 text-center">
+                        <div data-km-vs="spark3" class="text-dark"></div>
+                        <div class="text-white"><span data-i18n="page.visitors.colDanger">危険</span> <span data-km-vs="spark3Total"></span></div>
+                      </div>
+                    </div>
+                    <!--end::Row-->
+                    <div class="km-world-bans fs-7 mt-3" data-km-vs="bans"></div>
+                  </div>
+                </div>
+              </div>
+              <!--end::World-->
+              <?php
+              $table('byCountry', 'page.visitors.byCountry', '国・地域別', [['page.visitors.colCountry', '国・地域'], ['page.visitors.visits', '訪問'], ['page.visitors.ips', '送り元(IP)']], 'col-12 col-xl-7', collapsible: true);
+              ?>
+            </div>
+
+            <div class="row">
+              <?php
+              $table('byDay', 'page.visitors.byDay', '日別', [['page.visitors.colDay', '日付'], ['page.visitors.visits', '訪問'], ['page.visitors.ips', '送り元(IP)'], ['page.visitors.foreign', '外国から'], ['page.visitors.colDanger', '危険']], 'col-12 col-xl-6', collapsible: true);
+              $table('byPage', 'page.visitors.byPage', 'ページ別', [['page.visitors.colPage', 'ページ'], ['page.visitors.visits', '訪問'], ['page.visitors.ips', '送り元(IP)']], 'col-12 col-xl-6', collapsible: true);
               ?>
             </div>
 
@@ -211,6 +279,9 @@ require __DIR__ . '/_inc/partials/page-header.php';
           </div>
         </div>
         <!--end::App Content-->
+        <script src="./vendor/jsvectormap/js/jsvectormap.min.js"></script>
+        <script src="./vendor/jsvectormap/maps/world.js"></script>
+        <script src="<?= km_e(km_asset('./assets/js/visitors-world.js')) ?>"></script>
         <script src="<?= km_e(km_asset('./assets/js/visitors-threats.js')) ?>"></script>
         <script src="<?= km_e(km_asset('./assets/js/visitors.js')) ?>"></script>
 <?php require __DIR__ . '/_inc/partials/footer.php'; ?>

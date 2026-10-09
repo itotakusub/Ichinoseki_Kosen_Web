@@ -262,10 +262,26 @@ $parentLink = static fn(string $id): string => 'nav-link' . ($openMenu === $id ?
                   </li>
                 </ul>
               </li>
+              <?php
+              // アプリの受け箱で公開を待っている届けの数(2026-10-09。lib/apk-inbox.php)。DB が落ちていれば出さない
+              $apkWaiting = (static function (): int {
+                  try {
+                      require_once dirname(__DIR__, 3) . '/lib/apk-inbox.php';
+                      return km_apk_inbox_waiting_count(km_db());
+                  } catch (Throwable $exception) {
+                      return 0;
+                  }
+              })();
+              ?>
               <li class="nav-item">
-                <a href="./downloads.php" class="<?= $link('downloads') ?>">
+                <a href="<?= $apkWaiting > 0 ? './apk-inbox.php' : './downloads.php' ?>" class="<?= $link('downloads') ?>">
                   <i class="nav-icon bi bi-download"></i>
-                  <p data-i18n="side.downloads">ダウンロード</p>
+                  <p>
+                    <span data-i18n="side.downloads">ダウンロード</span>
+                    <?php if ($apkWaiting > 0): ?>
+                      <span class="nav-badge badge text-bg-warning me-3" title="公開を待っているアプリ"><?= (int) $apkWaiting ?></span>
+                    <?php endif; ?>
+                  </p>
                 </a>
               </li>
               <li class="<?= $parentItem('extra') ?>">

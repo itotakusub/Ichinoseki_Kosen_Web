@@ -666,6 +666,15 @@ server {
         proxy_read_timeout 300s;
     }
 
+    # アプリの受け箱(2026-10-09、lib/apk-inbox.php)。メールの URL は ?t=<印> を持つので、**クエリをログに残さない**。
+    # 本文の上限は /admin/ と同じ(公開・取り消しのボタンだけ。APK はここから上げない)。`=` なので /admin/ の設定は継承されない
+    location = /admin/apk-inbox.php {
+        access_log /var/log/nginx/access.log km_no_query;
+        client_max_body_size 12m;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+
     # 地図の取り込み(map-sync.php)とアプリへの配信(map-publish.php)。**PHP が set_time_limit(120) で
     # 長く動く**ので、上流の応答待ちを 180 秒にする(2026-09-14 の見直しで追加)。
     # http の既定 60 秒のままだと、地点が数百ある取り込みで nginx だけが先に 504 を返し、
