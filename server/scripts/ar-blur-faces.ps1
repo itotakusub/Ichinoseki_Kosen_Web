@@ -9,6 +9,9 @@
   - ぼかしは deface(Python。顔を見つけてぼかす)。入っていなければ入れ方を出して止まる:
       py -m pip install deface
   - images\ の JPEG だけをぼかす(depth\ の深度は色の無い距離の画像なので、そのまま)
+  - **depth\ の PNG は写真を見るソフトでは真っ黒に見えるが、正常**(距離を mm の数で入れているので、2 m = 2000 は
+    最大 65535 の 3% の明るさ)。**消さないこと**(2026-10-09、黒い画像と思って消してしまった)。
+    点群を作るのに使う(scripts\ar-depth-cloud.py。消してしまったら --depth-zip で zip から読める)
   - **ぼかす前の画像は PC に残さない。** ぼかした画像で元の画像を上書きする。
     途中で失敗したら、展開したフォルダごと消して止まる(ぼかしていない画像を残さない)。zip はそのまま残る
   - 終わったら、-RemoveZip を付けていれば zip も消す(付けなければ、消すよう案内だけする)
@@ -99,6 +102,10 @@ try {
 Write-Host ''
 Write-Host ("できました: {0} 枚をぼかしました → {1}" -f $images.Count, $OutDir) -ForegroundColor Green
 Write-Host 'ぼかしの見落としが無いか、画像を一通り見てください(横顔・小さな顔・後ろ姿は漏れることがあります)。'
+$depthCount = @(Get-ChildItem -LiteralPath (Join-Path $OutDir 'depth') -Filter 'frame_*.png' -File -ErrorAction SilentlyContinue).Count
+if ($depthCount -gt 0) {
+    Write-Host ("深さ(depth\)が {0} 枚あります。写真を見るソフトでは真っ黒に見えますが、距離の数(mm)なので正常です。消さないでください。" -f $depthCount) -ForegroundColor Yellow
+}
 if ($RemoveZip) {
     Remove-Item -LiteralPath $zipPath -Force
     Write-Host "zip を消しました: $zipPath"
@@ -110,4 +117,5 @@ Write-Host '次の手順(docs/20 の「PC で 3D を作る」):'
 Write-Host '  RealityScan: images フォルダを読み込んで位置合わせ → メッシュ → 書き出し(OBJ / glTF)'
 Write-Host '  COLMAP     : sparse\0 に既知の姿勢があります(README.txt)'
 Write-Host '  Blender    : 書き出したメッシュを読み込んで整える'
+Write-Host '  点群       : blender.exe -P scripts\ar-depth-cloud.py -- --dir <このフォルダ>(深さから部屋の形の下敷き。docs/20 の 18)'
 Write-Host '処理が済んだら、管理画面「AR の撮影」でサーバーの撮影を消してください。'
