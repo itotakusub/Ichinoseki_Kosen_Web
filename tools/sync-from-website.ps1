@@ -37,9 +37,11 @@ $excludeDirs = @(
     'Downloaded', 'Old', 'backups', 'out', 'certs', 'node_modules', '.git',
     'src\vendor', 'src\uploads'
 ) | ForEach-Object { Join-Path $Source $_ }
+# 名前だけで指すフォルダ(どこにあっても写さない)。Python が試験のたびに作るキャッシュ(2026-10-09、scripts/tests を足したとき入ってしまった)
+$excludeDirs += @('__pycache__')
 
 # 名前で写さないファイル。**.env.example は写す**(.env だけを弾く)
-$excludeFiles = @('.env', '*.local.php', '*.local.conf', '*.pem', '*.key', '*.jks', '*.p12', '*.pfx', '*.cms', '*.tar.gz', '*.log')
+$excludeFiles = @('.env', '*.local.php', '*.local.conf', '*.pem', '*.key', '*.jks', '*.p12', '*.pfx', '*.cms', '*.tar.gz', '*.log', '*.pyc')
 
 Write-Host "写す元: $Source"
 Write-Host "写す先: $dest"

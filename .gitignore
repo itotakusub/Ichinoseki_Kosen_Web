@@ -35,3 +35,6 @@ node_modules/
 .vscode/
 Thumbs.db
 desktop.ini
+
+# Python のキャッシュ(試験を動かすと scripts の隣にできる。2026-10-09)/
+*.pyc
