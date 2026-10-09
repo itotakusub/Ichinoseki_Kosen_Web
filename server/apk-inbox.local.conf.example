@@ -1,0 +1,16 @@
+# アプリの受け箱の設定(scripts/host-apk-inbox.sh。2026-10-09)。
+#
+# **ホストにだけ置く。** この見本を apk-inbox.local.conf という名前で写し、root の持ち物・600 にする。
+# `*.local.conf` なので、配備(deploy-to-host.ps1)でも GitHub の控えでも送らない。
+#
+#   sudo install -m 600 -o root -g root apk-inbox.local.conf.example apk-inbox.local.conf
+#   sudo nano apk-inbox.local.conf
+#
+# 読むのは `名前=値` の行だけ(シェルとして実行しない)。
+
+# APK を置く非公開のリポジトリ(持ち主/名前)
+GITHUB_REPO=itotakusub/kosenmap-apk
+
+# GitHub の fine-grained トークン。**このリポジトリだけ・Contents を読むだけ**にして作る(期限 1 年がめやす)。
+# 書けるトークンにしないこと(漏れたときに、偽の APK を置けてしまう)。web には渡らない(root の cron だけが読む)
+GITHUB_TOKEN=

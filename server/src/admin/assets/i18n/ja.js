@@ -247,6 +247,8 @@ globalThis.KM_I18N.ja = {
   "page.downloads.replaceField": "差し替えるファイル",
   "page.downloads.revertButton": "登録を取り消す",
   "page.downloads.title": "ダウンロード | KosenMap 管理",
+  "page.apkInbox.title": "アプリの受け箱 | KosenMap 管理",
+  "page.apkInbox.h1": "アプリの受け箱",
   "page.downloads.upTo": "まで",
   "page.downloads.uploadedNotice": "差し替えました。",
   "page.downloads.versionField": "バージョン(任意)",

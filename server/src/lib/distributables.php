@@ -154,9 +154,6 @@ function km_dist_store(PDO $pdo, string $slug, array $file, ?string $versionLabe
     if (!isset(KM_DISTRIBUTABLES[$slug])) {
         throw new InvalidArgumentException('配布物の種類が不正です。');
     }
-    $spec = KM_DISTRIBUTABLES[$slug];
-
-    km_dist_ensure_table($pdo);
 
     $error = (int) ($file['error'] ?? UPLOAD_ERR_NO_FILE);
     if ($error === UPLOAD_ERR_NO_FILE) {
@@ -183,7 +180,29 @@ function km_dist_store(PDO $pdo, string $slug, array $file, ?string $versionLabe
         throw new InvalidArgumentException('アップロードされたファイルを確認できませんでした。もう一度ファイルを選んで送ってください。');
     }
 
-    $size = (int) ($file['size'] ?? 0);
+    km_dist_store_file($pdo, $slug, $tmp, (string) ($file['name'] ?? ''), (int) ($file['size'] ?? 0), $versionLabel, $updatedBy, $versionCode, true, false);
+}
+
+/**
+ * 配布物を置く本体(2026-10-09 に km_dist_store から分けた。受け箱 lib/apk-inbox.php からも使う)。
+ *
+ * [$fromUpload] が true なら PHP が受け取った一時ファイルを動かす(move_uploaded_file)。
+ * false なら写す(受け箱のファイルは受け箱の側で消す)。
+ * [$keepPrevious] が true なら前の実体を消さずに残し、その行を返す(受け箱からの公開は、7 日間「前の版に戻す」ため)。
+ *
+ * @return array|null 置き換える前の行(無ければ null)
+ */
+function km_dist_store_file(PDO $pdo, string $slug, string $tmp, string $originalName, int $size, ?string $versionLabel, ?string $updatedBy, ?int $versionCode, bool $fromUpload, bool $keepPrevious): ?array
+{
+    if (!isset(KM_DISTRIBUTABLES[$slug])) {
+        throw new InvalidArgumentException('配布物の種類が不正です。');
+    }
+    $spec = KM_DISTRIBUTABLES[$slug];
+    km_dist_ensure_table($pdo);
+    if (!is_file($tmp)) {
+        throw new InvalidArgumentException('置くファイルが見つかりません。');
+    }
+
     if ($size <= 0) {
         throw new InvalidArgumentException('空のファイルは保存できません。');
     }
@@ -193,7 +212,6 @@ function km_dist_store(PDO $pdo, string $slug, array $file, ?string $versionLabe
         );
     }
 
-    $originalName = (string) ($file['name'] ?? '');
     $extension = strtolower((string) pathinfo($originalName, PATHINFO_EXTENSION));
     if (!in_array($extension, $spec['extensions'], true)) {
         throw new InvalidArgumentException(
@@ -258,11 +276,15 @@ function km_dist_store(PDO $pdo, string $slug, array $file, ?string $versionLabe
     // 元の名前はパスに使わない(uploads.php / profile.php と同じ方針)
     $storedName = 'dist_' . bin2hex(random_bytes(16)) . '.' . $extension;
 
-    if (!move_uploaded_file($tmp, $dir . DIRECTORY_SEPARATOR . $storedName)) {
+    $placed = $fromUpload
+        ? move_uploaded_file($tmp, $dir . DIRECTORY_SEPARATOR . $storedName)
+        : copy($tmp, $dir . DIRECTORY_SEPARATOR . $storedName);
+    if (!$placed) {
         throw new RuntimeException('ファイルを保存できませんでした。');
     }
 
-    $previous = km_dist_find($pdo, $slug)['storedName'] ?? null;
+    $previousRow = km_dist_find($pdo, $slug);
+    $previous = $previousRow['storedName'] ?? null;
 
     try {
         $pdo->prepare(
@@ -292,7 +314,43 @@ function km_dist_store(PDO $pdo, string $slug, array $file, ?string $versionLabe
         throw $exception;
     }
 
-    km_dist_remove_file($previous);
+    if (!$keepPrevious) {
+        km_dist_remove_file($previous);
+    }
+    return $previousRow;
+}
+
+/**
+ * 前に置いていた行に戻す(受け箱の「前の版に戻す」。2026-10-09)。前の実体が残っていること。
+ * 今の実体は消す。戻した行の更新者・時刻は今にする。
+ */
+function km_dist_restore(PDO $pdo, string $slug, array $previous, ?string $updatedBy): void
+{
+    if (!isset(KM_DISTRIBUTABLES[$slug])) {
+        throw new InvalidArgumentException('配布物の種類が不正です。');
+    }
+    $storedName = (string) ($previous['storedName'] ?? '');
+    if (preg_match('/^dist_[0-9a-f]{32}\.[a-z0-9]+$/', $storedName) !== 1 || !is_file(km_upload_dir() . DIRECTORY_SEPARATOR . $storedName)) {
+        throw new InvalidArgumentException('前の版のファイルが残っていません(戻せる期間を過ぎました)。');
+    }
+    km_dist_ensure_table($pdo);
+    $current = km_dist_find($pdo, $slug)['storedName'] ?? null;
+    $pdo->prepare(
+        'REPLACE INTO km_distributables (slug, original_name, stored_name, size_bytes, version_label, version_code, sha256, updated_by, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())'
+    )->execute([
+        $slug,
+        mb_substr((string) ($previous['originalName'] ?? ''), 0, 255),
+        $storedName,
+        (int) ($previous['sizeBytes'] ?? 0),
+        $previous['versionLabel'] ?? null,
+        isset($previous['versionCode']) ? (int) $previous['versionCode'] : null,
+        $previous['sha256'] ?? null,
+        $updatedBy,
+    ]);
+    if ($current !== null && $current !== $storedName) {
+        km_dist_remove_file($current);
+    }
 }
 
 /** 登録を消して、静的ファイルの既定(あれば)へ戻す。 */

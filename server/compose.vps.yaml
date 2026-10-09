@@ -84,6 +84,8 @@ services:
       - ./run/hoststats:/var/www/hoststats:ro
       # 訪問者の記録(2026-10-06)。nginx が書いたものを読むだけ
       - ./run/visitlog:/var/www/visitlog:ro
+      # アプリの受け箱(2026-10-09)。ホストの cron が置き、web は読むだけ(compose.yaml と同じ)
+      - ./run/apk-inbox:/var/www/apkinbox:ro
       - type: bind
         source: ./docker/php/99-timezone.ini
         target: /usr/local/etc/php/conf.d/99-timezone.ini

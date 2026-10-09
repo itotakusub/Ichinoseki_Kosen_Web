@@ -402,6 +402,9 @@ $include = @(
     # 国単位のアクセス拒否(2026-10-06)。当てるのは利用者(sudo)。設定 geoblock.local.conf はホストにだけ置く
     './scripts/host-geoblock.sh'
     './geoblock.local.conf.example'
+    # アプリの受け箱(2026-10-09)。root の cron が 5 分ごとに呼ぶ(版 9)。設定 apk-inbox.local.conf はホストにだけ置く
+    './scripts/host-apk-inbox.sh'
+    './apk-inbox.local.conf.example'
     <#
       SSH ログインの知らせと、切る・BAN する道具(2026-09-25)。
       **ここに置くのは原本だけ。** PAM と sudo から root で走るのは、ssh-login-notify-setup.sh --fix が

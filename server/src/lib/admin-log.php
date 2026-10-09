@@ -133,6 +133,10 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     'form.delete' => 'が問い合わせを削除しました',
     'dist.update' => 'が配布ファイルを差し替えました',
     'dist.delete' => 'が配布ファイルの登録を取り消しました',
+    // アプリの受け箱(2026-10-09。admin/apk-inbox.php)
+    'apk.publish' => 'が受け箱のアプリを公開しました',
+    'apk.cancel' => 'が受け箱のアプリを取り消しました',
+    'apk.rollback' => 'がアプリを前の版に戻しました',
     'profile.avatar_update' => 'がプロフィール画像を変更しました',
     'profile.avatar_clear' => 'がプロフィール画像を既定に戻しました',
     // **新しいパスワードそのものは記録しない。** 変えたという事実だけ残す

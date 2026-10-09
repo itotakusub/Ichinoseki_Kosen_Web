@@ -43,7 +43,7 @@ done
 APT_CONF="/etc/apt/apt.conf.d/52kosenmap-unattended"
 CRON_FILE="/etc/cron.d/kosenmap-updates"
 # **並びを変えたら上げること。** 古いホストの cron を書き直す合図になる
-CRON_VERSION=8
+CRON_VERSION=9
 LOG_DIR="/var/log/kosenmap"
 CHECK_SCRIPT="$PATH_ROOT/scripts/check-updates.sh"
 SECURITY_SCRIPT="$PATH_ROOT/scripts/host-security-check.sh"
@@ -57,6 +57,8 @@ STATS_SCRIPT="$PATH_ROOT/scripts/host-stats.sh"
 RESOURCE_SCRIPT="$PATH_ROOT/scripts/host-resource-alert.sh"
 # 国単位のアクセス拒否(版 8。2026-10-06)。設定(geoblock.local.conf)が無ければ何もしない
 GEOBLOCK_SCRIPT="$PATH_ROOT/scripts/host-geoblock.sh"
+# アプリの受け箱(版 9。2026-10-09)。設定(apk-inbox.local.conf)が無ければ何もしない
+APK_INBOX_SCRIPT="$PATH_ROOT/scripts/host-apk-inbox.sh"
 
 PROBLEMS=0
 note() { echo "  $1"; }
@@ -117,7 +119,7 @@ echo "== 確認スクリプト =="
 # **配備は実行ビットを保たない。** tar 越しに置いた直後は 644 のことがあるので、
 # cron が呼ぶものをまとめて見る(1本ずつ手で chmod すると、必ずどれかを忘れる)。
 # 版 6 で host-cert.sh と、それを包む send-log.sh を足した。版 7 で host-stats.sh と host-resource-alert.sh。
-for _script in "$CHECK_SCRIPT" "$SECURITY_SCRIPT" "$EMERGENCY_SCRIPT" "$BACKUP_SCRIPT" "$CERT_SCRIPT" "$SEND_LOG_SCRIPT" "$STATS_SCRIPT" "$RESOURCE_SCRIPT" "$GEOBLOCK_SCRIPT"; do
+for _script in "$CHECK_SCRIPT" "$SECURITY_SCRIPT" "$EMERGENCY_SCRIPT" "$BACKUP_SCRIPT" "$CERT_SCRIPT" "$SEND_LOG_SCRIPT" "$STATS_SCRIPT" "$RESOURCE_SCRIPT" "$GEOBLOCK_SCRIPT" "$APK_INBOX_SCRIPT"; do
   if [ -x "$_script" ]; then
     note "あり: $_script"
   elif [ -f "$_script" ]; then
@@ -247,6 +249,12 @@ else
 #
 # 国単位のアクセス拒否(host-geoblock.sh)は、毎月 2 日 4:53 に一覧を取り直して当て直し、再起動のあとにも当て直す
 # (nftables の表は再起動で消える)。**設定(geoblock.local.conf)が無ければ何もしない**ので、使わないホストにも置いてよい。
+#
+# ## アプリの受け箱(版 9 で足した。2026-10-09)
+#
+# host-apk-inbox.sh が **5 分ごと**に GitHub の非公開リポジトリの latest.json を見て、新しい APK があれば取ってきて
+# web に検めさせる(受け箱に入れて管理者へメール。公開は管理者が管理画面で押す)。**失敗したときだけ**送る
+# (同じ失敗は 6 時間に 1 回まで)。**設定(apk-inbox.local.conf)が無ければ何もしない。**
 SHELL=/bin/sh
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
@@ -266,6 +274,7 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 53 4 2 * *  root  sh $GEOBLOCK_SCRIPT --path $PATH_ROOT update >>$LOG_DIR/geoblock.log 2>&1 && sh $GEOBLOCK_SCRIPT --path $PATH_ROOT apply >>$LOG_DIR/geoblock.log 2>&1
 @reboot     root  sleep 30 && sh $GEOBLOCK_SCRIPT --path $PATH_ROOT apply >>$LOG_DIR/geoblock.log 2>&1
 37 4 * * *  root  find $PATH_ROOT/run/visitlog -maxdepth 1 -type f -name 'visit-*.jsonl' -mtime +30 -delete >>$LOG_DIR/visitlog.log 2>&1
+*/5 * * * *  root  $SEND_LOG_SCRIPT --path $PATH_ROOT --label アプリの受け箱 --only-failure --run "$APK_INBOX_SCRIPT --path $PATH_ROOT" >>$LOG_DIR/apk-inbox.log 2>&1
 CONF
     chmod 644 "$CRON_FILE"
     chown root:root "$CRON_FILE"

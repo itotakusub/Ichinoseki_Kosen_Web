@@ -246,6 +246,8 @@ globalThis.KM_I18N.en = {
   "page.downloads.replaceField": "Replacement file",
   "page.downloads.revertButton": "Remove registration",
   "page.downloads.title": "Downloads | KosenMap Admin",
+  "page.apkInbox.title": "App inbox | KosenMap Admin",
+  "page.apkInbox.h1": "App inbox",
   "page.downloads.upTo": "max",
   "page.downloads.uploadedNotice": "Replaced.",
   "page.downloads.versionField": "Version (optional)",
