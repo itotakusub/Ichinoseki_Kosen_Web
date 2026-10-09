@@ -28,9 +28,18 @@ if ($command !== 'stage' || $dir === '') {
     fwrite(STDERR, "使い方: php scripts/apk-inbox.php stage <届けのフォルダ>\n");
     exit(2);
 }
-// 置き場の外は読まない(ホストが渡す /var/www/apkinbox/<名前> だけ)
+// 置き場の外は読まない(ホストが渡す /var/www/apkinbox/<名前> だけ)。断る理由は分けて出す(2026-10-09、本番で初回に区別できなかった)
+$allowAny = getenv('KM_APK_INBOX_ALLOW_ANY_DIR') === '1';
+if (!$allowAny && !is_dir('/var/www/apkinbox')) {
+    fwrite(STDERR, "web の中に受け箱の置き場 /var/www/apkinbox がありません。compose の作り直し(deploy-to-host.ps1 -Action up)がまだです\n");
+    exit(2);
+}
 $real = realpath($dir);
-if ($real === false || !is_dir($real) || !str_starts_with($real, '/var/www/apkinbox/') && getenv('KM_APK_INBOX_ALLOW_ANY_DIR') !== '1') {
+if ($real === false || !is_dir($real)) {
+    fwrite(STDERR, "届けのフォルダが web の中に見えません: {$dir}(置き場はあるので、ホストの run/apk-inbox と web の /var/www/apkinbox が別の場所を指しています)\n");
+    exit(2);
+}
+if (!$allowAny && !str_starts_with($real, '/var/www/apkinbox/')) {
     fwrite(STDERR, "届けのフォルダは /var/www/apkinbox/ の下だけです: {$dir}\n");
     exit(2);
 }
