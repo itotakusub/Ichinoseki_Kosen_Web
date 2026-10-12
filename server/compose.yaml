@@ -535,11 +535,11 @@ services:
     depends_on:
       mariadb:
         condition: service_healthy
-    # **verify.php を見る。** 地図データを読む / と違い DB を触らず、実測 1ms で返る。
+    # **healthz.php を見る。** 地図データを読む / と違い DB を触らない。
     # 静的ファイルではなく PHP を叩くのは、**Apache は生きているが PHP が死んでいる**
-    # 状態を見逃さないため。
+    # 状態を見逃さないため。以前は verify.php を叩いていた(2026-10-12 に Old/src/ へ退避)
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1/verify.php"]
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1/healthz.php"]
       start_period: 30s
       interval: 30s
       timeout: 5s

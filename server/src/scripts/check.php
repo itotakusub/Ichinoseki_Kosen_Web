@@ -4721,6 +4721,29 @@ function km_check_hardening(): void
         && str_contains($otpJs, 'input[inputmode="numeric"][data-id="0"]') && str_contains($otpJs, "setAttribute('autocomplete', 'one-time-code')")
         && !str_contains($otpJs, '.value') && !preg_match('/fetch\(|XMLHttpRequest|sendBeacon|localStorage|cookie/', $otpJs)
         && str_contains($file('scripts/deploy-to-host.ps1'), "'./nginx/km/logto-otp-autocomplete.js'"));
+    /*
+     * ## Logto のメールのテンプレート(2026-10-12。docs/logto-email-templates.json。Console へ貼るのは利用者)
+     * Gmail などがコードを拾いやすいよう、コードは本文に 1 回だけ・単独の行に置く。URL(verify.php)は載せない。
+     */
+    $mailTemplates = json_decode($file('docs/logto-email-templates.json'), true);
+    $templateTypes = ['SignIn', 'Register', 'ForgotPassword', 'Generic', 'BindNewIdentifier', 'UserPermissionValidation', 'MfaVerification', 'BindMfa', 'OrganizationInvitation'];
+    $templateOk = is_array($mailTemplates) && count($mailTemplates) === 9
+        && array_column($mailTemplates, 'usageType') === $templateTypes;
+    foreach (is_array($mailTemplates) ? $mailTemplates : [] as $template) {
+        $content = (string) ($template['content'] ?? '');
+        $templateOk = $templateOk && ($template['contentType'] ?? '') === 'text/plain'
+            && substr_count($content, '{{code}}') === 1 && str_contains($content, "\n\n{{code}}\n\n")
+            && !str_contains($content, 'verify.php') && !str_contains($content, '{{link}}')
+            && str_contains((string) ($template['subject'] ?? ''), '(Verification Code)') && !str_contains((string) ($template['subject'] ?? ''), '{{code}}');
+    }
+    check_bool('Logto のテンプレート: 9 種類・コードは本文に 1 回だけ単独の行・URL なし・件名にコードを出さない', $templateOk);
+    // 確認コードの橋渡し verify.php は Old/src/ へ退避した。healthcheck は DB を触らない healthz.php を見る
+    $healthz = $file('src/healthz.php');
+    check_bool('verify.php は退避済み・healthcheck は healthz.php(DB を触らず、外には 404)', !is_file(km_check_repo_root() . '/src/verify.php')
+        && str_contains($file('compose.yaml'), '"http://127.0.0.1/healthz.php"]') && !str_contains($file('compose.yaml'), '/verify.php"')
+        && str_contains($healthz, "!== '127.0.0.1'") && !preg_match('/km_db|require/', $healthz)
+        && str_contains($file('nginx/default.conf.template'), "location = /healthz.php {\n        return 404;\n    }")
+        && !str_contains($file('nginx/default.conf.template'), 'location = /verify.php'));
     // 診断 W-54(2026-10-05): 見取り図の口も、錠を見る前に仮アカウントを表から確かめ直す(セッションを閉じる前に)
     $floorImage = $file('src/api/floor-image.php');
     check_bool('W-54: 見取り図の口は錠を見る前に km_map_guest_verify() を呼ぶ', strpos($floorImage, 'km_map_guest_verify();') !== false

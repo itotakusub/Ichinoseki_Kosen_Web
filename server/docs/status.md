@@ -296,7 +296,10 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
 - **Logto の確認コードの自動入力(2026-10-12、利用者の希望)**: Logto 1.44.0 のコード欄は `autocomplete="off"`(CSS では変えられない)。
   nginx(3001)が Logto の HTML に `nginx/km/logto-otp-autocomplete.js` を差し込み、1 つ目の枠に `one-time-code` を付ける。[04](04-host-jobs-and-mail.ipynb) §6。
   10-12 に本番へ反映(利用者)。Logto の HTML に 1 回だけ差し込まれ、スクリプトは 200・`application/javascript` で読まれ、CSP の違反なし(ブラウザで実測)。
-  **まだ**: 実機で候補が出るか(Safari と Apple の「メール」/ Pixel の Chrome と Gmail)・SignIn のメールの形の試し(Console は利用者)
+  Pixel(Chrome・Gmail)では候補が出なかった(10-12、利用者)。SignIn のメールの形を変えても Gmail はコードを拾わなかった。
+- **メールのテンプレートを 9 種類そろえ、verify.php を片付け(2026-10-12、利用者の指示)**: 正本 `docs/logto-email-templates.json`(コードは本文に 1 回・単独の行・件名に `(Verification Code)`・URL なし)。
+  `src/verify.php` は `Old/src/` へ退避し、nginx の location も外した。web の healthcheck は `src/healthz.php`(DB なし・外には nginx が 404)。
+  **まだ**: Console へ 9 種類を貼る(利用者)→ 配備 `-Action up`(healthcheck が変わるので web の作り直しが要る)。iPhone・Mac の Safari での実測(Safari と Apple の「メール」/ Pixel の Chrome と Gmail)・SignIn のメールの形の試し(Console は利用者)
 
 ### 診断(2026-10-05)の反映(2026-10-06、利用者の指示)
 

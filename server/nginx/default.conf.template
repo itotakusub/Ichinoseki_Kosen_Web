@@ -288,9 +288,10 @@ map $http_origin $km_ws_origin_denied {
 # **クエリ文字列を書かない**アクセスログ。
 #
 # 既定の combined は `$request`(= メソッド + URI + クエリ)を丸ごと書く。
-# 確認コードを URL で受け取るページ(/verify.php?code=123456)にそれを使うと、
-# **まだ有効なコードがログファイルに残ってしまう**。`$uri` だけを書く形にして、
+# URL に秘密が乗るページ(お試しの閲覧リンク・OIDC のコールバック・アプリの受け箱など)にそれを使うと、
+# **まだ有効な値がログファイルに残ってしまう**。`$uri` だけを書く形にして、
 # そのページにだけ適用する(他のページは従来どおり combined)。
+# 最初に作ったのは確認コードの橋渡し /verify.php のため(2026-10-12 に Old/src/ へ退避)。
 log_format km_no_query '$remote_addr - - [$time_local] "$request_method $uri $server_protocol" '
                        '$status $body_bytes_sent "$http_referer" "$http_user_agent"';
 
@@ -521,7 +522,7 @@ server {
     # /lib/… の .php 以外(万一置かれたもの)が404を素通りしてしまう。
     #
     # ★ ここで add_header を1つでも書くと、server ブロックの add_header は
-    #   **すべて継承されなくなる**(nginx の仕様。/verify.php の location と同じ罠)。
+    #   **すべて継承されなくなる**(nginx の仕様。/guest.php の location と同じ罠)。
     #   必要なものを全部書き直す。
     #
     # 差し替えても反映されるよう、URL 側に版を付けてある:
@@ -566,36 +567,20 @@ server {
         proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
     }
 
-    # 確認コードの橋渡しページ。**URL にコードが乗るのでログには残さない**
-    # (上の km_no_query は $uri だけを書く)。
-    location = /verify.php {
-        access_log /var/log/nginx/access.log km_no_query;
-
-        # **ここで add_header を1つでも書くと、server ブロックの add_header は
-        # すべて継承されなくなる**(nginx の仕様)。必要なものを全部書き直す。
-        #
-        # Referrer-Policy だけ no-referrer に強める。URL に確認コードが入るので、
-        # どこへも参照元として渡さない。**同じヘッダーが複数あると後勝ちになる**ため、
-        # PHP 側(verify.php)と同じ値にしてある — 食い違うと弱い方が採用される。
-        add_header X-Content-Type-Options nosniff always;
-        add_header X-Frame-Options SAMEORIGIN always;
-        add_header Referrer-Policy no-referrer always;
-        add_header Permissions-Policy $km_permissions_policy always;
-        add_header Content-Security-Policy $km_csp_fallback always;
-        include /etc/nginx/km/hsts-*.conf;
-
-        include /etc/nginx/km/proxy-web.conf;
-        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    # web の healthcheck だけが叩くページ(compose.yaml。2026-10-12)。外には出さない
+    # (以前ここにあった確認コードの橋渡し /verify.php は、メールから URL を外したので Old/src/ へ退避した)
+    location = /healthz.php {
+        return 404;
     }
 
     # お試しの閲覧リンク(2026-09-30、lib/map-guest.php)。**URL にリンクの中身が乗るのでログには残さない**。
-    # 参照元も渡さない(verify.php と同じ)。トークンの総当たりに備えて入口でも回数を絞る。
+    # 参照元も渡さない。トークンの総当たりに備えて入口でも回数を絞る。
     location = /guest.php {
         access_log /var/log/nginx/access.log km_no_query;
         access_log /var/log/km-visit/visit-$km_visit_day.jsonl km_visit;
         limit_req zone=km_public burst=5 nodelay;
 
-        # ここで add_header を書くと server ブロックの add_header は継承されない(上の verify.php と同じ)
+        # ここで add_header を書くと server ブロックの add_header は継承されない(nginx の仕様。必要なものを全部書き直す)
         add_header X-Content-Type-Options nosniff always;
         add_header X-Frame-Options SAMEORIGIN always;
         add_header Referrer-Policy no-referrer always;
@@ -750,7 +735,7 @@ server {
 
     # OIDC のコールバック。**URL に認可コードが乗るのでログには残さない**(2026-09-14 に追加。server-ops 16)。
     # 以前は location / に入り、既定の combined 形式で `?code=…&state=…` ごと記録していた。
-    # verify.php と違って add_header は書かない(server の add_header をそのまま継承させる)。
+    # guest.php と違って add_header は書かない(server の add_header をそのまま継承させる)。
     location = /callback.php {
         access_log /var/log/nginx/access.log km_no_query;
         include /etc/nginx/km/proxy-web.conf;
