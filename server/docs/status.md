@@ -288,6 +288,9 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
 - **深さから部屋の点群(2026-10-09)**: PC の `scripts/ar-depth-cloud.py`(Blender の中でも、Blender なしでも)が、深さ・カメラの位置・重ね方から色付きの点群(PLY)・真上の画像・床と天井の高さを作る。[20](20-indoor-positioning.ipynb) §18。
   アプリは前と同じ・0.1 秒より古い深さを保存しない(10/8 に同じ深さが 85 枚続いた)。1F の実測で床 −1.43 m・天井 +1.32 m を出せたが、壁は 20 cm ほどぼやける(部屋ごとの撮り直しはまだ)。
   本物の deface でのぼかしは 10/9 に利用者が流して正しく動いた(写真 212 枚の明るさは元と同じ)。「黒い画像」は深さの PNG の見え方で、壊れていなかった
+- **ビルド元の更新(2026-10-12、利用者の指示)**: 知らせ「ビルド元が更新されています」に合わせ、`docker/php/Dockerfile` の `php:8.4-apache` と
+  `docker/soketi/Dockerfile` の `node:24-trixie-slim` の digest を書き換えた(どちらも 10-06 作成。PHP 8.4.26・Node 24.21.0 のまま土台の Debian だけ新しい)。
+  composer:2・aloware/soketi は変化なし。**まだ**: 本番で配備 → `docker compose build --pull web soketi` → `up -d`(利用者)
 
 ### 診断(2026-10-05)の反映(2026-10-06、利用者の指示)
 
