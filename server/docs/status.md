@@ -293,6 +293,9 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
   composer:2・aloware/soketi は変化なし。**まだ**: 本番で配備 → `docker compose build --pull web soketi` → `up -d`(利用者)
 - **更新の知らせのメールを読みやすく(2026-10-12、利用者の指示)**: 1 件 1 行(「いま: … → 登録されている中身: …」)をやめ、
   件数・番号・何が起きたかの一言・「いま使っているもの」「新しく出たもの」を別の行に。当て方も digest の書き換えから書く(`lib/update-notice.php`)
+- **Logto の確認コードの自動入力(2026-10-12、利用者の希望)**: Logto 1.44.0 のコード欄は `autocomplete="off"`(CSS では変えられない)。
+  nginx(3001)が Logto の HTML に `nginx/km/logto-otp-autocomplete.js` を差し込み、1 つ目の枠に `one-time-code` を付ける。[04](04-host-jobs-and-mail.ipynb) §6。
+  **まだ**: 本番で `-Action restart -Services reverse-proxy`・実機で候補が出るか(Safari と Apple の「メール」/ Pixel の Chrome と Gmail)・SignIn のメールの形の試し(Console は利用者)
 
 ### 診断(2026-10-05)の反映(2026-10-06、利用者の指示)
 

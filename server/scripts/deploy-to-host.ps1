@@ -457,6 +457,8 @@ $mustContain = @(
     './docker/php/99-timezone.ini'
     './nginx/default.conf.template'
     './nginx/km/proxy-web.conf'
+    # Logto の確認コード欄の自動入力(2026-10-12)。無いと nginx の差し込みが 404 を読みにいく
+    './nginx/km/logto-otp-autocomplete.js'
     # 更新の確認と通知。**この2つは対**で、片方だけだと cron が空振りする
     './scripts/check-updates.sh'
     './src/scripts/notify-update.php'

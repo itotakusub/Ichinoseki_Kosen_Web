@@ -4703,6 +4703,24 @@ function km_check_hardening(): void
     $pushPs = $file('scripts/apk-push.ps1');
     check_bool('受け箱(PC): 2 つが同じ鍵・枠のパッケージ名・同じ版でなければ送らない・3 つのファイルだけ', str_contains($pushPs, "throw '2 つが違う鍵で署名されています'")
         && str_contains($pushPs, "\$allowed = @('KosenMap-admin.apk', 'KosenMap.apk', 'README.md', 'latest.json')") && str_starts_with($pushPs, "\u{FEFF}"));
+    /*
+     * ## Logto の確認コード欄の自動入力(2026-10-12。nginx/km/logto-otp-autocomplete.js)
+     * nginx が Logto Core(3001)の HTML にスクリプトを差し込み、1 つ目の枠に autocomplete="one-time-code" を付ける。
+     */
+    $otpJs = $file('nginx/km/logto-otp-autocomplete.js');
+    $logtoCore = '';
+    if (preg_match('/^server \{\n    listen 3001 ssl;.*?\n\}\n/ms', $file('nginx/default.conf.template'), $logtoCoreMatch) === 1) {
+        $logtoCore = (string) preg_replace('/^\s*#.*$/m', '', $logtoCoreMatch[0]);
+    }
+    check_bool('自動入力: Logto Core(3001)だけで HTML に差し込み、Logto には圧縮させない', $logtoCore !== ''
+        && str_contains($logtoCore, "sub_filter '</head>' '<script src=\"/km/logto-otp-autocomplete.js\" defer></script></head>';")
+        && str_contains($logtoCore, 'proxy_set_header Accept-Encoding "";')
+        && str_contains($logtoCore, "location = /km/logto-otp-autocomplete.js {\n        alias /etc/nginx/km/logto-otp-autocomplete.js;")
+        && substr_count($file('nginx/default.conf.template'), 'sub_filter \'</head>\'') === 1);
+    check_bool('自動入力: スクリプトは 1 つ目の枠に one-time-code を付けるだけ(値を読まない・送らない)', $otpJs !== ''
+        && str_contains($otpJs, 'input[inputmode="numeric"][data-id="0"]') && str_contains($otpJs, "setAttribute('autocomplete', 'one-time-code')")
+        && !str_contains($otpJs, '.value') && !preg_match('/fetch\(|XMLHttpRequest|sendBeacon|localStorage|cookie/', $otpJs)
+        && str_contains($file('scripts/deploy-to-host.ps1'), "'./nginx/km/logto-otp-autocomplete.js'"));
     // 診断 W-54(2026-10-05): 見取り図の口も、錠を見る前に仮アカウントを表から確かめ直す(セッションを閉じる前に)
     $floorImage = $file('src/api/floor-image.php');
     check_bool('W-54: 見取り図の口は錠を見る前に km_map_guest_verify() を呼ぶ', strpos($floorImage, 'km_map_guest_verify();') !== false

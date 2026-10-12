@@ -827,7 +827,27 @@ server {
     add_header Referrer-Policy strict-origin-when-cross-origin always;
     include /etc/nginx/km/hsts-*.conf;
 
+    # 確認コード欄に autocomplete="one-time-code" を付けるスクリプト(2026-10-12。中身と理由は km/logto-otp-autocomplete.js)。
+    # Logto のサインイン画面の CSP は script-src 'self' を許すので、同じ origin から返す
+    location = /km/logto-otp-autocomplete.js {
+        alias /etc/nginx/km/logto-otp-autocomplete.js;
+        default_type application/javascript;
+        types { }
+        # location に add_header を書くと server の分は受け継がれないので、同じものをここにも書く
+        add_header Cache-Control "public, max-age=3600" always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Referrer-Policy strict-origin-when-cross-origin always;
+        include /etc/nginx/km/hsts-*.conf;
+    }
+
     location / {
+        # Logto の HTML(サインイン・登録・パスワード再設定の画面)の </head> の前に、上のスクリプトを 1 行差し込む。
+        # sub_filter が書き換えるのは text/html だけ(OIDC の JSON には触れない)。
+        # **Logto に圧縮させない** —— 圧縮された HTML は書き換えられない。外向きの圧縮は gzip_proxied any が行う
+        proxy_set_header Accept-Encoding "";
+        sub_filter '</head>' '<script src="/km/logto-otp-autocomplete.js" defer></script></head>';
+        sub_filter_once on;
+
         # 書き込み(サインインの送信・トークン交換)だけを数える。
         # コンソールの読み取りとプリフライトは対象外 —— ここを数えていたせいで
         # 管理コンソールが 429 だらけになり、サインイン画面の資材まで落ちていた。
