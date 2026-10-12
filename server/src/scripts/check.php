@@ -3406,6 +3406,14 @@ function km_check_update_notice(): void
     check_bool('ビルド元は build --pull と書く', str_contains($baseBody, 'build --pull'));
     check_bool('系列タグの本文に ** を残さない', !str_contains($seriesBody, '**'));
     check_bool('ビルド元の本文に ** を残さない', !str_contains($baseBody, '**'));
+    // 1 行に詰めると digest が折り返されて、どちらが今か読めない(2026-10-12、利用者の指摘)
+    check_bool(
+        'いま使っているものと新しく出たものを別の行に書く',
+        str_contains($baseBody, "いま使っているもの:\n        sha256:c")
+            && str_contains($baseBody, "新しく出たもの:\n        sha256:d")
+    );
+    check_bool('ビルド元は Dockerfile の digest を書き換えると書く', str_contains($baseBody, 'Dockerfile(docker/php・docker/soketi)の digest'));
+    check_bool('件数を先に書く', str_contains($baseBody, '更新が 1 件あります。'));
 }
 
 // ========================================================================= self

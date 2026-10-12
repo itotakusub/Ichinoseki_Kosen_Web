@@ -291,6 +291,8 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
 - **ビルド元の更新(2026-10-12、利用者の指示)**: 知らせ「ビルド元が更新されています」に合わせ、`docker/php/Dockerfile` の `php:8.4-apache` と
   `docker/soketi/Dockerfile` の `node:24-trixie-slim` の digest を書き換えた(どちらも 10-06 作成。PHP 8.4.26・Node 24.21.0 のまま土台の Debian だけ新しい)。
   composer:2・aloware/soketi は変化なし。**まだ**: 本番で配備 → `docker compose build --pull web soketi` → `up -d`(利用者)
+- **更新の知らせのメールを読みやすく(2026-10-12、利用者の指示)**: 1 件 1 行(「いま: … → 登録されている中身: …」)をやめ、
+  件数・番号・何が起きたかの一言・「いま使っているもの」「新しく出たもの」を別の行に。当て方も digest の書き換えから書く(`lib/update-notice.php`)
 
 ### 診断(2026-10-05)の反映(2026-10-06、利用者の指示)
 

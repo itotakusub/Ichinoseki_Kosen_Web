@@ -155,46 +155,61 @@ function km_update_notice_body(
         return implode("\n", $lines) . "\n";
     }
 
-    // 種類ごとの呼び名。**打つ手が違うので、読み手が一目で分けられるようにする**
+    /*
+     * 1 件を数行に分けて書く(2026-10-12、利用者「いま・中身が分かりにくい」)。
+     * 以前は「- 名前 (種類)  いま: sha256:…  →  登録されている中身: sha256:…」の 1 行で、
+     * digest が長く折り返されて、どちらが今でどちらが新しいのか読み取れなかった。
+     * 種類ごとに「何が起きたか」を一言添え、今と新しいものは別の行に、値はさらに次の行に置く。
+     */
     $labels = [
-        'release' => ['新しい版', '公開されている版'],
-        'digest' => ['タグの中身が変わった', '登録されている中身'],
-        'series' => ['修正版', '登録されている中身'],
-        'base' => ['ビルド元の修正版', '登録されている中身'],
+        'release' => ['新しい版が出ました', 'いま使っている版', '新しく出た版'],
+        'digest' => ['同じタグの中身が入れ替わりました(気づかないうちに上がりうるものです)', 'いま使っているもの', 'タグの今の中身'],
+        'series' => ['修正版が出ました(同じ系列のタグの中身が新しくなりました)', 'いま使っているもの', '新しく出たもの'],
+        'base' => ['自前でビルドする像の土台(ビルド元)が新しくなりました', 'いま使っているもの', '新しく出たもの'],
     ];
     $shown = array_slice($items, 0, KM_UPDATE_NOTICE_MAX_ITEMS);
-    foreach ($shown as $item) {
-        [$label, $availableLabel] = $labels[$item['kind']] ?? ['更新', '公開されているもの'];
-        $lines[] = sprintf(
-            '- %s (%s)  いま: %s  →  %s: %s',
-            $item['name'],
-            $label,
-            $item['current'] !== '' ? $item['current'] : '不明',
-            $availableLabel,
-            $item['available'] !== '' ? $item['available'] : '不明'
-        );
+    $lines[] = '更新が ' . count($items) . ' 件あります。';
+    foreach ($shown as $index => $item) {
+        [$what, $currentLabel, $availableLabel] = $labels[$item['kind']] ?? ['更新があります', 'いま使っているもの', '新しく出たもの'];
+        $lines[] = '';
+        $lines[] = sprintf('[%d] %s', $index + 1, $item['name']);
+        $lines[] = '    ' . $what;
+        $lines[] = '    ' . $currentLabel . ':';
+        $lines[] = '        ' . ($item['current'] !== '' ? $item['current'] : '不明');
+        $lines[] = '    ' . $availableLabel . ':';
+        $lines[] = '        ' . ($item['available'] !== '' ? $item['available'] : '不明');
     }
     if (count($items) > count($shown)) {
-        $lines[] = sprintf('- ほか %d 件', count($items) - count($shown));
+        $lines[] = '';
+        $lines[] = sprintf('ほか %d 件(多いので省きました)', count($items) - count($shown));
     }
 
     /*
      * 当て方は**種類で変わる。** 系列タグや版番号は pull で当たるが、
-     * ビルド元は build --pull し直さない限り、いつまでも古いまま動き続ける。
+     * ビルド元は Dockerfile の digest を書き換えて build し直さない限り、いつまでも古いまま動き続ける。
+     * 2026-09-15 から全部 digest で固定しているので、「新しく出たもの」を書き換えるのが先。
      */
     $kinds = array_values(array_unique(array_column($items, 'kind')));
     $lines[] = '';
     $lines[] = '--- 当てるときは ---';
-    $lines[] = '1. 先にバックアップを取る (.\deploy-to-host.ps1 -BackupOnly)';
+    $lines[] = '';
+    $lines[] = '1. 先にバックアップを取る';
+    $lines[] = '       .\deploy-to-host.ps1 -BackupOnly';
     $step = 2;
     if (array_intersect($kinds, ['release', 'digest', 'series']) !== []) {
-        $lines[] = $step . '. compose.yaml の image: を書き換える(版番号、または check-updates.sh --pins が出す digest)';
+        $lines[] = $step . '. compose.yaml の image: を書き換えて配備する';
+        $lines[] = '       (版番号、または上の「新しく出たもの」の digest)';
         $step++;
-        $lines[] = $step . '. docker compose pull && docker compose up -d';
+        $lines[] = $step . '. ホストで入れ替える';
+        $lines[] = '       docker compose pull && docker compose up -d';
         $step++;
     }
     if (in_array('base', $kinds, true)) {
-        $lines[] = $step . '. ビルド元はビルドし直さないと当たらない: docker compose build --pull web soketi && docker compose up -d';
+        $lines[] = $step . '. ビルド元は Dockerfile(docker/php・docker/soketi)の digest を書き換えて配備する';
+        $lines[] = '       (上の「新しく出たもの」。pull だけでは当たりません)';
+        $step++;
+        $lines[] = $step . '. ホストでビルドし直して入れ替える';
+        $lines[] = '       docker compose build --pull web soketi && docker compose up -d';
         $step++;
     }
     $lines[] = $step . '. 最後に、実際にログインできることを1回確かめる';
