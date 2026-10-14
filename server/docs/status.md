@@ -297,6 +297,11 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
   nginx(3001)が Logto の HTML に `nginx/km/logto-otp-autocomplete.js` を差し込み、1 つ目の枠に `one-time-code` を付ける。[04](04-host-jobs-and-mail.ipynb) §6。
   10-12 に本番へ反映(利用者)。Logto の HTML に 1 回だけ差し込まれ、スクリプトは 200・`application/javascript` で読まれ、CSP の違反なし(ブラウザで実測)。
   Pixel(Chrome・Gmail)では候補が出なかった(10-12、利用者)。SignIn のメールの形を変えても Gmail はコードを拾わなかった。
+- **イベントモード: 管理アプリで作って Website で出す(2026-10-14、利用者の指示)**: 今回の会期はアプリを配らない。[07](07-map-qr.ipynb) §5。
+  アプリ(v7 = 1000007)の `MapEvent` に名前の上書き・出さないノードを足し、ノードの編集画面に「イベント『…』では」の欄と部屋の URL。
+  Website は管理画面「イベントモード」で書き出しを取り込む(新しいイベントは無効のまま・中身は丸ごと入れ替え・表 `km_map_event_hidden` / `km_map_event_sources`)。
+  公開ページは名前を置き換え・出さない地点を描かず候補にも出さない・案内の帯の既定は「イベントモード中…」・`/?room=<id>` でその部屋を開く(手元の試しで画面を確かめた)。
+  **まだ**: 本番へ配備・管理アプリを Pixel に入れて実物のイベントで取り込み(利用者)。管理画面の取り込みの画面は手元では開けていない(Logto の門番があるため)
 - **メールのテンプレートを 9 種類そろえ、verify.php を片付け(2026-10-12、利用者の指示)**: 正本 `docs/logto-email-templates.json`(コードは本文に 1 回・単独の行・件名に `(Verification Code)`・URL なし)。
   `src/verify.php` は `Old/src/` へ退避し、nginx の location も外した。web の healthcheck は `src/healthz.php`(DB なし・外には nginx が 404)。
   **まだ**: Console へ 9 種類を貼る(利用者)→ 配備 `-Action up`(healthcheck が変わるので web の作り直しが要る)。iPhone・Mac の Safari での実測(Safari と Apple の「メール」/ Pixel の Chrome と Gmail)・SignIn のメールの形の試し(Console は利用者)

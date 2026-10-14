@@ -110,6 +110,59 @@ function km_map_events_ensure_tables(PDO $pdo): void
             UNIQUE KEY (event_id, node_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         SQL);
+
+    /*
+     * イベント中に出さない地点(2026-10-14。管理アプリで作ったイベントの取り込み)。
+     * 通行止めとは別 —— **出さないだけで、経路は通ってよい**(通さないのは通行止め)。
+     */
+    $pdo->exec(<<<'SQL'
+        CREATE TABLE IF NOT EXISTS km_map_event_hidden (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            event_id INT NOT NULL,
+            node_id VARCHAR(32) NOT NULL,
+            UNIQUE KEY (event_id, node_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        SQL);
+
+    /*
+     * 管理アプリから取り込んだイベントの印(2026-10-14。lib/map-event-import.php)。
+     * **km_map_events に列を足さず、別表にする** —— アプリの DB 利用者には ALTER が無い
+     * (lib/map-data.php の km_map_floor_bounds と同じ判断)。
+     * 行があるイベントは中身(通行止め・臨時の地点・名前・非表示)をアプリが持つので、
+     * Website の地図編集では変えさせない(次の取り込みで消えるため)。
+     */
+    $pdo->exec(<<<'SQL'
+        CREATE TABLE IF NOT EXISTS km_map_event_sources (
+            event_id INT NOT NULL PRIMARY KEY,
+            app_uuid VARCHAR(64) NOT NULL,
+            imported_at DATETIME NOT NULL,
+            UNIQUE KEY (app_uuid)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        SQL);
+}
+
+/** 重ね合わせの子の表。イベントを消すとき・取り込み直すときに、ここに並べたものを消す。 */
+const KM_MAP_EVENT_CHILD_TABLES = [
+    'km_map_event_closures',
+    'km_map_event_pois',
+    'km_map_event_aliases',
+    'km_map_event_hidden',
+];
+
+/**
+ * 管理アプリから取り込んだイベントなら、Website の地図編集では変えさせない。
+ * 中身はアプリが正本で、次の取り込みで丸ごと入れ替わる —— ここで直しても黙って消える。
+ */
+function km_map_event_assert_editable(PDO $pdo, int $eventId): void
+{
+    km_map_events_ensure_tables($pdo);
+    $stmt = $pdo->prepare('SELECT 1 FROM km_map_event_sources WHERE event_id = ?');
+    $stmt->execute([$eventId]);
+    if ($stmt->fetchColumn() !== false) {
+        throw new InvalidArgumentException(
+            'このイベントは管理アプリから取り込んだものです。アプリで直してから、もう一度取り込んでください。'
+        );
+    }
 }
 
 /**
@@ -163,7 +216,8 @@ function km_map_event_active(PDO $pdo): array
  *   closedEdges: array<string, string>,   // "from\tto" => 理由
  *   closedNodes: array<string, string>,   // nodeId => 理由
  *   pois: array<int, array>,
- *   aliases: array<string, string>        // nodeId => 別名
+ *   aliases: array<string, string>,       // nodeId => 別名
+ *   hiddenNodes: array<string, bool>      // nodeId => true(イベント中は出さない)
  * }
  */
 function km_map_event_overlay(PDO $pdo, ?int $previewEventId = null): array
@@ -175,6 +229,7 @@ function km_map_event_overlay(PDO $pdo, ?int $previewEventId = null): array
         'closedNodes' => [],
         'pois' => [],
         'aliases' => [],
+        'hiddenNodes' => [],
     ];
 
     try {
@@ -256,6 +311,22 @@ function km_map_event_overlay(PDO $pdo, ?int $previewEventId = null): array
             $overlay['aliases'][(string) $row['nodeId']] = (string) $row['alias'];
         }
 
+        /*
+         * --- 出さない地点(2026-10-14) ---
+         *
+         * **ここだけは失敗しても続ける。** 表は管理画面を開いたときに作られるので、
+         * 配備してから管理画面を開くまでの間は無い。そのせいで通行止めまで消えては困る。
+         */
+        try {
+            $stmt = $pdo->prepare("SELECT node_id AS nodeId FROM km_map_event_hidden WHERE event_id IN ($in)");
+            $stmt->execute($ids);
+            foreach ($stmt->fetchAll() as $row) {
+                $overlay['hiddenNodes'][(string) $row['nodeId']] = true;
+            }
+        } catch (Throwable $exception) {
+            error_log('km_map_event_overlay: km_map_event_hidden is not readable yet: ' . $exception->getMessage());
+        }
+
         return $overlay;
     } catch (Throwable $exception) {
         /*
@@ -293,13 +364,16 @@ function km_map_events_all(PDO $pdo): array
                 (e.is_enabled = 1 AND e.ends_at IS NOT NULL AND e.ends_at <= NOW()) AS isExpired,
                 (SELECT COUNT(*) FROM km_map_event_closures c WHERE c.event_id = e.id) AS closureCount,
                 (SELECT COUNT(*) FROM km_map_event_pois p WHERE p.event_id = e.id) AS poiCount,
-                (SELECT COUNT(*) FROM km_map_event_aliases a WHERE a.event_id = e.id) AS aliasCount
+                (SELECT COUNT(*) FROM km_map_event_aliases a WHERE a.event_id = e.id) AS aliasCount,
+                (SELECT COUNT(*) FROM km_map_event_hidden h WHERE h.event_id = e.id) AS hiddenCount,
+                s.app_uuid AS appUuid, s.imported_at AS importedAt
          FROM km_map_events e
+         LEFT JOIN km_map_event_sources s ON s.event_id = e.id
          ORDER BY e.is_enabled DESC, e.id DESC'
     )->fetchAll();
 
     foreach ($rows as &$row) {
-        foreach (['id', 'closureCount', 'poiCount', 'aliasCount'] as $intKey) {
+        foreach (['id', 'closureCount', 'poiCount', 'aliasCount', 'hiddenCount'] as $intKey) {
             $row[$intKey] = (int) $row[$intKey];
         }
         foreach (['isEnabled', 'hideOccupantNames', 'isActive', 'isExpired'] as $boolKey) {
@@ -426,7 +500,7 @@ function km_map_event_delete(PDO $pdo, int $id): void
 
     $pdo->beginTransaction();
     try {
-        foreach (['km_map_event_closures', 'km_map_event_pois', 'km_map_event_aliases'] as $table) {
+        foreach ([...KM_MAP_EVENT_CHILD_TABLES, 'km_map_event_sources'] as $table) {
             $pdo->prepare("DELETE FROM {$table} WHERE event_id = ?")->execute([$id]);
         }
         $pdo->prepare('DELETE FROM km_map_events WHERE id = ?')->execute([$id]);

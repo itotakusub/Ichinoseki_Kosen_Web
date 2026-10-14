@@ -149,6 +149,7 @@ try {
          */
         case 'event.closure.toggle': {
             $eventId = $int('eventId');
+            km_map_event_assert_editable($pdo, $eventId);
             $reason = $str('reason');
             if ($str('target') === 'node') {
                 $nodeId = $str('node');
@@ -166,6 +167,7 @@ try {
         case 'event.poi.create':
         case 'event.poi.update': {
             $eventId = $int('eventId');
+            km_map_event_assert_editable($pdo, $eventId);
             $poiId = $action === 'event.poi.update' ? $int('poiId') : null;
             $saved = km_map_event_poi_save($pdo, $eventId, $poiId, [
                 'floor' => $str('floor'),
@@ -182,6 +184,7 @@ try {
 
         case 'event.poi.delete': {
             $eventId = $int('eventId');
+            km_map_event_assert_editable($pdo, $eventId);
             $poiId = $int('poiId');
             km_map_event_poi_delete($pdo, $eventId, $poiId);
             km_admin_log_record('content', 'map.event_poi', "削除 #{$poiId}");
@@ -190,6 +193,7 @@ try {
 
         case 'event.alias.set': {
             $eventId = $int('eventId');
+            km_map_event_assert_editable($pdo, $eventId);
             $nodeId = $str('node');
             $alias = $str('alias');
             km_map_event_alias_set($pdo, $eventId, $nodeId, $alias);

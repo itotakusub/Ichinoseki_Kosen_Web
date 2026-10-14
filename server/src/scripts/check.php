@@ -4744,6 +4744,59 @@ function km_check_hardening(): void
         && str_contains($healthz, "!== '127.0.0.1'") && !preg_match('/km_db|require/', $healthz)
         && str_contains($file('nginx/default.conf.template'), "location = /healthz.php {\n        return 404;\n    }")
         && !str_contains($file('nginx/default.conf.template'), 'location = /verify.php'));
+
+    /*
+     * ## イベントモード: 管理アプリのイベントの取り込み(2026-10-14。lib/map-event-import.php)
+     * アプリの MapEvent → Website の重ね合わせ。変換は DB を使わない関数なので、ここで試す。
+     */
+    require_once __DIR__ . '/../lib/map-event-import.php';
+    $uuidOf = static fn (string $c): string => str_repeat($c, 8) . '-' . str_repeat($c, 4) . '-' . str_repeat($c, 4) . '-' . str_repeat($c, 4) . '-' . str_repeat($c, 12);
+    $known = [
+        str_repeat('a', 32) => ['floor' => '1', 'type' => 'road', 'x' => 100.0, 'y' => 1100.0],
+        str_repeat('b', 32) => ['floor' => '1', 'type' => 'room', 'x' => 500.0, 'y' => 500.0],
+        str_repeat('c', 32) => ['floor' => '2', 'type' => 'road', 'x' => 10.0, 'y' => 10.0],
+        str_repeat('d', 32) => ['floor' => '1', 'type' => 'wall', 'x' => 101.0, 'y' => 1101.0],
+    ];
+    $appEvent = json_decode((string) json_encode([
+        'uuid' => 'ev-1', 'name' => '高専祭', 'startAtMillis' => 1792540800000, 'endAtMillis' => null,
+        'closedLineKeys' => ['1F:' . $uuidOf('b') . ':' . $uuidOf('a'), '1F:' . $uuidOf('a') . ':' . $uuidOf('e'), 'broken'],
+        'closedNodeUuids' => [$uuidOf('b')],
+        'closedFloors' => ['2F'],
+        'places' => [
+            ['uuid' => 'p1', 'name' => 'たこ焼き', 'floor' => '1F', 'x' => 102.0, 'y' => 98.0, 'category' => '模擬店', 'note' => '', 'staffOnly' => false],
+            ['uuid' => 'p2', 'name' => '本部', 'floor' => '1F', 'x' => 1.0, 'y' => 1.0, 'category' => '', 'note' => '', 'staffOnly' => true],
+            ['uuid' => 'p3', 'name' => 'くじ引き', 'floor' => '1F', 'x' => 1.0, 'y' => 1.0, 'category' => 'くじ', 'note' => '2回まで', 'staffOnly' => false],
+        ],
+        'nameOverrides' => [$uuidOf('b') => 'お化け屋敷', $uuidOf('e') => '無い部屋'],
+        'hiddenNodeUuids' => [$uuidOf('a')],
+    ]));
+    $fromApp = km_map_event_from_app($appEvent, $known);
+    check_bool('取り込み: 線の通行止めは DB の id の組・向きを揃える・無い地点と読めないキーは数える', $fromApp['closedEdges'] === [[str_repeat('a', 32), str_repeat('b', 32)]]
+        && $fromApp['skipped']['badLineKey'] === 1);
+    check_bool('取り込み: 地点の通行止め + 階の通行止めはその階の地点を全部閉じる', $fromApp['closedNodes'] === [str_repeat('b', 32), str_repeat('c', 32)]);
+    check_bool('取り込み: 名前の上書きと出さない地点(Website に無い地点は飛ばして数える)', $fromApp['aliases'] === [str_repeat('b', 32) => 'お化け屋敷']
+        && $fromApp['hidden'] === [str_repeat('a', 32)] && $fromApp['skipped']['unknownNode'] === 2);
+    $firstPoi = $fromApp['pois'][0] ?? [];
+    check_bool('取り込み: 一時地点は種別を言葉で寄せ・Y を反転・同じ階の一番近い通れる地点に繋ぐ(壁には繋がない)', count($fromApp['pois']) === 2
+        && ($firstPoi['category'] ?? '') === 'food' && ($firstPoi['y'] ?? 0) === 1102 && ($firstPoi['anchorNodeId'] ?? '') === str_repeat('a', 32)
+        && ($fromApp['pois'][1]['category'] ?? '') === 'other' && ($fromApp['pois'][1]['note'] ?? '') === 'くじ 2回まで');
+    check_bool('取り込み: スタッフ限定の一時地点は入れない・期間はミリ秒から', $fromApp['skipped']['staffOnly'] === 1
+        && $fromApp['startsAt'] === date('Y-m-d H:i:s', 1792540800) && $fromApp['endsAt'] === null);
+    $eventsLib = $file('src/lib/map-events.php');
+    check_bool('取り込み: 新しいイベントは無効のまま・印は別表(ALTER を使わない)・中身は丸ごと入れ替える', str_contains($file('src/lib/map-event-import.php'), 'VALUES (?, ?, ?, 0, 1, NULL, NULL, NOW(), NOW())')
+        && str_contains($eventsLib, 'CREATE TABLE IF NOT EXISTS km_map_event_sources') && !preg_match('/ALTER\s+TABLE/i', $eventsLib)
+        && str_contains($file('src/lib/map-event-import.php'), 'foreach (KM_MAP_EVENT_CHILD_TABLES as $table) {'));
+    check_bool('アプリから取り込んだイベントは Website の地図編集で変えさせない(4 つの操作すべて)', substr_count($file('src/admin/api/map-edit.php'), 'km_map_event_assert_editable($pdo, $eventId);') === 4);
+    check_bool('出さない地点の表が無くても重ね合わせ(通行止め)は続ける', (bool) preg_match('/try \{\s*\$stmt = \$pdo->prepare\("SELECT node_id AS nodeId FROM km_map_event_hidden/', $eventsLib));
+    $indexPage = $file('src/index.php');
+    $appJs = $file('src/Main/app.js');
+    check_bool('公開ページ: 案内の文が無ければ「イベントモード中…」・?room= は字の形だけ確かめて DB には渡さない', str_contains($indexPage, "'イベントモード中…('")
+        && str_contains($indexPage, "preg_match('/^[0-9A-Fa-f-]{32,36}\$/', \$roomParam) === 1")
+        && str_contains($indexPage, '<meta name="km-focus-room" content="<?= km_home_e($kmFocusRoom) ?>">')
+        && !preg_match('/km_db\(\)[^;]*\$room/', $indexPage));
+    check_bool('公開ページ: 名前は置き換え・出さない地点は描かず候補にも出さない・QR の部屋を開く', str_contains($appJs, "if (node.alias) {\n            return node.alias;\n        }")
+        && str_contains($appJs, 'if (node.hidden && !window.isAdmin) continue;') && str_contains($appJs, "        if (node.hidden) return false;")
+        && str_contains($appJs, 'window.setTimeout(focusRoomFromUrl, 0);'));
     // 診断 W-54(2026-10-05): 見取り図の口も、錠を見る前に仮アカウントを表から確かめ直す(セッションを閉じる前に)
     $floorImage = $file('src/api/floor-image.php');
     check_bool('W-54: 見取り図の口は錠を見る前に km_map_guest_verify() を呼ぶ', strpos($floorImage, 'km_map_guest_verify();') !== false

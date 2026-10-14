@@ -145,8 +145,22 @@ try {
  * ここも fail open。読めなければ埋め込まないだけで、app.js が従来どおり
  * /api/map-data.php へ取りに行く(admin/map-editor.php と同じ経路)。
  */
+/*
+ * QR から開いたときの部屋(2026-10-14、利用者の指示「URL にオプションを付ける」)。
+ * `/?room=<地点の id>`(アプリの uuid。ハイフンは有っても無くてもよい)。
+ * **字の形だけ確かめて <meta> で渡す。DB は引かない** —— 探すのは Main/app.js が、届いた地図の中から行う
+ * (錠やイベントで出さない地点は、そもそも地図に無いか hidden の印が付いている)。
+ * 地図データの同梱とは別にしてあるのは、同梱できずに API へ取りに行ったときも効かせるため。
+ */
+$kmFocusRoom = null;
+$roomParam = $_GET['room'] ?? '';
+if (is_string($roomParam) && preg_match('/^[0-9A-Fa-f-]{32,36}$/', $roomParam) === 1) {
+    $roomId = str_replace('-', '', $roomParam);
+    $kmFocusRoom = strlen($roomId) === 32 ? $roomId : null;
+}
+
 $inlineMapData = null;
-$kmEvent = null;              // イベントモードの案内(バナー)。無ければ null
+$kmEvent = null;             // イベントモードの案内(バナー)。無ければ null
 $kmFirstFloorImage = null;    // 最初に映す階の見取り図。<head> で preload する
 try {
     require_once __DIR__ . '/lib/map-data.php';
@@ -188,6 +202,10 @@ try {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <?php if ($kmFocusRoom !== null): ?>
+        <?php /* QR の部屋(上の $kmFocusRoom。32 字の 16 進だけ)。Main/app.js の focusRoomFromUrl が読む */ ?>
+        <meta name="km-focus-room" content="<?= km_home_e($kmFocusRoom) ?>">
+    <?php endif; ?>
     <title>高専マップ案内</title>
 
     <?php // 絶対パス。/favicon.svg は src/ 直下に置いてある。**条件の外に置くこと** ?>
@@ -346,7 +364,13 @@ try {
         <div class="km-event-banner" role="status">
             <span class="km-event-banner-icon" aria-hidden="true">🎪</span>
             <span class="km-event-banner-text">
-                <?= km_home_e($kmEvent['bannerText'] ?? (implode(' / ', $kmEvent['names']) . ' 開催中')) ?>
+                <?php
+                /*
+                 * 案内の文が無ければ「イベントモード中…(イベント名)」(2026-10-14、利用者の指示)。
+                 * 部屋の名前が置き換わり、出ない地点や通行止めがあることを、開いた時点で伝える。
+                 */
+                ?>
+                <?= km_home_e($kmEvent['bannerText'] ?? ('イベントモード中…(' . implode(' / ', $kmEvent['names']) . ')')) ?>
             </span>
             <?php if (!empty($kmEvent['bannerUrl'])): ?>
                 <?php /* リンク先は lib/map-events.php がサイト内の絶対パスだけに検証済み */ ?>

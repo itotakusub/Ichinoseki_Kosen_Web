@@ -2142,6 +2142,23 @@ body.km-map-unavailable .km-route-bar {
     line-height: 1;
 }
 
+/* QR(/?room=…)の部屋が案内できないときの短い知らせ(2026-10-14。Main/app.js の showRoomNotice) */
+.km-room-notice {
+    position: fixed;
+    left: 50%;
+    bottom: 24px;
+    transform: translateX(-50%);
+    z-index: 1500; /* 地図(1)と UI(1000)より上、読み込み画面(2000)より下 */
+    max-width: calc(100vw - 32px);
+    padding: 10px 16px;
+    border-radius: 12px;
+    background: rgba(17, 24, 39, 0.92);
+    color: #fff;
+    font-weight: 600;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+    pointer-events: none;
+}
+
 .km-event-banner-text {
     flex: 1 1 auto;
     /* 長い文言でも1行に潰さない。来場者はここしか読まないことがある */

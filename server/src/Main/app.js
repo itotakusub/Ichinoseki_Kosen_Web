@@ -634,6 +634,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     function buildFloorIndex() {
         nodesByFloor.clear();
         for (const [id, node] of Object.entries(graphData.nodes)) {
+            /*
+             * イベント中に出さない地点(2026-10-14。lib/map-events.php の km_map_event_hidden)。
+             * **印も名前も描かない。** 経路の計算(graphData.nodes をそのまま使う)からは外さない ——
+             * 通さないのは通行止めで、出さないのとは別。編集画面では掴めるように出す。
+             */
+            if (node.hidden && !window.isAdmin) continue;
             const floor = String(node.floor);
             if (!nodesByFloor.has(floor)) nodesByFloor.set(floor, []);
             nodesByFloor.get(floor).push([id, node]);
@@ -870,6 +876,8 @@ document.addEventListener('DOMContentLoaded', async () => {
      */
     function isRoutableNode(node) {
         if (!node) return false;
+        // イベント中に出さない地点は、行き先の候補にも出さない(2026-10-14)
+        if (node.hidden) return false;
         // 通路の点・壁・Wi-Fi ルーターは、そもそも人が行く場所ではない
         if (node.type === 'road' || node.type === 'wall' || node.type === 'wifi_router') return false;
         if (!String(node.name || '').trim()) return false;
@@ -952,9 +960,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     function nodeDetailHtml(id, node, type) {
         const floorLabel = String(node.floor) === 'outside' ? '外' : `${node.floor}F`;
         const typeLabel = mapStyle.LABELS[type] || type;
-        const title = node.alias ? `${node.alias}(${node.name})` : node.name;
+        // イベント中の名前は**置き換える**(2026-10-14、利用者の判断)。普段の名前は下に小さく残す
+        const title = node.alias || node.name;
 
         let rows = '';
+        if (node.alias) {
+            rows += `<div class="km-detail-row"><span>普段の名前</span><b>${escapeHtml(node.name)}</b></div>`;
+        }
         if (node.subtitle) {
             rows += `<div class="km-detail-row"><span>部屋番号</span><b>${escapeHtml(node.subtitle)}</b></div>`;
         }
@@ -1413,6 +1425,69 @@ document.addEventListener('DOMContentLoaded', async () => {
      */
     const LOADING_TIMEOUT_MS = 15000;
 
+    /*
+     * ======== QR から開いた部屋 ========(2026-10-14、利用者の指示「URL にオプションを付ける」)
+     *
+     * `/?room=<地点の id>` で開かれたら、その部屋の階へ移って寄せ、詳細を開く。
+     * id は index.php が字の形だけ確かめて `<meta name="km-focus-room">` に入れる(DB は引かない)。
+     * **イベントの外でも効く**(普段の掲示にも使える)。
+     *
+     * 詳細は印のポップアップではなく、その場で開く —— 拡大の度合いによっては部屋の印が
+     * まだ出ていない(種類ごとの出し入れ)。印が無くても詳細は出したい。
+     */
+    let focusRoomDone = false;
+    function focusRoomFromUrl() {
+        if (focusRoomDone) return;
+        focusRoomDone = true;
+        const meta = document.querySelector('meta[name="km-focus-room"]');
+        const id = meta ? meta.getAttribute('content') : '';
+        if (!id) return;
+        const node = graphData.nodes[id];
+        if (!node || node.hidden) {
+            // 出さない地点・地図から消えた部屋。**黙らない** —— QR を読んだのに何も起きないと壊れて見える
+            showRoomNotice('この部屋は今は案内していません。地図から探してください。');
+            return;
+        }
+        const floor = String(node.floor);
+        const open = () => {
+            userMovedMap = true;   // このあと収め直して位置を戻さない
+            /*
+             * 部屋を**見えている範囲の下寄り**に置く。詳細の吹き出しは部屋の上へ伸びるので、
+             * 真ん中に置くとトップバーの裏に潜る(手元で実測)。見えている範囲は、
+             * トップバー・検索パネル・階の並びを除いたところ(mapFitPadding)。
+             */
+            const zoom = Math.max(window.map.getZoom(), 1);
+            const padding = mapFitPadding();
+            const size = window.map.getSize();
+            const visibleX = (padding.paddingTopLeft.x + size.x - padding.paddingBottomRight.x) / 2;
+            const visibleY = padding.paddingTopLeft.y
+                + (size.y - padding.paddingTopLeft.y - padding.paddingBottomRight.y) * 0.75;
+            const center = window.map.project([node.y, node.x], zoom)
+                .add([size.x / 2 - visibleX, size.y / 2 - visibleY]);
+            window.map.setView(window.map.unproject(center, zoom), zoom, { animate: false });
+            L.popup({ autoPan: false })
+                .setLatLng([node.y, node.x])
+                .setContent(nodeDetailHtml(id, node, String(node.type || 'room')))
+                .openOn(window.map);
+        };
+        if (floor !== String(window.currentFloor) && floorImages[floor]) {
+            // 階の図は非同期に載る。**載ってから寄せる**(kmEnterBuilding と同じ)
+            window.map.once('moveend', open);
+            changeFloor(floor);
+        } else {
+            open();
+        }
+    }
+
+    function showRoomNotice(text) {
+        const notice = document.createElement('div');
+        notice.className = 'km-room-notice';
+        notice.setAttribute('role', 'status');
+        notice.textContent = text;
+        document.body.append(notice);
+        window.setTimeout(() => notice.remove(), 6000);
+    }
+
     (async () => {
         const imagesDone = preloadAllFloorImages(
             window.currentFloor,
@@ -1421,6 +1496,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 // 今いる階が読めた。地図へ載せて、ここで見せてしまう
                 loadFloorImageDynamic(window.currentFloor);
                 kmLoading.finish();
+                window.setTimeout(focusRoomFromUrl, 0);
             }
         );
 
@@ -1438,6 +1514,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 console.warn(`地図の準備が ${LOADING_TIMEOUT_MS}ms 以内に終わりませんでした。揃っているぶんで開始します。`);
                 loadFloorImageDynamic(window.currentFloor);
                 kmLoading.finish();
+                window.setTimeout(focusRoomFromUrl, 0);
             }
         }, LOADING_TIMEOUT_MS);
 
@@ -1864,9 +1941,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             for (const [id, node] of Object.entries(graphData.nodes)) {
                 // 人が行ける場所だけ。通路の点・壁・Wi-Fi ルーターは候補にしない
                 if (node.type === 'road' || node.type === 'wall' || node.type === 'wifi_router') continue;
+                // イベント中に出さない地点も出さない(2026-10-14)
+                if (node.hidden) continue;
                 const pattern = patterns[type];
-                if (node.type === type || (pattern && pattern.test(node.name))) {
-                    results.push({ id, name: node.name, floor: node.floor, x: node.x, y: node.y });
+                const shownName = node.alias || node.name;
+                if (node.type === type || (pattern && (pattern.test(node.name) || pattern.test(shownName)))) {
+                    results.push({ id, name: shownName, floor: node.floor, x: node.x, y: node.y });
                 }
             }
 
@@ -1911,21 +1991,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 分離したため、表示側で元の見た目に組み立て直す。
     function displayNameFor(node) {
         /*
-         * イベント中の臨時名称。**元の名前も残して併記する。**
-         * 「ステージ会場」だけにすると、普段この建物を知っている人が
-         * どこのことか分からなくなる(来場者と在校生の両方が同じ地図を見る)。
+         * イベント中の臨時名称。**置き換える**(2026-10-14、利用者の判断)。
+         * 以前は「ステージ会場(第1体育館)」と併記していたが、イベントの名前(模擬店・展示)が
+         * 主役になる会期では長くて読めない。普段の名前は地点の詳細に残す(nodeDetailHtml)。
          */
         if (node.alias) {
-            return `${node.alias}(${node.name})`;
+            return node.alias;
         }
         return node.occupantName ? `${node.name} ${node.occupantName}` : node.name;
     }
 
     function getLabelForNode(id, node) {
         const floorLabel = String(node.floor) === "outside" ? "外" : `${node.floor}F`;
-        // 臨時名称があるときは**両方の名前で引ける**ようにする。
-        // 来場者は「ステージ会場」で、在校生は「第1体育館」で探す
-        const name = node.alias ? `${node.alias}(${node.name})` : node.name;
+        // 臨時名称があるときは、その名前で引く(2026-10-14 から置き換え。displayNameFor と同じ)
+        const name = node.alias || node.name;
         return `[${floorLabel}] ${name}`;
     }
 
@@ -2409,7 +2488,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                      */
                     const marker = L.circleMarker([node.y, node.x], {
                         radius: 6, color: '#e11d48', fillColor: '#f43f5e', fillOpacity: 1
-                    }).bindTooltip(escapeHtml(node.name)).addTo(window.map);
+                    }).bindTooltip(escapeHtml(node.alias || node.name)).addTo(window.map);
                     currentMarkers.push(marker);
                     pathBoundsGroup.addLayer(marker);
                 }

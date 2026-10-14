@@ -222,6 +222,13 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
         if (isset($overlay['aliases'][$id])) {
             $node['alias'] = $overlay['aliases'][$id];
         }
+        /*
+         * イベント中に出さない地点(2026-10-14)。**一覧からは消さず、印だけ付ける** ——
+         * 経路は通ってよいので、グラフから抜くと案内が切れる。出し入れは Main/app.js が決める。
+         */
+        if (isset($overlay['hiddenNodes'][$id])) {
+            $node['hidden'] = true;
+        }
         $nodesById[$id] = $node;
     }
 

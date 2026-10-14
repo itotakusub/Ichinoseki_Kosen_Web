@@ -57,6 +57,8 @@ const node = (over) => Object.assign({ type: 'room', floor: '1', name: '第二�
 
 heading('routable: 人が行ける場所だけ');
 check('部屋は選べる', true, isRoutableNode(node()));
+// イベント中に出さない地点(2026-10-14。lib/map-events.php の km_map_event_hidden)
+check('イベントで出さない部屋は選べない', false, isRoutableNode(node({ hidden: true })));
 check('階段も選べる', true, isRoutableNode(node({ type: 'stairs', name: '中央階段' })));
 check('出入口も選べる', true, isRoutableNode(node({ type: 'entrance', name: '正面玄関' })));
 check('通路の点は選べない', false, isRoutableNode(node({ type: 'road', name: '' })));
