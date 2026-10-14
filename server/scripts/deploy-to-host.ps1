@@ -497,6 +497,8 @@ $mustContain = @(
     #>
     './src/Main/map-style.js'
     './src/Main/map-tuning.js'
+    # 札の置き方(引き出し線。2026-10-14)。無くても地図は出るが、重なりがほどけない
+    './src/Main/label-layout.js'
     <#
       建物平面図。**アプリの APK 内の画像の写し**で、これが無いと
       屋外図に重ねる見取り図だけが出ない(地図は出るので気づきにくい)。

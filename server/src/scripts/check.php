@@ -2036,11 +2036,12 @@ function km_check_map_vertical(): void
     check_bool('選び直したら経路を引き直す', str_contains($app, 'rebuildDijkstra();'));
 
     km_check_heading('map: ラベルの重なりをほどく');
-    check_bool('ずらしてから隠す', str_contains($app, 'const KM_LABEL_NUDGES = [0, -14, 14, -30, 30];'));
+    // 置き方の計算は Main/label-layout.js(2026-10-14。引き出し線)
+    check_bool('ずらしてから隠す', str_contains($src('Main/label-layout.js'), 'const NUDGES = [0, -14, 14, -30, 30];'));
     check_bool('大事なものから順に置く', str_contains($app, "KM_LABEL_PRIORITY = { facility: 0, entrance: 1, stairs: 2"));
     check_bool('隠すのは文字だけ(点は残す)', str_contains($src('Main/styles.css'), '.km-label.km-label-hidden'));
     check_bool('編集画面では間引かない', str_contains($app, 'if (window.isAdmin) return;'));
-    check_bool('測り直す前に前回の結果を戻す', strpos($app, "el.classList.remove('km-label-hidden');") < strpos($app, 'labels.sort('));
+    check_bool('測り直す前に前回の結果を戻す', ($reset = strpos($app, 'all.forEach(clearLabelLayout);')) !== false && $reset < (int) strpos($app, 'layoutApi.layout(items'));
 
     km_check_heading('map: 施設から中の階へ');
     check_bool('建物の階は接続IDから求める', str_contains($app, 'function facilityFloorLinks(facilityNode)'));
@@ -6881,9 +6882,24 @@ function km_check_layout(): void
     // 覚えられない環境(プライベートウィンドウ)で落ちないこと
     check_bool('保存の失敗で止まらない', substr_count($welcomeJs, 'try {') >= 2);
     check_bool('設定から読み直せる', str_contains($index, 'data-km-welcome-open'));
+    // QR(/?room=)から来た人には出さない(2026-10-14)。出すと開いた部屋の詳細が幕の下に隠れる
+    check_bool('QR から来た人には出さない', str_contains($welcomeJs, 'meta[name="km-focus-room"]') && str_contains($welcomeJs, 'if (!seen() && !fromRoomQr) open();'));
 
-    km_check_heading('layout: ラベルの重なりは屋外だけ(2026-09-25)');
-    check_bool('屋内では間引かない', str_contains($appJs, "if (String(window.currentFloor) !== 'outside') return;"));
+    km_check_heading('layout: ラベルの重なり(屋外は消す・屋内は消さない。2026-09-25 / 引き出し線 2026-10-14)');
+    check_bool('屋内では消さない(屋外だけ hideWhenCrowded)', str_contains($appJs, 'hideWhenCrowded: outdoors') && str_contains($appJs, "const outdoors = String(window.currentFloor) === 'outside';"));
+    $labelLayoutJs = (string) file_get_contents(__DIR__ . '/../Main/label-layout.js');
+    // 頭の preload にも app.js があるので、<script> の並びで比べる
+    $scriptTag = static fn (string $file): string => '<script defer src="<?= km_home_e(km_public_asset(\'Main/' . $file . '\')) ?>"></script>';
+    check_bool('label-layout.js を app.js より先に読む', ($p1 = strpos($index, $scriptTag('label-layout.js'))) !== false && $p1 < (int) strpos($index, $scriptTag('app.js')));
+    $repoRootForLabels = km_check_repo_root();
+    if ($repoRootForLabels !== null) {
+        check_bool('配備の必須ファイルに label-layout.js', str_contains((string) file_get_contents($repoRootForLabels . '/scripts/deploy-to-host.ps1'), "'./src/Main/label-layout.js'"));
+    } else {
+        check_skip('配備の必須ファイルに label-layout.js', '手元の作業ツリーで');
+    }
+    check_bool('線は札の後ろに描く', preg_match('/\.km-label\.km-label-led::after\s*\{[^}]*z-index:\s*-1/s', $css) === 1);
+    // CSP は style 属性を止める。線の位置は CSSOM(setProperty)で入れる
+    check_bool('線の位置は setProperty で入れる', str_contains($appJs, "el.style.setProperty('--km-lead-x'") && !str_contains($appJs, "setAttribute('style'"));
     check_bool('薄い建物名は間引きの数に入れない', str_contains($appJs, "faded && el.classList.contains('km-label-facility')"));
     check_bool('薄い建物名は押せない', preg_match('/#map\.km-facility-faded \.km-label-facility\s*\{[^}]*pointer-events:\s*none/s', $css) === 1);
     // Leaflet はツールチップへ opacity を直接書く
@@ -6902,6 +6918,14 @@ function km_check_layout(): void
             str_contains($kotlin, 'FADED("faded")') && str_contains($kotlin, 'HIDDEN("hidden")') && str_contains($kotlin, 'SHOWN("shown")')
         );
         check_bool('アプリも屋外だけ間引く', str_contains((string) file_get_contents(dirname($renderer) . '/MapScreen.kt'), 'declutterLabels = currentFloor == OUTSIDE_FLOOR'));
+        // 引き出し線の数(ずらし・横の間・線の間)がアプリと同じ
+        $layoutKt = (string) @file_get_contents(dirname($renderer) . '/LabelLayout.kt');
+        check_bool(
+            'アプリと同じ置き方の数',
+            str_contains($kotlin, 'LABEL_NUDGE_STEPS = listOf(0f, -14f, 14f, -30f, 30f)') && str_contains($labelLayoutJs, 'const NUDGES = [0, -14, 14, -30, 30];')
+            && str_contains($layoutKt, 'LABEL_ADJACENT_GAP = 4f') && str_contains($labelLayoutJs, 'const ADJACENT_GAP = 4;')
+            && str_contains($layoutKt, 'LABEL_LEADER_GAPS = listOf(36f, 68f)') && str_contains($labelLayoutJs, 'const LEADER_GAPS = [36, 68];')
+        );
     } else {
         check_skip('アプリと突き合わせ', 'アプリの原本が無い(本番のホストなど)');
     }

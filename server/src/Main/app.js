@@ -1532,14 +1532,14 @@ document.addEventListener('DOMContentLoaded', async () => {
      * **見せ方の側で、ずらして、それでも駄目なら引っ込める。**
      *
      *   1. 大事なものから順に置く(施設 → 出入口 → 階段 → 部屋 → その他)
-     *   2. 重なったら上下に少しずらしてみる(点とピルを繋ぐ線は短いので ±30px まで)
-     *   3. どこへずらしても重なるなら**そのラベルは出さない**(点は出したまま。
-     *      押せば名前が読めるので、情報は失われない)
+     *   2. 重なったら上下にずらす → 点の横・下に付ける → **点から離して線で結ぶ**(2026-10-14)
+     *   3. どこへ置いても重なるなら、屋外は**そのラベルは出さない**(点は出したまま。
+     *      押せば名前が読めるので、情報は失われない)。建物の中は元の位置のまま重ねる
      *
+     * 置き方の計算は `Main/label-layout.js`(アプリと同じ手順)。
      * ズームを上げると点どうしの間が開くので、隠れていたものから順に戻ってくる。
      */
     const KM_LABEL_PRIORITY = { facility: 0, entrance: 1, stairs: 2, room: 3, wifi_router: 4, road: 5, wall: 6 };
-    const KM_LABEL_NUDGES = [0, -14, 14, -30, 30];
     let declutterTimer = null;
 
     function labelPriority(el) {
@@ -1547,10 +1547,24 @@ document.addEventListener('DOMContentLoaded', async () => {
         return KM_LABEL_PRIORITY[type] === undefined ? 9 : KM_LABEL_PRIORITY[type];
     }
 
-    function overlaps(a, b) {
-        // 2px の余白。ちょうど接している程度は「読める」ので隠さない
-        return !(a.right <= b.left + 2 || a.left >= b.right - 2
-            || a.bottom <= b.top + 2 || a.top >= b.bottom - 2);
+    /** 札の要素 → その点のマーカー(点の中心を測って、線の根元にする) */
+    function markersByLabel() {
+        const byLabel = new Map();
+        markersById.forEach(function (marker) {
+            const tip = marker.getTooltip && marker.getTooltip();
+            const el = tip && tip.getElement && tip.getElement();
+            if (el && el.isConnected) byLabel.set(el, marker);
+        });
+        return byLabel;
+    }
+
+    function clearLabelLayout(el) {
+        el.classList.remove('km-label-hidden', 'km-label-led');
+        el.style.marginTop = '';
+        el.style.marginLeft = '';
+        ['--km-lead-x', '--km-lead-y', '--km-lead-len', '--km-lead-ang'].forEach(function (name) {
+            el.style.removeProperty(name);
+        });
     }
 
     function declutterLabels() {
@@ -1563,16 +1577,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (all.length === 0) return;
 
         // 前回の結果を戻してから測る。**戻さずに測ると、ずらした位置を元の位置として扱う**
-        all.forEach(function (el) {
-            el.classList.remove('km-label-hidden');
-            el.style.marginTop = '';
-        });
+        all.forEach(clearLabelLayout);
+        const layoutApi = window.KM_LABEL_LAYOUT;
+        if (!layoutApi) return;
 
         /*
-         * **屋外だけ**(2026-09-25、利用者の指示)。建物の中では部屋名が 1 つでも欠けると
-         * 探せなくなるので、重なっても全部出す(上で戻したまま終える)。
+         * 屋外は、置けない札を**出さない**。建物の中は**消さない**(2026-09-25、利用者の指示。
+         * 部屋名が 1 つでも欠けると探せなくなる)—— ずらしと線だけ使い、置けなければ元の位置で重ねる。
          */
-        if (String(window.currentFloor) !== 'outside') return;
+        const outdoors = String(window.currentFloor) === 'outside';
 
         /*
          * 薄く出している建物名は**数に入れない。** 下敷きの文字なので、
@@ -1583,32 +1596,68 @@ document.addEventListener('DOMContentLoaded', async () => {
             return !(faded && el.classList.contains('km-label-facility'));
         });
 
-        labels.sort(function (a, b) {
-            const byType = labelPriority(a) - labelPriority(b);
-            if (byType !== 0) return byType;
-            // 同じ種類なら上から順に。並べ方を決めておかないと、少し動かすたびに
-            // 隠れるものが入れ替わって**ちらつく**
-            return a.getBoundingClientRect().top - b.getBoundingClientRect().top;
+        /*
+         * **先に全部測ってから、まとめて書く。** 測る・書くを交互にすると、
+         * 札の数だけ組版をやり直させることになる(建物の中は 200 個を超える)。
+         */
+        const byLabel = markersByLabel();
+        const items = [];
+        const targets = [];
+        const nodes = [];
+        markersById.forEach(function (marker) {
+            const icon = marker.getElement && marker.getElement();
+            if (!icon || !icon.isConnected) return;
+            const r = icon.getBoundingClientRect();
+            if (r.width === 0 && r.height === 0) return;
+            nodes.push({ x: (r.left + r.right) / 2, y: (r.top + r.bottom) / 2, radius: r.width / 2 });
         });
-
-        const placed = [];
         labels.forEach(function (el) {
             const base = el.getBoundingClientRect();
             if (base.width === 0 && base.height === 0) return;   // そもそも出ていない
-            for (let i = 0; i < KM_LABEL_NUDGES.length; i++) {
-                const shift = KM_LABEL_NUDGES[i];
-                const rect = {
-                    left: base.left, right: base.right,
-                    top: base.top + shift, bottom: base.bottom + shift,
-                };
-                const hit = placed.some(function (other) { return overlaps(rect, other); });
-                if (!hit) {
-                    if (shift !== 0) el.style.marginTop = shift + 'px';
-                    placed.push(rect);
-                    return;
-                }
+            const marker = byLabel.get(el);
+            const icon = marker && marker.getElement && marker.getElement();
+            const r = icon ? icon.getBoundingClientRect() : null;
+            items.push({
+                box: { left: base.left, top: base.top, right: base.right, bottom: base.bottom },
+                anchor: r && r.width > 0 ? { x: (r.left + r.right) / 2, y: (r.top + r.bottom) / 2 } : null,
+                radius: r ? r.width / 2 : 0,
+                priority: labelPriority(el),
+            });
+            targets.push(el);
+        });
+        const c = window.map.getContainer().getBoundingClientRect();
+        const placements = layoutApi.layout(items, {
+            hideWhenCrowded: outdoors,
+            bounds: { left: c.left, top: c.top, right: c.right, bottom: c.bottom },
+            nodes: nodes,
+        });
+
+        placements.forEach(function (p, i) {
+            const el = targets[i];
+            if (p === null) {
+                el.classList.add('km-label-hidden');
+                return;
             }
-            el.classList.add('km-label-hidden');
+            if (p.dy !== 0) el.style.marginTop = p.dy + 'px';
+            if (p.dx !== 0) el.style.marginLeft = p.dx + 'px';
+            if (p.leader) {
+                /*
+                 * 線は札の ::after で描く(styles.css の .km-label-led)。札と一緒に動くので、
+                 * 地図を動かしている間もずれない。始点は札の縁、向きは点の方。
+                 * **style 属性ではなく CSSOM で入れる**(CSP は style 属性を止めるが、JS からの代入は通す)。
+                 */
+                const box = items[i].box;
+                const left = box.left + p.dx;
+                const top = box.top + p.dy;
+                const vx = p.leader.x1 - p.leader.x2;
+                const vy = p.leader.y1 - p.leader.y2;
+                el.classList.add('km-label-led');
+                // 1.5px は札の枠。::after の left/top は枠の内側から測る
+                el.style.setProperty('--km-lead-x', (p.leader.x2 - left - 1.5).toFixed(1) + 'px');
+                el.style.setProperty('--km-lead-y', (p.leader.y2 - top - 1.5).toFixed(1) + 'px');
+                el.style.setProperty('--km-lead-len', Math.sqrt(vx * vx + vy * vy).toFixed(1) + 'px');
+                el.style.setProperty('--km-lead-ang', (Math.atan2(vy, vx) * 180 / Math.PI).toFixed(1) + 'deg');
+            }
         });
     }
 

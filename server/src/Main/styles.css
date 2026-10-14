@@ -2229,6 +2229,30 @@ body.km-map-unavailable .km-route-bar {
     display: none;
 }
 
+/*
+ * 点から離して置いた札と点を結ぶ線(2026-10-14。app.js の declutterLabels・Main/label-layout.js)。
+ * 位置・長さ・向きは JS が札ごとに入れる。**札の後ろ**(z-index: -1)に描くので、
+ * 線が別の札の字を横切っても字は読める。色は札の縁と同じ(種類の色)。
+ */
+.km-label.km-label-led::after {
+    content: '';
+    position: absolute;
+    left: var(--km-lead-x, 0);
+    top: var(--km-lead-y, 0);
+    width: var(--km-lead-len, 0);
+    height: 2px;
+    margin-top: -1px;
+    background: var(--km-lead-color, #64748B);
+    transform-origin: 0 50%;
+    transform: rotate(var(--km-lead-ang, 0deg));
+    pointer-events: none;
+    z-index: -1;
+}
+.km-label-facility, .km-label-room { --km-lead-color: #06B6D4; }
+.km-label-stairs { --km-lead-color: #8B5CF6; }
+.km-label-entrance { --km-lead-color: #10B981; }
+.km-label-wifi_router { --km-lead-color: #2563EB; }
+
 /* 建物の詳細に出す「中へ 1F 2F …」(2026-09-22。app.js の facilityFloorLinks) */
 .km-detail-enter {
     display: flex;

@@ -30,7 +30,7 @@ const sandbox = { graphData: { nodes: {} }, floorImages: {} };
 vm.createContext(sandbox);
 vm.runInContext(
     extract('normalizeBuildingText') + '\n' + extract('buildingFloorLinksFor')
-        + '\n' + extract('facilityFloorLinks') + '\n' + extract('overlaps') + '\n;0;',
+        + '\n' + extract('facilityFloorLinks') + '\n;0;',
     sandbox,
     { filename: 'app.js (building)' }
 );
@@ -118,12 +118,14 @@ heading('building: ラベルの重なり');
 /*
  * ずらす・隠すの判定。**2px の余白**を持たせてある —— ちょうど接している程度は
  * 読めるので隠さない(隠しすぎると、地図から名前が消えたように見える)。
+ * 判定は 2026-10-14 に `Main/label-layout.js` へ移した(引き出し線)。
  */
+const labelLayout = require(path.join(__dirname, '..', '..', 'Main', 'label-layout.js'));
 const box = (top, left) => ({ top: top, bottom: top + 20, left: left, right: left + 100 });
-check('重なっていれば true', true, sandbox.overlaps(box(0, 0), box(10, 10)));
-check('離れていれば false', false, sandbox.overlaps(box(0, 0), box(40, 0)));
-check('接しているだけなら重なりと見ない', false, sandbox.overlaps(box(0, 0), box(20, 0)));
-check('横にずれていれば重ならない', false, sandbox.overlaps(box(0, 0), box(0, 120)));
+check('重なっていれば true', true, labelLayout.overlaps(box(0, 0), box(10, 10), 2));
+check('離れていれば false', false, labelLayout.overlaps(box(0, 0), box(40, 0), 2));
+check('接しているだけなら重なりと見ない', false, labelLayout.overlaps(box(0, 0), box(20, 0), 2));
+check('横にずれていれば重ならない', false, labelLayout.overlaps(box(0, 0), box(0, 120), 2));
 
 console.log('');
 if (failures === 0) {

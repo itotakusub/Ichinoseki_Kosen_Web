@@ -764,6 +764,7 @@ try {
     ?>
     <script defer src="<?= km_home_e(km_public_asset('Main/map-style.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/map-tuning.js')) ?>"></script>
+    <script defer src="<?= km_home_e(km_public_asset('Main/label-layout.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/app.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/panel.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/welcome.js')) ?>"></script>

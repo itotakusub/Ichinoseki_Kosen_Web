@@ -83,7 +83,13 @@
             });
         });
 
-        if (!seen()) open();
+        /*
+         * **QR(`/?room=<id>`)から来た人には出さない**(2026-10-14、利用者の指示)。
+         * 出すと、開いた部屋の詳細がこの幕の下に隠れる。読んだ印も付けないので、
+         * あとで普通に開いたときには出る。印は index.php の <meta name="km-focus-room">。
+         */
+        const fromRoomQr = document.querySelector('meta[name="km-focus-room"]') !== null;
+        if (!seen() && !fromRoomQr) open();
     }
 
     if (document.readyState === 'loading') {
