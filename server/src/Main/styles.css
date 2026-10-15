@@ -2271,3 +2271,110 @@ body.km-map-unavailable .km-route-bar {
     flex: 0 0 auto;
     padding: 0.35rem 0.7rem;
 }
+
+/*
+ * テスト用アカウント(展示の PC。2026-10-15、利用者の指示。index.php の .km-test-stack・Main/test-mode.js)。
+ * 右上(階の列の左)に「テスト中」の札と操作方法を縦に積む。どちらも「－」で見出しだけにできる。
+ * UI(1000)より上・読み込み画面(2000)と「はじめに」(2500)より下。
+ */
+.km-test-stack {
+    position: fixed;
+    top: 84px;
+    right: 88px;
+    z-index: 1200;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 330px;
+    max-height: calc(100vh - 100px);
+    overflow-y: auto;
+    pointer-events: none;   /* 札の隙間は地図を触れる */
+}
+.km-test-panel {
+    pointer-events: auto;
+    background: rgba(255, 255, 255, 0.97);
+    color: #0f172a;
+    border: 2px solid #F59E0B;
+    border-radius: 14px;
+    box-shadow: 0 6px 24px rgba(15, 23, 42, 0.18);
+}
+.km-test-guide { border-color: #3B82F6; }
+.km-test-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px 8px 14px;
+}
+.km-test-title {
+    flex: 1;
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 800;
+}
+.km-test-min {
+    flex: none;
+    width: 34px;
+    height: 34px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    background: #ffffff;
+    color: #0f172a;
+    font-size: 1.1rem;
+    font-weight: 800;
+    cursor: pointer;
+}
+.km-test-restart {
+    flex: none;
+    height: 34px;
+    padding: 0 12px;
+    border: none;
+    border-radius: 999px;
+    background: #2563EB;
+    color: #ffffff;
+    font-size: 0.9rem;
+    font-weight: 800;
+    cursor: pointer;
+}
+.km-test-restart:hover { background: #1D4ED8; }
+.km-test-min:focus-visible,
+.km-test-restart:focus-visible { outline: 3px solid #93C5FD; outline-offset: 2px; }
+.km-test-body { margin: 0; padding: 0 14px 12px; }
+.km-test-minimized .km-test-body { display: none; }
+.km-test-note { margin: 0 0 8px; font-size: 0.78rem; color: #475569; line-height: 1.45; }
+.km-test-survey-lead { margin: 4px 0 6px; font-weight: 800; text-align: center; }
+.km-test-qr svg { display: block; width: 132px; height: 132px; margin: 0 auto; }
+.km-test-url {
+    display: block;
+    margin-top: 4px;
+    font-size: 0.72rem;
+    text-align: center;
+    word-break: break-all;
+}
+.km-test-steps {
+    padding: 0 14px 12px 34px;
+    font-size: 0.86rem;
+    line-height: 1.45;
+}
+.km-test-steps li + li { margin-top: 4px; }
+
+@media (prefers-color-scheme: dark) {
+    :root:not([data-km-theme="light"]) .km-test-panel { background: rgba(15, 23, 42, 0.95); color: #e2e8f0; }
+    :root:not([data-km-theme="light"]) .km-test-note { color: #cbd5e1; }
+    :root:not([data-km-theme="light"]) .km-test-min { background: #1e293b; color: #e2e8f0; border-color: #475569; }
+}
+:root[data-km-theme="dark"] .km-test-panel { background: rgba(15, 23, 42, 0.95); color: #e2e8f0; }
+:root[data-km-theme="dark"] .km-test-note { color: #cbd5e1; }
+:root[data-km-theme="dark"] .km-test-min { background: #1e293b; color: #e2e8f0; border-color: #475569; }
+
+/* 狭い画面(展示は PC の想定だが、スマホで開いても地図を塞ぎすぎない)。下に寄せて小さく */
+@media (max-width: 768px) {
+    .km-test-stack {
+        top: auto;
+        bottom: 76px;
+        left: 8px;
+        right: 8px;
+        width: auto;
+        max-height: 45vh;
+    }
+    .km-test-qr svg { width: 128px; height: 128px; }
+}

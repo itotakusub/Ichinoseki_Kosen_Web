@@ -826,6 +826,8 @@ document.addEventListener('DOMContentLoaded', async () => {
              * 行き先は data 属性に置き、クリックは下の委譲リスナーで受ける。
              */
             marker.bindPopup(nodeDetailHtml(id, node, type));
+            // どの地点の詳細が開いたかを、popupopen で引けるようにする(テスト用アカウントの記録)
+            marker.kmNodeId = id;
         }
 
         marker.on('click', (e) => {
@@ -1668,6 +1670,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     window.kmDeclutterLabels = scheduleDeclutter;
 
+    // 部屋の詳細を開いた(テスト用アカウントの記録。createNodeMarker が marker.kmNodeId を付ける)
+    window.map.on('popupopen', (e) => {
+        const source = e.popup && e.popup._source;
+        if (source && source.kmNodeId) testLog('detail', { node: source.kmNodeId, floor: String(window.currentFloor) });
+    });
+
     window.map.on('zoomend', () => {
         renderGlobalLabels();
         scheduleDeclutter();
@@ -1775,6 +1783,25 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     });
 
+    /*
+     * テスト用アカウント(展示の PC。2026-10-15)の操作の記録。`window.kmTestLog` は
+     * Main/test-mode.js が**印の付いたアカウントのときだけ**用意する。無ければ何もしない
+     * (一般の閲覧者の操作は、どこへも送らない)。
+     */
+    function testLog(kind, data) {
+        if (typeof window.kmTestLog === 'function') window.kmTestLog(kind, data);
+    }
+
+    // 出発地・目的地の欄に打った語(候補から選んだときも change が来る)。地点に当たれば一緒に残す
+    [[startInput, 'start'], [endInput, 'goal']].forEach(([input, field]) => {
+        if (!input) return;
+        input.addEventListener('change', () => {
+            const text = input.value.trim();
+            if (text === '') return;
+            testLog('search', { field: field, text: text, node: resolveNodeByLabel(text) });
+        });
+    });
+
     // ---- UIイベントリスナー ----
     if (searchBtn) {
         searchBtn.addEventListener('click', () => {
@@ -1790,6 +1817,17 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
 
             const path = dijkstra.findShortestPath(startNode, endNode);
+            // 条件も残す(階段・エレベーターの好み、雨の日など)。引けなかったことも手がかりになる
+            testLog('route', {
+                node: startNode,
+                node2: endNode,
+                text: [
+                    'vertical=' + verticalPreference,
+                    routeOptions.fewerFloors ? 'fewerFloors' : '',
+                    routeOptions.rain ? 'rain' : '',
+                    path ? '' : 'notFound',
+                ].filter(Boolean).join(','),
+            });
             if (path) {
                 currentRoutePath = path;
                 /*
@@ -1978,6 +2016,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         categorySelect.addEventListener('change', () => {
             const type = categorySelect.value;
             if (!type) return;
+            const picked = categorySelect.options[categorySelect.selectedIndex];
+            testLog('category', { text: picked ? picked.textContent : type });
 
             const results = [];
             const patterns = {
@@ -2462,6 +2502,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     window.renderEventOverlay = renderEventOverlay;
 
     function changeFloor(floor) {
+        if (String(floor) !== String(window.currentFloor)) testLog('floor', { floor: String(floor) });
         window.currentFloor = floor;
         floorBtns.forEach(b => b.classList.remove('active'));
         const activeBtn = document.querySelector(`.floor-btn[data-floor="${floor}"]`);
@@ -2945,6 +2986,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     /** 一覧から選んだ地点へ寄せて、詳細を開く。 */
     function openNodeFromList(node) {
+        testLog('pick', { node: node.id });
         if (window.innerWidth <= 768 && searchPanel) setSearchPanelCollapsed(true);
         if (String(node.floor) !== String(window.currentFloor)) changeFloor(node.floor);
         setTimeout(() => {

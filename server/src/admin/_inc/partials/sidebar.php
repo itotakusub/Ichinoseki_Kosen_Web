@@ -101,6 +101,13 @@ $parentLink = static fn(string $id): string => 'nav-link' . ($openMenu === $id ?
                   <p data-i18n="side.users">ユーザー管理</p>
                 </a>
               </li>
+              <?php // 展示の PC 用のテスト用アカウントと、集めた記録(2026-10-15、lib/test-mode.php) ?>
+              <li class="nav-item">
+                <a href="./test-mode.php" class="<?= $link('testMode') ?>">
+                  <i class="nav-icon bi bi-clipboard2-data"></i>
+                  <p data-i18n="side.testMode">テスト用アカウント</p>
+                </a>
+              </li>
               <?php // 教職員の権限の申請(docs/15。2026-09-18)。承認すると教職員氏名と閲覧不可の地点が見えるようになる ?>
               <li class="nav-item">
                 <a href="./staff-requests.php" class="<?= $link('staffRequests') ?>">

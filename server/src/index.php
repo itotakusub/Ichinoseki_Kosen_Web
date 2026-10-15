@@ -107,6 +107,40 @@ if ($guestViewing) {
     km_visit_mark_viewer('anon');
 }
 
+/*
+ * テスト用アカウント(展示の PC。2026-10-15、lib/test-mode.php)。**開くたびに確かめ直す**(前の印を信じない)。
+ * 印が付いていれば:「テスト中」の札とアンケートの QR、操作方法と「始めから」を出し、操作を記録する
+ * (記録の API は下のセッションの印を見る)。確かめられなければ付いていないとみなす —— 一般の人を記録しない側へ倒す。
+ */
+require_once __DIR__ . '/lib/test-mode.php';
+unset($_SESSION[KM_TEST_MODE_SESSION_KEY]);
+$kmTestMode = null;
+if ($loggedIn && isset($claims->sub)) {
+    try {
+        $testPdo = km_db();
+        if (km_test_account_is_marked($testPdo, (string) $claims->sub)) {
+            $_SESSION[KM_TEST_MODE_SESSION_KEY] = ['sub' => (string) $claims->sub, 'until' => time() + KM_TEST_MODE_SESSION_TTL];
+            $surveyUrl = km_test_survey_url($testPdo);
+            $surveyQr = null;
+            if ($surveyUrl !== '' && km_test_survey_url_valid($surveyUrl)) {
+                require_once __DIR__ . '/lib/qr.php';
+                $surveyQr = str_replace('アクセスコードの QR', 'アンケートの QR', km_qr_svg(km_qr_matrix($surveyUrl), 4, 4));
+            } else {
+                $surveyUrl = '';
+            }
+            $kmTestMode = [
+                'surveyUrl' => $surveyUrl,
+                'surveyQr' => $surveyQr,
+                'guide' => km_test_guide_lines(km_test_guide_text($testPdo)),
+            ];
+        }
+    } catch (Throwable $exception) {
+        error_log('KosenMap home: test-mode check failed (treated as not marked): ' . $exception->getMessage());
+        unset($_SESSION[KM_TEST_MODE_SESSION_KEY]);
+        $kmTestMode = null;
+    }
+}
+
 function km_home_e(?string $value): string
 {
     return htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
@@ -205,6 +239,11 @@ try {
     <?php if ($kmFocusRoom !== null): ?>
         <?php /* QR の部屋(上の $kmFocusRoom。32 字の 16 進だけ)。Main/app.js の focusRoomFromUrl が読む */ ?>
         <meta name="km-focus-room" content="<?= km_home_e($kmFocusRoom) ?>">
+    <?php endif; ?>
+    <?php if ($kmTestMode !== null): ?>
+        <?php /* テスト用アカウントの印と、記録の送信に使うトークン(Main/test-mode.js が読む。一般の人には出さない) */ ?>
+        <meta name="km-test-mode" content="1">
+        <meta name="km-csrf" content="<?= km_home_e(km_csrf_token()) ?>">
     <?php endif; ?>
     <title>高専マップ案内</title>
 
@@ -736,6 +775,46 @@ try {
         <script type="application/json" id="km-map-data"<?= km_csp_nonce_attr() ?>><?= $inlineMapData ?></script>
     <?php endif; ?>
 
+    <?php if ($kmTestMode !== null): ?>
+    <?php
+    /*
+     * テスト用アカウント(展示の PC。2026-10-15、利用者の指示)。右上に縦に積む。
+     * どちらも「－」で小さくできる(見出しだけ残る)。「始めから」は小さくしても押せるよう見出しに置く。
+     * 小さくした状態は覚えない —— 「始めから」で次の人には開いた状態で渡す。開け閉ては Main/test-mode.js。
+     */
+    ?>
+    <div class="km-test-stack">
+        <section id="km-test-card" class="km-test-panel km-test-card" aria-labelledby="km-test-card-title">
+            <div class="km-test-head">
+                <h2 id="km-test-card-title" class="km-test-title">🧪 テスト中</h2>
+                <button type="button" class="km-test-min" data-km-test-min aria-expanded="true" aria-label="テスト中の札を小さくする">－</button>
+            </div>
+            <div class="km-test-body">
+                <p class="km-test-note">この PC での操作(検索した語・選んだ場所など)を、改善のために記録しています。お名前などは記録しません。</p>
+                <?php if ($kmTestMode['surveyQr'] !== null): ?>
+                    <p class="km-test-survey-lead">アンケートにご協力ください</p>
+                    <?php /* QR は lib/qr.php が作る SVG(中身は URL だけ。管理画面で https に限って確かめてある) */ ?>
+                    <div class="km-test-qr"><?= $kmTestMode['surveyQr'] ?></div>
+                    <a class="km-test-url" href="<?= km_home_e($kmTestMode['surveyUrl']) ?>" target="_blank" rel="noopener noreferrer"><?= km_home_e($kmTestMode['surveyUrl']) ?></a>
+                <?php endif; ?>
+            </div>
+        </section>
+
+        <section id="km-test-guide" class="km-test-panel km-test-guide" aria-labelledby="km-test-guide-title">
+            <div class="km-test-head">
+                <h2 id="km-test-guide-title" class="km-test-title">操作方法</h2>
+                <button type="button" id="km-test-restart" class="km-test-restart">↺ 始めから</button>
+                <button type="button" class="km-test-min" data-km-test-min aria-expanded="true" aria-label="操作方法を小さくする">－</button>
+            </div>
+            <ol class="km-test-body km-test-steps">
+                <?php foreach ($kmTestMode['guide'] as $line): ?>
+                    <li><?= km_home_e($line) ?></li>
+                <?php endforeach; ?>
+            </ol>
+        </section>
+    </div>
+    <?php endif; ?>
+
     <?php
     /*
      * defer を付ける。末尾に置いてあるので実行順は元から HTML パースの後だが、
@@ -765,6 +844,10 @@ try {
     <script defer src="<?= km_home_e(km_public_asset('Main/map-style.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/map-tuning.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/label-layout.js')) ?>"></script>
+    <?php if ($kmTestMode !== null): ?>
+        <?php /* テスト用アカウントだけ。**app.js より先に**読み、window.kmTestLog を用意しておく(app.js は在れば呼ぶ) */ ?>
+        <script defer src="<?= km_home_e(km_public_asset('Main/test-mode.js')) ?>"></script>
+    <?php endif; ?>
     <script defer src="<?= km_home_e(km_public_asset('Main/app.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/panel.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/welcome.js')) ?>"></script>

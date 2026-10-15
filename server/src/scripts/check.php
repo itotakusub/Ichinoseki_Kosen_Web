@@ -6885,6 +6885,63 @@ function km_check_layout(): void
     // QR(/?room=)から来た人には出さない(2026-10-14)。出すと開いた部屋の詳細が幕の下に隠れる
     check_bool('QR から来た人には出さない', str_contains($welcomeJs, 'meta[name="km-focus-room"]') && str_contains($welcomeJs, 'if (!seen() && !fromRoomQr) open();'));
 
+    km_check_heading('test-mode: テスト用アカウント(展示の PC。2026-10-15)');
+    require_once __DIR__ . '/../lib/test-mode.php';
+    $testLib = (string) file_get_contents(__DIR__ . '/../lib/test-mode.php');
+    $testApi = (string) file_get_contents(__DIR__ . '/../api/test-events.php');
+    $testJs = (string) file_get_contents(__DIR__ . '/../Main/test-mode.js');
+    $now = 1_760_000_000_000;
+    $parsed = km_test_events_parse([
+        'visit' => '0123456789abcdef',
+        'events' => [
+            ['kind' => 'search', 't' => $now - 1000, 'field' => 'goal', 'text' => "  図書館\n ", 'node' => 'abc123'],
+            ['kind' => 'route', 't' => $now, 'node' => 'a', 'node2' => 'b', 'text' => 'vertical=any'],
+            ['kind' => 'evil', 'text' => 'x'],
+            ['kind' => 'detail', 'node' => '../etc/passwd'],
+            ['kind' => 'floor', 'floor' => 'outside', 't' => $now + 999_999_999],
+        ],
+    ], $now);
+    check('種類の分からない記録は捨てる', 4, $parsed === null ? -1 : count($parsed['rows']));
+    check('語は前後の空白と改行を落とす', '図書館', $parsed['rows'][0]['text'] ?? null);
+    check('欄は start / goal だけ', 'goal', $parsed['rows'][0]['field'] ?? null);
+    check('地点の id は英数字だけ(パスのような値は捨てる)', null, ($parsed['rows'][2] ?? ['node' => 'x'])['node']);
+    check('未来の時刻はサーバーの今にする', gmdate('Y-m-d H:i:s', intdiv($now, 1000)) . '.000', $parsed['rows'][3]['at'] ?? null);
+    check('visit の形が違えば丸ごと断る', null, km_test_events_parse(['visit' => 'xyz', 'events' => []], $now));
+    $many = km_test_events_parse(['visit' => '0123456789abcdef', 'events' => array_fill(0, 80, ['kind' => 'open'])], $now);
+    check('1 回に受けるのは 50 件まで', KM_TEST_EVENTS_PER_REQUEST, count($many['rows'] ?? []));
+    check_bool('アンケートは https だけ', km_test_survey_url_valid('https://forms.gle/abc') && km_test_survey_url_valid('')
+        && !km_test_survey_url_valid('http://example.com') && !km_test_survey_url_valid('javascript:alert(1)') && !km_test_survey_url_valid('https://a.example/"><x'));
+    check('操作方法は空の行を飛ばす', ['一', '二'], km_test_guide_lines("一\n\n  二  \r\n"));
+    check_bool('印を確かめられなければ付いていない扱い', str_contains($testLib, "error_log('km_test_account_is_marked failed (treated as not marked): '") && str_contains($testLib, 'return false;'));
+    // 公開ページ: 印のあるときだけ JS と札を出す。開くたびに印を立て直す
+    check_bool('開くたびに印を外してから確かめ直す', strpos($index, 'unset($_SESSION[KM_TEST_MODE_SESSION_KEY]);') !== false
+        && strpos($index, 'unset($_SESSION[KM_TEST_MODE_SESSION_KEY]);') < (int) strpos($index, 'km_test_account_is_marked($testPdo'));
+    check_bool('test-mode.js は印のあるときだけ読む', preg_match("/if \(\\\$kmTestMode !== null\): \?>\s*(<\?php[^?]*\?>\s*)?<script defer src=\"<\?= km_home_e\(km_public_asset\('Main\/test-mode\.js'\)\) \?>\"><\/script>/", $index) === 1);
+    check_bool('test-mode.js は app.js より先', (int) strpos($index, "Main/test-mode.js')") < (int) strpos($index, '<script defer src="<?= km_home_e(km_public_asset(\'Main/app.js\')) ?>"></script>'));
+    check_bool('札と操作方法は小さくできる・始めからがある', substr_count($index, 'data-km-test-min') === 2 && str_contains($index, 'id="km-test-restart"'));
+    check_bool('app.js は kmTestLog が在るときだけ送る', str_contains($appJs, "if (typeof window.kmTestLog === 'function') window.kmTestLog(kind, data);") && !str_contains($appJs, "/api/test-events.php"));
+    foreach (['search', 'category', 'pick', 'route', 'detail', 'floor'] as $kind) {
+        check_bool("app.js が記録する: {$kind}", str_contains($appJs, "testLog('{$kind}'"));
+    }
+    // API: セッションの印・期限・CSRF の順に見てから書く
+    $markAt = strpos($testApi, '$_SESSION[KM_TEST_MODE_SESSION_KEY]');
+    check_bool('API は印と CSRF を見てから書く', $markAt !== false && $markAt < (int) strpos($testApi, 'km_csrf_verify()')
+        && (int) strpos($testApi, 'km_csrf_verify()') < (int) strpos($testApi, 'km_test_events_insert('));
+    check_bool('API は期限切れの印を断る', str_contains($testApi, "(int) (\$mark['until'] ?? 0) < time()"));
+    check_bool('API は 64KB までしか読まない', str_contains($testApi, "file_get_contents('php://input', false, null, 0, 65536)"));
+    check_bool('JS はトークンを X-KM-CSRF で送る', str_contains($testJs, "'X-KM-CSRF': token"));
+    check_bool('始めからで記録を区切り、来場者の覚えを消す', str_contains($testJs, 'window.sessionStorage.setItem(VISIT_KEY, newVisitId());')
+        && str_contains($testJs, "'km-map-tuning-v1'") && str_contains($testJs, "window.location.replace('/');"));
+    $repoRootForTest = km_check_repo_root();
+    if ($repoRootForTest !== null) {
+        check_bool('nginx: 記録の入口は本文 64KB・回数を絞る', preg_match('/location = \/api\/test-events\.php \{\s*client_max_body_size 64k;\s*limit_req zone=km_api/', (string) @file_get_contents($repoRootForTest . '/nginx/default.conf.template')) === 1);
+    } else {
+        check_skip('nginx: 記録の入口', '手元の作業ツリーで');
+    }
+    check_bool('CSV は式として読ませない', str_contains($testLib, "preg_replace('/^([=+\\-@])/', \"'\$1\""));
+    check_bool('管理画面に CSRF と記録の消去の確認', str_contains((string) file_get_contents(__DIR__ . '/../admin/test-mode.php'), "!km_csrf_verify()")
+        && str_contains((string) file_get_contents(__DIR__ . '/../admin/test-mode.php'), 'data-km-confirm="テスト用アカウントの記録を全部消します。'));
+
     km_check_heading('layout: ラベルの重なり(屋外は消す・屋内は消さない。2026-09-25 / 引き出し線 2026-10-14)');
     check_bool('屋内では消さない(屋外だけ hideWhenCrowded)', str_contains($appJs, 'hideWhenCrowded: outdoors') && str_contains($appJs, "const outdoors = String(window.currentFloor) === 'outside';"));
     $labelLayoutJs = (string) file_get_contents(__DIR__ . '/../Main/label-layout.js');

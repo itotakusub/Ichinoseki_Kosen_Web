@@ -689,6 +689,15 @@ server {
         proxy_read_timeout 900s;
     }
 
+    # テスト用アカウント(展示の PC)の操作の記録(2026-10-15、lib/test-mode.php)。
+    # 本文は数 KB(1 回 50 件まで)。PHP 側も 64KB までしか読まない
+    location = /api/test-events.php {
+        client_max_body_size 64k;
+        limit_req zone=km_api burst=60 nodelay;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+
     # アプリのランキングへの記録(POST だけ数える。取得の GET は数えない)
     location = /api/app-ranking.php {
         limit_req zone=km_app burst=60 nodelay;
