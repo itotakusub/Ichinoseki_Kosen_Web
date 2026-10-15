@@ -743,6 +743,8 @@ if ($kmEvent !== null && $kmTestMode === null) {
                         初めて開いたときに出した案内(利用規約・メールについて)を、もう一度読めます。
                     </p>
                     <button type="button" class="secondary-btn" data-km-welcome-open>はじめにを読む</button>
+                    <?php /* 初回に出す操作の案内(Main/tutorial.js)をもう一度 */ ?>
+                    <button type="button" class="secondary-btn" data-km-tutorial-open>操作の案内を見る</button>
                 </div>
             </div>
         </aside>
@@ -846,6 +848,10 @@ if ($kmEvent !== null && $kmTestMode === null) {
                     <li><?= km_home_e($line) ?></li>
                 <?php endforeach; ?>
             </ol>
+            <div class="km-test-body">
+                <?php /* 押す所を順に光らせる案内(Main/tutorial.js)。来場者ごとに最初は自動で出る */ ?>
+                <button type="button" class="secondary-btn km-test-tour" data-km-tutorial-open>📍 画面で順に案内する</button>
+            </div>
         </section>
     </div>
     <?php endif; ?>
@@ -905,6 +911,8 @@ if ($kmEvent !== null && $kmTestMode === null) {
     <script defer src="<?= km_home_e(km_public_asset('Main/app.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/panel.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/welcome.js')) ?>"></script>
+    <?php /* 初回の操作案内(2026-10-15)。「はじめに」を閉じてから・地図が出てから始める */ ?>
+    <script defer src="<?= km_home_e(km_public_asset('Main/tutorial.js')) ?>"></script>
 
 </body>
 

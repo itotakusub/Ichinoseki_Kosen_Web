@@ -47,6 +47,8 @@
                 // 覚えられなくても閉じる。次に開いたときにまた出るだけ
             }
             if (lastFocus && typeof lastFocus.focus === 'function') lastFocus.focus();
+            // 初回の操作案内(Main/tutorial.js)は「はじめに」を閉じてから始める
+            document.dispatchEvent(new CustomEvent('km-welcome-closed'));
         }
 
         ok.addEventListener('click', close);

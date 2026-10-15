@@ -2757,7 +2757,7 @@ function km_check_guest_links(): void
     check_bool('突き合わせのたびに表から読み直す(許す・外すがすぐ効く)', (bool) preg_match("/function km_map_guest_verify.*?SELECT a\\.names_allowed.*?\\['names'\\] = \\(int\\) \\\$namesAllowed === 1;/s", $lib));
     check_bool('入り直しも表の値で印を立てる', (bool) preg_match('/function km_map_guest_reenter.*?SELECT id, display_name, names_allowed/s', $lib) && substr_count($guest, "\$account['names']);") === 2);
     check_bool('止めたアカウントは変えない', str_contains($lib, 'SET names_allowed = ? WHERE id = ? AND revoked_at IS NULL'));
-    check_bool('氏名の判定は許した人だけ・地図の錠は仮アカウントなら通す', str_contains($code($read('lib/map-access.php')), "'password' => km_map_password_entered(\$config) || km_map_teacher_like_session(true),") && str_contains($code($read('lib/map-access.php')), "'password' => km_map_password_entered(\$config) || km_map_teacher_like_session(false),"));
+    check_bool('氏名の判定は許した人だけ・地図の錠は仮アカウントなら通す', str_contains($code($read('lib/map-access.php')), "'password' => km_map_password_entered(\$config) || km_map_teacher_like_session(true),") && str_contains($code($read('lib/map-access.php')), "'password' => km_map_password_entered(\$config) || km_map_teacher_like_session(false) || km_map_event_opens_view(\$config),"));
     check_bool('管理画面: CSRF を確かめてから・記録は番号だけ', strpos($admin, 'km_csrf_verify()') < strpos($admin, 'km_map_guest_set_names(') && str_contains($admin, "\$allow ? 'guest.account_names_allow' : 'guest.account_names_deny', '#' . \$accountId);"));
     check_bool('管理画面: 見せる前に確かめる', str_contains($read('admin/guest-links.php'), "'page.guestLinks.confirmNames'") && str_contains($read('admin/assets/i18n/ja.js'), '"page.guestLinks.confirmNames"') && str_contains($read('admin/assets/i18n/en.js'), '"page.guestLinks.confirmNames"'));
     check_bool('公開ページに誰として見ているかを出す', str_contains($read('index.php'), 'お試し: <?= km_home_e((string) $guestName) ?> さん'));
@@ -6891,6 +6891,28 @@ function km_check_layout(): void
     check_bool('設定から読み直せる', str_contains($index, 'data-km-welcome-open'));
     // QR(/?room=)から来た人には出さない(2026-10-14)。出すと開いた部屋の詳細が幕の下に隠れる
     check_bool('QR から来た人には出さない', str_contains($welcomeJs, 'meta[name="km-focus-room"]') && str_contains($welcomeJs, 'if (!seen() && !fromRoomQr) open();'));
+
+    km_check_heading('tutorial: 初回の操作案内(2026-10-15)');
+    $tutorialJs = (string) file_get_contents(__DIR__ . '/../Main/tutorial.js');
+    check_bool('tutorial.js を welcome.js のあとに読む', ($tw = strpos($index, "Main/welcome.js')")) !== false && $tw < (int) strpos($index, "Main/tutorial.js')"));
+    check_bool('「はじめに」を閉じてから始める', str_contains($welcomeJs, "new CustomEvent('km-welcome-closed')") && str_contains($tutorialJs, "'km-welcome-closed'"));
+    check_bool('地図が出てから始める', str_contains($appJs, "new CustomEvent('km-map-ready')") && str_contains($tutorialJs, "'km-map-ready'"));
+    check_bool('QR から来た人と錠のときは出さない', str_contains($tutorialJs, 'meta[name="km-focus-room"]') && str_contains($tutorialJs, "classList.contains('km-map-unavailable')"));
+    check_bool('最初の手順は出発地(検索が閉じていれば「検索」から)', str_contains($tutorialJs, 'ここを押して、出発地を決めてください。') && str_contains($tutorialJs, 'when: searchCollapsed'));
+    check_bool('幕は見た目だけ(案内の上からも押せる)', preg_match('/\.km-tour \{[^}]*pointer-events: none/', $css) === 1);
+    check_bool('テスト用アカウントは来場者ごとに出す', str_contains($tutorialJs, "SEEN_KEY + ':visit:'"));
+    check_bool('設定からもう一度見られる', str_contains($index, 'data-km-tutorial-open'));
+    check_bool('押す所を追いかける(シートが滑って出る)', str_contains($tutorialJs, 'window.requestAnimationFrame(follow);'));
+
+    km_check_heading('map-access: イベント中だけパスワード無しで地図を出す(2026-10-15)');
+    $accessLib = (string) file_get_contents(__DIR__ . '/../lib/map-access.php');
+    check_bool('既定は出さない(厳密に true のときだけ)', str_contains($accessLib, "'eventOpensMap' => (\$config['eventOpensMap'] ?? false) === true,"));
+    check('設定が無ければイベントを見に行かない', false, km_map_event_opens_view(['mapMode' => 'password']));
+    check_bool('地図の錠だけに効く(氏名の錠には足さない)', str_contains($accessLib, "km_map_teacher_like_session(false) || km_map_event_opens_view(\$config)")
+        && !preg_match("/'password' => km_map_password_entered\(\\\$config\) \|\| km_map_teacher_like_session\(true\)[^,]*km_map_event_opens_view/", $accessLib));
+    check_bool('確かめられなければ開けない', str_contains($accessLib, "error_log('km_map_event_opens_view failed (map stays locked): '") && str_contains($accessLib, '$active = false;'));
+    check_bool('保存で設定ファイルに書く', str_contains($accessLib, "\"    'eventOpensMap' => \" . var_export(\$resolvedEventOpensMap, true)"));
+    check_bool('管理画面にチェックがある', str_contains((string) file_get_contents(__DIR__ . '/../admin/map-settings.php'), 'name="event_opens_map"'));
 
     km_check_heading('test-mode: テスト用アカウント(展示の PC。2026-10-15)');
     require_once __DIR__ . '/../lib/test-mode.php';

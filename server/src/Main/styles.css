@@ -2455,3 +2455,65 @@ body.km-map-unavailable .km-route-bar {
 @media (min-width: 769px) {
     body:has(.km-test-stack) .km-event-banner { right: calc(88px + 330px + 12px); }
 }
+/*
+ * 初回の操作案内(2026-10-15、Main/tutorial.js)。押す所を明るく抜いて黄色の枠で囲み、そばに吹き出し。
+ * **幕は見た目だけ**(pointer-events: none)。案内の上から、言われた所をそのまま押せる。
+ * UI(1000)・イベントの許可の帯(1300)より上、「はじめに」(2500)より下。
+ */
+.km-tour { position: fixed; inset: 0; z-index: 2200; pointer-events: none; }
+.km-tour-spot {
+    position: fixed;
+    border: 3px solid #FBBF24;
+    border-radius: 12px;
+    box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.55);
+    transition: left 0.25s ease, top 0.25s ease, width 0.25s ease, height 0.25s ease;
+    animation: km-tour-pulse 1.6s ease-in-out infinite;
+}
+.km-tour-spot.is-none {
+    left: 50% !important; top: 50% !important; width: 0 !important; height: 0 !important;
+    border: none;
+    animation: none;
+}
+@keyframes km-tour-pulse {
+    0%, 100% { outline: 0 solid rgba(251, 191, 36, 0.6); }
+    50% { outline: 8px solid rgba(251, 191, 36, 0); }
+}
+.km-tour-card {
+    position: fixed;
+    pointer-events: auto;
+    padding: 14px 16px 12px;
+    background: #ffffff;
+    color: #0f172a;
+    border: 2px solid #FBBF24;
+    border-radius: 14px;
+    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.3);
+}
+.km-tour-count { margin: 0 0 4px; font-size: 0.75rem; font-weight: 700; color: #92400E; }
+.km-tour-text { margin: 0 0 12px; font-size: 1rem; font-weight: 700; line-height: 1.55; }
+.km-tour-actions { display: flex; justify-content: flex-end; gap: 8px; }
+/* 吹き出しの矢印(押す所を指す)。位置は JS が入れる */
+.km-tour-arrow {
+    position: absolute;
+    width: 16px;
+    height: 16px;
+    background: #ffffff;
+    border: 2px solid #FBBF24;
+    transform: translateX(-50%) rotate(45deg);
+}
+.km-tour-card.is-below .km-tour-arrow { top: -10px; border-right: none; border-bottom: none; }
+.km-tour-card.is-above .km-tour-arrow { bottom: -10px; border-left: none; border-top: none; }
+.km-tour-card.is-left .km-tour-arrow { right: -10px; left: auto; transform: translateY(-50%) rotate(45deg); border-left: none; border-bottom: none; }
+.km-tour-arrow[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) {
+    .km-tour-spot { animation: none; transition: none; }
+}
+@media (prefers-color-scheme: dark) {
+    :root:not([data-km-theme="light"]) .km-tour-card,
+    :root:not([data-km-theme="light"]) .km-tour-arrow { background: #0f172a; color: #e2e8f0; }
+    :root:not([data-km-theme="light"]) .km-tour-count { color: #FCD34D; }
+}
+:root[data-km-theme="dark"] .km-tour-card,
+:root[data-km-theme="dark"] .km-tour-arrow { background: #0f172a; color: #e2e8f0; }
+:root[data-km-theme="dark"] .km-tour-count { color: #FCD34D; }
+/* 操作方法の札から、画面の案内(Main/tutorial.js)を出し直すボタン */
+.km-test-tour { width: 100%; }

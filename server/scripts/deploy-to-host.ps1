@@ -504,6 +504,7 @@ $mustContain = @(
     './src/api/test-events.php'
     './src/admin/test-mode.php'
     './src/Main/test-mode.js'
+    './src/Main/tutorial.js'
     <#
       建物平面図。**アプリの APK 内の画像の写し**で、これが無いと
       屋外図に重ねる見取り図だけが出ない(地図は出るので気づきにくい)。

@@ -65,6 +65,9 @@ const kmLoading = (() => {
             if (status) status.textContent = '準備ができました';
             done = true;
             root.classList.add('is-done');
+            // 初回の操作案内(Main/tutorial.js)は、地図が出てから始める
+            window.kmMapReady = true;
+            document.dispatchEvent(new CustomEvent('km-map-ready'));
         },
     };
 })();

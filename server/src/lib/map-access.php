@@ -34,7 +34,7 @@ function km_map_access_config_path(): string
     return __DIR__ . '/../config/map-access.local.php';
 }
 
-/** @return array{mode:string,mapMode:string,passwordHash:?string,teacherSeesHidden:bool} */
+/** @return array{mode:string,mapMode:string,passwordHash:?string,teacherSeesHidden:bool,eventOpensMap:bool} */
 function km_map_access_config(): array
 {
     $path = km_map_access_config_path();
@@ -66,6 +66,12 @@ function km_map_access_config(): array
          * 厳密に true のときだけ有効(書き損じは見せない側に倒す)。
          */
         'teacherSeesHidden' => ($config['teacherSeesHidden'] ?? false) === true,
+        /*
+         * **イベント中だけ、地図をパスワード無しで出すか**(2026-10-15、利用者の指示)。既定は出さない。
+         * 効くのは地図そのもの(mapMode)だけで、**教職員氏名の錠(mode)は変えない。**
+         * 厳密に true のときだけ有効(書き損じは閉じる側に倒す)。判定は km_map_event_opens_view()。
+         */
+        'eventOpensMap' => ($config['eventOpensMap'] ?? false) === true,
     ];
 }
 
@@ -73,7 +79,7 @@ function km_map_access_config(): array
  * 設定ファイルを書き換える。admin/map-settings.php からだけ呼ぶ。
  * $newPassword が null なら現在のハッシュを維持する(モードだけ変える場合)。
  */
-function km_map_access_save(string $mode, ?string $newPassword, ?string $mapMode = null, ?bool $teacherSeesHidden = null): void
+function km_map_access_save(string $mode, ?string $newPassword, ?string $mapMode = null, ?bool $teacherSeesHidden = null, ?bool $eventOpensMap = null): void
 {
     if (!in_array($mode, KM_MAP_ACCESS_MODES, true)) {
         throw new InvalidArgumentException('不正な公開モードです。');
@@ -88,6 +94,7 @@ function km_map_access_save(string $mode, ?string $newPassword, ?string $mapMode
         : $current['passwordHash'];
     $resolvedMapMode = $mapMode ?? $current['mapMode'];
     $resolvedTeacherSeesHidden = $teacherSeesHidden ?? $current['teacherSeesHidden'];
+    $resolvedEventOpensMap = $eventOpensMap ?? $current['eventOpensMap'];
 
     /*
      * **パスワードが無いのに password を選ばせない。**
@@ -106,6 +113,7 @@ function km_map_access_save(string $mode, ?string $newPassword, ?string $mapMode
         . "    'mapMode' => " . var_export($resolvedMapMode, true) . ",\n"
         . "    'passwordHash' => " . var_export($passwordHash, true) . ",\n"
         . "    'teacherSeesHidden' => " . var_export($resolvedTeacherSeesHidden, true) . ",\n"
+        . "    'eventOpensMap' => " . var_export($resolvedEventOpensMap, true) . ",\n"
         . "];\n";
 
     km_map_access_write_config(km_map_access_config_path(), $php);
@@ -309,7 +317,7 @@ function km_map_view_unlocked(array $config): bool
     return match ($config['mapMode']) {
         'public' => true,
         // 教職員(とお試しの閲覧)はパスワード無しで地図を見られる(docs/15 段 D)
-        'password' => km_map_password_entered($config) || km_map_teacher_like_session(false),
+        'password' => km_map_password_entered($config) || km_map_teacher_like_session(false) || km_map_event_opens_view($config),
         default => true,
     };
 }
@@ -323,4 +331,31 @@ function km_map_view_unlocked(array $config): bool
 function km_map_password_requested(array $config): bool
 {
     return $config['mode'] === 'password' || $config['mapMode'] === 'password';
+}
+
+/**
+ * イベント中なので、地図をパスワード無しで出してよいか(2026-10-15、利用者の指示)。
+ *
+ * 設定「イベント中はパスワード無しで地図を表示する」が入っていて、**いま有効なイベントがある**とき(期間内・有効)。
+ * 確かめられなければ(DB に繋がらない・表が無い)**開けない** —— 錠は閉じる側に倒す。
+ * 1 回の要求で何度も呼ばれる(地図・見取り図・入力欄の判定)ので、結果は覚えておく。
+ */
+function km_map_event_opens_view(array $config): bool
+{
+    if (($config['eventOpensMap'] ?? false) !== true) {
+        return false;
+    }
+    static $active = null;
+    if ($active === null) {
+        try {
+            require_once __DIR__ . '/db.php';
+            require_once __DIR__ . '/map-events.php';
+            $active = km_map_event_active(km_db()) !== [];
+        } catch (Throwable $exception) {
+            error_log('km_map_event_opens_view failed (map stays locked): ' . $exception->getMessage());
+            $active = false;
+        }
+    }
+
+    return $active;
 }
