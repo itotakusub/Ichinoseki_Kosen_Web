@@ -26,6 +26,8 @@ $search = trim((string) ($_GET['q'] ?? ''));
 $found = [];
 $searchError = null;
 $returnTo = static fn (): string => ($_POST['return'] ?? '') === 'users' ? './users.php' : './test-mode.php';
+// 記録の絞り込み(テスト用アカウント / イベント中の来場者)
+$source = in_array($_GET['source'] ?? '', ['test', 'event'], true) ? (string) $_GET['source'] : 'all';
 
 try {
     $pdo = km_db();
@@ -33,10 +35,10 @@ try {
     // CSV は画面より先に返す(GET でよい。中身は管理者だけが見られる記録)
     if (($_GET['download'] ?? '') === 'csv') {
         header('Content-Type: text/csv; charset=utf-8');
-        header('Content-Disposition: attachment; filename="kosenmap-test-events-' . date('Ymd-His') . '.csv"');
+        header('Content-Disposition: attachment; filename="kosenmap-test-events-' . $source . '-' . date('Ymd-His') . '.csv"');
         header('Cache-Control: no-store');
         $out = fopen('php://output', 'wb');
-        $rows = km_test_events_csv($pdo, $out);
+        $rows = km_test_events_csv($pdo, $out, $source);
         fclose($out);
         km_admin_log_record('content', 'test.events_csv', $rows . ' 件');
         exit;
@@ -64,12 +66,18 @@ try {
         if ($formAction === 'settings') {
             $survey = trim((string) ($_POST['survey_url'] ?? ''));
             $guide = str_replace("\r\n", "\n", trim((string) ($_POST['guide'] ?? '')));
+            $idle = trim((string) ($_POST['idle_minutes'] ?? ''));
+            $collect = isset($_POST['event_collect']) ? '1' : '0';
             if (!km_test_survey_url_valid($survey)) {
                 $errors[] = 'アンケートの URL は https:// で始まる 255 字までの URL にしてください(空にすると出しません)。';
             } elseif (mb_strlen($guide) > 2000) {
                 $errors[] = '操作方法は 2000 字までにしてください。';
+            } elseif (!ctype_digit($idle) || (int) $idle > 60) {
+                $errors[] = '自動で「始めから」に戻すまでの時間は 0〜60 分にしてください(0 は戻さない)。';
             } else {
                 km_setting_set($pdo, KM_TEST_SURVEY_SETTING, $survey);
+                km_setting_set($pdo, KM_TEST_IDLE_SETTING, (string) (int) $idle);
+                km_setting_set($pdo, KM_EVENT_COLLECT_SETTING, $collect);
                 km_test_guide_set($pdo, $guide === '' ? KM_TEST_GUIDE_DEFAULT : $guide);
                 km_admin_log_record('settings', 'test.settings');
                 header('Location: ./test-mode.php?saved=1', true, 303);
@@ -103,8 +111,10 @@ try {
     $accounts = km_test_accounts_all($pdo);
     $surveyUrl = km_test_survey_url($pdo);
     $guideText = km_test_guide_text($pdo);
-    $summary = km_test_events_summary($pdo);
-    $recent = km_test_events_recent($pdo, 100);
+    $idleMinutes = km_test_idle_minutes($pdo);
+    $eventCollect = km_event_collect_enabled($pdo);
+    $summary = km_test_events_summary($pdo, $source);
+    $recent = km_test_events_recent($pdo, 100, $source);
     $nodeNames = km_test_node_names($pdo, array_merge(
         array_column($summary['places'], 'node'),
         array_column($summary['routes'], 'from'),
@@ -118,6 +128,8 @@ try {
     $accounts = [];
     $surveyUrl = '';
     $guideText = KM_TEST_GUIDE_DEFAULT;
+    $idleMinutes = KM_TEST_IDLE_DEFAULT;
+    $eventCollect = true;
     $summary = null;
     $recent = [];
     $nodeNames = [];
@@ -254,6 +266,25 @@ require __DIR__ . '/_inc/partials/page-header.php';
                         <label for="guide-text" class="form-label">操作方法(1 行が 1 項目。番号は自動で付きます)</label>
                         <textarea id="guide-text" name="guide" class="form-control" rows="8" maxlength="2000"><?= km_e($guideText) ?></textarea>
                       </div>
+                      <div class="mb-3">
+                        <label for="idle-minutes" class="form-label">触られないまま、この分数が過ぎたら自動で「始めから」</label>
+                        <?php // style 属性は CSP で効かないので、幅は格子で決める ?>
+                        <div class="row"><div class="col-6 col-md-4">
+                          <div class="input-group">
+                            <input type="number" id="idle-minutes" name="idle_minutes" class="form-control" min="0" max="60" step="1"
+                                   value="<?= (int) $idleMinutes ?>">
+                            <span class="input-group-text">分</span>
+                          </div>
+                        </div></div>
+                        <div class="form-text">0 にすると自動では戻しません。戻す前に 15 秒の知らせ(「このまま使う」で取り消せる)が出ます。1 度も触られていない画面は戻しません。</div>
+                      </div>
+                      <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" id="event-collect" name="event_collect" value="1" <?= $eventCollect ? 'checked' : '' ?>>
+                        <label class="form-check-label" for="event-collect">
+                          イベントモード中は、来場者(ログインしていない人も)の操作も記録する
+                        </label>
+                        <div class="form-text">最初の画面で「情報を収集するのを許可します」(チェック済み)を出し、外した人の操作は記録しません。誰の操作かは残しません。</div>
+                      </div>
                       <button type="submit" class="btn btn-primary">保存</button>
                     </form>
                     <form method="post" class="mt-2" data-km-confirm="操作方法を既定の文に戻します。よろしいですか?">
@@ -271,7 +302,12 @@ require __DIR__ . '/_inc/partials/page-header.php';
             <div class="card mb-4">
               <div class="card-header d-flex align-items-center">
                 <h3 class="card-title me-auto">集めた記録</h3>
-                <a href="./test-mode.php?download=csv" class="btn btn-sm btn-outline-primary me-2">CSV を書き出す</a>
+                <div class="btn-group btn-group-sm me-2" role="group" aria-label="記録の絞り込み">
+                  <?php foreach (['all' => 'すべて', 'test' => 'テスト用アカウント', 'event' => 'イベント中の来場者'] as $key => $text): ?>
+                    <a href="./test-mode.php?source=<?= km_e($key) ?>" class="btn <?= $source === $key ? 'btn-secondary' : 'btn-outline-secondary' ?>"><?= km_e($text) ?></a>
+                  <?php endforeach; ?>
+                </div>
+                <a href="./test-mode.php?download=csv&amp;source=<?= km_e($source) ?>" class="btn btn-sm btn-outline-primary me-2">CSV を書き出す</a>
                 <form method="post" class="m-0" data-km-confirm="テスト用アカウントの記録を全部消します。戻せません。先に CSV を書き出しましたか?">
                   <?= km_csrf_field() ?>
                   <input type="hidden" name="form_action" value="delete_events">
@@ -329,12 +365,13 @@ require __DIR__ . '/_inc/partials/page-header.php';
                   <div class="table-responsive">
                     <table class="table table-sm table-striped fs-7 align-middle">
                       <thead>
-                        <tr><th>時刻</th><th>来場者</th><th>種類</th><th>語・条件</th><th>場所</th><th>階</th></tr>
+                        <tr><th>時刻</th><th>アカウント</th><th>来場者</th><th>種類</th><th>語・条件</th><th>場所</th><th>階</th></tr>
                       </thead>
                       <tbody>
                         <?php foreach ($recent as $row): ?>
                           <tr>
                             <td class="text-nowrap"><?= km_e(km_test_local_time((string) $row['happened_at'])) ?></td>
+                            <td><?= km_e(km_test_account_label((string) $row['account'])) ?></td>
                             <td><code><?= km_e(substr((string) $row['visit'], 0, 6)) ?></code></td>
                             <td class="text-nowrap"><?= km_e(KM_TEST_EVENT_LABELS[$row['kind']] ?? (string) $row['kind']) ?><?= $row['field'] === 'start' ? '(出発地)' : ($row['field'] === 'goal' ? '(目的地)' : '') ?></td>
                             <td><?= km_e((string) ($row['text'] ?? '')) ?></td>

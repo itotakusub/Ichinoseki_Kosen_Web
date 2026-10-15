@@ -3000,6 +3000,13 @@ function km_check_github_mirror(): void
         check_bool('出す段を読めた', false);
     }
 
+    km_check_heading('deploy: バックアップは配備の前(2026-10-15、利用者の指摘)');
+    // 戻す先は「配備する前の、動いている状態」。取れなければ何も送らずに止める
+    $backupAt = strpos($deploy, '$backupResult = Invoke-KmBackupStep -Open:$OpenBackup');
+    check_bool('-Backup の控えは tar を作る前', $backupAt !== false && $backupAt < (int) strpos($deploy, "\$tarArgs = @('-czf'"));
+    check_bool('控えが取れなければ配備しない(exit 3)', preg_match('/\$backupResult = Invoke-KmBackupStep -Open:\$OpenBackup\s*\} catch \{.*?exit 3\s*\}/s', $deploy) === 1);
+    check('-Backup の控えを取るのは 1 か所だけ', 1, substr_count($deploy, '$backupResult = Invoke-KmBackupStep'));
+
     km_check_heading('github-mirror: 検査を外す道を作らない');
     check_bool('まとめて出すときに -Force を渡さない', !preg_match('/pushArgs \+= .*-Force/', $all));
     check_bool('片方が止まってももう片方は出す', str_contains($all, 'catch {') && str_contains($all, 'foreach ($m in $mirrors)'));
@@ -6916,7 +6923,7 @@ function km_check_layout(): void
     // 公開ページ: 印のあるときだけ JS と札を出す。開くたびに印を立て直す
     check_bool('開くたびに印を外してから確かめ直す', strpos($index, 'unset($_SESSION[KM_TEST_MODE_SESSION_KEY]);') !== false
         && strpos($index, 'unset($_SESSION[KM_TEST_MODE_SESSION_KEY]);') < (int) strpos($index, 'km_test_account_is_marked($testPdo'));
-    check_bool('test-mode.js は印のあるときだけ読む', preg_match("/if \(\\\$kmTestMode !== null\): \?>\s*(<\?php[^?]*\?>\s*)?<script defer src=\"<\?= km_home_e\(km_public_asset\('Main\/test-mode\.js'\)\) \?>\"><\/script>/", $index) === 1);
+    check_bool('test-mode.js は印のあるときだけ読む', preg_match("/if \(\\\$kmTestMode !== null \|\| \\\$kmEventCollect !== null\): \?>\s*(<\?php[^?]*\?>\s*)?<script defer src=\"<\?= km_home_e\(km_public_asset\('Main\/test-mode\.js'\)\) \?>\"><\/script>/", $index) === 1);
     check_bool('test-mode.js は app.js より先', (int) strpos($index, "Main/test-mode.js')") < (int) strpos($index, '<script defer src="<?= km_home_e(km_public_asset(\'Main/app.js\')) ?>"></script>'));
     check_bool('札と操作方法は小さくできる・始めからがある', substr_count($index, 'data-km-test-min') === 2 && str_contains($index, 'id="km-test-restart"'));
     check_bool('app.js は kmTestLog が在るときだけ送る', str_contains($appJs, "if (typeof window.kmTestLog === 'function') window.kmTestLog(kind, data);") && !str_contains($appJs, "/api/test-events.php"));
@@ -6924,13 +6931,32 @@ function km_check_layout(): void
         check_bool("app.js が記録する: {$kind}", str_contains($appJs, "testLog('{$kind}'"));
     }
     // API: セッションの印・期限・CSRF の順に見てから書く
-    $markAt = strpos($testApi, '$_SESSION[KM_TEST_MODE_SESSION_KEY]');
-    check_bool('API は印と CSRF を見てから書く', $markAt !== false && $markAt < (int) strpos($testApi, 'km_csrf_verify()')
-        && (int) strpos($testApi, 'km_csrf_verify()') < (int) strpos($testApi, 'km_test_events_insert('));
-    check_bool('API は期限切れの印を断る', str_contains($testApi, "(int) (\$mark['until'] ?? 0) < time()"));
+    $markAt = strpos($testApi, '$sub = km_test_collect_subject($_SESSION, time());');
+    check_bool('API は印と CSRF を見てから書く', $markAt !== false && $markAt < (int) strpos($testApi, 'if (!km_csrf_verify())')
+        && (int) strpos($testApi, 'if (!km_csrf_verify())') < (int) strpos($testApi, 'km_test_events_insert('));
+    $nowS = 1_760_000_000;
+    check('送り主: テスト用の印が先', 'abc', km_test_collect_subject([KM_TEST_MODE_SESSION_KEY => ['sub' => 'abc', 'until' => $nowS + 1], KM_EVENT_COLLECT_SESSION_KEY => ['subject' => 'event:3', 'until' => $nowS + 1]], $nowS));
+    check('送り主: イベント中の来場者', 'event:3', km_test_collect_subject([KM_EVENT_COLLECT_SESSION_KEY => ['subject' => 'event:3', 'until' => $nowS + 1]], $nowS));
+    check('API は期限切れの印を断る', null, km_test_collect_subject([KM_TEST_MODE_SESSION_KEY => ['sub' => 'abc', 'until' => $nowS - 1], KM_EVENT_COLLECT_SESSION_KEY => ['subject' => 'event:3', 'until' => $nowS - 1]], $nowS));
+    check('イベントの印は event: で始まるものだけ', null, km_test_collect_subject([KM_EVENT_COLLECT_SESSION_KEY => ['subject' => 'someone', 'until' => $nowS + 1]], $nowS));
+    check('イベントの記録に誰かは書かない(番号だけ・並べ替える)', 'event:2-5', km_event_collect_subject([5, '2', 0]));
+    check_bool('Logto の ID と event: は取り違えない', !km_test_valid_sub('event:1'));
+    check_bool('絞り込みは決まった文字列だけ', km_test_source_where("x' OR 1=1") === '1 = 1' && km_test_source_where('event') === "sub LIKE 'event:%'");
+    check('自動の始めからの既定は 3 分', 3, KM_TEST_IDLE_DEFAULT);
+    // イベント中の許可: チェック済みで出す・決めるまで送らない・外したら溜めた分も捨てる
+    check_bool('許可はチェック済みで出す', str_contains($index, '<input type="checkbox" id="km-collect-consent" checked>'));
+    check_bool('イベントの記録はテスト用アカウントのときは出さない', str_contains($index, 'if ($kmEvent !== null && $kmTestMode === null) {'));
+    check_bool('開くたびにイベントの印も立て直す', strpos($index, 'unset($_SESSION[KM_EVENT_COLLECT_SESSION_KEY]);') !== false
+        && strpos($index, 'unset($_SESSION[KM_EVENT_COLLECT_SESSION_KEY]);') < (int) strpos($index, 'km_event_collect_enabled(km_db())'));
+    check_bool('決めるまでは送らない', str_contains($testJs, "if (consent !== 'yes') return;   // 決めるまでは溜めるだけ"));
+    check_bool('許可しないなら記録もしない・溜めた分も捨てる', str_contains($testJs, "if (consent === 'no') return;") && str_contains($testJs, 'queue = [];   // 許可しないなら'));
+    check_bool('タブを移っただけでは許可したことにしない', preg_match("/visibilitychange', function \(\) \{\s*if \(document\.visibilityState === 'hidden'\) flush\(true\);/", $testJs) === 1);
+    // 自動の始めから: 触られていない画面は戻さない・戻す前に知らせる
+    check_bool('触られるまで自動で戻さない', str_contains($testJs, '// 触られるまでは数えない(arm しない)') && str_contains($testJs, 'const IDLE_WARNING_SECONDS = 15;'));
+    check_bool('戻す前の知らせに「このまま使う」', str_contains($testJs, "keep.textContent = 'このまま使う';") && str_contains($testJs, "restart('idle');"));
     check_bool('API は 64KB までしか読まない', str_contains($testApi, "file_get_contents('php://input', false, null, 0, 65536)"));
     check_bool('JS はトークンを X-KM-CSRF で送る', str_contains($testJs, "'X-KM-CSRF': token"));
-    check_bool('始めからで記録を区切り、来場者の覚えを消す', str_contains($testJs, 'window.sessionStorage.setItem(VISIT_KEY, newVisitId());')
+    check_bool('始めからで記録を区切り、来場者の覚えを消す', str_contains($testJs, 'storageSet(window.sessionStorage, VISIT_KEY, newVisitId());')
         && str_contains($testJs, "'km-map-tuning-v1'") && str_contains($testJs, "window.location.replace('/');"));
     $repoRootForTest = km_check_repo_root();
     if ($repoRootForTest !== null) {

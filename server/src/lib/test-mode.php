@@ -34,6 +34,27 @@ const KM_TEST_MODE_SESSION_TTL = 8 * 3600;
 
 const KM_TEST_SURVEY_SETTING = 'test_mode_survey_url';
 
+/**
+ * 触られないまま、この分数が過ぎたら自動で「始めから」(2026-10-15、利用者の指示)。0 は使わない。
+ * 1 度も触られていない画面は戻さない(開き直しが繰り返されるだけになる)。
+ */
+const KM_TEST_IDLE_SETTING = 'test_mode_idle_minutes';
+const KM_TEST_IDLE_DEFAULT = 3;
+
+/*
+ * ======== イベント中の来場者の記録(2026-10-15、利用者の指示) ========
+ *
+ * イベントモードが有効な間は、**ログインしている・していないに関わらず**、最初の画面で
+ * 「情報の収集を許可します」(チェック済み)を出し、外さなかった人の操作も同じ表に記録する。
+ *
+ * - 誰の記録かは残さない。アカウント欄は `event:<イベントの番号>`(ログインしていても Logto の ID は書かない)
+ * - チェックを外して OK を押した人の操作は送らない。決めるまでは手元に溜めるだけ(Main/test-mode.js)
+ * - 管理画面「テスト用アカウント」で止められる(既定は記録する)
+ */
+const KM_EVENT_COLLECT_SESSION_KEY = 'km_event_collect';
+const KM_EVENT_COLLECT_SETTING = 'event_collect';
+const KM_EVENT_SUBJECT_PREFIX = 'event:';
+
 /** 1 回の送信で受ける件数と、1 件の文字の長さ(検索の語) */
 const KM_TEST_EVENTS_PER_REQUEST = 50;
 const KM_TEST_EVENT_TEXT_MAX = 100;
@@ -207,6 +228,52 @@ function km_test_survey_url_valid(string $url): bool
     return is_array($parts) && ($parts['scheme'] ?? '') === 'https' && ($parts['host'] ?? '') !== '';
 }
 
+function km_test_idle_minutes(PDO $pdo): int
+{
+    $value = km_setting_get($pdo, KM_TEST_IDLE_SETTING, (string) KM_TEST_IDLE_DEFAULT);
+
+    return ctype_digit($value) ? max(0, min(60, (int) $value)) : KM_TEST_IDLE_DEFAULT;
+}
+
+function km_event_collect_enabled(PDO $pdo): bool
+{
+    return km_setting_get($pdo, KM_EVENT_COLLECT_SETTING, '1') === '1';
+}
+
+/** イベント中の来場者の記録のアカウント欄。**純粋関数**(誰かは書かない。どのイベントかだけ) */
+function km_event_collect_subject(array $eventIds): string
+{
+    $ids = array_values(array_filter(array_map('intval', $eventIds), static fn (int $id): bool => $id > 0));
+    sort($ids);
+
+    return substr(KM_EVENT_SUBJECT_PREFIX . ($ids === [] ? '0' : implode('-', $ids)), 0, 64);
+}
+
+/** 記録の絞り込み(all / test / event)の WHERE。**決まった文字列だけ返す**(SQL に値を差し込まない) */
+function km_test_source_where(string $source, string $column = 'sub'): string
+{
+    return match ($source) {
+        'test' => "{$column} NOT LIKE 'event:%'",
+        'event' => "{$column} LIKE 'event:%'",
+        default => '1 = 1',
+    };
+}
+
+/** 記録の受け手(API)が使う送り主。テスト用の印が先、なければイベント中の来場者。どちらも無ければ null */
+function km_test_collect_subject(array $session, int $now): ?string
+{
+    $test = $session[KM_TEST_MODE_SESSION_KEY] ?? null;
+    if (is_array($test) && (string) ($test['sub'] ?? '') !== '' && (int) ($test['until'] ?? 0) >= $now) {
+        return (string) $test['sub'];
+    }
+    $event = $session[KM_EVENT_COLLECT_SESSION_KEY] ?? null;
+    if (is_array($event) && str_starts_with((string) ($event['subject'] ?? ''), KM_EVENT_SUBJECT_PREFIX) && (int) ($event['until'] ?? 0) >= $now) {
+        return (string) $event['subject'];
+    }
+
+    return null;
+}
+
 function km_test_guide_text(PDO $pdo): string
 {
     try {
@@ -369,39 +436,40 @@ function km_test_node_names(PDO $pdo, array $ids): array
  *               places:list<array{node:string,count:int}>, routes:list<array{from:?string,to:?string,count:int}>,
  *               floors:list<array{floor:string,count:int}>, first:?string, last:?string}
  */
-function km_test_events_summary(PDO $pdo): array
+function km_test_events_summary(PDO $pdo, string $source = 'all'): array
 {
     km_test_mode_ensure_tables($pdo);
+    $w = km_test_source_where($source);
     $one = static fn (string $sql): array => $pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC);
 
     $byKind = [];
-    foreach ($one('SELECT kind, COUNT(*) AS c FROM km_test_events GROUP BY kind') as $row) {
+    foreach ($one("SELECT kind, COUNT(*) AS c FROM km_test_events WHERE {$w} GROUP BY kind") as $row) {
         $byKind[(string) $row['kind']] = (int) $row['c'];
     }
-    $range = $one('SELECT COUNT(*) AS c, COUNT(DISTINCT visit) AS v, MIN(happened_at) AS f, MAX(happened_at) AS l FROM km_test_events')[0];
+    $range = $one("SELECT COUNT(*) AS c, COUNT(DISTINCT visit) AS v, MIN(happened_at) AS f, MAX(happened_at) AS l FROM km_test_events WHERE {$w}")[0];
 
     return [
         'total' => (int) $range['c'],
         'visits' => (int) $range['v'],
         'byKind' => $byKind,
         'searches' => array_map(static fn ($r) => ['text' => (string) $r['text'], 'count' => (int) $r['c']], $one(
-            "SELECT text, COUNT(*) AS c FROM km_test_events WHERE kind IN ('search', 'category') AND text IS NOT NULL
+            "SELECT text, COUNT(*) AS c FROM km_test_events WHERE {$w} AND kind IN ('search', 'category') AND text IS NOT NULL
              GROUP BY text ORDER BY c DESC, text LIMIT 30"
         )),
         // 「探した場所」は、検索から選んだ地点・詳細を開いた地点・経路の目的地を合わせて数える
         'places' => array_map(static fn ($r) => ['node' => (string) $r['n'], 'count' => (int) $r['c']], $one(
             "SELECT n, COUNT(*) AS c FROM (
-                 SELECT node_id AS n FROM km_test_events WHERE kind IN ('pick', 'detail', 'search') AND node_id IS NOT NULL
+                 SELECT node_id AS n FROM km_test_events WHERE {$w} AND kind IN ('pick', 'detail', 'search') AND node_id IS NOT NULL
                  UNION ALL
-                 SELECT node_id2 AS n FROM km_test_events WHERE kind = 'route' AND node_id2 IS NOT NULL
+                 SELECT node_id2 AS n FROM km_test_events WHERE {$w} AND kind = 'route' AND node_id2 IS NOT NULL
              ) AS t GROUP BY n ORDER BY c DESC, n LIMIT 30"
         )),
         'routes' => array_map(static fn ($r) => ['from' => $r['node_id'], 'to' => $r['node_id2'], 'count' => (int) $r['c']], $one(
-            "SELECT node_id, node_id2, COUNT(*) AS c FROM km_test_events WHERE kind = 'route'
+            "SELECT node_id, node_id2, COUNT(*) AS c FROM km_test_events WHERE {$w} AND kind = 'route'
              GROUP BY node_id, node_id2 ORDER BY c DESC LIMIT 20"
         )),
         'floors' => array_map(static fn ($r) => ['floor' => (string) $r['floor_id'], 'count' => (int) $r['c']], $one(
-            "SELECT floor_id, COUNT(*) AS c FROM km_test_events WHERE kind = 'floor' AND floor_id IS NOT NULL
+            "SELECT floor_id, COUNT(*) AS c FROM km_test_events WHERE {$w} AND kind = 'floor' AND floor_id IS NOT NULL
              GROUP BY floor_id ORDER BY c DESC"
         )),
         'first' => $range['f'] !== null ? km_test_local_time((string) $range['f']) : null,
@@ -410,12 +478,13 @@ function km_test_events_summary(PDO $pdo): array
 }
 
 /** 新しい順に [limit] 件 */
-function km_test_events_recent(PDO $pdo, int $limit = 100): array
+function km_test_events_recent(PDO $pdo, int $limit = 100, string $source = 'all'): array
 {
     km_test_mode_ensure_tables($pdo);
     $statement = $pdo->prepare(
         'SELECT e.visit, e.kind, e.field, e.text, e.node_id, e.node_id2, e.floor_id, e.happened_at, COALESCE(NULLIF(a.label, \'\'), e.sub) AS account
            FROM km_test_events e LEFT JOIN km_test_accounts a ON a.sub = e.sub
+          WHERE ' . km_test_source_where($source, 'e.sub') . '
           ORDER BY e.id DESC LIMIT ' . max(1, min(5000, $limit))
     );
     $statement->execute();
@@ -423,22 +492,30 @@ function km_test_events_recent(PDO $pdo, int $limit = 100): array
     return $statement->fetchAll(PDO::FETCH_ASSOC);
 }
 
+/** 記録のアカウント欄の見せ方。イベント中の来場者は誰か分からない(番号はイベントの番号) */
+function km_test_account_label(string $account): string
+{
+    return str_starts_with($account, KM_EVENT_SUBJECT_PREFIX)
+        ? 'イベントの来場者(#' . substr($account, strlen(KM_EVENT_SUBJECT_PREFIX)) . ')'
+        : $account;
+}
+
 /** CSV(Excel で開けるよう BOM 付き UTF-8)を書き出す。全件・古い順 */
-function km_test_events_csv(PDO $pdo, $out): int
+function km_test_events_csv(PDO $pdo, $out, string $source = 'all'): int
 {
     km_test_mode_ensure_tables($pdo);
     fwrite($out, "\xEF\xBB\xBF");
     fputcsv($out, ['時刻(日本)', 'アカウント', '来場者(visit)', '種類', '欄', '語・条件', '地点', '地点2(目的地)', '階'], ',', '"', '');
     $rows = $pdo->query(
         'SELECT e.visit, e.kind, e.field, e.text, e.node_id, e.node_id2, e.floor_id, e.happened_at, COALESCE(NULLIF(a.label, \'\'), e.sub) AS account
-           FROM km_test_events e LEFT JOIN km_test_accounts a ON a.sub = e.sub ORDER BY e.id'
+           FROM km_test_events e LEFT JOIN km_test_accounts a ON a.sub = e.sub WHERE ' . km_test_source_where($source, 'e.sub') . ' ORDER BY e.id'
     )->fetchAll(PDO::FETCH_ASSOC);
     $names = km_test_node_names($pdo, array_merge(array_column($rows, 'node_id'), array_column($rows, 'node_id2')));
     $name = static fn ($id) => $id === null ? '' : ($names[$id] ?? $id);
     foreach ($rows as $row) {
         fputcsv($out, [
             km_test_local_time((string) $row['happened_at']),
-            (string) $row['account'],
+            km_test_account_label((string) $row['account']),
             (string) $row['visit'],
             KM_TEST_EVENT_LABELS[$row['kind']] ?? (string) $row['kind'],
             match ($row['field']) { 'start' => '出発地', 'goal' => '目的地', default => '' },

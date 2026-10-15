@@ -132,6 +132,8 @@ if ($loggedIn && isset($claims->sub)) {
                 'surveyUrl' => $surveyUrl,
                 'surveyQr' => $surveyQr,
                 'guide' => km_test_guide_lines(km_test_guide_text($testPdo)),
+                // 触られないまま過ぎたら自動で「始めから」(分。0 は使わない)
+                'idleMinutes' => km_test_idle_minutes($testPdo),
             ];
         }
     } catch (Throwable $exception) {
@@ -229,6 +231,28 @@ try {
     $inlineMapData = null;
     $kmEvent = null;
 }
+
+/*
+ * イベント中の来場者の記録(2026-10-15、利用者の指示。lib/test-mode.php)。
+ * **ログインしている・していないに関わらず**、最初の画面で「情報の収集を許可します」(チェック済み)を出す。
+ * 誰の記録かは残さない(アカウント欄は event:<イベントの番号>)。テスト用アカウントのときは出さない(あちらが記録する)。
+ * 開くたびに印を立て直す。イベントが終わっていれば印は無く、API は断る。
+ */
+unset($_SESSION[KM_EVENT_COLLECT_SESSION_KEY]);
+$kmEventCollect = null;
+if ($kmEvent !== null && $kmTestMode === null) {
+    try {
+        if (km_event_collect_enabled(km_db())) {
+            $collectSubject = km_event_collect_subject($kmEvent['ids'] ?? []);
+            $_SESSION[KM_EVENT_COLLECT_SESSION_KEY] = ['subject' => $collectSubject, 'until' => time() + KM_TEST_MODE_SESSION_TTL];
+            $kmEventCollect = ['key' => $collectSubject];
+        }
+    } catch (Throwable $exception) {
+        error_log('KosenMap home: event collection check failed (not collected): ' . $exception->getMessage());
+        unset($_SESSION[KM_EVENT_COLLECT_SESSION_KEY]);
+        $kmEventCollect = null;
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="ja">
@@ -241,8 +265,15 @@ try {
         <meta name="km-focus-room" content="<?= km_home_e($kmFocusRoom) ?>">
     <?php endif; ?>
     <?php if ($kmTestMode !== null): ?>
-        <?php /* テスト用アカウントの印と、記録の送信に使うトークン(Main/test-mode.js が読む。一般の人には出さない) */ ?>
+        <?php /* テスト用アカウントの印と、自動で「始めから」にするまでの分(Main/test-mode.js が読む。一般の人には出さない) */ ?>
         <meta name="km-test-mode" content="1">
+        <meta name="km-test-idle" content="<?= (int) $kmTestMode['idleMinutes'] ?>">
+    <?php elseif ($kmEventCollect !== null): ?>
+        <?php /* イベント中の来場者の記録。値は許可の覚え(localStorage)をイベントごとに分けるための名前 */ ?>
+        <meta name="km-event-collect" content="<?= km_home_e($kmEventCollect['key']) ?>">
+    <?php endif; ?>
+    <?php if ($kmTestMode !== null || $kmEventCollect !== null): ?>
+        <?php /* 記録の送信に使うトークン(api/test-events.php が X-KM-CSRF で見る) */ ?>
         <meta name="km-csrf" content="<?= km_home_e(km_csrf_token()) ?>">
     <?php endif; ?>
     <title>高専マップ案内</title>
@@ -414,6 +445,10 @@ try {
             <?php if (!empty($kmEvent['bannerUrl'])): ?>
                 <?php /* リンク先は lib/map-events.php がサイト内の絶対パスだけに検証済み */ ?>
                 <a class="km-event-banner-link" href="<?= km_home_e($kmEvent['bannerUrl']) ?>">くわしく</a>
+            <?php endif; ?>
+            <?php if ($kmEventCollect !== null): ?>
+                <?php /* 許可をあとから変えられるように(Main/test-mode.js が下の #km-collect-bar を開き直す) */ ?>
+                <button type="button" class="km-event-banner-link km-collect-open" data-km-collect-open>記録の設定</button>
             <?php endif; ?>
         </div>
         <?php endif; ?>
@@ -815,6 +850,25 @@ try {
     </div>
     <?php endif; ?>
 
+    <?php if ($kmEventCollect !== null): ?>
+    <?php
+    /*
+     * イベント中の情報の収集の許可(2026-10-15、利用者の指示)。**チェック済みで出す。**
+     * 最初の画面で 1 回だけ出し(イベントごとに覚える)、上の帯の「記録の設定」から開き直せる。
+     * 決めるまでは送らずに手元に溜め、外して OK なら捨てる(Main/test-mode.js)。
+     * JS が動かない環境では出さない(そもそも記録しない)ので、hidden で置く。
+     */
+    ?>
+    <div id="km-collect-bar" class="km-collect-bar" role="region" aria-labelledby="km-collect-title" hidden>
+        <p id="km-collect-title" class="km-collect-title">📊 情報の収集について</p>
+        <p class="km-collect-text">イベント期間中は、案内をよくするために、この画面での操作(検索した語・選んだ場所・開いた部屋・階の切り替え)を記録します。お名前やログインの情報は記録しません。</p>
+        <div class="km-collect-actions">
+            <label class="km-collect-check"><input type="checkbox" id="km-collect-consent" checked> 情報を収集するのを許可します</label>
+            <button type="button" id="km-collect-ok" class="primary-btn km-collect-ok">OK</button>
+        </div>
+    </div>
+    <?php endif; ?>
+
     <?php
     /*
      * defer を付ける。末尾に置いてあるので実行順は元から HTML パースの後だが、
@@ -844,8 +898,8 @@ try {
     <script defer src="<?= km_home_e(km_public_asset('Main/map-style.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/map-tuning.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/label-layout.js')) ?>"></script>
-    <?php if ($kmTestMode !== null): ?>
-        <?php /* テスト用アカウントだけ。**app.js より先に**読み、window.kmTestLog を用意しておく(app.js は在れば呼ぶ) */ ?>
+    <?php if ($kmTestMode !== null || $kmEventCollect !== null): ?>
+        <?php /* テスト用アカウントとイベント中だけ。**app.js より先に**読み、window.kmTestLog を用意しておく(app.js は在れば呼ぶ) */ ?>
         <script defer src="<?= km_home_e(km_public_asset('Main/test-mode.js')) ?>"></script>
     <?php endif; ?>
     <script defer src="<?= km_home_e(km_public_asset('Main/app.js')) ?>"></script>

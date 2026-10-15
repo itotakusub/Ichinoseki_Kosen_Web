@@ -270,6 +270,8 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
             }
         }
         $event = [
+            // 番号は来場者の操作の記録(lib/test-mode.php)がイベントを見分けるのに使う
+            'ids' => array_map('intval', array_column($overlay['events'], 'id')),
             'names' => array_column($overlay['events'], 'name'),
             'bannerText' => $banner['bannerText'] ?? null,
             'bannerUrl' => $banner['bannerUrl'] ?? null,
