@@ -3007,6 +3007,21 @@ function km_check_github_mirror(): void
     check_bool('控えが取れなければ配備しない(exit 3)', preg_match('/\$backupResult = Invoke-KmBackupStep -Open:\$OpenBackup\s*\} catch \{.*?exit 3\s*\}/s', $deploy) === 1);
     check('-Backup の控えを取るのは 1 か所だけ', 1, substr_count($deploy, '$backupResult = Invoke-KmBackupStep'));
 
+    km_check_heading('update-containers: コンテナの更新を選んで進める(2026-10-16、利用者の指示)');
+    $upd = $read('scripts/update-containers.ps1');
+    check_bool('update-containers.ps1 がある(UTF-8 BOM 付き)', str_starts_with($upd, "\xEF\xBB\xBF"));
+    check_bool('配備は deploy-to-host.ps1 -Backup に任せる(控えは配備の前)', str_contains($upd, '& $deploy -Action deploy -Backup -Yes'));
+    check_bool('控えが取れなかった(3)ら先へ進まない', preg_match('/3 \{[^}]*return \$false \}/', $upd) === 1);
+    check_bool('書き換えたら check.php を通し、落ちたら元に戻す', substr_count($upd, 'if (-not (Invoke-Check)) { Restore-Files $backup; return }') === 2);
+    check_bool('本番を変える前は yes と打たせる(大文字小文字も区別)', str_contains($upd, "-ceq 'yes'"));
+    check_bool('Logto の移行は新しい像の使い捨てコンテナで当てる', str_contains($upd, 'docker compose run --rm --entrypoint sh logto -c \'cd /etc/logto && npm run alteration deploy $newText\''));
+    check_bool('移行の前に一覧を見せる', strpos($upd, 'alteration list') < strpos($upd, 'alteration deploy'));
+    check_bool('1 つだけの up -d を叩かない', preg_match('/docker compose up -d [a-z]/', $upd) === 0);
+    check_bool('Logto は 1 つずつ(飛ばすときは skip と打たせる)', str_contains($upd, "-cne 'skip'"));
+    check_bool('タグの無い固定は上げない(上げ先が分からない)', str_contains($upd, 'Where-Object { -not $_.Untagged -and -not $_.IsLogto }'));
+    check_bool('latest に戻す道が無い(digest を必ず書く)', str_contains($upd, '"$($p.Prefix)$($c.NewRef)@$($c.NewDigest)$($p.Suffix)"'));
+    check_bool('ホストの出力は画面へ流す(関数の戻り値に混ぜない)', str_contains($upd, '& ssh @sshArgs | Out-Host'));
+
     km_check_heading('github-mirror: 検査を外す道を作らない');
     check_bool('まとめて出すときに -Force を渡さない', !preg_match('/pushArgs \+= .*-Force/', $all));
     check_bool('片方が止まってももう片方は出す', str_contains($all, 'catch {') && str_contains($all, 'foreach ($m in $mirrors)'));
