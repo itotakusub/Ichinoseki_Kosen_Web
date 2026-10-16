@@ -127,7 +127,7 @@ services:
     # (digest だけにすると hex を版番号として読み、毎日「新しい版があります」と言い続ける)。
     # 1.44.0 に上げた(2026-10-06、利用者の決定)。移行は 2 つ: 利用者 ID の列を 128 字に広げる(**戻せない** ——
     # 長い ID ができた後は巻き戻しが失敗する)・SAML の列を足す。先に検証機で上げて確かめた(docs/19)
-    image: ghcr.io/logto-io/logto:1.44.0@sha256:847cdd2759ad60f61b9733af0ea352183c805681dff5c9f8140a80f52d8e1340
+    image: ghcr.io/logto-io/logto:1.45.0@sha256:097cd47689546461edb4637fb6eee60b9ab6d3d4c08ebb20bc44a1b1809b82c0
     container_name: km-logto
     restart: unless-stopped
     security_opt:
@@ -266,7 +266,7 @@ services:
 
   phpmyadmin:
     # 2026-09-15 に動いていた中身(タグを残す理由は postgres と同じ)
-    image: phpmyadmin:5.2.3-apache@sha256:e1d42a6985a9622e1e2461d31d2cea82fb069ee05194dbe2a6c758f86c9ef6b8
+    image: phpmyadmin:5.2.3-apache@sha256:da3c72f9886fca93037b740c93fe1697a7924fe6790a58733814cee61ec49af8
     container_name: km-phpmyadmin
     restart: unless-stopped
     security_opt:
@@ -780,7 +780,7 @@ services:
   glances:
     # ホストの使用量(タスクマネージャー。2026-10-05、利用者の指示)。**API だけ**を出し、Web 画面は出さない。
     # 4.5.7(2026-09-26 の latest)。タグを残すのは check-updates.sh が新しい版を読むため(postgres と同じ)
-    image: nicolargo/glances:latest@sha256:0d955eb3cff5e2d5ecb34e873e5448acd4741c765d1a11e032f081bcaa75eaa5
+    image: nicolargo/glances:latest@sha256:413ddc0b03422ab0bcbf30f53faf63c3ee91b354bf544cd01aa60afa73a4cda2
     container_name: km-glances
     restart: unless-stopped
     # **ホスト全体だけを見る。docker.sock は渡さない**(利用者の決定。読み取りでも root 相当の口になる)。

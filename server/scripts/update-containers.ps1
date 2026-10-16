@@ -149,6 +149,77 @@ function Get-RemoteDigests([string[]]$Refs) {
     return $result
 }
 
+<#
+  **本番でいま動いているもの**を読む(2026-10-16、利用者の指摘「1.44.0 なのに最新と出た」)。
+
+  以前は「いまの版」を**手元の** compose.yaml から読んでいた。途中で止めた回(書き換えたが配備・入れ替えまで
+  行かなかった)のあとでは、手元は 1.45.0・本番は 1.44.0 になり、**本番が古いのに「最新です」と出た。**
+  比べる相手は本番。返すもの:
+    Running[サービス] = 動いているコンテナの image(compose に書いてあった `名前:タグ@sha256:…`)
+    Built[サービス]   = その像を作った時刻(epoch 秒)。ビルドするサービスで、Dockerfile より古ければ未ビルド
+    Files[ファイル]   = ホストに置いてある Dockerfile の FROM / COPY --from= の行
+    FileTime[ファイル] = その Dockerfile の更新時刻(epoch 秒)
+  試し(-DryRun)では読めないので $null(手元だけで判断する)。
+#>
+function Get-HostState {
+    if ($DryRun) { return $null }
+    Connect-Host
+    $remoteScript = @'
+cd __REMOTE__ || exit 1
+for c in $(docker compose ps -q 2>/dev/null); do
+  line=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}|{{.Config.Image}}|{{.Image}}' "$c" 2>/dev/null) || continue
+  img=${line##*|}
+  created=$(docker image inspect -f '{{.Created}}' "$img" 2>/dev/null)
+  epoch=$(date -d "$created" +%s 2>/dev/null || echo 0)
+  echo "KMRUN|${line%|*}|$epoch"
+done
+for f in docker/php/Dockerfile docker/soketi/Dockerfile; do
+  echo "KMMTIME|$f|$(stat -c %Y "$f" 2>/dev/null || echo 0)"
+  grep -E '^(FROM|COPY .*--from=)' "$f" 2>/dev/null | sed "s#^#KMFILE|$f|#"
+done
+'@
+    $out = Invoke-KmSshStdin -Script ($remoteScript -replace '__REMOTE__', $RemotePath) -TimeoutSec 120
+    $state = @{ Running = @{}; Built = @{}; Files = @{}; FileTime = @{} }
+    foreach ($line in $out) {
+        if ($line -match '^KMRUN\|([^|]+)\|([^|]+)\|(\d+)$') {
+            $state.Running[$Matches[1]] = $Matches[2]
+            $state.Built[$Matches[1]] = [long]$Matches[3]
+        } elseif ($line -match '^KMMTIME\|([^|]+)\|(\d+)$') {
+            $state.FileTime[$Matches[1]] = [long]$Matches[2]
+        } elseif ($line -match '^KMFILE\|([^|]+)\|(.*)$') {
+            if (-not $state.Files.ContainsKey($Matches[1])) { $state.Files[$Matches[1]] = @() }
+            $state.Files[$Matches[1]] += $Matches[2]
+        }
+    }
+    if ($state.Running.Count -eq 0) { throw '本番で動いているコンテナを読めませんでした(docker compose ps が空)。' }
+    return $state
+}
+
+<#
+  その固定が**本番に入っているか**。
+    'yes'     本番も同じ digest で動いている
+    'no'      手元とは違う(手元だけ書き換えた・配備した が作り直していない)
+    'unknown' 読めない(試し・そのサービスが本番で動いていない)
+  本番の digest も返す(表示に使う)。
+#>
+function Get-HostPinState($Pin, $State) {
+    if ($null -eq $State) { return @{ State = 'unknown'; Digest = '' } }
+    if ($Pin.Kind -eq 'image') {
+        $running = "$($State.Running[$Pin.Service])"
+        if ($running -eq '') { return @{ State = 'unknown'; Digest = '' } }
+        $d = if ($running -match '@(sha256:[0-9a-f]{64})$') { $Matches[1] } else { '' }
+        return @{ State = $(if ($d -eq $Pin.Digest) { 'yes' } else { 'no' }); Digest = $d }
+    }
+    # ビルドするもの: ホストの Dockerfile に同じ固定があり、しかも像がその Dockerfile より新しいこと
+    $hostLine = @($State.Files[$Pin.File] | Where-Object { $_ -like "*$($Pin.Ref)@*" }) | Select-Object -First 1
+    $d = if ("$hostLine" -match [regex]::Escape($Pin.Ref) + '@(sha256:[0-9a-f]{64})') { $Matches[1] } else { '' }
+    if ($d -ne $Pin.Digest) { return @{ State = 'no'; Digest = $d } }
+    $built = [long]$State.Built[$Pin.Service]
+    $mtime = [long]$State.FileTime[$Pin.File]
+    if ($built -gt 0 -and $mtime -gt $built) { return @{ State = 'no'; Digest = $d } }
+    return @{ State = 'yes'; Digest = $d }
+}
+
 # ---------------------------------------------------------------- 手元の固定
 
 function Get-FriendlyName([string]$Ref) {
@@ -291,7 +362,7 @@ function Invoke-Deploy {
         return $true
     }
     try {
-        & $deploy -Action deploy -Backup -Yes -HostName $HostName -User $User -KeyPath $KeyPath -RemotePath $RemotePath -Port $Port
+        & $deploy -Action deploy -Backup -GitHub none -Yes -HostName $HostName -User $User -KeyPath $KeyPath -RemotePath $RemotePath -Port $Port
         $code = $LASTEXITCODE
     } catch {
         Write-Warn "  配備が止まりました: $($_.Exception.Message)"
@@ -337,46 +408,62 @@ function Invoke-Refresh {
     if ($pins.Count -eq 0) { Write-Warn '  固定が見つかりません。'; return }
 
     $digests = Get-RemoteDigests @($pins | ForEach-Object { $_.Ref } | Select-Object -Unique)
+    # 手元だけでなく**本番**とも比べる(手元を書き換えたまま止めた回のあとでも、未反映を見落とさない)
+    $hostState = Get-HostState
 
     $rows = @()
     $n = 0
     foreach ($p in $pins) {
         $n++
         $new = "$($digests[$p.Ref])"
-        $state = if ($new -eq '') { 'unknown' } elseif ($new -eq $p.Digest) { 'same' } else { 'new' }
-        $rows += [pscustomobject]@{ No = $n; Pin = $p; NewDigest = $new; State = $state }
+        $onHost = Get-HostPinState $p $hostState
+        $state = if ($new -ne '' -and $new -ne $p.Digest) { 'new' }
+            elseif ($onHost.State -eq 'no') { 'pending' }
+            elseif ($new -eq '') { 'unknown' }
+            else { 'same' }
+        $rows += [pscustomobject]@{ No = $n; Pin = $p; NewDigest = $(if ($state -eq 'new') { $new } else { $p.Digest }); State = $state }
     }
 
     Write-Host ''
     foreach ($r in $rows) {
-        $mark = switch ($r.State) { 'new' { '★ 新しい中身あり' } 'same' { '  変化なし' } default { '  聞けませんでした' } }
-        $color = switch ($r.State) { 'new' { 'Yellow' } 'same' { 'Gray' } default { 'DarkYellow' } }
+        $mark = switch ($r.State) {
+            'new' { '★ 新しい中身あり' }
+            'pending' { '☆ 手元は新しい・本番は古いまま' }
+            'same' { '  変化なし(本番も同じ)' }
+            default { '  聞けませんでした' }
+        }
+        $color = switch ($r.State) { 'new' { 'Yellow' } 'pending' { 'Yellow' } 'same' { 'Gray' } default { 'DarkYellow' } }
         Write-Host ("  [{0,2}] {1,-26} {2,-40} {3}" -f $r.No, $r.Pin.Name, $r.Pin.Ref, $mark) -ForegroundColor $color
+    }
+    if ($null -eq $hostState) {
+        Write-Host '  (試しなので、本番に入っているかは見ていません)' -ForegroundColor DarkGray
     }
     if ($untagged.Count -gt 0) {
         Write-Host ''
         Write-Host "  タグの無い固定(ここでは上げません): $(($untagged | ForEach-Object { ($_.Ref) + '(' + $_.File + ')' }) -join ' / ')" -ForegroundColor DarkGray
     }
 
-    $candidates = @($rows | Where-Object { $_.State -eq 'new' })
+    $candidates = @($rows | Where-Object { $_.State -in 'new', 'pending' })
     if ($candidates.Count -eq 0) { Write-Host ''; Write-Host '  当てるものはありません。' -ForegroundColor Green; return }
 
     Write-Host ''
-    $answer = Read-Host "  当てる番号をカンマで(Enter = ★ の全部 $(($candidates | ForEach-Object { $_.No }) -join ','), q = やめる)"
+    $answer = Read-Host "  当てる番号をカンマで(Enter = ★☆ の全部 $(($candidates | ForEach-Object { $_.No }) -join ','), q = やめる)"
     if ($answer.Trim() -eq 'q') { return }
     $chosen = @(if ($answer.Trim() -eq '') { $candidates } else {
         $nums = $answer -split '[,\s]+' | Where-Object { $_ -match '^\d+$' } | ForEach-Object { [int]$_ }
-        $rows | Where-Object { $_.No -in $nums -and $_.State -eq 'new' }
+        $rows | Where-Object { $_.No -in $nums -and $_.State -in 'new', 'pending' }
     })
-    if ($chosen.Count -eq 0) { Write-Warn '  選んだ番号に、当てられるもの(★)がありません。'; return }
+    if ($chosen.Count -eq 0) { Write-Warn '  選んだ番号に、当てられるもの(★☆)がありません。'; return }
 
     if (@($chosen | Where-Object { $_.Pin.Name -match 'DB' }).Count -gt 0) {
         Write-Warn '  DB(MariaDB / PostgreSQL)を含みます。壊れたら控えからの復元になります(docs/03 §8)。'
     }
 
-    $changes = @($chosen | ForEach-Object { [pscustomobject]@{ Pin = $_.Pin; NewRef = $_.Pin.Ref; NewDigest = $_.NewDigest } })
+    # ☆(手元はもう新しい)は書き換えない。配備と入れ替えだけ行う
+    $changes = @($chosen | Where-Object { $_.State -eq 'new' } |
+        ForEach-Object { [pscustomobject]@{ Pin = $_.Pin; NewRef = $_.Pin.Ref; NewDigest = $_.NewDigest } })
     Write-Step '手元のファイルを書き換える'
-    Show-Changes $changes
+    if ($changes.Count -gt 0) { Show-Changes $changes } else { Write-Host '  書き換えるものはありません(手元はもう新しい)。' }
     $backup = Set-PinLines $changes
 
     if (-not (Invoke-Check)) { Restore-Files $backup; return }
@@ -388,14 +475,14 @@ function Invoke-Refresh {
     if ($buildServices.Count) { $what += "作り直す: $($buildServices -join ' ')" }
 
     if (-not (Confirm-Yes "本番で控えを取ってから配備し、入れ替えます($($what -join ' / '))。数十秒止まるサービスがあります")) {
-        $keep = Read-Host '  やめました。手元の書き換えを元に戻しますか? (y = 戻す / Enter = 残す)'
-        if ($keep.Trim() -eq 'y') { Restore-Files $backup }
+        $keep = Read-Host '  やめました。手元の書き換えを元に戻しますか? (Enter = 戻す / n = 残す)'
+        if ($keep.Trim() -ne 'n') { Restore-Files $backup }
         return
     }
     if (-not (Invoke-Deploy)) {
-        Write-Warn '  本番は入れ替えていません。手元のファイルは書き換えたままです。'
-        $keep = Read-Host '  元に戻しますか? (y = 戻す / Enter = 残す)'
-        if ($keep.Trim() -eq 'y') { Restore-Files $backup }
+        Write-Warn '  本番は入れ替えていません。'
+        $keep = Read-Host '  手元の書き換えを元に戻しますか? (Enter = 戻す / n = 残す)'
+        if ($keep.Trim() -ne 'n') { Restore-Files $backup }
         return
     }
 
@@ -438,9 +525,28 @@ function Invoke-LogtoUpgrade {
     Write-Step 'Logto を次の版へ上げる'
     $pin = @(Get-Pins | Where-Object { $_.IsLogto -and $_.File -eq 'compose.yaml' }) | Select-Object -First 1
     if (-not $pin) { Write-Warn '  compose.yaml に Logto の固定が見つかりません。'; return }
-    $currentText = ($pin.Ref -split ':')[-1]
+    $localText = ($pin.Ref -split ':')[-1]
+    <#
+      **いまの版は本番で動いているものから読む**(2026-10-16、利用者の指摘)。
+      手元の compose.yaml は、途中で止めた回のあとでは先に進んでいることがある(手元 1.45.0・本番 1.44.0)。
+      それを「いまの版」にすると、本番が古いのに「最新です」と出る。
+    #>
+    $hostState = Get-HostState
+    $runningImage = if ($null -ne $hostState) { "$($hostState.Running['logto'])" } else { '' }
+    if ($runningImage -ne '') {
+        $currentText = (($runningImage -replace '@.*$', '') -split ':')[-1]
+        Write-Host "  本番で動いている版: $currentText"
+        Write-Host "  手元の compose.yaml: $localText"
+        if ($currentText -ne $localText) {
+            Write-Warn '  手元と本番が違います(前回、手元を書き換えたあと入れ替えまで行かずに止まったようです)。本番の版から数えます。'
+        }
+    } else {
+        $currentText = $localText
+        if ($null -ne $hostState) { Write-Warn '  本番で Logto が動いていません。手元の compose.yaml の版から数えます。' }
+        Write-Host "  いまの版(手元の compose.yaml): $currentText"
+    }
     $current = ConvertTo-Version $currentText
-    Write-Host "  いまの版: $currentText"
+    if (-not $current) { Write-Warn "  版の番号を読めません: $currentText"; return }
 
     $releases = Get-LogtoReleases
     $newer = @($releases | Where-Object { $current -and $_.Version -gt $current })
@@ -481,13 +587,34 @@ function Invoke-LogtoUpgrade {
 
     Write-Host ''
     Write-Warn '  確かめてください: 会期中(イベントの最中)ではない / リリースノートを読んだ / サインインを試せる人が居る'
+    <#
+      やめたとき・配備できなかったときは、**手元を本番に合わせて戻す**(既定)。
+      「書き換える前」に戻すだけだと、前回の書きかけ(手元だけ新しい)が残ることがある。
+    #>
+    $resetToHost = {
+        if ((Read-Host '  手元の compose.yaml を本番と同じ版に戻しますか? (Enter = 戻す / n = 残す)').Trim() -eq 'n') {
+            Write-Warn '  手元は書き換えたままです。次に配備すると compose.yaml の新しい版が置かれます。'
+            return
+        }
+        if ($runningImage -match '^(.+)@(sha256:[0-9a-f]{64})$') {
+            # **$Matches は先に取っておく。** Get-Pins の中の -match で上書きされる
+            $hostRef = $Matches[1]; $hostDigest = $Matches[2]
+            $fresh = @(Get-Pins | Where-Object { $_.IsLogto -and $_.File -eq 'compose.yaml' }) | Select-Object -First 1
+            [void](Set-PinLines @([pscustomobject]@{ Pin = $fresh; NewRef = $hostRef; NewDigest = $hostDigest }))
+            Write-Host "  手元の compose.yaml を本番と同じ $currentText に戻しました。"
+        } else {
+            Restore-Files $backup
+        }
+    }
+
     if (-not (Confirm-Yes "本番で控えを取ってから compose を置き、Logto $currentText → $newText の新しい像を取ります(まだ入れ替えません)")) {
-        if ((Read-Host '  やめました。手元の書き換えを元に戻しますか? (y = 戻す / Enter = 残す)').Trim() -eq 'y') { Restore-Files $backup }
+        Write-Host '  やめました。'
+        & $resetToHost
         return
     }
     if (-not (Invoke-Deploy)) {
-        Write-Warn '  本番の Logto はそのままです。手元の compose.yaml は書き換えたままです。'
-        if ((Read-Host '  元に戻しますか? (y = 戻す / Enter = 残す)').Trim() -eq 'y') { Restore-Files $backup }
+        Write-Warn '  本番の Logto はそのままです。'
+        & $resetToHost
         return
     }
 

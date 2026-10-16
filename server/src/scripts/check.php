@@ -3010,7 +3010,7 @@ function km_check_github_mirror(): void
     km_check_heading('update-containers: コンテナの更新を選んで進める(2026-10-16、利用者の指示)');
     $upd = $read('scripts/update-containers.ps1');
     check_bool('update-containers.ps1 がある(UTF-8 BOM 付き)', str_starts_with($upd, "\xEF\xBB\xBF"));
-    check_bool('配備は deploy-to-host.ps1 -Backup に任せる(控えは配備の前)', str_contains($upd, '& $deploy -Action deploy -Backup -Yes'));
+    check_bool('配備は deploy-to-host.ps1 -Backup に任せる(控えは配備の前)', preg_match('/& \$deploy -Action deploy -Backup [^\n]*-Yes/', $upd) === 1);
     check_bool('控えが取れなかった(3)ら先へ進まない', preg_match('/3 \{[^}]*return \$false \}/', $upd) === 1);
     check_bool('書き換えたら check.php を通し、落ちたら元に戻す', substr_count($upd, 'if (-not (Invoke-Check)) { Restore-Files $backup; return }') === 2);
     check_bool('本番を変える前は yes と打たせる(大文字小文字も区別)', str_contains($upd, "-ceq 'yes'"));
@@ -3021,6 +3021,11 @@ function km_check_github_mirror(): void
     check_bool('タグの無い固定は上げない(上げ先が分からない)', str_contains($upd, 'Where-Object { -not $_.Untagged -and -not $_.IsLogto }'));
     check_bool('latest に戻す道が無い(digest を必ず書く)', str_contains($upd, '"$($p.Prefix)$($c.NewRef)@$($c.NewDigest)$($p.Suffix)"'));
     check_bool('ホストの出力は画面へ流す(関数の戻り値に混ぜない)', str_contains($upd, '& ssh @sshArgs | Out-Host'));
+    // 手元だけ書き換えて止めた回のあと、本番 1.44.0 なのに「最新です」と出た(2026-10-16、利用者の指摘)
+    check_bool('Logto のいまの版は本番で動いているものから読む', str_contains($upd, "\$runningImage = if (\$null -ne \$hostState) { \"\$(\$hostState.Running['logto'])\" }")
+        && strpos($upd, '$hostState = Get-HostState') < strpos($upd, '$current = ConvertTo-Version $currentText'));
+    check_bool('修正版も本番と比べる(手元だけ新しいものを ☆ で出す)', str_contains($upd, "elseif (\$onHost.State -eq 'no') { 'pending' }"));
+    check_bool('やめたときの既定は手元を戻す(Enter = 戻す)', substr_count($upd, '(Enter = 戻す / n = 残す)') === 3 && !str_contains($upd, 'Enter = 残す'));
 
     km_check_heading('github-mirror: 検査を外す道を作らない');
     check_bool('まとめて出すときに -Force を渡さない', !preg_match('/pushArgs \+= .*-Force/', $all));
