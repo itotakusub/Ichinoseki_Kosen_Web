@@ -43,13 +43,24 @@ param(
     [string]$Path = '',
     # 展開先。未指定なら <置き場>\_opened\<日時>
     [string]$Destination = '',
+    # 復号に使う秘密鍵の置き場(リポジトリの外)
     [string]$KeyDir = "$env:USERPROFILE\.kosenmap",
     # 控えの置き場。未指定なら Get-KmBackupRoot
     [string]$BackupRoot = '',
     # 開いたものを残す(復元に使うとき)。付けなければ検査のあと消す
     [switch]$Keep,
-    [switch]$List
+    # 開かずに、置き場に何があるかだけ見る
+    [switch]$List,
+    # オプションとその意味を出して終わる
+    [switch]$Help
 )
+
+# -Help: オプションとその意味を出して終わる(2026-10-16。説明はこのファイルの先頭のコメントから km-help.ps1 が読む)
+if ($Help) {
+    $kmHelp = Join-Path $PSScriptRoot 'km-help.ps1'
+    if (Test-Path $kmHelp) { & $kmHelp -Path $PSCommandPath } else { Get-Help $PSCommandPath -Detailed }
+    exit 0
+}
 
 $ErrorActionPreference = 'Stop'
 

@@ -615,13 +615,25 @@ def build_blender_scene(result: CloudResult, name: str, top_view_path: Path | No
 
 # ---------------------------------------------------------------- 入口
 
+class _JapaneseHelpFormatter(argparse.HelpFormatter):
+    """-Help の見出しを日本語にする(argparse の既定は usage: / options:)"""
+
+    def add_usage(self, usage, actions, groups, prefix=None):
+        return super().add_usage(usage, actions, groups, prefix="使い方: ")
+
+
 def parse_args(argv: list[str]):
-    parser = argparse.ArgumentParser(description="AR の撮影の深さから部屋の点群を作る")
+    parser = argparse.ArgumentParser(
+        description="AR の撮影の深さから部屋の点群を作る", formatter_class=_JapaneseHelpFormatter, add_help=False,
+    )
+    parser._optionals.title = "オプション"
+    # -Help: オプションとその意味を出して終わる(2026-10-16、PS1 の -Help と揃えた。-h / --help も同じ)
+    parser.add_argument("-Help", "-h", "--help", action="help", help="オプションとその意味を出して終わる")
     parser.add_argument("--dir", required=True, help="ar-blur-faces.ps1 でぼかしたフォルダ")
     parser.add_argument("--depth-zip", help="深さを読む zip(depth/*.png だけを読む)")
-    parser.add_argument("--max-range", type=float, default=5.0)
-    parser.add_argument("--voxel", type=float, default=0.05)
-    parser.add_argument("--min-hits", type=int, default=2)
+    parser.add_argument("--max-range", type=float, default=5.0, help="これより遠い深さは使わない(m。既定 5)")
+    parser.add_argument("--voxel", type=float, default=0.05, help="間引きの升目(m。既定 0.05)")
+    parser.add_argument("--min-hits", type=int, default=2, help="この枚数以上の画像から当たった升目だけ残す(既定 2)")
     parser.add_argument("--ply", help="PLY の書き先")
     parser.add_argument("--out", help="(Blender)場面を保存する .blend")
     parser.add_argument("--preview", action="store_true", help="深さを色の画像にして depth_preview に書く")

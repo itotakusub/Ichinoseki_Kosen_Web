@@ -45,13 +45,26 @@ param(
     [ValidateSet('', 'check', 'refresh', 'logto', 'status')]
     [string]$Choice = '',
     [switch]$DryRun,
+    # 繋ぐホスト(本番)
     [string]$HostName = 'ito4.jp',
     # deploy-to-host.ps1 と同じ。docker あり・sudo なし(docs/12 §7-4 B)
     [string]$User = 'kmops',
+    # SSH の秘密鍵(配備と同じ)
     [string]$KeyPath = "$env:USERPROFILE\.ssh\km_ops",
+    # ホスト側の置き場(server/ に相当)
     [string]$RemotePath = '/opt/kosenmap',
-    [int]$Port = 22
+    # SSH のポート
+    [int]$Port = 22,
+    # オプションとその意味を出して終わる
+    [switch]$Help
 )
+
+# -Help: オプションとその意味を出して終わる(2026-10-16。説明はこのファイルの先頭のコメントから km-help.ps1 が読む)
+if ($Help) {
+    $kmHelp = Join-Path $PSScriptRoot 'km-help.ps1'
+    if (Test-Path $kmHelp) { & $kmHelp -Path $PSCommandPath } else { Get-Help $PSCommandPath -Detailed }
+    exit 0
+}
 
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot   # …\Website\server

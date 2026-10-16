@@ -5647,6 +5647,66 @@ function km_check_powershell(): void
     }
     // 見えない3バイトが shebang の前に入ると、`#!/bin/sh` が効かなくなる
     check('BOM の付いた .sh は無い', [], $withBom);
+
+    /*
+     * **どの PS1 も -Help でオプションとその意味を出す**(2026-10-16、利用者の指示)。
+     * 説明は各スクリプトの先頭のコメント(.SYNOPSIS / .PARAMETER / param() の中のコメント)を km-help.ps1 が読む。
+     * 新しい PS1 を足したら、param の最後に [switch]$Help と、param の直後に if ($Help) { … km-help.ps1 … } を足す。
+     * 読み込む部品(param を持たない km-ssh.ps1 など)は、直に叩いたときだけ $args を見る(. で読むと何もしない)。
+     */
+    km_check_heading('powershell: どの PS1 も -Help でオプションとその意味を出す');
+    $ps1 = array_merge(glob($repoRoot . '/scripts/*.ps1') ?: [], glob($repoRoot . '/src/scripts/js/*.ps1') ?: []);
+    $noHelp = [];
+    $lateHelp = [];
+    foreach ($ps1 as $path) {
+        $code = (string) file_get_contents($path);
+        $name = basename($path);
+        if ($name === 'km-help.ps1') {
+            continue;
+        }
+        if (str_contains($code, "\$MyInvocation.InvocationName -ne '.' -and \$args -contains '-Help'")) {
+            continue;
+        }
+        if (preg_match('/\[switch\]\$Help\s*\r?\n\)/', $code) !== 1 || !str_contains($code, 'km-help.ps1')) {
+            $noHelp[] = $name;
+            continue;
+        }
+        // param の閉じ括弧のすぐあと(空行とコメントだけを挟んで)に if ($Help) が来る。前に処理を置くと -Help でも走る
+        if (preg_match('/\[switch\]\$Help\s*\r?\n\)\s*(?:#[^\n]*\n\s*)*if \(\$Help\) \{/', $code) !== 1) {
+            $lateHelp[] = $name;
+        }
+    }
+    check('-Help の無い .ps1 は無い', [], $noHelp);
+    check('-Help は param の直後で見る(ほかの処理より先)', [], $lateHelp);
+    $helper = (string) @file_get_contents($repoRoot . '/scripts/km-help.ps1');
+    check_bool('km-help.ps1 がある(BOM 付き)', str_starts_with($helper, $bom));
+    check_bool('km-help.ps1 は .PARAMETER と param() の中のコメントの両方から説明を読む',
+        str_contains($helper, '$info.Parameters.ContainsKey(') && str_contains($helper, '$described.ContainsKey('));
+    // 必須の値があるスクリプトは、-Help を別の組にする(-Help だけで必須の値を聞かれて止まらないように)
+    $mandatoryNotSplit = [];
+    foreach ($ps1 as $path) {
+        // スクリプトの param(行の頭から始まるもの)だけを見る。関数の param(字下げあり)の Mandatory は関係ない
+        if (preg_match('/^param\((.*?)^\)/ms', (string) file_get_contents($path), $block) !== 1 || !str_contains($block[1], 'Mandatory')) {
+            continue;
+        }
+        if (preg_match('/Mandatory\s*=\s*\$true\)/', $block[1]) === 1
+            || !str_contains($block[1], "[Parameter(ParameterSetName = 'Help')][switch]\$Help")) {
+            $mandatoryNotSplit[] = basename($path);
+        }
+    }
+    check('必須の値があるスクリプトは -Help を別の組にする', [], $mandatoryNotSplit);
+    // 同じ部品を 4 か所に置く。手元にある写しは同じ中身であること(無ければ見ない)
+    $copies = ['C:/Users/itota/Documents/Test/scripts/km-help.ps1', 'F:/Pull/Ichinoseki_Kosen/scripts/km-help.ps1', 'F:/Pull/Ichinoseki_Kosen_Web/tools/km-help.ps1'];
+    $differ = [];
+    foreach ($copies as $copy) {
+        if (is_file($copy) && hash_file('sha256', $copy) !== hash('sha256', $helper)) {
+            $differ[] = $copy;
+        }
+    }
+    check('km-help.ps1 の写しはどれも同じ中身', [], $differ);
+    $py = (string) @file_get_contents($repoRoot . '/scripts/ar-depth-cloud.py');
+    check_bool('手元で動かす Python(ar-depth-cloud.py)にも -Help', str_contains($py, 'parser.add_argument("-Help", "-h", "--help", action="help"'));
+    check_bool('check.php 自身も -Help', str_contains((string) file_get_contents(__FILE__), "in_array('-Help', \$arguments, true)"));
 }
 
 // ======================================================================= shell
@@ -7613,10 +7673,17 @@ function km_check_qr(): void
 
 $arguments = array_slice($argv, 1);
 
-if (in_array('--help', $arguments, true) || in_array('-h', $arguments, true)
+// -Help は PS1 の -Help と揃えた(2026-10-16、利用者の指示「オプションとその意味を表示できるように」)
+if (in_array('-Help', $arguments, true) || in_array('--help', $arguments, true) || in_array('-h', $arguments, true)
     || in_array('--list', $arguments, true)) {
-    echo "使い方: php src/scripts/check.php [名前 …]\n\n";
-    echo "  引数なし … 純粋な検査をすべて走らせる\n\n";
+    echo "使い方: php src/scripts/check.php [名前 …] [オプション]\n\n";
+    echo "  自己検査。DB も Logto も Web サーバーも要らない範囲で、取り違えたときの被害が大きい判定を確かめる。\n\n";
+    echo "オプション:\n";
+    echo "  (なし)          純粋な検査をすべて走らせる\n";
+    echo "  名前 …          その検査だけ走らせる(下の一覧から。いくつでも)\n";
+    echo "  --list          検査の名前の一覧を出す(走らせない)\n";
+    echo "  -Help / -h / --help  このオプションとその意味を出して終わる\n\n";
+    echo "終わり方: 0 すべて通過 / 1 落ちたものがある / 2 知らない名前を渡した・要る拡張(mbstring)が無い\n\n";
     echo "  純粋(既定で走る):\n";
     foreach (KM_CHECK_PURE as $name) {
         echo "    {$name}\n";

@@ -33,8 +33,17 @@ push-github.ps1 がこの一覧と照合して止める。
 param(
     [string]$Dump = 'C:\Users\itota\Documents\Test\php\Kosen_map.sql',
     [string]$Extra = (Join-Path $HOME '.kosenmap\private-names.extra.txt'),
-    [string]$Output = $(if ($env:KM_PRIVATE_NAMES_FILE) { $env:KM_PRIVATE_NAMES_FILE } else { Join-Path $HOME '.kosenmap\private-names.txt' })
+    [string]$Output = $(if ($env:KM_PRIVATE_NAMES_FILE) { $env:KM_PRIVATE_NAMES_FILE } else { Join-Path $HOME '.kosenmap\private-names.txt' }),
+    # オプションとその意味を出して終わる
+    [switch]$Help
 )
+
+# -Help: オプションとその意味を出して終わる(2026-10-16。説明はこのファイルの先頭のコメントから km-help.ps1 が読む)
+if ($Help) {
+    $kmHelp = Join-Path $PSScriptRoot 'km-help.ps1'
+    if (Test-Path $kmHelp) { & $kmHelp -Path $PSCommandPath } else { Get-Help $PSCommandPath -Detailed }
+    exit 0
+}
 
 $ErrorActionPreference = 'Stop'
 

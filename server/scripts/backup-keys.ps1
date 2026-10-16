@@ -33,22 +33,38 @@
 #>
 [CmdletBinding()]
 param(
+    # 証明書を置くホスト(本番)
     [string]$HostName = 'ito4.jp',
     # 証明書を置き場へ書くので、置き場の持ち主 kmops で繋ぐ(2026-09-18。docs/12 §7-4 B 段 2)
     [string]$User = 'kmops',
+    # SSH の秘密鍵
     [string]$KeyPath = "$env:USERPROFILE\.ssh\km_ops",
+    # ホスト側の置き場(server/ に相当)
     [string]$RemotePath = '/opt/kosenmap',
+    # SSH のポート
     [int]$Port = 22,
     # 鍵の置き場。**リポジトリの外**
     [string]$KeyDir = "$env:USERPROFILE\.kosenmap",
     # 有効期限。切れても復号はできる(CMS は期限を見ない)が、目安として長めに取る
     [int]$Days = 7300,
+    # 鍵と証明書を作るだけで、ホストへ証明書を置かない
     [switch]$SkipUpload,
+    # いまの状態(鍵と証明書があるか・指紋)を見るだけ。何も作らない
     [switch]$Check,
+    # 鍵にパスフレーズがあるとき(聞かれたら打つ)
     [switch]$Interactive,
     # **本当に作り直すとき**だけ。古いバックアップは開けなくなる
-    [switch]$Force
+    [switch]$Force,
+    # オプションとその意味を出して終わる
+    [switch]$Help
 )
+
+# -Help: オプションとその意味を出して終わる(2026-10-16。説明はこのファイルの先頭のコメントから km-help.ps1 が読む)
+if ($Help) {
+    $kmHelp = Join-Path $PSScriptRoot 'km-help.ps1'
+    if (Test-Path $kmHelp) { & $kmHelp -Path $PSCommandPath } else { Get-Help $PSCommandPath -Detailed }
+    exit 0
+}
 
 $ErrorActionPreference = 'Stop'
 

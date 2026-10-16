@@ -50,6 +50,7 @@ param(
     [string]$HostName = 'ito4.jp',
     # 2026-09-18 から kmops(置き場の持ち主・docker あり。docs/12 §7-4 B 段 2)。-Gated なら鍵は km_backup を渡す
     [string]$User = 'kmops',
+    # SSH の秘密鍵(既定は km_ops。-Gated なら km_backup を渡す)
     [string]$KeyPath = "$env:USERPROFILE\.ssh\km_ops",
     # ホスト側の server/ に相当するフォルダ。未指定なら docker inspect から探す
     [string]$RemotePath = '/opt/kosenmap',
@@ -59,6 +60,7 @@ param(
     [string]$BackupRoot = '',
     # 何世代残すか。古いものから消す
     [int]$Keep = 7,
+    # SSH のポート
     [int]$Port = 22,
     # 復号に使う秘密鍵の置き場。**リポジトリの外**(backup-keys.ps1 と揃える)
     [string]$KeyDir = "$env:USERPROFILE\.kosenmap",
@@ -71,8 +73,17 @@ param(
       その鍵は「作る(backup)」と「取る(scp -O)」しかできない。盗まれても、暗号化された控えが読めるだけ。
       ホストへ任意のコマンドを送らないので、-RemotePath は既定の /opt/kosenmap のまま使う(探しに行けない)。
     #>
-    [switch]$Gated
+    [switch]$Gated,
+    # オプションとその意味を出して終わる
+    [switch]$Help
 )
+
+# -Help: オプションとその意味を出して終わる(2026-10-16。説明はこのファイルの先頭のコメントから km-help.ps1 が読む)
+if ($Help) {
+    $kmHelp = Join-Path $PSScriptRoot 'km-help.ps1'
+    if (Test-Path $kmHelp) { & $kmHelp -Path $PSCommandPath } else { Get-Help $PSCommandPath -Detailed }
+    exit 0
+}
 
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot

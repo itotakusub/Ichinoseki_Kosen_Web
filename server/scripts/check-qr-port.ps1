@@ -20,7 +20,17 @@ PHP の QR 実装(src/lib/qr.php)が、PowerShell 版(new-map-qr.ps1)と一致�
 pwsh -File scripts\check-qr-port.ps1
 #>
 [CmdletBinding()]
-param()
+param(
+    # オプションとその意味を出して終わる
+    [switch]$Help
+)
+
+# -Help: オプションとその意味を出して終わる(2026-10-16。説明はこのファイルの先頭のコメントから km-help.ps1 が読む)
+if ($Help) {
+    $kmHelp = Join-Path $PSScriptRoot 'km-help.ps1'
+    if (Test-Path $kmHelp) { & $kmHelp -Path $PSCommandPath } else { Get-Help $PSCommandPath -Detailed }
+    exit 0
+}
 
 $ErrorActionPreference = 'Stop'
 

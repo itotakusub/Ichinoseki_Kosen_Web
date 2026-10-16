@@ -349,6 +349,17 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
     `up -d` のあとは全部の起動を見届け(restarting・unhealthy・異常終了)、駄目ならログを出して止まる。Logto の移行はやり直さない。
     試しで: 形の誤り 2 種・config の誤り・無い像・やり直し(2 回目で通る/3 回とも駄目)・起動待ち(ssh の一時切断を含む)・再起動の繰り返しを確かめた。
     ホストへ送る sh は文法を確かめ、heredoc で写した compose が元と 1 字も違わないことを確かめた。**本番の docker での `config -q` はまだ通していない**
+- **どの PS1 も `-Help` でオプションとその意味を出す(2026-10-16、利用者の指示)**:
+  - 共通の `scripts/km-help.ps1` が、各スクリプトの先頭のコメント(.SYNOPSIS・.PARAMETER・param() の中のコメント)と param() の書き方(型・既定値・選べる値・必須)を読んで出す。説明を二重に書かない。
+    同じ中身を Android の `scripts/` と GitHub の控え 2 つ(`scripts/`・`tools/`)にも置いた(check.php が食い違いを見張る)
+  - 対象: Website の `scripts/*.ps1`・`src/scripts/js/run-all.ps1`、Android の `scripts/*.ps1`、控えにしかない道具(push-github・sync-from-*・update-private-names)。計 27 本。
+    読み込む部品(km-ssh.ps1・backup-lib.ps1)は param を持たないので、直に叩いたときだけ `-Help` を見る(. で読むと何もしない)。
+    必須の値があるもの(ar-blur-faces・ar-realityscan-prep・new-map-qr)は `-Help` を別の組にして、`-Help` だけで必須の値を聞かれないようにした
+  - 説明の無かったオプション 45 個に意味を書き足した。先頭の説明が無かった Android の 4 本に .SYNOPSIS を足した
+  - PS1 以外で手元で動かすもの: `ar-depth-cloud.py`(`-Help`・`-h`・`--help`。見出しも日本語)、`check.php`(`-Help`。終わり方の番号も出す)。ホストで動く .sh は対象外
+  - 確かめ: 全部の `-Help` を 7 と 5.1 で流した(説明の抜けなし・終了 0)。普段の呼び方(new-map-qr -Code … -MatrixOnly、deploy -WhatIfOnly、update-containers -DryRun)が変わらないこと、
+    必須の値は -Help 無しなら今まで通り必須なことも確かめた。check.php 1912 件
+  - `Test/scripts/check-php-api (1).ps1` は check-php-api.ps1 の古い写し(行き先が使わなくなった校内 LAN のまま)。-Help は付けたが、Old/ へ退避してよいもの
 
 ### 診断(2026-10-05)の反映(2026-10-06、利用者の指示)
 

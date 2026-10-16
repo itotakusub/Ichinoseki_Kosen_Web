@@ -96,16 +96,21 @@
 param(
     # 下の4つは既定で本番が入る。個別に指定すればそちらが優先される
     [string]$HostName = '',
+    # 繋ぐ利用者(既定は kmops)
     [string]$User = '',
     # ホスト上の server/ に相当するフォルダ。未指定なら docker inspect から自動で探す
     [string]$RemotePath = '',
+    # SSH の秘密鍵(既定は ~\.ssh\km_ops)
     [string]$KeyPath = '',
     [ValidateSet('deploy', 'up', 'restart')]
     [string]$Action = 'deploy',
+    # -Action restart で入れ直すサービス(例: reverse-proxy)
     [string[]]$Services = @(),
+    # 何が送られるかを見るだけ(接続もしない)
     [switch]$WhatIfOnly,
     # 転送前の確認を省く。**行き先は本番しかないので、普段は付けないこと**
     [switch]$Yes,
+    # SSH のポート
     [int]$Port = 22,
     # 初めて繋ぐホスト(新しい VPS)。指紋を表示してから known_hosts に登録する
     [switch]$AcceptHostKey,
@@ -134,8 +139,17 @@ param(
     [ValidateSet('all', 'web', 'android', 'none')]
     [string]$GitHub = 'all',
     # GitHub へ出すときに、プルリクエストの説明(docs/pull-requests/)も作る。既定は作らない(2026-10-05)
-    [switch]$PullRequest
+    [switch]$PullRequest,
+    # オプションとその意味を出して終わる
+    [switch]$Help
 )
+
+# -Help: オプションとその意味を出して終わる(2026-10-16。説明はこのファイルの先頭のコメントから km-help.ps1 が読む)
+if ($Help) {
+    $kmHelp = Join-Path $PSScriptRoot 'km-help.ps1'
+    if (Test-Path $kmHelp) { & $kmHelp -Path $PSCommandPath } else { Get-Help $PSCommandPath -Detailed }
+    exit 0
+}
 
 $ErrorActionPreference = 'Stop'
 
