@@ -3012,7 +3012,18 @@ function km_check_github_mirror(): void
     check_bool('update-containers.ps1 がある(UTF-8 BOM 付き)', str_starts_with($upd, "\xEF\xBB\xBF"));
     check_bool('配備は deploy-to-host.ps1 -Backup に任せる(控えは配備の前)', preg_match('/& \$deploy -Action deploy -Backup [^\n]*-Yes/', $upd) === 1);
     check_bool('控えが取れなかった(3)ら先へ進まない', preg_match('/3 \{[^}]*return \$false \}/', $upd) === 1);
-    check_bool('書き換えたら check.php を通し、落ちたら元に戻す', substr_count($upd, 'if (-not (Invoke-Check)) { Restore-Files $backup; return }') === 2);
+    check_bool('書き換えたら check.php と本番での確かめを通し、駄目なら元に戻す', substr_count($upd, 'if (-not (Confirm-ReadyToDeploy $backup)) { return }') === 2
+        && preg_match('/function Confirm-ReadyToDeploy.*?Invoke-Check.*?Test-ComposeOnHost.*?Restore-Files \$Backup/s', $upd) === 1);
+    // compose の中身が間違っていたら送る前に止める(2026-10-16、利用者の指示「自動で停止か、リトライ」)
+    check_bool('本番の .env で compose を読めるか、置き場を汚さずに確かめる', str_contains($upd, 'docker compose --project-directory $RemotePath -f "`$t/compose.yaml" -f "`$t/compose.vps.yaml" config -q')
+        && str_contains($upd, "trap 'rm -rf \"`\$t\"' EXIT"));
+    check_bool('書いてある像が全部レジストリにあるかを見る', str_contains($upd, 'docker buildx imagetools inspect "`$ref"'));
+    check_bool('確かめは配備の yes より前', strpos($upd, 'if (-not (Confirm-ReadyToDeploy $backup)) { return }') < strpos($upd, 'Confirm-Yes "本番で控えを取ってから配備'));
+    check_bool('取る・作るは自動でやり直し、駄目なら up -d せずに止める', str_contains($upd, "if (\$pullServices.Count -and -not (Invoke-HostWithRetry \"docker compose pull")
+        && str_contains($upd, "if (-not (Invoke-HostWithRetry 'docker compose pull logto')) { & \$rollbackLogto; return }"));
+    check_bool('Logto の移行はやり直さない(1 回だけ)', !preg_match('/Invoke-HostWithRetry[^\n]*alteration deploy/', $upd));
+    check_bool('入れ替えたら起動を見届け、駄目なら戻し方を選ばせる', str_contains($upd, 'if ($bad.Count -gt 0) { Invoke-Recover $backup -AfterUp -BuildServices $buildServices; return }'));
+    check_bool('戻すための配備では控えを取り直さない', preg_match('/if \(\$Rollback\) \{\s*& \$deploy -Action deploy -GitHub none -Yes/', $upd) === 1);
     check_bool('本番を変える前は yes と打たせる(大文字小文字も区別)', str_contains($upd, "-ceq 'yes'"));
     check_bool('Logto の移行は新しい像の使い捨てコンテナで当てる', str_contains($upd, 'docker compose run --rm --entrypoint sh logto -c \'cd /etc/logto && npm run alteration deploy $newText\''));
     check_bool('移行の前に一覧を見せる', strpos($upd, 'alteration list') < strpos($upd, 'alteration deploy'));

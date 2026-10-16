@@ -123,6 +123,40 @@ function Invoke-Host([string]$Command, [switch]$AllowFailure) {
 }
 
 <#
+  **一時的な失敗は自動でやり直す**(2026-10-16、利用者の指示「間違っていたときに自動で停止か、リトライ」)。
+  レジストリや回線の揺れ(タイムアウト・429・一瞬の切断)は、待てば通ることが多い。
+  10 秒・20 秒と待って計 3 回。それでも駄目なら止める(呼ぶ側が戻し方を出す)。
+  **やり直してよいのは、何度やっても結果が同じもの**(聞く・取る・作る)だけ。Logto の移行には使わない。
+#>
+$RetryTries = 3
+function Invoke-WithRetry([string]$Label, [scriptblock]$Action) {
+    for ($i = 1; $i -le $RetryTries; $i++) {
+        try {
+            return (& $Action)
+        } catch {
+            if ($i -eq $RetryTries) { throw }
+            Write-Warn "  $Label に失敗しました: $($_.Exception.Message.Split("`n")[0])"
+            Write-Warn "  $($i * 10) 秒待ってやり直します($($i + 1)/$RetryTries)…"
+            if (-not $DryRun) { Start-Sleep -Seconds ($i * 10) }
+        }
+    }
+}
+
+# ホストのコマンドを、失敗したら自動でやり直す。最後まで駄目なら $false
+function Invoke-HostWithRetry([string]$Command) {
+    for ($i = 1; $i -le $RetryTries; $i++) {
+        $code = Invoke-Host $Command -AllowFailure
+        if ($code -eq 0) { return $true }
+        if ($i -lt $RetryTries) {
+            Write-Warn "  失敗しました (exit $code)。$($i * 10) 秒待ってやり直します($($i + 1)/$RetryTries)…"
+            Start-Sleep -Seconds ($i * 10)
+        }
+    }
+    Write-Warn "  $RetryTries 回とも失敗しました: $Command"
+    return $false
+}
+
+<#
   レジストリにある**いまの** digest をホストで聞く(check-updates.sh の remote_digest と同じ聞き方)。
   imagetools はマニフェストリストの digest を出すので、compose に書く値と同じ種類になる。
   聞けなかったものは空(「変わっていない」と混同しない)。
@@ -140,7 +174,7 @@ function Get-RemoteDigests([string[]]$Refs) {
         "echo `"KMDIGEST|$r|`$d`""
     }
     Write-Host '  レジストリに新しい中身を聞いています…' -ForegroundColor DarkGray
-    $out = Invoke-KmSshStdin -Script ($lines -join "`n") -TimeoutSec 300
+    $out = Invoke-WithRetry '問い合わせ' { Invoke-KmSshStdin -Script ($lines -join "`n") -TimeoutSec 300 }
     foreach ($line in $out) {
         if ($line -match '^KMDIGEST\|([^|]+)\|(sha256:[0-9a-f]{64})?$') {
             $result[$Matches[1]] = "$($Matches[2])"
@@ -178,7 +212,7 @@ for f in docker/php/Dockerfile docker/soketi/Dockerfile; do
   grep -E '^(FROM|COPY .*--from=)' "$f" 2>/dev/null | sed "s#^#KMFILE|$f|#"
 done
 '@
-    $out = Invoke-KmSshStdin -Script ($remoteScript -replace '__REMOTE__', $RemotePath) -TimeoutSec 120
+    $out = Invoke-WithRetry '本番の様子の取得' { Invoke-KmSshStdin -Script ($remoteScript -replace '__REMOTE__', $RemotePath) -TimeoutSec 120 }
     $state = @{ Running = @{}; Built = @{}; Files = @{}; FileTime = @{} }
     foreach ($line in $out) {
         if ($line -match '^KMRUN\|([^|]+)\|([^|]+)\|(\d+)$') {
@@ -354,15 +388,28 @@ function Invoke-Check {
   配備は deploy-to-host.ps1 に任せる(**控えは配備の前**。取れなければ何も送らず 3 で終わる)。
   0 と 2(後片付けに気になる点)は先へ進める。
 #>
-function Invoke-Deploy {
-    Write-Step '控えを取ってから配備(deploy-to-host.ps1 -Backup)'
+function Invoke-Deploy([switch]$Rollback) {
     $deploy = Join-Path $PSScriptRoot 'deploy-to-host.ps1'
-    if ($DryRun) {
-        Write-Host '  (試し) .\deploy-to-host.ps1 -Action deploy -Backup -Yes' -ForegroundColor DarkGray
-        return $true
+    if ($Rollback) {
+        # 戻すための配備。控えはこの回の始めに取ってあるので取り直さない
+        Write-Step '元の compose / Dockerfile を配備し直す(deploy-to-host.ps1)'
+        if ($DryRun) {
+            Write-Host '  (試し) .\deploy-to-host.ps1 -Action deploy -Yes' -ForegroundColor DarkGray
+            return $true
+        }
+    } else {
+        Write-Step '控えを取ってから配備(deploy-to-host.ps1 -Backup)'
+        if ($DryRun) {
+            Write-Host '  (試し) .\deploy-to-host.ps1 -Action deploy -Backup -Yes' -ForegroundColor DarkGray
+            return $true
+        }
     }
     try {
-        & $deploy -Action deploy -Backup -GitHub none -Yes -HostName $HostName -User $User -KeyPath $KeyPath -RemotePath $RemotePath -Port $Port
+        if ($Rollback) {
+            & $deploy -Action deploy -GitHub none -Yes -HostName $HostName -User $User -KeyPath $KeyPath -RemotePath $RemotePath -Port $Port
+        } else {
+            & $deploy -Action deploy -Backup -GitHub none -Yes -HostName $HostName -User $User -KeyPath $KeyPath -RemotePath $RemotePath -Port $Port
+        }
         $code = $LASTEXITCODE
     } catch {
         Write-Warn "  配備が止まりました: $($_.Exception.Message)"
@@ -373,6 +420,190 @@ function Invoke-Deploy {
         2 { Write-Warn '  配備は済みましたが、後片付けに気になる点があります(上の表示)。続けます。'; return $true }
         3 { Write-Warn '  控えが取れなかったので、配備していません(何も送っていません)。'; return $false }
         default { Write-Warn "  配備に失敗しました (exit $code)。"; return $false }
+    }
+}
+
+<#
+  ---------------------------------------------------------------- 誤りを本番へ送らない
+
+  **compose の中身が間違っていたら、送る前に止める**(2026-10-16、利用者の指示)。
+  check.php は形(digest で固定しているか など)しか見ない。本番の docker が読めるか・その像が本当にあるかは
+  ホストでしか分からないので、**置き場を汚さずに**確かめる:
+    1. 手元: image: / FROM の行が `名前[:タグ]@sha256:64桁` の形か(打ち間違い・digest の欠け)
+    2. ホスト: 手元の compose を一時フォルダへ写し、本番の .env で `docker compose config -q`(YAML の誤り・知らないキー)
+    3. ホスト: 書いてある像が全部レジストリにあるか(`imagetools inspect 名前:タグ@sha256:…`。無い digest・版の打ち間違い)
+  1 つでも駄目なら**何も送らずに止まり**、直してから `r` でやり直せる。
+#>
+function Test-ComposeOnHost {
+    Write-Step 'compose と像を確かめる(本番には置かない)'
+    $problems = @()
+    $refs = @()
+    $refPattern = '^[a-z0-9][a-z0-9./_-]*(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$'
+    foreach ($file in $PinFiles) {
+        $path = Join-Path $Root $file.Path
+        if (-not (Test-Path $path)) { continue }
+        $lines = [IO.File]::ReadAllLines($path)
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $ref = $null
+            if ($file.Kind -eq 'compose' -and $lines[$i] -match '^\s+image:\s*(\S+)\s*$') { $ref = $Matches[1].Trim('"', "'") }
+            elseif ($file.Kind -eq 'build' -and $lines[$i] -match '^FROM\s+(\S+)') { $ref = $Matches[1] }
+            elseif ($file.Kind -eq 'build' -and $lines[$i] -match '^COPY\s.*--from=(\S+)') {
+                # `COPY --from=fork` のような段の名前は像ではない
+                if ($Matches[1] -notmatch '[:/@]') { continue }
+                $ref = $Matches[1]
+            }
+            if ($null -eq $ref) { continue }
+            if ($ref -cnotmatch $refPattern) {
+                $problems += "$($file.Path):$($i + 1)  形が違います(名前[:タグ]@sha256:64 桁): $ref"
+            } else {
+                $refs += $ref
+            }
+        }
+    }
+    if ($problems.Count -gt 0) {
+        $problems | ForEach-Object { Write-Host "  ✗ $_" -ForegroundColor Red }
+        return $false
+    }
+    $refs = @($refs | Select-Object -Unique)
+    Write-Host "  手元の形: よい(像 $($refs.Count) 個)"
+    if ($DryRun) { Write-Host '  (試し) ホストでの config と像の確かめは省きます' -ForegroundColor DarkGray; return $true }
+
+    $composeParts = foreach ($name in 'compose.yaml', 'compose.vps.yaml') {
+        $text = [IO.File]::ReadAllText((Join-Path $Root $name))
+        if ($text.Contains('KM_COMPOSE_EOF')) { throw "$name に KM_COMPOSE_EOF という文字があるので送れません。" }
+        if (-not $text.EndsWith("`n")) { $text += "`n" }
+        "cat > `"`$t/$name`" <<'KM_COMPOSE_EOF'`n$($text)KM_COMPOSE_EOF"
+    }
+    $refLoop = ($refs | ForEach-Object { "'$_'" }) -join ' '
+    $remoteScript = @"
+t=`$(mktemp -d) || exit 1
+trap 'rm -rf "`$t"' EXIT
+$($composeParts -join "`n")
+cd $RemotePath || exit 1
+if docker compose --project-directory $RemotePath -f "`$t/compose.yaml" -f "`$t/compose.vps.yaml" config -q >"`$t/out" 2>&1; then
+  echo KMCONFIG_OK
+else
+  echo KMCONFIG_NG
+  head -n 20 "`$t/out" | sed 's/^/KMERR|/'
+fi
+for ref in $refLoop; do
+  if docker buildx imagetools inspect "`$ref" >"`$t/ref" 2>&1; then
+    echo "KMREF_OK|`$ref"
+  else
+    echo "KMREF_NG|`$ref|`$(head -n 1 "`$t/ref")"
+  fi
+done
+"@
+    Connect-Host
+    $out = Invoke-WithRetry '確かめ' { Invoke-KmSshStdin -Script $remoteScript -TimeoutSec 600 }
+    $ok = $true
+    if ($out -contains 'KMCONFIG_OK') {
+        Write-Host '  docker compose config: 読めました'
+    } else {
+        $ok = $false
+        Write-Host '  ✗ docker compose config: 本番の docker が compose を読めません' -ForegroundColor Red
+        $out | Where-Object { $_ -like 'KMERR|*' } | ForEach-Object { Write-Host "      $($_.Substring(6))" -ForegroundColor Red }
+    }
+    $missing = @($out | Where-Object { $_ -like 'KMREF_NG|*' })
+    $found = @($out | Where-Object { $_ -like 'KMREF_OK|*' })
+    foreach ($line in $missing) {
+        $parts = $line.Split('|')
+        Write-Host "  ✗ レジストリにありません: $($parts[1])" -ForegroundColor Red
+        if ($parts.Count -gt 2 -and $parts[2]) { Write-Host "      $($parts[2])" -ForegroundColor Red }
+    }
+    if ($missing.Count -gt 0) { $ok = $false }
+    if ($found.Count + $missing.Count -lt $refs.Count) {
+        $ok = $false
+        Write-Warn "  像の確かめが途中で終わりました($($found.Count + $missing.Count)/$($refs.Count))。"
+    }
+    if ($ok) { Write-Host "  像: $($found.Count) 個ともレジストリにあります" -ForegroundColor Green }
+    return $ok
+}
+
+<#
+  検査(check.php)と、本番での確かめ(Test-ComposeOnHost)を通す。
+  **駄目なら何も送らずに止まる。** 直してから r で確かめ直す。やめるときは手元をこの回の前に戻す。
+#>
+function Confirm-ReadyToDeploy($Backup) {
+    while ($true) {
+        $ok = Invoke-Check
+        if ($ok) { $ok = Test-ComposeOnHost }
+        if ($ok) { return $true }
+        Write-Host ''
+        Write-Warn '  止めました。本番には何も送っていません。'
+        $answer = Read-Host '  ファイルを直してから r = もう一度確かめる / Enter = やめる(手元をこの回の前に戻す)'
+        if ($answer.Trim() -ne 'r') { Restore-Files $Backup; return $false }
+    }
+}
+
+<#
+  **入れ替えたあと、全部が起動したかを見届ける。** healthy を待ち、駄目なものがあれば止まる。
+  見るもの: 再起動を繰り返している(restarting)/ unhealthy / 0 以外で終わった(exited)。
+  starting の間は待つ(既定 180 秒)。駄目なサービスの名前を返す(空なら全部よい)。
+#>
+function Wait-Healthy([int]$TimeoutSec = 180) {
+    Write-Step '起動を見届ける'
+    if ($DryRun) { Write-Host '  (試し) 省きます' -ForegroundColor DarkGray; return @() }
+    $probe = @"
+cd $RemotePath || exit 1
+for c in `$(docker compose ps -a -q 2>/dev/null); do
+  docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}|{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}|{{.State.ExitCode}}' "`$c" 2>/dev/null
+done
+"@
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ($true) {
+        $rows = @(Invoke-WithRetry '様子の取得' { Invoke-KmSshStdin -Script $probe -TimeoutSec 60 }) |
+            Where-Object { $_ -match '^[^|]+\|[^|]*\|[^|]*\|-?\d+$' }
+        $bad = @(); $waiting = @()
+        foreach ($r in $rows) {
+            $f = $r.Split('|')
+            if ($f[1] -eq 'restarting' -or $f[2] -eq 'unhealthy' -or ($f[1] -eq 'exited' -and $f[3] -ne '0') -or $f[1] -eq 'dead') { $bad += $f[0] }
+            elseif ($f[2] -eq 'starting' -or $f[1] -eq 'created') { $waiting += $f[0] }
+        }
+        if ($bad.Count -eq 0 -and $waiting.Count -eq 0) {
+            Write-Host "  全部起動しました($($rows.Count) 個)。" -ForegroundColor Green
+            return @()
+        }
+        if ((Get-Date) -ge $deadline) {
+            $bad = @($bad + $waiting | Select-Object -Unique)
+            Write-Host "  ✗ 起動しきらないもの: $($bad -join ' ')" -ForegroundColor Red
+            foreach ($svc in $bad) { [void](Invoke-Host "docker compose logs --tail 30 $svc" -AllowFailure) }
+            return $bad
+        }
+        $msg = @()
+        if ($bad.Count) { $msg += "駄目: $($bad -join ' ')" }
+        if ($waiting.Count) { $msg += "待ち: $($waiting -join ' ')" }
+        Write-Host "  $($msg -join ' / ')(10 秒後にもう一度見ます)" -ForegroundColor DarkGray
+        Start-Sleep -Seconds 10
+    }
+}
+
+<#
+  途中で駄目になったときの戻し方を選ばせる(**自動では戻さない**。戻すのも本番を変える操作なので)。
+  b: 手元をこの回の前に戻す → 配備し直す(控えは取り直さない)→ 入れ替え後なら作り直して up -d → 見届ける
+#>
+function Invoke-Recover($Backup, [switch]$AfterUp, [string[]]$BuildServices = @()) {
+    Write-Host ''
+    if ($AfterUp) {
+        Write-Warn '  止めました。新しい像で立て直しましたが、起動しないものがあります(上のログ)。'
+    } else {
+        Write-Warn '  止めました。本番の compose / Dockerfile は新しいものに置き換わっていますが、動いているコンテナは古いままです(up -d していません)。'
+    }
+    $answer = Read-Host '  b = 手元を元に戻して、本番も元に戻す / Enter = このまま止める(あとで直す)'
+    if ($answer.Trim() -ne 'b') {
+        Write-Warn '  このまま止めます。直してからメニューの 2 をもう一度選べば、本番と比べて続きから当てられます。'
+        return
+    }
+    Restore-Files $Backup
+    if (-not (Invoke-Deploy -Rollback)) { Write-Warn '  元に戻す配備に失敗しました。上の表示を見てください。'; return }
+    if ($AfterUp) {
+        if ($BuildServices.Count) { [void](Invoke-HostWithRetry "docker compose build $($BuildServices -join ' ')") }
+        [void](Invoke-Host 'docker compose up -d' -AllowFailure)
+        $still = Wait-Healthy
+        if ($still.Count -eq 0) { Write-Host '  元に戻りました。' -ForegroundColor Green }
+        else { Write-Warn "  戻しても起動しないもの: $($still -join ' ')。docs/06(もしものとき)を見てください。" }
+    } else {
+        Write-Host '  本番の compose / Dockerfile を元に戻しました(コンテナは触っていません)。' -ForegroundColor Green
     }
 }
 
@@ -466,7 +697,7 @@ function Invoke-Refresh {
     if ($changes.Count -gt 0) { Show-Changes $changes } else { Write-Host '  書き換えるものはありません(手元はもう新しい)。' }
     $backup = Set-PinLines $changes
 
-    if (-not (Invoke-Check)) { Restore-Files $backup; return }
+    if (-not (Confirm-ReadyToDeploy $backup)) { return }
 
     $pullServices = @($chosen | Where-Object { $_.Pin.Kind -eq 'image' } | ForEach-Object { $_.Pin.Service } | Select-Object -Unique)
     $buildServices = @($chosen | Where-Object { $_.Pin.Kind -eq 'build' } | ForEach-Object { $_.Pin.Service } | Select-Object -Unique)
@@ -487,10 +718,17 @@ function Invoke-Refresh {
     }
 
     Write-Step 'ホストで入れ替える'
-    if ($pullServices.Count) { [void](Invoke-Host "docker compose pull $($pullServices -join ' ')") }
-    if ($buildServices.Count) { [void](Invoke-Host "docker compose build --pull $($buildServices -join ' ')") }
+    # 取る・作るは一時的に失敗しうるので自動でやり直す。最後まで駄目なら up -d せずに止める
+    if ($pullServices.Count -and -not (Invoke-HostWithRetry "docker compose pull $($pullServices -join ' ')")) {
+        Invoke-Recover $backup; return
+    }
+    if ($buildServices.Count -and -not (Invoke-HostWithRetry "docker compose build --pull $($buildServices -join ' ')")) {
+        Invoke-Recover $backup; return
+    }
     # **1 つだけの up -d にしない**(depends_on が評価されない)
-    [void](Invoke-Host 'docker compose up -d')
+    [void](Invoke-Host 'docker compose up -d' -AllowFailure)
+    $bad = Wait-Healthy
+    if ($bad.Count -gt 0) { Invoke-Recover $backup -AfterUp -BuildServices $buildServices; return }
     [void](Invoke-Host 'docker compose ps' -AllowFailure)
     if ($buildServices -contains 'soketi') {
         [void](Invoke-Host 'docker compose exec -T soketi node -v' -AllowFailure)
@@ -583,7 +821,7 @@ function Invoke-LogtoUpgrade {
     $changes = @([pscustomobject]@{ Pin = $pin; NewRef = $newRef; NewDigest = $digest })
     Show-Changes $changes
     $backup = Set-PinLines $changes
-    if (-not (Invoke-Check)) { Restore-Files $backup; return }
+    if (-not (Confirm-ReadyToDeploy $backup)) { return }
 
     Write-Host ''
     Write-Warn '  確かめてください: 会期中(イベントの最中)ではない / リリースノートを読んだ / サインインを試せる人が居る'
@@ -591,10 +829,11 @@ function Invoke-LogtoUpgrade {
       やめたとき・配備できなかったときは、**手元を本番に合わせて戻す**(既定)。
       「書き換える前」に戻すだけだと、前回の書きかけ(手元だけ新しい)が残ることがある。
     #>
+    # 戻したら $true(n で残したら $false)
     $resetToHost = {
         if ((Read-Host '  手元の compose.yaml を本番と同じ版に戻しますか? (Enter = 戻す / n = 残す)').Trim() -eq 'n') {
             Write-Warn '  手元は書き換えたままです。次に配備すると compose.yaml の新しい版が置かれます。'
-            return
+            return $false
         }
         if ($runningImage -match '^(.+)@(sha256:[0-9a-f]{64})$') {
             # **$Matches は先に取っておく。** Get-Pins の中の -match で上書きされる
@@ -605,29 +844,46 @@ function Invoke-LogtoUpgrade {
         } else {
             Restore-Files $backup
         }
+        return $true
+    }
+    <#
+      配備したあと(移行の前)に止めたとき: 手元を戻し、**本番の compose も戻す**。
+      戻さないと、本番は「compose は新しい版・動いているのは古い版」のまま残り、次の up -d で
+      移行を当てないまま新しい像が起動する。
+    #>
+    $rollbackLogto = {
+        Write-Warn '  動いている Logto は古い版のままです(移行も立て直しもしていません)。'
+        if (& $resetToHost) {
+            if (Invoke-Deploy -Rollback) { Write-Host "  本番の compose.yaml も $currentText に戻しました。" -ForegroundColor Green }
+            else { Write-Warn '  本番へ戻す配備に失敗しました。直してから .\deploy-to-host.ps1 で配備し直してください(up -d はしないこと)。' }
+        } else {
+            Write-Warn '  本番の compose.yaml は新しい版のままです。**次に up -d すると移行を当てないまま新しい像が起動します。**'
+        }
     }
 
     if (-not (Confirm-Yes "本番で控えを取ってから compose を置き、Logto $currentText → $newText の新しい像を取ります(まだ入れ替えません)")) {
         Write-Host '  やめました。'
-        & $resetToHost
+        [void](& $resetToHost)
         return
     }
     if (-not (Invoke-Deploy)) {
         Write-Warn '  本番の Logto はそのままです。'
-        & $resetToHost
+        [void](& $resetToHost)
         return
     }
 
+    # 取る・一覧を見るは何度やっても同じなので、失敗したら自動でやり直す。最後まで駄目なら止めて戻す
     Write-Step '新しい像を取る'
-    [void](Invoke-Host 'docker compose pull logto')
+    if (-not (Invoke-HostWithRetry 'docker compose pull logto')) { & $rollbackLogto; return }
 
     Write-Step '移行の一覧(使い捨てのコンテナ。DB は書き換えない)'
-    [void](Invoke-Host "docker compose run --rm --entrypoint sh logto -c 'cd /etc/logto && npm run alteration list $newText'")
+    if (-not (Invoke-HostWithRetry "docker compose run --rm --entrypoint sh logto -c 'cd /etc/logto && npm run alteration list $newText'")) {
+        & $rollbackLogto; return
+    }
 
     if (-not (Confirm-Yes "Logto の DB 移行を当てます($newText)。**戻すのは難しい**(控えは取りました)")) {
-        Write-Warn '  移行はしていません。動いている Logto は古い版のままです。'
-        Write-Warn '  compose.yaml は新しい版になっているので、次に up -d すると新しい像で起動します。'
-        Write-Warn "  やめるなら手元の compose.yaml を $currentText に戻して配備し直してください。"
+        Write-Warn '  移行はしていません。'
+        & $rollbackLogto
         return
     }
 
@@ -640,11 +896,18 @@ function Invoke-LogtoUpgrade {
     }
 
     Write-Step '立て直す(全体の up -d)'
-    [void](Invoke-Host 'docker compose up -d')
-    Write-Host '  起動を待っています(20 秒)…'
-    if (-not $DryRun) { Start-Sleep -Seconds 20 }
-    [void](Invoke-Host 'docker compose ps' -AllowFailure)
+    [void](Invoke-Host 'docker compose up -d' -AllowFailure)
+    # Logto は起動のときに移行を確かめるので遅い。長めに待つ
+    $bad = Wait-Healthy -TimeoutSec 300
     [void](Invoke-Host 'docker compose logs --tail 60 logto' -AllowFailure)
+    if ($bad.Count -gt 0) {
+        # **移行は当たっているので、自動では戻さない**(古い像を DB の新しい形で起動すると壊れうる)
+        Write-Host ''
+        Write-Warn "  止めました。起動しないもの: $($bad -join ' ')"
+        Write-Warn '  移行は当たっています。版を戻すだけでは直りません。上のログを見てから、'
+        Write-Warn '  docs/05 §6(巻き戻し)か、この回の始めに取った控えからの復元(docs/03 §8)を選んでください。'
+        return
+    }
     Show-AfterChecklist -Logto
 }
 
