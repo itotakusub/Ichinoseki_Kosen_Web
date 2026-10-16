@@ -359,7 +359,7 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
   - PS1 以外で手元で動かすもの: `ar-depth-cloud.py`(`-Help`・`-h`・`--help`。見出しも日本語)、`check.php`(`-Help`。終わり方の番号も出す)。ホストで動く .sh は対象外
   - 確かめ: 全部の `-Help` を 7 と 5.1 で流した(説明の抜けなし・終了 0)。普段の呼び方(new-map-qr -Code … -MatrixOnly、deploy -WhatIfOnly、update-containers -DryRun)が変わらないこと、
     必須の値は -Help 無しなら今まで通り必須なことも確かめた。check.php 1912 件
-  - `Test/scripts/check-php-api (1).ps1` は check-php-api.ps1 の古い写し(行き先が使わなくなった校内 LAN のまま)。-Help は付けたが、Old/ へ退避してよいもの
+  - `Test/scripts/check-php-api (1).ps1` は check-php-api.ps1 の古い写し(行き先が使わなくなった校内 LAN のまま)だったので、同日 `Test/Old/duplicate-scripts-20261016/` へ退避した(GitHub の控えも `Old/` の同じ名前へ)
 
 ### 診断(2026-10-05)の反映(2026-10-06、利用者の指示)
 
