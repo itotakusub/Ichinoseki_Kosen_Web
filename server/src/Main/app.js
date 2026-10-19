@@ -65,6 +65,9 @@ const kmLoading = (() => {
             if (status) status.textContent = '準備ができました';
             done = true;
             root.classList.add('is-done');
+            // 初回の操作案内(Main/tutorial.js)は、地図が出てから始める
+            window.kmMapReady = true;
+            document.dispatchEvent(new CustomEvent('km-map-ready'));
         },
     };
 })();
@@ -634,6 +637,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     function buildFloorIndex() {
         nodesByFloor.clear();
         for (const [id, node] of Object.entries(graphData.nodes)) {
+            /*
+             * イベント中に出さない地点(2026-10-14。lib/map-events.php の km_map_event_hidden)。
+             * **印も名前も描かない。** 経路の計算(graphData.nodes をそのまま使う)からは外さない ——
+             * 通さないのは通行止めで、出さないのとは別。編集画面では掴めるように出す。
+             */
+            if (node.hidden && !window.isAdmin) continue;
             const floor = String(node.floor);
             if (!nodesByFloor.has(floor)) nodesByFloor.set(floor, []);
             nodesByFloor.get(floor).push([id, node]);
@@ -820,6 +829,8 @@ document.addEventListener('DOMContentLoaded', async () => {
              * 行き先は data 属性に置き、クリックは下の委譲リスナーで受ける。
              */
             marker.bindPopup(nodeDetailHtml(id, node, type));
+            // どの地点の詳細が開いたかを、popupopen で引けるようにする(テスト用アカウントの記録)
+            marker.kmNodeId = id;
         }
 
         marker.on('click', (e) => {
@@ -870,6 +881,8 @@ document.addEventListener('DOMContentLoaded', async () => {
      */
     function isRoutableNode(node) {
         if (!node) return false;
+        // イベント中に出さない地点は、行き先の候補にも出さない(2026-10-14)
+        if (node.hidden) return false;
         // 通路の点・壁・Wi-Fi ルーターは、そもそも人が行く場所ではない
         if (node.type === 'road' || node.type === 'wall' || node.type === 'wifi_router') return false;
         if (!String(node.name || '').trim()) return false;
@@ -952,9 +965,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     function nodeDetailHtml(id, node, type) {
         const floorLabel = String(node.floor) === 'outside' ? '外' : `${node.floor}F`;
         const typeLabel = mapStyle.LABELS[type] || type;
-        const title = node.alias ? `${node.alias}(${node.name})` : node.name;
+        // イベント中の名前は**置き換える**(2026-10-14、利用者の判断)。普段の名前は下に小さく残す
+        const title = node.alias || node.name;
 
         let rows = '';
+        if (node.alias) {
+            rows += `<div class="km-detail-row"><span>普段の名前</span><b>${escapeHtml(node.name)}</b></div>`;
+        }
         if (node.subtitle) {
             rows += `<div class="km-detail-row"><span>部屋番号</span><b>${escapeHtml(node.subtitle)}</b></div>`;
         }
@@ -1413,6 +1430,69 @@ document.addEventListener('DOMContentLoaded', async () => {
      */
     const LOADING_TIMEOUT_MS = 15000;
 
+    /*
+     * ======== QR から開いた部屋 ========(2026-10-14、利用者の指示「URL にオプションを付ける」)
+     *
+     * `/?room=<地点の id>` で開かれたら、その部屋の階へ移って寄せ、詳細を開く。
+     * id は index.php が字の形だけ確かめて `<meta name="km-focus-room">` に入れる(DB は引かない)。
+     * **イベントの外でも効く**(普段の掲示にも使える)。
+     *
+     * 詳細は印のポップアップではなく、その場で開く —— 拡大の度合いによっては部屋の印が
+     * まだ出ていない(種類ごとの出し入れ)。印が無くても詳細は出したい。
+     */
+    let focusRoomDone = false;
+    function focusRoomFromUrl() {
+        if (focusRoomDone) return;
+        focusRoomDone = true;
+        const meta = document.querySelector('meta[name="km-focus-room"]');
+        const id = meta ? meta.getAttribute('content') : '';
+        if (!id) return;
+        const node = graphData.nodes[id];
+        if (!node || node.hidden) {
+            // 出さない地点・地図から消えた部屋。**黙らない** —— QR を読んだのに何も起きないと壊れて見える
+            showRoomNotice('この部屋は今は案内していません。地図から探してください。');
+            return;
+        }
+        const floor = String(node.floor);
+        const open = () => {
+            userMovedMap = true;   // このあと収め直して位置を戻さない
+            /*
+             * 部屋を**見えている範囲の下寄り**に置く。詳細の吹き出しは部屋の上へ伸びるので、
+             * 真ん中に置くとトップバーの裏に潜る(手元で実測)。見えている範囲は、
+             * トップバー・検索パネル・階の並びを除いたところ(mapFitPadding)。
+             */
+            const zoom = Math.max(window.map.getZoom(), 1);
+            const padding = mapFitPadding();
+            const size = window.map.getSize();
+            const visibleX = (padding.paddingTopLeft.x + size.x - padding.paddingBottomRight.x) / 2;
+            const visibleY = padding.paddingTopLeft.y
+                + (size.y - padding.paddingTopLeft.y - padding.paddingBottomRight.y) * 0.75;
+            const center = window.map.project([node.y, node.x], zoom)
+                .add([size.x / 2 - visibleX, size.y / 2 - visibleY]);
+            window.map.setView(window.map.unproject(center, zoom), zoom, { animate: false });
+            L.popup({ autoPan: false })
+                .setLatLng([node.y, node.x])
+                .setContent(nodeDetailHtml(id, node, String(node.type || 'room')))
+                .openOn(window.map);
+        };
+        if (floor !== String(window.currentFloor) && floorImages[floor]) {
+            // 階の図は非同期に載る。**載ってから寄せる**(kmEnterBuilding と同じ)
+            window.map.once('moveend', open);
+            changeFloor(floor);
+        } else {
+            open();
+        }
+    }
+
+    function showRoomNotice(text) {
+        const notice = document.createElement('div');
+        notice.className = 'km-room-notice';
+        notice.setAttribute('role', 'status');
+        notice.textContent = text;
+        document.body.append(notice);
+        window.setTimeout(() => notice.remove(), 6000);
+    }
+
     (async () => {
         const imagesDone = preloadAllFloorImages(
             window.currentFloor,
@@ -1421,6 +1501,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 // 今いる階が読めた。地図へ載せて、ここで見せてしまう
                 loadFloorImageDynamic(window.currentFloor);
                 kmLoading.finish();
+                window.setTimeout(focusRoomFromUrl, 0);
             }
         );
 
@@ -1438,6 +1519,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 console.warn(`地図の準備が ${LOADING_TIMEOUT_MS}ms 以内に終わりませんでした。揃っているぶんで開始します。`);
                 loadFloorImageDynamic(window.currentFloor);
                 kmLoading.finish();
+                window.setTimeout(focusRoomFromUrl, 0);
             }
         }, LOADING_TIMEOUT_MS);
 
@@ -1455,14 +1537,14 @@ document.addEventListener('DOMContentLoaded', async () => {
      * **見せ方の側で、ずらして、それでも駄目なら引っ込める。**
      *
      *   1. 大事なものから順に置く(施設 → 出入口 → 階段 → 部屋 → その他)
-     *   2. 重なったら上下に少しずらしてみる(点とピルを繋ぐ線は短いので ±30px まで)
-     *   3. どこへずらしても重なるなら**そのラベルは出さない**(点は出したまま。
-     *      押せば名前が読めるので、情報は失われない)
+     *   2. 重なったら上下にずらす → 点の横・下に付ける → **点から離して線で結ぶ**(2026-10-14)
+     *   3. どこへ置いても重なるなら、屋外は**そのラベルは出さない**(点は出したまま。
+     *      押せば名前が読めるので、情報は失われない)。建物の中は元の位置のまま重ねる
      *
+     * 置き方の計算は `Main/label-layout.js`(アプリと同じ手順)。
      * ズームを上げると点どうしの間が開くので、隠れていたものから順に戻ってくる。
      */
     const KM_LABEL_PRIORITY = { facility: 0, entrance: 1, stairs: 2, room: 3, wifi_router: 4, road: 5, wall: 6 };
-    const KM_LABEL_NUDGES = [0, -14, 14, -30, 30];
     let declutterTimer = null;
 
     function labelPriority(el) {
@@ -1470,10 +1552,24 @@ document.addEventListener('DOMContentLoaded', async () => {
         return KM_LABEL_PRIORITY[type] === undefined ? 9 : KM_LABEL_PRIORITY[type];
     }
 
-    function overlaps(a, b) {
-        // 2px の余白。ちょうど接している程度は「読める」ので隠さない
-        return !(a.right <= b.left + 2 || a.left >= b.right - 2
-            || a.bottom <= b.top + 2 || a.top >= b.bottom - 2);
+    /** 札の要素 → その点のマーカー(点の中心を測って、線の根元にする) */
+    function markersByLabel() {
+        const byLabel = new Map();
+        markersById.forEach(function (marker) {
+            const tip = marker.getTooltip && marker.getTooltip();
+            const el = tip && tip.getElement && tip.getElement();
+            if (el && el.isConnected) byLabel.set(el, marker);
+        });
+        return byLabel;
+    }
+
+    function clearLabelLayout(el) {
+        el.classList.remove('km-label-hidden', 'km-label-led');
+        el.style.marginTop = '';
+        el.style.marginLeft = '';
+        ['--km-lead-x', '--km-lead-y', '--km-lead-len', '--km-lead-ang'].forEach(function (name) {
+            el.style.removeProperty(name);
+        });
     }
 
     function declutterLabels() {
@@ -1486,16 +1582,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (all.length === 0) return;
 
         // 前回の結果を戻してから測る。**戻さずに測ると、ずらした位置を元の位置として扱う**
-        all.forEach(function (el) {
-            el.classList.remove('km-label-hidden');
-            el.style.marginTop = '';
-        });
+        all.forEach(clearLabelLayout);
+        const layoutApi = window.KM_LABEL_LAYOUT;
+        if (!layoutApi) return;
 
         /*
-         * **屋外だけ**(2026-09-25、利用者の指示)。建物の中では部屋名が 1 つでも欠けると
-         * 探せなくなるので、重なっても全部出す(上で戻したまま終える)。
+         * 屋外は、置けない札を**出さない**。建物の中は**消さない**(2026-09-25、利用者の指示。
+         * 部屋名が 1 つでも欠けると探せなくなる)—— ずらしと線だけ使い、置けなければ元の位置で重ねる。
          */
-        if (String(window.currentFloor) !== 'outside') return;
+        const outdoors = String(window.currentFloor) === 'outside';
 
         /*
          * 薄く出している建物名は**数に入れない。** 下敷きの文字なので、
@@ -1506,32 +1601,68 @@ document.addEventListener('DOMContentLoaded', async () => {
             return !(faded && el.classList.contains('km-label-facility'));
         });
 
-        labels.sort(function (a, b) {
-            const byType = labelPriority(a) - labelPriority(b);
-            if (byType !== 0) return byType;
-            // 同じ種類なら上から順に。並べ方を決めておかないと、少し動かすたびに
-            // 隠れるものが入れ替わって**ちらつく**
-            return a.getBoundingClientRect().top - b.getBoundingClientRect().top;
+        /*
+         * **先に全部測ってから、まとめて書く。** 測る・書くを交互にすると、
+         * 札の数だけ組版をやり直させることになる(建物の中は 200 個を超える)。
+         */
+        const byLabel = markersByLabel();
+        const items = [];
+        const targets = [];
+        const nodes = [];
+        markersById.forEach(function (marker) {
+            const icon = marker.getElement && marker.getElement();
+            if (!icon || !icon.isConnected) return;
+            const r = icon.getBoundingClientRect();
+            if (r.width === 0 && r.height === 0) return;
+            nodes.push({ x: (r.left + r.right) / 2, y: (r.top + r.bottom) / 2, radius: r.width / 2 });
         });
-
-        const placed = [];
         labels.forEach(function (el) {
             const base = el.getBoundingClientRect();
             if (base.width === 0 && base.height === 0) return;   // そもそも出ていない
-            for (let i = 0; i < KM_LABEL_NUDGES.length; i++) {
-                const shift = KM_LABEL_NUDGES[i];
-                const rect = {
-                    left: base.left, right: base.right,
-                    top: base.top + shift, bottom: base.bottom + shift,
-                };
-                const hit = placed.some(function (other) { return overlaps(rect, other); });
-                if (!hit) {
-                    if (shift !== 0) el.style.marginTop = shift + 'px';
-                    placed.push(rect);
-                    return;
-                }
+            const marker = byLabel.get(el);
+            const icon = marker && marker.getElement && marker.getElement();
+            const r = icon ? icon.getBoundingClientRect() : null;
+            items.push({
+                box: { left: base.left, top: base.top, right: base.right, bottom: base.bottom },
+                anchor: r && r.width > 0 ? { x: (r.left + r.right) / 2, y: (r.top + r.bottom) / 2 } : null,
+                radius: r ? r.width / 2 : 0,
+                priority: labelPriority(el),
+            });
+            targets.push(el);
+        });
+        const c = window.map.getContainer().getBoundingClientRect();
+        const placements = layoutApi.layout(items, {
+            hideWhenCrowded: outdoors,
+            bounds: { left: c.left, top: c.top, right: c.right, bottom: c.bottom },
+            nodes: nodes,
+        });
+
+        placements.forEach(function (p, i) {
+            const el = targets[i];
+            if (p === null) {
+                el.classList.add('km-label-hidden');
+                return;
             }
-            el.classList.add('km-label-hidden');
+            if (p.dy !== 0) el.style.marginTop = p.dy + 'px';
+            if (p.dx !== 0) el.style.marginLeft = p.dx + 'px';
+            if (p.leader) {
+                /*
+                 * 線は札の ::after で描く(styles.css の .km-label-led)。札と一緒に動くので、
+                 * 地図を動かしている間もずれない。始点は札の縁、向きは点の方。
+                 * **style 属性ではなく CSSOM で入れる**(CSP は style 属性を止めるが、JS からの代入は通す)。
+                 */
+                const box = items[i].box;
+                const left = box.left + p.dx;
+                const top = box.top + p.dy;
+                const vx = p.leader.x1 - p.leader.x2;
+                const vy = p.leader.y1 - p.leader.y2;
+                el.classList.add('km-label-led');
+                // 1.5px は札の枠。::after の left/top は枠の内側から測る
+                el.style.setProperty('--km-lead-x', (p.leader.x2 - left - 1.5).toFixed(1) + 'px');
+                el.style.setProperty('--km-lead-y', (p.leader.y2 - top - 1.5).toFixed(1) + 'px');
+                el.style.setProperty('--km-lead-len', Math.sqrt(vx * vx + vy * vy).toFixed(1) + 'px');
+                el.style.setProperty('--km-lead-ang', (Math.atan2(vy, vx) * 180 / Math.PI).toFixed(1) + 'deg');
+            }
         });
     }
 
@@ -1541,6 +1672,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         declutterTimer = window.setTimeout(declutterLabels, 120);
     }
     window.kmDeclutterLabels = scheduleDeclutter;
+
+    // 部屋の詳細を開いた(テスト用アカウントの記録。createNodeMarker が marker.kmNodeId を付ける)
+    window.map.on('popupopen', (e) => {
+        const source = e.popup && e.popup._source;
+        if (source && source.kmNodeId) testLog('detail', { node: source.kmNodeId, floor: String(window.currentFloor) });
+    });
 
     window.map.on('zoomend', () => {
         renderGlobalLabels();
@@ -1649,6 +1786,25 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     });
 
+    /*
+     * テスト用アカウント(展示の PC。2026-10-15)の操作の記録。`window.kmTestLog` は
+     * Main/test-mode.js が**印の付いたアカウントのときだけ**用意する。無ければ何もしない
+     * (一般の閲覧者の操作は、どこへも送らない)。
+     */
+    function testLog(kind, data) {
+        if (typeof window.kmTestLog === 'function') window.kmTestLog(kind, data);
+    }
+
+    // 出発地・目的地の欄に打った語(候補から選んだときも change が来る)。地点に当たれば一緒に残す
+    [[startInput, 'start'], [endInput, 'goal']].forEach(([input, field]) => {
+        if (!input) return;
+        input.addEventListener('change', () => {
+            const text = input.value.trim();
+            if (text === '') return;
+            testLog('search', { field: field, text: text, node: resolveNodeByLabel(text) });
+        });
+    });
+
     // ---- UIイベントリスナー ----
     if (searchBtn) {
         searchBtn.addEventListener('click', () => {
@@ -1664,6 +1820,17 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
 
             const path = dijkstra.findShortestPath(startNode, endNode);
+            // 条件も残す(階段・エレベーターの好み、雨の日など)。引けなかったことも手がかりになる
+            testLog('route', {
+                node: startNode,
+                node2: endNode,
+                text: [
+                    'vertical=' + verticalPreference,
+                    routeOptions.fewerFloors ? 'fewerFloors' : '',
+                    routeOptions.rain ? 'rain' : '',
+                    path ? '' : 'notFound',
+                ].filter(Boolean).join(','),
+            });
             if (path) {
                 currentRoutePath = path;
                 /*
@@ -1852,6 +2019,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         categorySelect.addEventListener('change', () => {
             const type = categorySelect.value;
             if (!type) return;
+            const picked = categorySelect.options[categorySelect.selectedIndex];
+            testLog('category', { text: picked ? picked.textContent : type });
 
             const results = [];
             const patterns = {
@@ -1864,9 +2033,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             for (const [id, node] of Object.entries(graphData.nodes)) {
                 // 人が行ける場所だけ。通路の点・壁・Wi-Fi ルーターは候補にしない
                 if (node.type === 'road' || node.type === 'wall' || node.type === 'wifi_router') continue;
+                // イベント中に出さない地点も出さない(2026-10-14)
+                if (node.hidden) continue;
                 const pattern = patterns[type];
-                if (node.type === type || (pattern && pattern.test(node.name))) {
-                    results.push({ id, name: node.name, floor: node.floor, x: node.x, y: node.y });
+                const shownName = node.alias || node.name;
+                if (node.type === type || (pattern && (pattern.test(node.name) || pattern.test(shownName)))) {
+                    results.push({ id, name: shownName, floor: node.floor, x: node.x, y: node.y });
                 }
             }
 
@@ -1911,21 +2083,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 分離したため、表示側で元の見た目に組み立て直す。
     function displayNameFor(node) {
         /*
-         * イベント中の臨時名称。**元の名前も残して併記する。**
-         * 「ステージ会場」だけにすると、普段この建物を知っている人が
-         * どこのことか分からなくなる(来場者と在校生の両方が同じ地図を見る)。
+         * イベント中の臨時名称。**置き換える**(2026-10-14、利用者の判断)。
+         * 以前は「ステージ会場(第1体育館)」と併記していたが、イベントの名前(模擬店・展示)が
+         * 主役になる会期では長くて読めない。普段の名前は地点の詳細に残す(nodeDetailHtml)。
          */
         if (node.alias) {
-            return `${node.alias}(${node.name})`;
+            return node.alias;
         }
         return node.occupantName ? `${node.name} ${node.occupantName}` : node.name;
     }
 
     function getLabelForNode(id, node) {
         const floorLabel = String(node.floor) === "outside" ? "外" : `${node.floor}F`;
-        // 臨時名称があるときは**両方の名前で引ける**ようにする。
-        // 来場者は「ステージ会場」で、在校生は「第1体育館」で探す
-        const name = node.alias ? `${node.alias}(${node.name})` : node.name;
+        // 臨時名称があるときは、その名前で引く(2026-10-14 から置き換え。displayNameFor と同じ)
+        const name = node.alias || node.name;
         return `[${floorLabel}] ${name}`;
     }
 
@@ -2334,6 +2505,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     window.renderEventOverlay = renderEventOverlay;
 
     function changeFloor(floor) {
+        if (String(floor) !== String(window.currentFloor)) testLog('floor', { floor: String(floor) });
         window.currentFloor = floor;
         floorBtns.forEach(b => b.classList.remove('active'));
         const activeBtn = document.querySelector(`.floor-btn[data-floor="${floor}"]`);
@@ -2409,7 +2581,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                      */
                     const marker = L.circleMarker([node.y, node.x], {
                         radius: 6, color: '#e11d48', fillColor: '#f43f5e', fillOpacity: 1
-                    }).bindTooltip(escapeHtml(node.name)).addTo(window.map);
+                    }).bindTooltip(escapeHtml(node.alias || node.name)).addTo(window.map);
                     currentMarkers.push(marker);
                     pathBoundsGroup.addLayer(marker);
                 }
@@ -2817,6 +2989,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     /** 一覧から選んだ地点へ寄せて、詳細を開く。 */
     function openNodeFromList(node) {
+        testLog('pick', { node: node.id });
         if (window.innerWidth <= 768 && searchPanel) setSearchPanelCollapsed(true);
         if (String(node.floor) !== String(window.currentFloor)) changeFloor(node.floor);
         setTimeout(() => {

@@ -39,14 +39,23 @@
 .EXAMPLE
   .\ar-realityscan-prep.ps1 -Dir $HOME\Downloads\ar-20261008-1420-1F-f193f607 -OriginLat 38.93 -OriginLon 141.12 -WriteExif
 #>
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'Run')]
 param(
-    [Parameter(Mandatory = $true)][string]$Dir,
+    [Parameter(Mandatory = $true, ParameterSetName = 'Run')][string]$Dir,
     [Nullable[double]]$OriginLat = $null,
     [Nullable[double]]$OriginLon = $null,
     [double]$OriginAlt = 0,
-    [switch]$WriteExif
+    [switch]$WriteExif,
+    # オプションとその意味を出して終わる
+    [Parameter(ParameterSetName = 'Help')][switch]$Help
 )
+
+# -Help: オプションとその意味を出して終わる(2026-10-16。説明はこのファイルの先頭のコメントから km-help.ps1 が読む)
+if ($Help) {
+    $kmHelp = Join-Path $PSScriptRoot 'km-help.ps1'
+    if (Test-Path $kmHelp) { & $kmHelp -Path $PSCommandPath } else { Get-Help $PSCommandPath -Detailed }
+    exit 0
+}
 
 $ErrorActionPreference = 'Stop'
 $inv = [Globalization.CultureInfo]::InvariantCulture

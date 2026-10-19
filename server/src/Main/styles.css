@@ -712,6 +712,61 @@ body {
     white-space: nowrap;
 }
 
+/*
+ * 展示の PC の「係の人」のログアウト(2026-10-19)。来場者に押させないため、目立たない小さな札にして、
+ * 開くと合言葉の欄が出る。止めるのは sign-out.php(合言葉が合わなければ出さない)。
+ */
+.km-test-signout {
+    position: relative;
+}
+.km-test-signout > summary {
+    list-style: none;
+    cursor: pointer;
+    font-size: var(--text-label);
+    color: var(--secondary);
+    opacity: 0.6;
+    padding: 0.2rem 0.55rem;
+    border: 1px dashed var(--border-strong);
+    border-radius: 999px;
+    user-select: none;
+}
+.km-test-signout > summary::-webkit-details-marker {
+    display: none;
+}
+.km-test-signout[open] > summary {
+    opacity: 1;
+}
+.km-test-signout > form {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 1300;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.6rem;
+    color: var(--text);
+    background: var(--glass-heavy);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-lg);
+    white-space: nowrap;
+}
+.km-test-signout label {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: var(--text-label);
+}
+.km-test-signout input {
+    width: 8rem;
+    font: inherit;
+    padding: 0.3rem 0.5rem;
+    color: var(--text);
+    background: var(--glass-heavy);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-xs);
+}
 /* 「ダウンロード・設定」へ移したときの並び(スマホ)。panel.js が入れ替える */
 #km-auth-slot .action-group-left {
     flex-wrap: wrap;
@@ -2123,11 +2178,20 @@ body.km-map-unavailable .km-route-bar {
 /* 弾かれ、文字だけが裸で出る状態になる(1.0.1 で実際に踏んだ)。      */
 /* ------------------------------------------------------------------ */
 
+/*
+ * **トップバーの下に置く**(2026-10-15 に直した)。トップバーは一段にしたとき(2026-09-05)から
+ * position: absolute なので、流れに置いたままの帯はその**真下に潜って見えなかった**。
+ * 位置は検索パネルと同じ「トップバーの下」。PC では左の検索パネルと右の階のレールの間に置く。
+ */
 .km-event-banner {
+    position: absolute;
+    top: calc(var(--km-edge) + 60px + 12px);
+    left: calc(var(--km-edge) + 340px + 12px);
+    right: calc(var(--km-edge) + 72px);
     display: flex;
     align-items: center;
     gap: 10px;
-    margin: 8px 16px 0;
+    margin: 0;
     padding: 10px 14px;
     border-radius: 12px;
     /* 通行止めの赤とは別の色にする。バナーは警告ではなく案内 */
@@ -2140,6 +2204,23 @@ body.km-map-unavailable .km-route-bar {
 .km-event-banner-icon {
     font-size: 1.2rem;
     line-height: 1;
+}
+
+/* QR(/?room=…)の部屋が案内できないときの短い知らせ(2026-10-14。Main/app.js の showRoomNotice) */
+.km-room-notice {
+    position: fixed;
+    left: 50%;
+    bottom: 24px;
+    transform: translateX(-50%);
+    z-index: 1500; /* 地図(1)と UI(1000)より上、読み込み画面(2000)より下 */
+    max-width: calc(100vw - 32px);
+    padding: 10px 16px;
+    border-radius: 12px;
+    background: rgba(17, 24, 39, 0.92);
+    color: #fff;
+    font-weight: 600;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+    pointer-events: none;
 }
 
 .km-event-banner-text {
@@ -2212,6 +2293,30 @@ body.km-map-unavailable .km-route-bar {
     display: none;
 }
 
+/*
+ * 点から離して置いた札と点を結ぶ線(2026-10-14。app.js の declutterLabels・Main/label-layout.js)。
+ * 位置・長さ・向きは JS が札ごとに入れる。**札の後ろ**(z-index: -1)に描くので、
+ * 線が別の札の字を横切っても字は読める。色は札の縁と同じ(種類の色)。
+ */
+.km-label.km-label-led::after {
+    content: '';
+    position: absolute;
+    left: var(--km-lead-x, 0);
+    top: var(--km-lead-y, 0);
+    width: var(--km-lead-len, 0);
+    height: 2px;
+    margin-top: -1px;
+    background: var(--km-lead-color, #64748B);
+    transform-origin: 0 50%;
+    transform: rotate(var(--km-lead-ang, 0deg));
+    pointer-events: none;
+    z-index: -1;
+}
+.km-label-facility, .km-label-room { --km-lead-color: #06B6D4; }
+.km-label-stairs { --km-lead-color: #8B5CF6; }
+.km-label-entrance { --km-lead-color: #10B981; }
+.km-label-wifi_router { --km-lead-color: #2563EB; }
+
 /* 建物の詳細に出す「中へ 1F 2F …」(2026-09-22。app.js の facilityFloorLinks) */
 .km-detail-enter {
     display: flex;
@@ -2230,3 +2335,241 @@ body.km-map-unavailable .km-route-bar {
     flex: 0 0 auto;
     padding: 0.35rem 0.7rem;
 }
+
+/*
+ * テスト用アカウント(展示の PC。2026-10-15、利用者の指示。index.php の .km-test-stack・Main/test-mode.js)。
+ * 右上(階の列の左)に「テスト中」の札と操作方法を縦に積む。どちらも「－」で見出しだけにできる。
+ * UI(1000)より上・読み込み画面(2000)と「はじめに」(2500)より下。
+ */
+.km-test-stack {
+    position: fixed;
+    top: 84px;
+    right: 88px;
+    z-index: 1200;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 330px;
+    max-height: calc(100vh - 100px);
+    overflow-y: auto;
+    pointer-events: none;   /* 札の隙間は地図を触れる */
+}
+.km-test-panel {
+    pointer-events: auto;
+    background: rgba(255, 255, 255, 0.97);
+    color: #0f172a;
+    border: 2px solid #F59E0B;
+    border-radius: 14px;
+    box-shadow: 0 6px 24px rgba(15, 23, 42, 0.18);
+}
+.km-test-guide { border-color: #3B82F6; }
+.km-test-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px 8px 14px;
+}
+.km-test-title {
+    flex: 1;
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 800;
+}
+.km-test-min {
+    flex: none;
+    width: 34px;
+    height: 34px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    background: #ffffff;
+    color: #0f172a;
+    font-size: 1.1rem;
+    font-weight: 800;
+    cursor: pointer;
+}
+.km-test-restart {
+    flex: none;
+    height: 34px;
+    padding: 0 12px;
+    border: none;
+    border-radius: 999px;
+    background: #2563EB;
+    color: #ffffff;
+    font-size: 0.9rem;
+    font-weight: 800;
+    cursor: pointer;
+}
+.km-test-restart:hover { background: #1D4ED8; }
+.km-test-min:focus-visible,
+.km-test-restart:focus-visible { outline: 3px solid #93C5FD; outline-offset: 2px; }
+.km-test-body { margin: 0; padding: 0 14px 12px; }
+.km-test-minimized .km-test-body { display: none; }
+.km-test-note { margin: 0 0 8px; font-size: 0.78rem; color: #475569; line-height: 1.45; }
+.km-test-survey-lead { margin: 4px 0 6px; font-weight: 800; text-align: center; }
+.km-test-qr svg { display: block; width: 132px; height: 132px; margin: 0 auto; }
+.km-test-url {
+    display: block;
+    margin-top: 4px;
+    font-size: 0.72rem;
+    text-align: center;
+    word-break: break-all;
+}
+.km-test-steps {
+    padding: 0 14px 12px 34px;
+    font-size: 0.86rem;
+    line-height: 1.45;
+}
+.km-test-steps li + li { margin-top: 4px; }
+
+@media (prefers-color-scheme: dark) {
+    :root:not([data-km-theme="light"]) .km-test-panel { background: rgba(15, 23, 42, 0.95); color: #e2e8f0; }
+    :root:not([data-km-theme="light"]) .km-test-note { color: #cbd5e1; }
+    :root:not([data-km-theme="light"]) .km-test-min { background: #1e293b; color: #e2e8f0; border-color: #475569; }
+}
+:root[data-km-theme="dark"] .km-test-panel { background: rgba(15, 23, 42, 0.95); color: #e2e8f0; }
+:root[data-km-theme="dark"] .km-test-note { color: #cbd5e1; }
+:root[data-km-theme="dark"] .km-test-min { background: #1e293b; color: #e2e8f0; border-color: #475569; }
+
+/* 狭い画面(展示は PC の想定だが、スマホで開いても地図を塞ぎすぎない)。下に寄せて小さく */
+@media (max-width: 768px) {
+    .km-test-stack {
+        top: auto;
+        bottom: 76px;
+        left: 8px;
+        right: 8px;
+        width: auto;
+        max-height: 45vh;
+    }
+    .km-test-qr svg { width: 128px; height: 128px; }
+}
+/*
+ * イベント中の情報の収集の許可(2026-10-15、index.php の #km-collect-bar・Main/test-mode.js)。
+ * 下の真ん中に出す帯。地図は触れたまま(幕は張らない)。「はじめに」(2500)より下・UI(1000)より上。
+ */
+.km-collect-bar {
+    position: fixed;
+    left: 50%;
+    bottom: 20px;
+    transform: translateX(-50%);
+    z-index: 1300;
+    width: min(620px, calc(100vw - 32px));
+    padding: 14px 16px;
+    background: rgba(255, 255, 255, 0.98);
+    color: #0f172a;
+    border: 2px solid #10B981;
+    border-radius: 14px;
+    box-shadow: 0 8px 28px rgba(15, 23, 42, 0.22);
+}
+.km-collect-bar[hidden] { display: none; }
+.km-collect-title { margin: 0 0 4px; font-weight: 800; }
+.km-collect-text { margin: 0 0 10px; font-size: 0.85rem; line-height: 1.5; color: #334155; }
+.km-collect-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.km-collect-check { display: flex; align-items: center; gap: 8px; font-weight: 700; cursor: pointer; }
+.km-collect-check input { width: 20px; height: 20px; accent-color: #10B981; }
+.km-collect-ok { min-width: 96px; }
+.km-collect-open {
+    border: none;
+    background: none;
+    padding: 0;
+    font: inherit;
+    cursor: pointer;
+    text-decoration: underline;
+}
+
+/* 自動で「始めから」に戻る前の知らせ(テスト用アカウント。Main/test-mode.js が作る) */
+.km-idle-notice {
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 2400;
+    width: min(420px, calc(100vw - 32px));
+    padding: 20px;
+    text-align: center;
+    background: #ffffff;
+    color: #0f172a;
+    border: 3px solid #2563EB;
+    border-radius: 16px;
+    box-shadow: 0 12px 40px rgba(15, 23, 42, 0.3);
+}
+.km-idle-notice[hidden] { display: none; }
+.km-idle-text { margin: 0 0 14px; font-size: 1.05rem; font-weight: 800; line-height: 1.5; }
+
+@media (prefers-color-scheme: dark) {
+    :root:not([data-km-theme="light"]) .km-collect-bar,
+    :root:not([data-km-theme="light"]) .km-idle-notice { background: rgba(15, 23, 42, 0.97); color: #e2e8f0; }
+    :root:not([data-km-theme="light"]) .km-collect-text { color: #cbd5e1; }
+}
+:root[data-km-theme="dark"] .km-collect-bar,
+:root[data-km-theme="dark"] .km-idle-notice { background: rgba(15, 23, 42, 0.97); color: #e2e8f0; }
+:root[data-km-theme="dark"] .km-collect-text { color: #cbd5e1; }
+/* イベントの帯の位置: 狭い画面は横いっぱい(検索は下から出るシート)。テスト用アカウントの札があれば、その左まで */
+@media (max-width: 768px) {
+    .km-event-banner { left: var(--km-edge); right: var(--km-edge); }
+}
+@media (min-width: 769px) {
+    body:has(.km-test-stack) .km-event-banner { right: calc(88px + 330px + 12px); }
+}
+/*
+ * 初回の操作案内(2026-10-15、Main/tutorial.js)。押す所を明るく抜いて黄色の枠で囲み、そばに吹き出し。
+ * **幕は見た目だけ**(pointer-events: none)。案内の上から、言われた所をそのまま押せる。
+ * UI(1000)・イベントの許可の帯(1300)より上、「はじめに」(2500)より下。
+ */
+.km-tour { position: fixed; inset: 0; z-index: 2200; pointer-events: none; }
+.km-tour-spot {
+    position: fixed;
+    border: 3px solid #FBBF24;
+    border-radius: 12px;
+    box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.55);
+    transition: left 0.25s ease, top 0.25s ease, width 0.25s ease, height 0.25s ease;
+    animation: km-tour-pulse 1.6s ease-in-out infinite;
+}
+.km-tour-spot.is-none {
+    left: 50% !important; top: 50% !important; width: 0 !important; height: 0 !important;
+    border: none;
+    animation: none;
+}
+@keyframes km-tour-pulse {
+    0%, 100% { outline: 0 solid rgba(251, 191, 36, 0.6); }
+    50% { outline: 8px solid rgba(251, 191, 36, 0); }
+}
+.km-tour-card {
+    position: fixed;
+    pointer-events: auto;
+    padding: 14px 16px 12px;
+    background: #ffffff;
+    color: #0f172a;
+    border: 2px solid #FBBF24;
+    border-radius: 14px;
+    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.3);
+}
+.km-tour-count { margin: 0 0 4px; font-size: 0.75rem; font-weight: 700; color: #92400E; }
+.km-tour-text { margin: 0 0 12px; font-size: 1rem; font-weight: 700; line-height: 1.55; overflow-y: auto; }
+/* 見える範囲がとても狭い(スマホでキーボードが出た)ときは、本文だけ巻物になる(max-height は tutorial.js が入れる) */
+.km-tour-actions { display: flex; justify-content: flex-end; gap: 8px; }
+/* 吹き出しの矢印(押す所を指す)。位置は JS が入れる */
+.km-tour-arrow {
+    position: absolute;
+    width: 16px;
+    height: 16px;
+    background: #ffffff;
+    border: 2px solid #FBBF24;
+    transform: translateX(-50%) rotate(45deg);
+}
+.km-tour-card.is-below .km-tour-arrow { top: -10px; border-right: none; border-bottom: none; }
+.km-tour-card.is-above .km-tour-arrow { bottom: -10px; border-left: none; border-top: none; }
+.km-tour-card.is-left .km-tour-arrow { right: -10px; left: auto; transform: translateY(-50%) rotate(45deg); border-left: none; border-bottom: none; }
+.km-tour-arrow[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) {
+    .km-tour-spot { animation: none; transition: none; }
+}
+@media (prefers-color-scheme: dark) {
+    :root:not([data-km-theme="light"]) .km-tour-card,
+    :root:not([data-km-theme="light"]) .km-tour-arrow { background: #0f172a; color: #e2e8f0; }
+    :root:not([data-km-theme="light"]) .km-tour-count { color: #FCD34D; }
+}
+:root[data-km-theme="dark"] .km-tour-card,
+:root[data-km-theme="dark"] .km-tour-arrow { background: #0f172a; color: #e2e8f0; }
+:root[data-km-theme="dark"] .km-tour-count { color: #FCD34D; }
+/* 操作方法の札から、画面の案内(Main/tutorial.js)を出し直すボタン */
+.km-test-tour { width: 100%; }

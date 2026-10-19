@@ -933,6 +933,8 @@ globalThis.KM_I18N.ja = {
   "page.users.empty": "ユーザーがまだ登録されていません。",
   "page.users.footer": "Logto の role: kosenmap-admin / kosenmap-user",
   "page.users.h1": "ユーザー管理",
+  "page.testMode.h1": "テスト用アカウント",
+  "page.testMode.title": "テスト用アカウント | KosenMap 管理",
   "page.users.noMatch": "条件に一致するユーザーがいません。",
   "page.users.openLogto": "Logto Console で管理",
   "page.users.searchPlaceholder": "ユーザーを検索...",
@@ -1048,6 +1050,7 @@ globalThis.KM_I18N.ja = {
   "side.tables": "テーブル管理",
   "side.timeline": "タイムライン",
   "side.users": "ユーザー管理",
+  "side.testMode": "テスト用アカウント",
 
   "svc.directConnect": "直接続 (ブラウザからは開けません)",
   "svc.endpoint": "接続先",

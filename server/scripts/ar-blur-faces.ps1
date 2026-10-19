@@ -38,13 +38,22 @@
 .EXAMPLE
   .\ar-blur-faces.ps1 -Zip $HOME\Downloads\ar-20261006-1530-3F-0f8fad5b.zip
 #>
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'Run')]
 param(
-    [Parameter(Mandatory = $true)][string]$Zip,
+    [Parameter(Mandatory = $true, ParameterSetName = 'Run')][string]$Zip,
     [string]$OutDir,
     [ValidateRange(0.01, 0.99)][double]$Threshold = 0.2,
-    [switch]$RemoveZip
+    [switch]$RemoveZip,
+    # オプションとその意味を出して終わる
+    [Parameter(ParameterSetName = 'Help')][switch]$Help
 )
+
+# -Help: オプションとその意味を出して終わる(2026-10-16。説明はこのファイルの先頭のコメントから km-help.ps1 が読む)
+if ($Help) {
+    $kmHelp = Join-Path $PSScriptRoot 'km-help.ps1'
+    if (Test-Path $kmHelp) { & $kmHelp -Path $PSCommandPath } else { Get-Help $PSCommandPath -Detailed }
+    exit 0
+}
 
 $ErrorActionPreference = 'Stop'
 

@@ -20,8 +20,17 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Source = 'C:\Users\itota\Documents\Website\server'
+    [string]$Source = 'C:\Users\itota\Documents\Website\server',
+    # オプションとその意味を出して終わる
+    [switch]$Help
 )
+
+# -Help: オプションとその意味を出して終わる(2026-10-16。説明はこのファイルの先頭のコメントから km-help.ps1 が読む)
+if ($Help) {
+    $kmHelp = Join-Path $PSScriptRoot 'km-help.ps1'
+    if (Test-Path $kmHelp) { & $kmHelp -Path $PSCommandPath } else { Get-Help $PSCommandPath -Detailed }
+    exit 0
+}
 
 $ErrorActionPreference = 'Stop'
 

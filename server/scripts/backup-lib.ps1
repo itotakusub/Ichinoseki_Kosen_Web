@@ -6,6 +6,13 @@
   **開き方が2通りある**状態になる(復元の当日にそれをやると詰む)。
 #>
 
+# -Help: ほかのスクリプトから読み込む部品。直に `.\backup-lib.ps1 -Help` と叩いたときだけ説明を出す(. で読み込んだときは何もしない。2026-10-16)
+if ($MyInvocation.InvocationName -ne '.' -and $args -contains '-Help') {
+    $kmHelp = Join-Path $PSScriptRoot 'km-help.ps1'
+    if (Test-Path $kmHelp) { & $kmHelp -Path $PSCommandPath } else { Get-Help $PSCommandPath -Detailed }
+    exit 0
+}
+
 <#
   openssl を探す。**無ければ分かる形で止める** ——
   暗号化したのに開けない、が一番まずい。

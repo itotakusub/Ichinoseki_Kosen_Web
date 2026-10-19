@@ -932,6 +932,8 @@ globalThis.KM_I18N.en = {
   "page.users.empty": "No users are registered yet.",
   "page.users.footer": "Logto roles: kosenmap-admin / kosenmap-user",
   "page.users.h1": "User management",
+  "page.testMode.h1": "Test accounts",
+  "page.testMode.title": "Test accounts | KosenMap Admin",
   "page.users.noMatch": "No users match your search.",
   "page.users.openLogto": "Manage in Logto Console",
   "page.users.searchPlaceholder": "Search users...",
@@ -1047,6 +1049,7 @@ globalThis.KM_I18N.en = {
   "side.tables": "Table management",
   "side.timeline": "Timeline",
   "side.users": "User management",
+  "side.testMode": "Test accounts",
 
   "svc.directConnect": "Direct connection (cannot be opened in a browser)",
   "svc.endpoint": "Endpoint",

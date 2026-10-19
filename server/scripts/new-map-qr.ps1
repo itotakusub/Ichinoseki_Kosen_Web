@@ -33,9 +33,9 @@ PNGの出力先。省略するとカレントディレクトリに kosenmap-qr-<
 .EXAMPLE
 .\scripts\new-map-qr.ps1 -Code KOSEN2026 -ErrorCorrection H -ModuleSize 12 -ShowInConsole
 #>
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'Run')]
 param(
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $true, ParameterSetName = 'Run')]
     [string]$Code,
 
     [string]$OutputPath,
@@ -43,23 +43,35 @@ param(
     [ValidateSet('L', 'M', 'Q', 'H')]
     [string]$ErrorCorrection = 'M',
 
+    # QR の 1 マスの大きさ(画素)
     [ValidateRange(1, 64)]
     [int]$ModuleSize = 8,
 
+    # まわりの余白(マスの数。規格では 4 以上)
     [ValidateRange(0, 16)]
     [int]$QuietZone = 4,
 
     [ValidateRange(-1, 7)]
     [int]$Mask = -1,
 
+    # 端末にも QR を描く(読めるか試すとき)
     [switch]$ShowInConsole,
 
     # 文字列をそのまま符号化する(プレフィックスも正規化も付けない)。検証用。
     [switch]$Raw,
 
     # PNGを書かず、モジュールの並びを "0101..." の行として出す。検証用。
-    [switch]$MatrixOnly
+    [switch]$MatrixOnly,
+    # オプションとその意味を出して終わる
+    [Parameter(ParameterSetName = 'Help')][switch]$Help
 )
+
+# -Help: オプションとその意味を出して終わる(2026-10-16。説明はこのファイルの先頭のコメントから km-help.ps1 が読む)
+if ($Help) {
+    $kmHelp = Join-Path $PSScriptRoot 'km-help.ps1'
+    if (Test-Path $kmHelp) { & $kmHelp -Path $PSCommandPath } else { Get-Help $PSCommandPath -Detailed }
+    exit 0
+}
 
 $ErrorActionPreference = 'Stop'
 

@@ -27,8 +27,8 @@
 # aloware/soketi:latest(2026-09-15 時点。2.0.0 の後に作り直された版)
 FROM ghcr.io/aloware/soketi:latest@sha256:effb4ce14dc53809d12020ca813c68a8782854f4d842b143bc7d8b42fe626b54 AS fork
 
-# node:24-trixie-slim(Node 24.21 / Debian 13)
-FROM node:24-trixie-slim@sha256:8ec5d7557396cfe32d21c3f9c13072355ceab22b584578ca4bb28af31120cffe
+# node:24-trixie-slim(Node 24.21 / Debian 13)。2026-10-12: Node 24.21.0 のまま土台だけ作り直された版(2026-10-06 作成)に上げた
+FROM node:24-trixie-slim@sha256:7f486cabe892bff8fef04c0f7da8dba84a560be3e4e2740b7a86afc57ebec315
 
 COPY --from=fork /app /app
 WORKDIR /app

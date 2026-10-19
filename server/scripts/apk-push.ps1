@@ -37,9 +37,19 @@
 param(
     [string]$TestRoot = 'C:\Users\itota\Documents\Test',
     [string]$RepoDir = 'F:\Pull\kosenmap-apk',
+    # 受け箱のリポジトリ(GitHub。非公開)。clone と push の先
     [string]$Remote = 'git@github-kosen:itotakusub/kosenmap-apk.git',
-    [switch]$WhatIf
+    [switch]$WhatIf,
+    # オプションとその意味を出して終わる
+    [switch]$Help
 )
+
+# -Help: オプションとその意味を出して終わる(2026-10-16。説明はこのファイルの先頭のコメントから km-help.ps1 が読む)
+if ($Help) {
+    $kmHelp = Join-Path $PSScriptRoot 'km-help.ps1'
+    if (Test-Path $kmHelp) { & $kmHelp -Path $PSCommandPath } else { Get-Help $PSCommandPath -Detailed }
+    exit 0
+}
 
 $ErrorActionPreference = 'Stop'
 

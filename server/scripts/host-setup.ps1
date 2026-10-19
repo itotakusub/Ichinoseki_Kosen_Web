@@ -43,13 +43,26 @@ param(
     [switch]$Composer,
     # ホスト側の置き場。既定は docker が知っている場所から自動で決める
     [string]$RemotePath,
+    # 繋ぐホスト(本番)
     [string]$HostName = 'ito4.jp',
     # 置き場の持ち主で繋ぐ。2026-09-18 から kmops(docs/12 §7-4 B 段 2)
     [string]$User = 'kmops',
+    # SSH の秘密鍵
     [string]$KeyPath = "$env:USERPROFILE\.ssh\km_ops",
+    # SSH のポート
     [int]$Port = 22,
-    [switch]$Interactive
+    # 鍵にパスフレーズがあるとき(聞かれたら打つ)
+    [switch]$Interactive,
+    # オプションとその意味を出して終わる
+    [switch]$Help
 )
+
+# -Help: オプションとその意味を出して終わる(2026-10-16。説明はこのファイルの先頭のコメントから km-help.ps1 が読む)
+if ($Help) {
+    $kmHelp = Join-Path $PSScriptRoot 'km-help.ps1'
+    if (Test-Path $kmHelp) { & $kmHelp -Path $PSCommandPath } else { Get-Help $PSCommandPath -Detailed }
+    exit 0
+}
 
 $ErrorActionPreference = 'Stop'
 

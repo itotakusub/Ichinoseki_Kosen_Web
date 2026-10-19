@@ -42,12 +42,12 @@
   後片付け(host-setup.ps1 -Fix)を呼ばない。**普段は付けない。**
 
 .PARAMETER Backup
-  配備が済んだあと、backup-data.ps1 を呼んでバックアップも取る。
+  **配備の前に** backup-data.ps1 を呼んでバックアップを取る(2026-10-15 に順番を直した、利用者の指摘)。
 
-  **配備の「あと」なのには理由がある。** 先に取ると、
-  取った控えが**配備前のもの**になり、配備で壊れたときに戻す先が1つ古くなる。
-  逆に配備で壊れたなら、その状態を控えても仕方がない ——
-  だから後片付け(所有権と PHP からの読み書きの確認)が通ったときだけ取る。
+  控えが要るのは「配備で壊れたときに戻す先」で、それは**配備する前の、動いている状態**。
+  以前は配備のあと(後片付けが通ってから)取っていた。それだと配備で DB の中身が壊れたとき、
+  戻せる一番新しい控えは前の週次(最長 1 週間前)になり、今回の配備の直前には戻れなかった。
+  **取れなかったら配備しない**(終了コード 3。何も送っていない)。直してから取り直すか、-Backup を外して配備する。
 
 .PARAMETER BackupOnly
   配備せず、バックアップだけ取る。自動実行から呼ぶとき用。
@@ -85,7 +85,7 @@
   .\deploy-to-host.ps1 -Action restart -Services reverse-proxy
 
 .EXAMPLE
-  # 配備してから、そのままバックアップも取る
+  # 先にバックアップを取ってから配備する(取れなければ配備しない)
   .\deploy-to-host.ps1 -Action up -Backup
 
 .EXAMPLE
@@ -96,16 +96,21 @@
 param(
     # 下の4つは既定で本番が入る。個別に指定すればそちらが優先される
     [string]$HostName = '',
+    # 繋ぐ利用者(既定は kmops)
     [string]$User = '',
     # ホスト上の server/ に相当するフォルダ。未指定なら docker inspect から自動で探す
     [string]$RemotePath = '',
+    # SSH の秘密鍵(既定は ~\.ssh\km_ops)
     [string]$KeyPath = '',
     [ValidateSet('deploy', 'up', 'restart')]
     [string]$Action = 'deploy',
+    # -Action restart で入れ直すサービス(例: reverse-proxy)
     [string[]]$Services = @(),
+    # 何が送られるかを見るだけ(接続もしない)
     [switch]$WhatIfOnly,
     # 転送前の確認を省く。**行き先は本番しかないので、普段は付けないこと**
     [switch]$Yes,
+    # SSH のポート
     [int]$Port = 22,
     # 初めて繋ぐホスト(新しい VPS)。指紋を表示してから known_hosts に登録する
     [switch]$AcceptHostKey,
@@ -122,7 +127,7 @@ param(
       **忘れると壊れる手順は、忘れられる形にしておかない。**
     #>
     [switch]$NoSetup,
-    # 配備のあとバックアップも取る(理由は .PARAMETER Backup)
+    # 配備の前にバックアップを取る(理由は .PARAMETER Backup)
     [switch]$Backup,
     # 配備せずバックアップだけ。自動実行から呼ぶとき用
     [switch]$BackupOnly,
@@ -134,8 +139,17 @@ param(
     [ValidateSet('all', 'web', 'android', 'none')]
     [string]$GitHub = 'all',
     # GitHub へ出すときに、プルリクエストの説明(docs/pull-requests/)も作る。既定は作らない(2026-10-05)
-    [switch]$PullRequest
+    [switch]$PullRequest,
+    # オプションとその意味を出して終わる
+    [switch]$Help
 )
+
+# -Help: オプションとその意味を出して終わる(2026-10-16。説明はこのファイルの先頭のコメントから km-help.ps1 が読む)
+if ($Help) {
+    $kmHelp = Join-Path $PSScriptRoot 'km-help.ps1'
+    if (Test-Path $kmHelp) { & $kmHelp -Path $PSCommandPath } else { Get-Help $PSCommandPath -Detailed }
+    exit 0
+}
 
 $ErrorActionPreference = 'Stop'
 
@@ -457,6 +471,8 @@ $mustContain = @(
     './docker/php/99-timezone.ini'
     './nginx/default.conf.template'
     './nginx/km/proxy-web.conf'
+    # Logto の確認コード欄の自動入力(2026-10-12)。無いと nginx の差し込みが 404 を読みにいく
+    './nginx/km/logto-otp-autocomplete.js'
     # 更新の確認と通知。**この2つは対**で、片方だけだと cron が空振りする
     './scripts/check-updates.sh'
     './src/scripts/notify-update.php'
@@ -495,6 +511,14 @@ $mustContain = @(
     #>
     './src/Main/map-style.js'
     './src/Main/map-tuning.js'
+    # 札の置き方(引き出し線。2026-10-14)。無くても地図は出るが、重なりがほどけない
+    './src/Main/label-layout.js'
+    # テスト用アカウント(展示の PC。2026-10-15)。lib が無いと index.php が fatal になる
+    './src/lib/test-mode.php'
+    './src/api/test-events.php'
+    './src/admin/test-mode.php'
+    './src/Main/test-mode.js'
+    './src/Main/tutorial.js'
     <#
       建物平面図。**アプリの APK 内の画像の写し**で、これが無いと
       屋外図に重ねる見取り図だけが出ない(地図は出るので気づきにくい)。
@@ -554,7 +578,7 @@ if (-not $Yes) {
     Write-Host ''
     Write-Host "  配備先 : $($preset.Label)" -ForegroundColor Yellow
     Write-Host "           $sshTarget`:$RemotePath"
-    Write-Host "  動作   : $Action$(if ($Services) { " (" + ($Services -join ', ') + ")" })$(if ($Backup) { ' + バックアップ' })$(if ($Backup -and $OpenBackup) { '(解凍まで)' })$(if ($GitHub -ne 'none') { " + GitHub へ出す($GitHub)" })"
+    Write-Host "  動作   : $Action$(if ($Services) { " (" + ($Services -join ', ') + ")" })$(if ($Backup) { '(先にバックアップ' + $(if ($OpenBackup) { '・解凍まで' }) + ')' })$(if ($GitHub -ne 'none') { " + GitHub へ出す($GitHub)" })"
     Write-Host ''
     $answer = Read-Host "  $(if ($HostName -in $prodHostNames) { '本番' } else { $HostName })へ配備します。続けますか (yes/no)"
     if ($answer -ne 'yes') {
@@ -649,6 +673,29 @@ if ("$psOut" -match 'no configuration file|not found') {
 "@
 } else {
     $psOut | ForEach-Object { Write-Host "      $_" }
+}
+
+# ---------------------------------------------------------------- バックアップ(-Backup のときだけ。配備の前)
+
+<#
+  **送る前に取る**(2026-10-15、利用者の指摘「普通はデプロイの前にバックアップ」)。
+  ホストに繋がること・.env があることを確かめた後(上の 1〜3)で、まだ何も送っていない時点。
+  取れなかったら**ここで止める** —— 戻す先が無いまま本番を入れ替えない。
+  取らなかったことは黙らない(失敗の理由と、次にすることを言う)。
+#>
+$backupResult = $null
+if ($Backup) {
+    Write-Host ''
+    try {
+        $backupResult = Invoke-KmBackupStep -Open:$OpenBackup
+    } catch {
+        Write-Host ''
+        Write-Host "バックアップが取れなかったので、配備していません: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host '  ホストには何も送っていません。直してから同じコマンドをもう一度。'
+        Write-Host '  バックアップ無しで配備するなら -Backup を外す(戻す先は前の週次の控えになります)。'
+        exit 3
+    }
+    Write-Host ''
 }
 
 # ---------------------------------------------------------------- 転送
@@ -947,37 +994,6 @@ if ((Get-RemoteShell) -eq 'sh') {
   **2 を使う** —— どちらとも違う結果であることを、値そのもので言う。
 #>
 <#
-  ---- バックアップ(-Backup のときだけ)
-
-  **後片付けが通ったときだけ取る。**
-
-  後片付けは「所有権が正しいか」「PHP から config と uploads を読み書きできるか」まで
-  見ている。そこが引っかかっている状態で控えを取ると、
-  **壊れた状態を「最新の控え」として残す**ことになり、
-  いざ戻すときに一番新しいものが一番使えない、という順番になる。
-
-  取らなかったことは黙らない —— 取れたか取らなかったかは、必ず言葉にして残す。
-#>
-$backupResult = $null
-$backupExit = 0
-if ($Backup) {
-    Write-Host ''
-    if ($setupExit -ne 0) {
-        Write-Host 'バックアップは取っていません(後片付けに気になる点が残っているため)。' -ForegroundColor Yellow
-        Write-Host '  直してから: .\deploy-to-host.ps1 -BackupOnly'
-    } else {
-        try {
-            $backupResult = Invoke-KmBackupStep -Open:$OpenBackup
-        } catch {
-            $backupExit = 3
-            Write-Host ''
-            Write-Host "バックアップが取れませんでした: $($_.Exception.Message)" -ForegroundColor Yellow
-            Write-Host '  配備そのものは終わっています。取り直すには: .\deploy-to-host.ps1 -BackupOnly'
-        }
-    }
-}
-
-<#
   ---- GitHub の控えへ出す(-GitHub none 以外)
 
   **配備が済んでから。** 本番に置けたものと控えを揃える。
@@ -1007,7 +1023,7 @@ if ($githubNote) {
     Write-Host $githubNote -ForegroundColor $(if ($githubNote.StartsWith('**')) { 'Yellow' } else { 'Green' })
 }
 if ($backupResult) {
-    Write-Host "バックアップ: $($backupResult.OutDir)" -ForegroundColor Green
+    Write-Host "バックアップ(配備の前に取ったもの): $($backupResult.OutDir)" -ForegroundColor Green
     if ($backupResult.PSObject.Properties['Opened']) {
         Write-Host '  **解凍したものには .env と config/*.local.php が平文で入っています。**' -ForegroundColor Yellow
         Write-Host "  24時間を過ぎたあと、次の世代整理(週次の backup-data.ps1)で消えます。最長で約1週間残ります。すぐ消すなら: Remove-Item -Recurse -Force `"$($backupResult.Opened)`""
@@ -1017,17 +1033,14 @@ if ($backupResult) {
 
 <#
   終了コードは**起きたことの数だけ**分ける。まとめると読み分けられない。
-    0 全部成功 / 2 後片付けに気になる点 / 3 配備は済んだがバックアップが取れなかった
+    0 全部成功 / 2 後片付けに気になる点
+    3 バックアップが取れなかったので**配備していない**(上の「バックアップ」の段で終わる。2026-10-15 から)
   1(転送の失敗)は上流の throw が返す。
 #>
-if ($setupExit -eq 0 -and $backupExit -eq 0) {
+if ($setupExit -eq 0) {
     Write-Host '完了しました。' -ForegroundColor Green
     exit 0
 }
-if ($setupExit -ne 0) {
-    Write-Host '転送は完了しています。**後片付けに気になる点が残りました**(上の出力を確認してください)。' -ForegroundColor Yellow
-    Write-Host '調べ直すには: .\host-setup.ps1     直すには: .\host-setup.ps1 -Fix'
-    exit 2
-}
-Write-Host '配備は完了しています。**バックアップだけが取れませんでした。**' -ForegroundColor Yellow
-exit 3
+Write-Host '転送は完了しています。**後片付けに気になる点が残りました**(上の出力を確認してください)。' -ForegroundColor Yellow
+Write-Host '調べ直すには: .\host-setup.ps1     直すには: .\host-setup.ps1 -Fix'
+exit 2

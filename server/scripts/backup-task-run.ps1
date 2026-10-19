@@ -38,12 +38,17 @@
 #>
 [CmdletBinding()]
 param(
+    # 控えを取るホスト(本番)
     [string]$HostName = 'ito4.jp',
     # 2026-09-18 から kmops(門番の鍵の行も kmops に在る。docs/12 §7-4 B 段 2)
     [string]$User = 'kmops',
+    # SSH の秘密鍵
     [string]$KeyPath = "$env:USERPROFILE\.ssh\km_ops",
+    # ホスト側の置き場(server/ に相当)
     [string]$RemotePath = '/opt/kosenmap',
+    # 手元に何世代残すか。古いものから消す
     [int]$Keep = 7,
+    # SSH のポート
     [int]$Port = 22,
     # 控えの置き場。未指定なら Get-KmBackupRoot
     [string]$BackupRoot = '',
@@ -54,8 +59,17 @@ param(
     # メールの宛先ホスト。未指定なら取得元と同じ(試験で「取得は失敗させ、メールは届ける」ときに分ける)
     [string]$MailHostName = '',
     # 控え専用の鍵(門番付き)で取る。取得も失敗のメールも門番の決まった口を通る(backup-data.ps1 の -Gated)
-    [switch]$Gated
+    [switch]$Gated,
+    # オプションとその意味を出して終わる
+    [switch]$Help
 )
+
+# -Help: オプションとその意味を出して終わる(2026-10-16。説明はこのファイルの先頭のコメントから km-help.ps1 が読む)
+if ($Help) {
+    $kmHelp = Join-Path $PSScriptRoot 'km-help.ps1'
+    if (Test-Path $kmHelp) { & $kmHelp -Path $PSCommandPath } else { Get-Help $PSCommandPath -Detailed }
+    exit 0
+}
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'backup-lib.ps1')

@@ -20,6 +20,8 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && !km_csrf_verify()) {
     $newPassword = trim((string) ($_POST['new_password'] ?? ''));
     // hidden でも教職員には見せるか(docs/15 段 D)。チェックが無ければ見せない
     $teacherSeesHidden = ($_POST['teacher_sees_hidden'] ?? '') === '1';
+    // イベント中だけ地図をパスワード無しで出すか(2026-10-15)。チェックが無ければ出さない
+    $eventOpensMap = ($_POST['event_opens_map'] ?? '') === '1';
     $hasPassword = km_map_access_config()['passwordHash'] !== null || $newPassword !== '';
 
     if (!in_array($mode, KM_MAP_ACCESS_MODES, true)) {
@@ -38,12 +40,12 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && !km_csrf_verify()) {
 
     if ($errors === []) {
         try {
-            km_map_access_save($mode, $newPassword !== '' ? $newPassword : null, $mapMode, $teacherSeesHidden);
+            km_map_access_save($mode, $newPassword !== '' ? $newPassword : null, $mapMode, $teacherSeesHidden, $eventOpensMap);
             $saved = true;
             km_admin_log_record(
                 'settings',
                 'map.settings',
-                "氏名={$mode} / 地図={$mapMode} / hidden でも教職員に=" . ($teacherSeesHidden ? '見せる' : '見せない')
+                "氏名={$mode} / 地図={$mapMode} / イベント中は地図を開ける=" . ($eventOpensMap ? 'はい' : 'いいえ') . " / hidden でも教職員に=" . ($teacherSeesHidden ? '見せる' : '見せない')
                     . ($newPassword !== '' ? ' / パスワード変更' : '')
             );
         } catch (Throwable $exception) {
@@ -255,6 +257,18 @@ docker compose exec -u root web chmod 640 config/<?= km_e(basename($configPath))
                             <strong data-i18n="page.mapSettings.mapMode.password">パスワードが必要</strong>
                             <div class="text-body-secondary fs-7" data-i18n="page.mapSettings.mapMode.passwordHint">
                               入力するまで地点も経路も見取り図も出ません。トップページ・お問い合わせ・よくある質問は今までどおり見られます。
+                            </div>
+                          </label>
+                        </div>
+                        <?php // 2026-10-15、利用者の指示。教職員氏名の錠は変えない(lib/map-access.php の km_map_event_opens_view) ?>
+                        <div class="form-check mt-2 ms-4">
+                          <input class="form-check-input" type="checkbox" name="event_opens_map" value="1" id="km-event-opens-map"
+                                 <?= $config['eventOpensMap'] ? 'checked' : '' ?> />
+                          <label class="form-check-label" for="km-event-opens-map">
+                            <strong>イベント中だけ、パスワード無しで表示する</strong>
+                            <div class="text-body-secondary fs-7">
+                              「パスワードが必要」のときに効きます。イベントモードで有効なイベントがある間(期間内)だけ、地図・経路・見取り図をパスワード無しで出します。
+                              教職員氏名の扱いは下の設定のままです。イベントが終われば自動で元に戻ります。
                             </div>
                           </label>
                         </div>

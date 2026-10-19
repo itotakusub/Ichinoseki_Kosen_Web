@@ -6,6 +6,7 @@ define('KM_ADMIN', true);
 require __DIR__ . '/_inc/guard.php';
 require_once dirname(__DIR__) . '/lib/db.php';
 require_once dirname(__DIR__) . '/lib/map-events.php';
+require_once dirname(__DIR__) . '/lib/map-event-import.php';
 require_once dirname(__DIR__) . '/lib/admin-log.php';
 
 /**
@@ -25,6 +26,8 @@ $events = [];
 $isolation = null;
 $cleanupMode = 'manual';
 $expiredForCleanup = [];
+$importPending = ['events' => [], 'uploadedAt' => null, 'error' => null];
+$importPreview = [];
 
 try {
     $pdo = km_db();
@@ -37,7 +40,46 @@ try {
         $id = isset($_POST['id']) && $_POST['id'] !== '' ? (int) $_POST['id'] : null;
 
         try {
-            if ($formAction === 'cleanup_mode') {
+            /*
+             * 管理アプリのイベントの取り込み(2026-10-14。lib/map-event-import.php)。
+             * 上げる → 差分を見る → 選んで入れる。入れたイベントは無効のまま(ON はこの画面で)。
+             */
+            if ($formAction === 'import_upload') {
+                $file = $_FILES['event_file'] ?? null;
+                if (!is_array($file) || ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK
+                    || !is_uploaded_file((string) ($file['tmp_name'] ?? ''))) {
+                    throw new InvalidArgumentException('ファイルを受け取れませんでした。選び直してください。');
+                }
+                $refused = km_map_event_import_store((string) $file['tmp_name'], (int) ($file['size'] ?? 0));
+                if ($refused !== null) {
+                    throw new InvalidArgumentException($refused);
+                }
+                $notice = 'ファイルを受け取りました。下の「取り込み待ち」で中身を確かめてから取り込んでください。';
+            } elseif ($formAction === 'import_discard') {
+                km_map_event_import_discard();
+                $notice = '取り込み待ちを捨てました。';
+            } elseif ($formAction === 'import_apply') {
+                $selected = array_map('strval', is_array($_POST['uuids'] ?? null) ? $_POST['uuids'] : []);
+                $pending = km_map_event_import_load();
+                if ($pending['error'] !== null) {
+                    throw new InvalidArgumentException($pending['error']);
+                }
+                $applied = [];
+                foreach ($pending['events'] as $pendingEvent) {
+                    if (!in_array(trim((string) $pendingEvent->uuid), $selected, true)) {
+                        continue;
+                    }
+                    $result = km_map_event_import_apply($pdo, $pendingEvent);
+                    $applied[] = $result['converted']['name'] . ($result['created'] ? '(新規・無効)' : '(入れ替え)');
+                }
+                if ($applied === []) {
+                    throw new InvalidArgumentException('取り込むイベントを選んでください。');
+                }
+                km_map_event_import_discard();
+                km_admin_log_record('content', 'map.event_import', implode(' / ', $applied));
+                $notice = '取り込みました: ' . implode('、', $applied)
+                    . '。新しいイベントは無効のままです。期間と案内の文を確かめてから有効にしてください。';
+            } elseif ($formAction === 'cleanup_mode') {
                 km_map_event_cleanup_mode_save($pdo, (string) ($_POST['cleanup_mode'] ?? ''));
                 km_admin_log_record(
                     'settings',
@@ -133,6 +175,11 @@ try {
 
     $expiredForCleanup = km_map_events_expired($pdo);
     $events = km_map_events_all($pdo);
+
+    $importPending = km_map_event_import_load();
+    if ($importPending['events'] !== []) {
+        $importPreview = km_map_event_import_preview($pdo, $importPending['events']);
+    }
 
     // いま重ねている内容で、到達できなくなる場所がどれだけあるか
     $overlay = km_map_event_overlay($pdo);
@@ -285,6 +332,113 @@ $fmt = static fn (?string $value): string => $value === null || $value === ''
             </div>
             <?php endif; ?>
 
+            <?php if ($dbError === null): ?>
+            <!-- ------------------------------------------------ 管理アプリのイベントの取り込み(2026-10-14) -->
+            <div class="card mb-4" id="km-event-import">
+              <div class="card-header">
+                <h3 class="card-title">管理アプリのイベントを取り込む</h3>
+              </div>
+              <div class="card-body">
+                <p class="text-body-secondary fs-7">
+                  管理アプリで作ったイベント(部屋の名前・表示しない地点・通行止め・一時地点)を入れます。
+                  アプリの「地図の書き出し」で作ったファイルを上げてください。
+                  同じイベントを取り込み直すと、中身は丸ごと入れ替わります。<strong>新しいイベントは無効のまま入る</strong>ので、期間と案内の文を確かめてから有効にしてください。
+                </p>
+                <form method="post" enctype="multipart/form-data" class="row g-2 align-items-end">
+                  <?= km_csrf_field() ?>
+                  <input type="hidden" name="form_action" value="import_upload">
+                  <div class="col-12 col-md">
+                    <input class="form-control" type="file" name="event_file" accept=".json,application/json" required>
+                  </div>
+                  <div class="col-12 col-md-auto">
+                    <button type="submit" class="btn btn-outline-primary">上げて中身を見る</button>
+                  </div>
+                </form>
+
+                <?php if ($importPending['error'] !== null): ?>
+                  <div class="alert alert-warning mt-3 mb-0" role="alert"><?= km_e($importPending['error']) ?></div>
+                <?php endif; ?>
+
+                <?php if ($importPreview !== []): ?>
+                  <hr>
+                  <h4 class="h6">
+                    取り込み待ち
+                    <span class="text-body-secondary fs-7">(<?= km_e($fmt($importPending['uploadedAt'])) ?> に上げたもの)</span>
+                  </h4>
+                  <form method="post">
+                    <?= km_csrf_field() ?>
+                    <input type="hidden" name="form_action" value="import_apply">
+                    <div class="table-responsive">
+                      <table class="table table-sm align-middle">
+                        <thead>
+                          <tr>
+                            <th></th>
+                            <th>イベント</th>
+                            <th class="text-end">名前</th>
+                            <th class="text-end">表示しない</th>
+                            <th class="text-end">通行止め</th>
+                            <th class="text-end">一時地点</th>
+                            <th>注意</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                        <?php foreach ($importPreview as $index => $item): ?>
+                          <?php
+                            $c = $item['converted'];
+                            $existing = $item['existing'];
+                            $skip = $c['skipped'];
+                            $notes = [];
+                            if ($skip['unknownNode'] > 0) {
+                                $notes[] = "Website に無い地点 {$skip['unknownNode']} 件は飛ばします(先に「アプリの地図を取り込む」を)";
+                            }
+                            if ($skip['unknownFloor'] !== []) {
+                                $notes[] = '知らない階: ' . implode(', ', array_unique($skip['unknownFloor']));
+                            }
+                            if ($skip['staffOnly'] > 0) {
+                                $notes[] = "スタッフ限定の一時地点 {$skip['staffOnly']} 件は公開ページに出さないので入れません";
+                            }
+                            if ($skip['badLineKey'] > 0) {
+                                $notes[] = "読めない通行止めの線 {$skip['badLineKey']} 件";
+                            }
+                            $closures = count($c['closedEdges']) + count($c['closedNodes']);
+                          ?>
+                          <tr>
+                            <td>
+                              <input class="form-check-input" type="checkbox" name="uuids[]" id="km-import-<?= (int) $index ?>"
+                                     value="<?= km_e($c['uuid']) ?>" checked>
+                            </td>
+                            <td>
+                              <label for="km-import-<?= (int) $index ?>" class="fw-semibold"><?= km_e($c['name']) ?></label>
+                              <div class="fs-7 text-body-secondary">
+                                <?php if ($existing === null): ?>
+                                  新しく作る(無効のまま)
+                                <?php else: ?>
+                                  「<?= km_e($existing['name']) ?>」を入れ替える(いま: 名前 <?= (int) $existing['aliasCount'] ?>・表示しない <?= (int) $existing['hiddenCount'] ?>・通行止め <?= (int) $existing['closureCount'] ?>・一時地点 <?= (int) $existing['poiCount'] ?>)
+                                <?php endif; ?>
+                              </div>
+                            </td>
+                            <td class="text-end"><?= count($c['aliases']) ?></td>
+                            <td class="text-end"><?= count($c['hidden']) ?></td>
+                            <td class="text-end"><?= $closures ?></td>
+                            <td class="text-end"><?= count($c['pois']) ?></td>
+                            <td class="fs-7"><?= $notes === [] ? '—' : km_e(implode(' / ', $notes)) ?></td>
+                          </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                      </table>
+                    </div>
+                    <button type="submit" class="btn btn-primary">選んだイベントを取り込む</button>
+                  </form>
+                  <form method="post" class="mt-2">
+                    <?= km_csrf_field() ?>
+                    <input type="hidden" name="form_action" value="import_discard">
+                    <button type="submit" class="btn btn-outline-secondary btn-sm">取り込まずに捨てる</button>
+                  </form>
+                <?php endif; ?>
+              </div>
+            </div>
+            <?php endif; ?>
+
             <div class="row">
               <!-- ------------------------------------------------ 一覧 -->
               <div class="col-12 col-xl-7">
@@ -317,6 +471,9 @@ $fmt = static fn (?string $value): string => $value === null || $value === ''
                               <?php if ($event['hideOccupantNames']): ?>
                                 <span class="badge text-bg-secondary fs-8" data-i18n="page.mapEvents.namesHidden">氏名を隠す</span>
                               <?php endif; ?>
+                              <?php if (($event['appUuid'] ?? null) !== null): ?>
+                                <span class="badge text-bg-primary fs-8" title="中身は管理アプリで直して取り込み直します">アプリから(<?= km_e($fmt($event['importedAt'] ?? null)) ?>)</span>
+                              <?php endif; ?>
                             </td>
                             <td class="fs-7">
                               <?= km_e($fmt($event['startsAt'])) ?><br>
@@ -324,7 +481,10 @@ $fmt = static fn (?string $value): string => $value === null || $value === ''
                             </td>
                             <td class="text-end fs-7">
                               通行止め <?= $event['closureCount'] ?><br>
-                              地点 <?= $event['poiCount'] ?> / 別名 <?= $event['aliasCount'] ?>
+                              地点 <?= $event['poiCount'] ?> / 名前 <?= $event['aliasCount'] ?>
+                              <?php if ($event['hiddenCount'] > 0): ?>
+                                <br>表示しない <?= $event['hiddenCount'] ?>
+                              <?php endif; ?>
                             </td>
                             <td class="text-end">
                               <?php if ($event['isActive']): ?>

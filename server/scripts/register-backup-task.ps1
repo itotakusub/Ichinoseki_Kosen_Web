@@ -43,21 +43,37 @@
 #>
 [CmdletBinding()]
 param(
+    # タスク スケジューラに登録する名前
     [string]$TaskName = 'KosenMap バックアップ(週次)',
+    # 控えを取るホスト(本番)
     [string]$HostName = 'ito4.jp',
     # 2026-09-18 から kmops(門番の鍵の行も kmops に在る。docs/12 §7-4 B 段 2)
     [string]$User = 'kmops',
     # 未指定なら -Gated のとき km_backup(控え専用・門番付き)、そうでなければ km_ops
     [string]$KeyPath = '',
+    # ホスト側の置き場(server/ に相当)
     [string]$RemotePath = '/opt/kosenmap',
+    # 何曜日に取るか
     [ValidateSet('Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday')]
     [string]$DayOfWeek = 'Sunday',
+    # 何時に取るか(24 時間制。例 03:00)
     [string]$At = '03:00',
+    # 手元に何世代残すか。古いものから消す
     [int]$Keep = 7,
     # 控え専用の鍵(ホストの ssh-backup-gate.sh の門番付き)で取る。**無人で動く鍵が、控えを作って取る以外に使えなくなる**
     [switch]$Gated,
-    [switch]$WhatIfOnly
+    # 登録する中身を見せるだけ(登録しない)
+    [switch]$WhatIfOnly,
+    # オプションとその意味を出して終わる
+    [switch]$Help
 )
+
+# -Help: オプションとその意味を出して終わる(2026-10-16。説明はこのファイルの先頭のコメントから km-help.ps1 が読む)
+if ($Help) {
+    $kmHelp = Join-Path $PSScriptRoot 'km-help.ps1'
+    if (Test-Path $kmHelp) { & $kmHelp -Path $PSCommandPath } else { Get-Help $PSCommandPath -Detailed }
+    exit 0
+}
 
 $ErrorActionPreference = 'Stop'
 

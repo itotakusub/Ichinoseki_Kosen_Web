@@ -99,7 +99,8 @@
       url: urlOf('soketi', `https://${HOST}:6001`),
       icon: 'bi-broadcast',
       accent: 'text-bg-danger',
-      openable: true,
+      // WebSocket の入口(2026-10-19 から管理画面の 443 番の /ws/)。ブラウザで開く画面は無い
+      openable: false,
       status: 'unknown',
     },
     {

@@ -66,8 +66,17 @@ param(
     [switch]$CheckOnly,
     [switch]$ScanAll,
     # プルリクエストの説明を作る(既定は作らない。2026-10-05)
-    [switch]$PullRequest
+    [switch]$PullRequest,
+    # オプションとその意味を出して終わる
+    [switch]$Help
 )
+
+# -Help: オプションとその意味を出して終わる(2026-10-16。説明はこのファイルの先頭のコメントから km-help.ps1 が読む)
+if ($Help) {
+    $kmHelp = Join-Path $PSScriptRoot 'km-help.ps1'
+    if (Test-Path $kmHelp) { & $kmHelp -Path $PSCommandPath } else { Get-Help $PSCommandPath -Detailed }
+    exit 0
+}
 
 $ErrorActionPreference = 'Stop'
 

@@ -199,6 +199,15 @@ do_status() {
           *) echo "★ 管理用の名前(${_admin})が証明書にありません。issue --domain ${_domain} --also ${_admin} で足してください。"; _rc=1 ;;
         esac
       fi
+      # サインインの入口(443 番の Logto。2026-10-19)を .env で切り替えているなら、その名前も入っていること。
+      # 入っていないと、サインインを押した時点でブラウザが証明書の名前の不一致で止める
+      _auth="$(env_value KM_AUTH_DOMAIN)"
+      if [ -n "$_auth" ]; then
+        case ",${_san}," in
+          *",DNS:${_auth},"*) echo "   サインインの名前(${_auth})も入っています。" ;;
+          *) echo "★ サインインの名前(${_auth})が証明書にありません。issue --domain ${_domain} --also ${_admin:-${_domain}} --also ${_auth} で足してください。"; _rc=1 ;;
+        esac
+      fi
       _served="$(served_fingerprint "$_domain" || true)"
       if [ -z "$_served" ]; then
         echo "★ 443 番から証明書を受け取れません(nginx が動いているか確かめてください)"

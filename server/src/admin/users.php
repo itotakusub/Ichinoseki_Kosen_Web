@@ -10,6 +10,9 @@ require_once dirname(__DIR__) . '/lib/profile.php';
 
 $search = trim((string) ($_GET['q'] ?? ''));
 
+$testNotice = isset($_GET['marked']) ? 'テスト用の印を付けました。そのアカウントで公開ページを開き直すと「テスト中」になります。'
+    : (isset($_GET['unmarked']) ? 'テスト用の印を外しました。' : null);
+
 /*
  * ユーザーの正本は Logto なので、ここは読み取り専用の一覧にする。ローカル DB に
  * ユーザー表を持つと正本が二重化して必ず食い違うため、意図的に作らない。
@@ -36,6 +39,15 @@ try {
     $avatarMap = km_profile_avatar_map(km_db(), array_column($users, 'id'));
 } catch (Throwable $exception) {
     error_log('users.php avatar lookup failed (fall back to Logto): ' . $exception->getMessage());
+}
+
+// テスト用の印(展示の PC。lib/test-mode.php)。DB が読めなくても一覧は出す
+require_once dirname(__DIR__) . '/lib/test-mode.php';
+$testSubs = [];
+try {
+    $testSubs = array_column(km_test_accounts_all(km_db()), 'sub');
+} catch (Throwable $exception) {
+    error_log('users.php test accounts lookup failed: ' . $exception->getMessage());
 }
 
 /** 表示に使う画像を1人ぶん決める。優先順は「この画面で設定 → Logto → 既定」。 */
@@ -68,6 +80,9 @@ require __DIR__ . '/_inc/partials/page-header.php';
         <div class="app-content">
           <!--begin::Container-->
           <div class="container-fluid">
+            <?php if ($testNotice !== null): ?>
+              <div class="alert alert-success" role="alert"><?= km_e($testNotice) ?> <a href="./test-mode.php">テスト用アカウントの画面へ</a></div>
+            <?php endif; ?>
             <!--begin::Notice-->
             <div class="alert alert-info d-flex align-items-start" role="alert">
               <i class="bi bi-info-circle-fill me-2 mt-1" aria-hidden="true"></i>
@@ -192,7 +207,20 @@ require __DIR__ . '/_inc/partials/page-header.php';
                                   <span class="badge text-bg-success" data-i18n="page.users.statusActive">有効</span>
                                 <?php endif; ?>
                               </td>
-                              <td class="text-end">
+                              <td class="text-end text-nowrap">
+                                <?php // 展示の PC 用の印(2026-10-15。admin/test-mode.php が受けて、ここへ戻す) ?>
+                                <?php $isTest = in_array($user['id'], $testSubs, true); ?>
+                                <form method="post" action="./test-mode.php" class="d-inline">
+                                  <?= km_csrf_field() ?>
+                                  <input type="hidden" name="form_action" value="<?= $isTest ? 'unmark' : 'mark' ?>">
+                                  <input type="hidden" name="sub" value="<?= km_e($user['id']) ?>">
+                                  <input type="hidden" name="label" value="<?= km_e($user['name']) ?>">
+                                  <input type="hidden" name="return" value="users">
+                                  <button type="submit" class="btn btn-sm <?= $isTest ? 'btn-warning' : 'btn-outline-warning' ?>"
+                                          title="<?= $isTest ? 'テスト用の印を外す' : 'テスト用にする(展示の PC。操作を記録する)' ?>">
+                                    <?= $isTest ? 'テスト用 ✓' : 'テスト用にする' ?>
+                                  </button>
+                                </form>
                                 <a
                                   href="<?= km_e(km_site_url('logto-admin', '/console/users/' . rawurlencode($user['id']))) ?>"
                                   class="btn btn-sm btn-outline-secondary"

@@ -1,0 +1,56 @@
+[
+  {
+    "usageType": "SignIn",
+    "contentType": "text/plain",
+    "subject": "【高専マップ】確認コード (Verification Code)",
+    "content": "高専マップの確認コード (Verification Code):\n\n{{code}}\n\nサインイン画面に戻って入力してください。\nこのコードは10分間有効です。心当たりが無い場合は破棄してください。"
+  },
+  {
+    "usageType": "Register",
+    "contentType": "text/plain",
+    "subject": "【高専マップ】新規登録の確認コード (Verification Code)",
+    "content": "高専マップの新規登録の確認コード (Verification Code):\n\n{{code}}\n\n登録の画面に戻って入力してください。\nこのコードは10分間有効です。心当たりが無い場合は破棄してください。"
+  },
+  {
+    "usageType": "ForgotPassword",
+    "contentType": "text/plain",
+    "subject": "【高専マップ】パスワード再設定の確認コード (Verification Code)",
+    "content": "高専マップのパスワード再設定の確認コード (Verification Code):\n\n{{code}}\n\nパスワード再設定の画面に戻って入力してください。\nこのコードは10分間有効です。心当たりが無い場合は破棄してください(パスワードは変わりません)。"
+  },
+  {
+    "usageType": "Generic",
+    "contentType": "text/plain",
+    "subject": "【高専マップ】確認コード (Verification Code)",
+    "content": "高専マップの確認コード (Verification Code):\n\n{{code}}\n\n元の画面に戻って入力してください。\nこのコードは10分間有効です。心当たりが無い場合は破棄してください。"
+  },
+  {
+    "usageType": "BindNewIdentifier",
+    "contentType": "text/plain",
+    "subject": "【高専マップ】メールアドレス登録の確認コード (Verification Code)",
+    "content": "高専マップのメールアドレス登録の確認コード (Verification Code):\n\n{{code}}\n\n元の画面に戻って入力してください。\nこのコードは10分間有効です。心当たりが無い場合は破棄してください。"
+  },
+  {
+    "usageType": "UserPermissionValidation",
+    "contentType": "text/plain",
+    "subject": "【高専マップ】本人確認の確認コード (Verification Code)",
+    "content": "高専マップの本人確認の確認コード (Verification Code):\n\n{{code}}\n\n元の画面に戻って入力してください。\nこのコードは10分間有効です。操作に心当たりが無い場合は破棄してください。"
+  },
+  {
+    "usageType": "MfaVerification",
+    "contentType": "text/plain",
+    "subject": "【高専マップ】2段階認証の確認コード (Verification Code)",
+    "content": "高専マップの2段階認証の確認コード (Verification Code):\n\n{{code}}\n\nサインイン画面に戻って入力してください。\nこのコードは10分間有効です。心当たりが無い場合は破棄し、パスワードの変更を検討してください。"
+  },
+  {
+    "usageType": "BindMfa",
+    "contentType": "text/plain",
+    "subject": "【高専マップ】2段階認証の設定用コード (Verification Code)",
+    "content": "高専マップの2段階認証の設定用コード (Verification Code):\n\n{{code}}\n\n設定の画面に戻って入力してください。\nこのコードは10分間有効です。心当たりが無い場合は破棄してください。"
+  },
+  {
+    "usageType": "OrganizationInvitation",
+    "contentType": "text/plain",
+    "subject": "【高専マップ】組織への招待コード (Verification Code)",
+    "content": "高専マップの組織への招待コード (Verification Code):\n\n{{code}}\n\n招待の画面に戻って入力してください。\nこのコードは10分間有効です。心当たりが無い場合は破棄してください。"
+  }
+]

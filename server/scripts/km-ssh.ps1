@@ -46,6 +46,13 @@
 # **Set-StrictMode はここでは掛けない。** dot-source した側のスコープにも効いてしまい、
 # 既に実績のある backup-data.ps1 の挙動を変えかねないため。
 
+# -Help: ほかのスクリプトから読み込む部品。直に `.\km-ssh.ps1 -Help` と叩いたときだけ説明を出す(. で読み込んだときは何もしない。2026-10-16)
+if ($MyInvocation.InvocationName -ne '.' -and $args -contains '-Help') {
+    $kmHelp = Join-Path $PSScriptRoot 'km-help.ps1'
+    if (Test-Path $kmHelp) { & $kmHelp -Path $PSCommandPath } else { Get-Help $PSCommandPath -Detailed }
+    exit 0
+}
+
 # Initialize-KmSsh で埋める接続情報
 $script:KmSsh = @{
     HostName    = ''

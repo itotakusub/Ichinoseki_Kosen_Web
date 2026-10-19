@@ -127,7 +127,7 @@ services:
     # (digest だけにすると hex を版番号として読み、毎日「新しい版があります」と言い続ける)。
     # 1.44.0 に上げた(2026-10-06、利用者の決定)。移行は 2 つ: 利用者 ID の列を 128 字に広げる(**戻せない** ——
     # 長い ID ができた後は巻き戻しが失敗する)・SAML の列を足す。先に検証機で上げて確かめた(docs/19)
-    image: ghcr.io/logto-io/logto:1.44.0@sha256:847cdd2759ad60f61b9733af0ea352183c805681dff5c9f8140a80f52d8e1340
+    image: ghcr.io/logto-io/logto:1.45.0@sha256:097cd47689546461edb4637fb6eee60b9ab6d3d4c08ebb20bc44a1b1809b82c0
     container_name: km-logto
     restart: unless-stopped
     security_opt:
@@ -167,7 +167,9 @@ services:
       # **`${…:-既定}` で書く。** 直書きだと .env で上書きできず、別のホストへ
       # 移したときに **Logto が旧ホストの URL でトークンを発行し続ける**。
       # 既定値は現行の校内 LAN そのままなので、.env に足さなければ挙動は変わらない。
-      ENDPOINT: ${LOGTO_ENDPOINT:-https://192.168.3.29:3001}
+      # **2026-10-19 から 443 番の auth.<KM_DOMAIN>**(nginx の auth の server。:3001 の入口は外した)。
+      # 名前で受けるので、IP アドレスだけの校内 LAN 単体の構成ではサインインできない(ローカル環境は compose.vps.yaml を重ねて名前で動く)
+      ENDPOINT: ${LOGTO_ENDPOINT:-https://${KM_AUTH_DOMAIN:-auth.${KM_DOMAIN:-192.168.3.29}}}
       ADMIN_ENDPOINT: ${LOGTO_ADMIN_ENDPOINT:-https://192.168.3.29:3002}
       TRUST_PROXY_HEADER: "1"
     depends_on:
@@ -189,7 +191,7 @@ services:
 
   mariadb:
     # 2026-09-15 に動いていた中身(タグを残す理由は postgres と同じ)
-    image: mariadb:11.4@sha256:1292844148b311e4ed4300022a996d39083f415a963e970cf47cad1b3b18e3a6
+    image: mariadb:11.4@sha256:250e1609e93c0e6aecf64bfbab2d84d5e89d2481540fe77447ff6c855c3b1873
     container_name: km-mariadb
     restart: unless-stopped
     security_opt:
@@ -266,7 +268,7 @@ services:
 
   phpmyadmin:
     # 2026-09-15 に動いていた中身(タグを残す理由は postgres と同じ)
-    image: phpmyadmin:5.2.3-apache@sha256:e1d42a6985a9622e1e2461d31d2cea82fb069ee05194dbe2a6c758f86c9ef6b8
+    image: phpmyadmin:5.2.3-apache@sha256:da3c72f9886fca93037b740c93fe1697a7924fe6790a58733814cee61ec49af8
     container_name: km-phpmyadmin
     restart: unless-stopped
     security_opt:
@@ -298,6 +300,10 @@ services:
       # root でのログインを一時的に許すときだけ .env に 1(docker/phpmyadmin/config.user.inc.php)。
       # **普段は空 = 禁止。** 2026-09-14 まではイメージの既定で root も空パスワードも通っていた(server-ops 12)
       KM_PMA_ALLOW_ROOT: ${KM_PMA_ALLOW_ROOT:-}
+      # 環境保管領域の制御用の利用者(2026-10-19)。**パスワードがあるときだけ有効**(docker/phpmyadmin/config.user.inc.php)。
+      # 作り方は docs/05-containers の §1-2(パスワードはホストで作って .env に書く。画面にもリポジトリにも出さない)
+      KM_PMA_CONTROLUSER: ${KM_PMA_CONTROLUSER:-pma}
+      KM_PMA_CONTROLPASS: ${KM_PMA_CONTROLPASS:-}
       PMA_HOST: mariadb
       PMA_PORT: "3306"
       PMA_SSL: "1"
@@ -379,7 +385,8 @@ services:
       # 旧ホストの値で固定していた。結果、別のホストへ移すと
       # 管理画面が「認証の設定が未完了」(503)になる —— 公開ページは動くので
       # 移行がほぼ終わったように見えてから気付くことになる(192.168.3.98 で実際に踏んだ)。
-      LOGTO_ENDPOINT: ${LOGTO_ENDPOINT:-https://192.168.3.29:3001}
+      # logto の ENDPOINT と同じ導き方(2026-10-19。443 番の auth.<KM_DOMAIN>)
+      LOGTO_ENDPOINT: ${LOGTO_ENDPOINT:-https://${KM_AUTH_DOMAIN:-auth.${KM_DOMAIN:-192.168.3.29}}}
       APP_URL: ${APP_URL:-https://192.168.3.29:9443}
       # 管理画面の URL(2026-09-15。lib/site.php の km_site_admin_parts)。**既定は APP_URL と同じ = 別オリジンにしない。**
       # reverse-proxy の KM_ADMIN_URL と同じ値にすること
@@ -535,11 +542,11 @@ services:
     depends_on:
       mariadb:
         condition: service_healthy
-    # **verify.php を見る。** 地図データを読む / と違い DB を触らず、実測 1ms で返る。
+    # **healthz.php を見る。** 地図データを読む / と違い DB を触らない。
     # 静的ファイルではなく PHP を叩くのは、**Apache は生きているが PHP が死んでいる**
-    # 状態を見逃さないため。
+    # 状態を見逃さないため。以前は verify.php を叩いていた(2026-10-12 に Old/src/ へ退避)
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1/verify.php"]
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1/healthz.php"]
       start_period: 30s
       interval: 30s
       timeout: 5s
@@ -613,13 +620,14 @@ services:
       # **既定は公開側と同じ = 別オリジンにしない。** web の ADMIN_URL と同じ値にすること
       KM_ADMIN_DOMAIN: ${KM_ADMIN_DOMAIN:-${KM_DOMAIN:-192.168.3.29}}
       KM_ADMIN_URL: ${KM_ADMIN_URL:-${KM_APP_URL:-https://192.168.3.29:9443}}
+      # 443 番の Logto の入口の名前(2026-10-19。nginx の auth の server)。**いつも定義する**(空だと server_name が壊れる)。
+      # web と logto の LOGTO_ENDPOINT と同じ導き方。VPS は compose.vps.yaml が auth.<ドメイン> を渡す
+      KM_AUTH_DOMAIN: ${KM_AUTH_DOMAIN:-auth.${KM_DOMAIN:-192.168.3.29}}
     ports:
       - "192.168.3.29:8080:80"
       - "192.168.3.29:9443:443"
       - "192.168.3.29:8281:8281"
-      - "192.168.3.29:3001:3001"
       - "192.168.3.29:3002:3002"
-      - "192.168.3.29:6001:6001"
       - "192.168.3.29:8025:8025"
     volumes:
       # テンプレートは起動時に envsubst で /etc/nginx/conf.d/default.conf へ展開される。
@@ -707,7 +715,7 @@ services:
       # ---------------------------------------------------------------
       # 入口の上限(2026-09-14 の診断で追加。server-ops 3・server-authz 4)。
       #
-      # 6001 はインターネットに公開していて、接続に要る app key はブラウザに出る値なので守りにならない。
+      # Soketi はインターネットから届く(2026-10-19 からは 443 番の /ws/app/ 経由。それまでは 6001 番)。接続に要る app key はブラウザに出る値なので守りにならない。
       # それまで上限が 1 つも無く、接続を大量に張られるとメモリと記述子を使い切って
       # 管理画面のチャットと死活監視の配信が止まった。名前は本番の soketi 1.6.1 の dist/cli から実測したもの。
       #
@@ -780,7 +788,7 @@ services:
   glances:
     # ホストの使用量(タスクマネージャー。2026-10-05、利用者の指示)。**API だけ**を出し、Web 画面は出さない。
     # 4.5.7(2026-09-26 の latest)。タグを残すのは check-updates.sh が新しい版を読むため(postgres と同じ)
-    image: nicolargo/glances:latest@sha256:0d955eb3cff5e2d5ecb34e873e5448acd4741c765d1a11e032f081bcaa75eaa5
+    image: nicolargo/glances:latest@sha256:413ddc0b03422ab0bcbf30f53faf63c3ee91b354bf544cd01aa60afa73a4cda2
     container_name: km-glances
     restart: unless-stopped
     # **ホスト全体だけを見る。docker.sock は渡さない**(利用者の決定。読み取りでも root 相当の口になる)。

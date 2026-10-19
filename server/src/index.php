@@ -107,6 +107,42 @@ if ($guestViewing) {
     km_visit_mark_viewer('anon');
 }
 
+/*
+ * テスト用アカウント(展示の PC。2026-10-15、lib/test-mode.php)。**開くたびに確かめ直す**(前の印を信じない)。
+ * 印が付いていれば:「テスト中」の札とアンケートの QR、操作方法と「始めから」を出し、操作を記録する
+ * (記録の API は下のセッションの印を見る)。確かめられなければ付いていないとみなす —— 一般の人を記録しない側へ倒す。
+ */
+require_once __DIR__ . '/lib/test-mode.php';
+unset($_SESSION[KM_TEST_MODE_SESSION_KEY]);
+$kmTestMode = null;
+if ($loggedIn && isset($claims->sub)) {
+    try {
+        $testPdo = km_db();
+        if (km_test_account_is_marked($testPdo, (string) $claims->sub)) {
+            $_SESSION[KM_TEST_MODE_SESSION_KEY] = ['sub' => (string) $claims->sub, 'until' => time() + KM_TEST_MODE_SESSION_TTL];
+            $surveyUrl = km_test_survey_url($testPdo);
+            $surveyQr = null;
+            if ($surveyUrl !== '' && km_test_survey_url_valid($surveyUrl)) {
+                require_once __DIR__ . '/lib/qr.php';
+                $surveyQr = str_replace('アクセスコードの QR', 'アンケートの QR', km_qr_svg(km_qr_matrix($surveyUrl), 4, 4));
+            } else {
+                $surveyUrl = '';
+            }
+            $kmTestMode = [
+                'surveyUrl' => $surveyUrl,
+                'surveyQr' => $surveyQr,
+                'guide' => km_test_guide_lines(km_test_guide_text($testPdo)),
+                // 触られないまま過ぎたら自動で「始めから」(分。0 は使わない)
+                'idleMinutes' => km_test_idle_minutes($testPdo),
+            ];
+        }
+    } catch (Throwable $exception) {
+        error_log('KosenMap home: test-mode check failed (treated as not marked): ' . $exception->getMessage());
+        unset($_SESSION[KM_TEST_MODE_SESSION_KEY]);
+        $kmTestMode = null;
+    }
+}
+
 function km_home_e(?string $value): string
 {
     return htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
@@ -145,8 +181,22 @@ try {
  * ここも fail open。読めなければ埋め込まないだけで、app.js が従来どおり
  * /api/map-data.php へ取りに行く(admin/map-editor.php と同じ経路)。
  */
+/*
+ * QR から開いたときの部屋(2026-10-14、利用者の指示「URL にオプションを付ける」)。
+ * `/?room=<地点の id>`(アプリの uuid。ハイフンは有っても無くてもよい)。
+ * **字の形だけ確かめて <meta> で渡す。DB は引かない** —— 探すのは Main/app.js が、届いた地図の中から行う
+ * (錠やイベントで出さない地点は、そもそも地図に無いか hidden の印が付いている)。
+ * 地図データの同梱とは別にしてあるのは、同梱できずに API へ取りに行ったときも効かせるため。
+ */
+$kmFocusRoom = null;
+$roomParam = $_GET['room'] ?? '';
+if (is_string($roomParam) && preg_match('/^[0-9A-Fa-f-]{32,36}$/', $roomParam) === 1) {
+    $roomId = str_replace('-', '', $roomParam);
+    $kmFocusRoom = strlen($roomId) === 32 ? $roomId : null;
+}
+
 $inlineMapData = null;
-$kmEvent = null;              // イベントモードの案内(バナー)。無ければ null
+$kmEvent = null;             // イベントモードの案内(バナー)。無ければ null
 $kmFirstFloorImage = null;    // 最初に映す階の見取り図。<head> で preload する
 try {
     require_once __DIR__ . '/lib/map-data.php';
@@ -181,6 +231,28 @@ try {
     $inlineMapData = null;
     $kmEvent = null;
 }
+
+/*
+ * イベント中の来場者の記録(2026-10-15、利用者の指示。lib/test-mode.php)。
+ * **ログインしている・していないに関わらず**、最初の画面で「情報の収集を許可します」(チェック済み)を出す。
+ * 誰の記録かは残さない(アカウント欄は event:<イベントの番号>)。テスト用アカウントのときは出さない(あちらが記録する)。
+ * 開くたびに印を立て直す。イベントが終わっていれば印は無く、API は断る。
+ */
+unset($_SESSION[KM_EVENT_COLLECT_SESSION_KEY]);
+$kmEventCollect = null;
+if ($kmEvent !== null && $kmTestMode === null) {
+    try {
+        if (km_event_collect_enabled(km_db())) {
+            $collectSubject = km_event_collect_subject($kmEvent['ids'] ?? []);
+            $_SESSION[KM_EVENT_COLLECT_SESSION_KEY] = ['subject' => $collectSubject, 'until' => time() + KM_TEST_MODE_SESSION_TTL];
+            $kmEventCollect = ['key' => $collectSubject];
+        }
+    } catch (Throwable $exception) {
+        error_log('KosenMap home: event collection check failed (not collected): ' . $exception->getMessage());
+        unset($_SESSION[KM_EVENT_COLLECT_SESSION_KEY]);
+        $kmEventCollect = null;
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="ja">
@@ -188,6 +260,22 @@ try {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <?php if ($kmFocusRoom !== null): ?>
+        <?php /* QR の部屋(上の $kmFocusRoom。32 字の 16 進だけ)。Main/app.js の focusRoomFromUrl が読む */ ?>
+        <meta name="km-focus-room" content="<?= km_home_e($kmFocusRoom) ?>">
+    <?php endif; ?>
+    <?php if ($kmTestMode !== null): ?>
+        <?php /* テスト用アカウントの印と、自動で「始めから」にするまでの分(Main/test-mode.js が読む。一般の人には出さない) */ ?>
+        <meta name="km-test-mode" content="1">
+        <meta name="km-test-idle" content="<?= (int) $kmTestMode['idleMinutes'] ?>">
+    <?php elseif ($kmEventCollect !== null): ?>
+        <?php /* イベント中の来場者の記録。値は許可の覚え(localStorage)をイベントごとに分けるための名前 */ ?>
+        <meta name="km-event-collect" content="<?= km_home_e($kmEventCollect['key']) ?>">
+    <?php endif; ?>
+    <?php if ($kmTestMode !== null || $kmEventCollect !== null): ?>
+        <?php /* 記録の送信に使うトークン(api/test-events.php が X-KM-CSRF で見る) */ ?>
+        <meta name="km-csrf" content="<?= km_home_e(km_csrf_token()) ?>">
+    <?php endif; ?>
     <title>高専マップ案内</title>
 
     <?php // 絶対パス。/favicon.svg は src/ 直下に置いてある。**条件の外に置くこと** ?>
@@ -310,11 +398,29 @@ try {
                                 <?php // サインインの期限が切れ、取り直せなかった教職員(W-50)。黙って氏名を消さず、理由を出す ?>
                                 <span class="user-chip" role="status">教職員の表示を出すには、サインインし直してください</span>
                             <?php endif; ?>
-                            <?php // POST + CSRF でだけ出られる。GET だと他サイトのリンクで追い出せた ?>
-                            <form method="post" action="/sign-out.php" class="km-signout-form">
-                                <?= km_csrf_field() ?>
-                                <button type="submit" class="secondary-btn logout-btn">ログアウト</button>
-                            </form>
+                            <?php if ($kmTestMode !== null): ?>
+                                <?php
+                                // **展示の PC では来場者に押させない**(2026-10-19)。閉じた欄の中に、係の人の合言葉の欄を置く。
+                                // 止めるのは sign-out.php(合言葉が合わなければ出さない)。ここは押し間違いを防ぐだけ
+                                ?>
+                                <details class="km-test-signout">
+                                    <summary>係の人</summary>
+                                    <form method="post" action="/sign-out.php">
+                                        <?= km_csrf_field() ?>
+                                        <label>
+                                            <span>合言葉</span>
+                                            <input type="password" name="signout_pin" maxlength="32" autocomplete="off" required>
+                                        </label>
+                                        <button type="submit" class="secondary-btn">ログアウト</button>
+                                    </form>
+                                </details>
+                            <?php else: ?>
+                                <?php // POST + CSRF でだけ出られる。GET だと他サイトのリンクで追い出せた ?>
+                                <form method="post" action="/sign-out.php" class="km-signout-form">
+                                    <?= km_csrf_field() ?>
+                                    <button type="submit" class="secondary-btn logout-btn">ログアウト</button>
+                                </form>
+                            <?php endif; ?>
                         <?php else: ?>
                             <?php
                             // **管理画面のオリジン(admin.ito4.jp)でサインインさせる**(2026-09-17)。公開側でサインインしてから
@@ -346,11 +452,21 @@ try {
         <div class="km-event-banner" role="status">
             <span class="km-event-banner-icon" aria-hidden="true">🎪</span>
             <span class="km-event-banner-text">
-                <?= km_home_e($kmEvent['bannerText'] ?? (implode(' / ', $kmEvent['names']) . ' 開催中')) ?>
+                <?php
+                /*
+                 * 案内の文が無ければ「イベントモード中…(イベント名)」(2026-10-14、利用者の指示)。
+                 * 部屋の名前が置き換わり、出ない地点や通行止めがあることを、開いた時点で伝える。
+                 */
+                ?>
+                <?= km_home_e($kmEvent['bannerText'] ?? ('イベントモード中…(' . implode(' / ', $kmEvent['names']) . ')')) ?>
             </span>
             <?php if (!empty($kmEvent['bannerUrl'])): ?>
                 <?php /* リンク先は lib/map-events.php がサイト内の絶対パスだけに検証済み */ ?>
                 <a class="km-event-banner-link" href="<?= km_home_e($kmEvent['bannerUrl']) ?>">くわしく</a>
+            <?php endif; ?>
+            <?php if ($kmEventCollect !== null): ?>
+                <?php /* 許可をあとから変えられるように(Main/test-mode.js が下の #km-collect-bar を開き直す) */ ?>
+                <button type="button" class="km-event-banner-link km-collect-open" data-km-collect-open>記録の設定</button>
             <?php endif; ?>
         </div>
         <?php endif; ?>
@@ -645,6 +761,8 @@ try {
                         初めて開いたときに出した案内(利用規約・メールについて)を、もう一度読めます。
                     </p>
                     <button type="button" class="secondary-btn" data-km-welcome-open>はじめにを読む</button>
+                    <?php /* 初回に出す操作の案内(Main/tutorial.js)をもう一度 */ ?>
+                    <button type="button" class="secondary-btn" data-km-tutorial-open>操作の案内を見る</button>
                 </div>
             </div>
         </aside>
@@ -712,6 +830,69 @@ try {
         <script type="application/json" id="km-map-data"<?= km_csp_nonce_attr() ?>><?= $inlineMapData ?></script>
     <?php endif; ?>
 
+    <?php if ($kmTestMode !== null): ?>
+    <?php
+    /*
+     * テスト用アカウント(展示の PC。2026-10-15、利用者の指示)。右上に縦に積む。
+     * どちらも「－」で小さくできる(見出しだけ残る)。「始めから」は小さくしても押せるよう見出しに置く。
+     * 小さくした状態は覚えない —— 「始めから」で次の人には開いた状態で渡す。開け閉ては Main/test-mode.js。
+     */
+    ?>
+    <div class="km-test-stack">
+        <section id="km-test-card" class="km-test-panel km-test-card" aria-labelledby="km-test-card-title">
+            <div class="km-test-head">
+                <h2 id="km-test-card-title" class="km-test-title">🧪 テスト中</h2>
+                <button type="button" class="km-test-min" data-km-test-min aria-expanded="true" aria-label="テスト中の札を小さくする">－</button>
+            </div>
+            <div class="km-test-body">
+                <p class="km-test-note">この PC での操作(検索した語・選んだ場所など)を、改善のために記録しています。お名前などは記録しません。</p>
+                <?php if ($kmTestMode['surveyQr'] !== null): ?>
+                    <p class="km-test-survey-lead">アンケートにご協力ください</p>
+                    <?php /* QR は lib/qr.php が作る SVG(中身は URL だけ。管理画面で https に限って確かめてある) */ ?>
+                    <div class="km-test-qr"><?= $kmTestMode['surveyQr'] ?></div>
+                    <a class="km-test-url" href="<?= km_home_e($kmTestMode['surveyUrl']) ?>" target="_blank" rel="noopener noreferrer"><?= km_home_e($kmTestMode['surveyUrl']) ?></a>
+                <?php endif; ?>
+            </div>
+        </section>
+
+        <section id="km-test-guide" class="km-test-panel km-test-guide" aria-labelledby="km-test-guide-title">
+            <div class="km-test-head">
+                <h2 id="km-test-guide-title" class="km-test-title">操作方法</h2>
+                <button type="button" id="km-test-restart" class="km-test-restart">↺ 始めから</button>
+                <button type="button" class="km-test-min" data-km-test-min aria-expanded="true" aria-label="操作方法を小さくする">－</button>
+            </div>
+            <ol class="km-test-body km-test-steps">
+                <?php foreach ($kmTestMode['guide'] as $line): ?>
+                    <li><?= km_home_e($line) ?></li>
+                <?php endforeach; ?>
+            </ol>
+            <div class="km-test-body">
+                <?php /* 押す所を順に光らせる案内(Main/tutorial.js)。来場者ごとに最初は自動で出る */ ?>
+                <button type="button" class="secondary-btn km-test-tour" data-km-tutorial-open>📍 画面で順に案内する</button>
+            </div>
+        </section>
+    </div>
+    <?php endif; ?>
+
+    <?php if ($kmEventCollect !== null): ?>
+    <?php
+    /*
+     * イベント中の情報の収集の許可(2026-10-15、利用者の指示)。**チェック済みで出す。**
+     * 最初の画面で 1 回だけ出し(イベントごとに覚える)、上の帯の「記録の設定」から開き直せる。
+     * 決めるまでは送らずに手元に溜め、外して OK なら捨てる(Main/test-mode.js)。
+     * JS が動かない環境では出さない(そもそも記録しない)ので、hidden で置く。
+     */
+    ?>
+    <div id="km-collect-bar" class="km-collect-bar" role="region" aria-labelledby="km-collect-title" hidden>
+        <p id="km-collect-title" class="km-collect-title">📊 情報の収集について</p>
+        <p class="km-collect-text">イベント期間中は、案内をよくするために、この画面での操作(検索した語・選んだ場所・開いた部屋・階の切り替え)を記録します。お名前やログインの情報は記録しません。</p>
+        <div class="km-collect-actions">
+            <label class="km-collect-check"><input type="checkbox" id="km-collect-consent" checked> 情報を収集するのを許可します</label>
+            <button type="button" id="km-collect-ok" class="primary-btn km-collect-ok">OK</button>
+        </div>
+    </div>
+    <?php endif; ?>
+
     <?php
     /*
      * defer を付ける。末尾に置いてあるので実行順は元から HTML パースの後だが、
@@ -740,9 +921,16 @@ try {
     ?>
     <script defer src="<?= km_home_e(km_public_asset('Main/map-style.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/map-tuning.js')) ?>"></script>
+    <script defer src="<?= km_home_e(km_public_asset('Main/label-layout.js')) ?>"></script>
+    <?php if ($kmTestMode !== null || $kmEventCollect !== null): ?>
+        <?php /* テスト用アカウントとイベント中だけ。**app.js より先に**読み、window.kmTestLog を用意しておく(app.js は在れば呼ぶ) */ ?>
+        <script defer src="<?= km_home_e(km_public_asset('Main/test-mode.js')) ?>"></script>
+    <?php endif; ?>
     <script defer src="<?= km_home_e(km_public_asset('Main/app.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/panel.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/welcome.js')) ?>"></script>
+    <?php /* 初回の操作案内(2026-10-15)。「はじめに」を閉じてから・地図が出てから始める */ ?>
+    <script defer src="<?= km_home_e(km_public_asset('Main/tutorial.js')) ?>"></script>
 
 </body>
 

@@ -374,6 +374,10 @@ DNS:localhost
 IP Address:$IP
 IP Address:127.0.0.1"
   _ext="DNS:$DOMAIN,DNS:localhost,IP:$IP,IP:127.0.0.1"
+  # サインインの入口(2026-10-19。443 番の auth.<ドメイン>)。web はこの名前で Logto を呼ぶ(compose.local.yaml の別名)
+  _want="$_want
+DNS:auth.$DOMAIN"
+  _ext="$_ext,DNS:auth.$DOMAIN"
   if [ -n "$ADMIN" ] && [ "$ADMIN" != "$DOMAIN" ]; then
     _want="$_want
 DNS:$ADMIN"

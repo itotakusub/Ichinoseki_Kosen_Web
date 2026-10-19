@@ -2036,11 +2036,12 @@ function km_check_map_vertical(): void
     check_bool('選び直したら経路を引き直す', str_contains($app, 'rebuildDijkstra();'));
 
     km_check_heading('map: ラベルの重なりをほどく');
-    check_bool('ずらしてから隠す', str_contains($app, 'const KM_LABEL_NUDGES = [0, -14, 14, -30, 30];'));
+    // 置き方の計算は Main/label-layout.js(2026-10-14。引き出し線)
+    check_bool('ずらしてから隠す', str_contains($src('Main/label-layout.js'), 'const NUDGES = [0, -14, 14, -30, 30];'));
     check_bool('大事なものから順に置く', str_contains($app, "KM_LABEL_PRIORITY = { facility: 0, entrance: 1, stairs: 2"));
     check_bool('隠すのは文字だけ(点は残す)', str_contains($src('Main/styles.css'), '.km-label.km-label-hidden'));
     check_bool('編集画面では間引かない', str_contains($app, 'if (window.isAdmin) return;'));
-    check_bool('測り直す前に前回の結果を戻す', strpos($app, "el.classList.remove('km-label-hidden');") < strpos($app, 'labels.sort('));
+    check_bool('測り直す前に前回の結果を戻す', ($reset = strpos($app, 'all.forEach(clearLabelLayout);')) !== false && $reset < (int) strpos($app, 'layoutApi.layout(items'));
 
     km_check_heading('map: 施設から中の階へ');
     check_bool('建物の階は接続IDから求める', str_contains($app, 'function facilityFloorLinks(facilityNode)'));
@@ -2756,7 +2757,7 @@ function km_check_guest_links(): void
     check_bool('突き合わせのたびに表から読み直す(許す・外すがすぐ効く)', (bool) preg_match("/function km_map_guest_verify.*?SELECT a\\.names_allowed.*?\\['names'\\] = \\(int\\) \\\$namesAllowed === 1;/s", $lib));
     check_bool('入り直しも表の値で印を立てる', (bool) preg_match('/function km_map_guest_reenter.*?SELECT id, display_name, names_allowed/s', $lib) && substr_count($guest, "\$account['names']);") === 2);
     check_bool('止めたアカウントは変えない', str_contains($lib, 'SET names_allowed = ? WHERE id = ? AND revoked_at IS NULL'));
-    check_bool('氏名の判定は許した人だけ・地図の錠は仮アカウントなら通す', str_contains($code($read('lib/map-access.php')), "'password' => km_map_password_entered(\$config) || km_map_teacher_like_session(true),") && str_contains($code($read('lib/map-access.php')), "'password' => km_map_password_entered(\$config) || km_map_teacher_like_session(false),"));
+    check_bool('氏名の判定は許した人だけ・地図の錠は仮アカウントなら通す', str_contains($code($read('lib/map-access.php')), "'password' => km_map_password_entered(\$config) || km_map_teacher_like_session(true),") && str_contains($code($read('lib/map-access.php')), "'password' => km_map_password_entered(\$config) || km_map_teacher_like_session(false) || km_map_event_opens_view(\$config),"));
     check_bool('管理画面: CSRF を確かめてから・記録は番号だけ', strpos($admin, 'km_csrf_verify()') < strpos($admin, 'km_map_guest_set_names(') && str_contains($admin, "\$allow ? 'guest.account_names_allow' : 'guest.account_names_deny', '#' . \$accountId);"));
     check_bool('管理画面: 見せる前に確かめる', str_contains($read('admin/guest-links.php'), "'page.guestLinks.confirmNames'") && str_contains($read('admin/assets/i18n/ja.js'), '"page.guestLinks.confirmNames"') && str_contains($read('admin/assets/i18n/en.js'), '"page.guestLinks.confirmNames"'));
     check_bool('公開ページに誰として見ているかを出す', str_contains($read('index.php'), 'お試し: <?= km_home_e((string) $guestName) ?> さん'));
@@ -2998,6 +2999,44 @@ function km_check_github_mirror(): void
     } else {
         check_bool('出す段を読めた', false);
     }
+
+    km_check_heading('deploy: バックアップは配備の前(2026-10-15、利用者の指摘)');
+    // 戻す先は「配備する前の、動いている状態」。取れなければ何も送らずに止める
+    $backupAt = strpos($deploy, '$backupResult = Invoke-KmBackupStep -Open:$OpenBackup');
+    check_bool('-Backup の控えは tar を作る前', $backupAt !== false && $backupAt < (int) strpos($deploy, "\$tarArgs = @('-czf'"));
+    check_bool('控えが取れなければ配備しない(exit 3)', preg_match('/\$backupResult = Invoke-KmBackupStep -Open:\$OpenBackup\s*\} catch \{.*?exit 3\s*\}/s', $deploy) === 1);
+    check('-Backup の控えを取るのは 1 か所だけ', 1, substr_count($deploy, '$backupResult = Invoke-KmBackupStep'));
+
+    km_check_heading('update-containers: コンテナの更新を選んで進める(2026-10-16、利用者の指示)');
+    $upd = $read('scripts/update-containers.ps1');
+    check_bool('update-containers.ps1 がある(UTF-8 BOM 付き)', str_starts_with($upd, "\xEF\xBB\xBF"));
+    check_bool('配備は deploy-to-host.ps1 -Backup に任せる(控えは配備の前)', preg_match('/& \$deploy -Action deploy -Backup [^\n]*-Yes/', $upd) === 1);
+    check_bool('控えが取れなかった(3)ら先へ進まない', preg_match('/3 \{[^}]*return \$false \}/', $upd) === 1);
+    check_bool('書き換えたら check.php と本番での確かめを通し、駄目なら元に戻す', substr_count($upd, 'if (-not (Confirm-ReadyToDeploy $backup)) { return }') === 2
+        && preg_match('/function Confirm-ReadyToDeploy.*?Invoke-Check.*?Test-ComposeOnHost.*?Restore-Files \$Backup/s', $upd) === 1);
+    // compose の中身が間違っていたら送る前に止める(2026-10-16、利用者の指示「自動で停止か、リトライ」)
+    check_bool('本番の .env で compose を読めるか、置き場を汚さずに確かめる', str_contains($upd, 'docker compose --project-directory $RemotePath -f "`$t/compose.yaml" -f "`$t/compose.vps.yaml" config -q')
+        && str_contains($upd, "trap 'rm -rf \"`\$t\"' EXIT"));
+    check_bool('書いてある像が全部レジストリにあるかを見る', str_contains($upd, 'docker buildx imagetools inspect "`$ref"'));
+    check_bool('確かめは配備の yes より前', strpos($upd, 'if (-not (Confirm-ReadyToDeploy $backup)) { return }') < strpos($upd, 'Confirm-Yes "本番で控えを取ってから配備'));
+    check_bool('取る・作るは自動でやり直し、駄目なら up -d せずに止める', str_contains($upd, "if (\$pullServices.Count -and -not (Invoke-HostWithRetry \"docker compose pull")
+        && str_contains($upd, "if (-not (Invoke-HostWithRetry 'docker compose pull logto')) { & \$rollbackLogto; return }"));
+    check_bool('Logto の移行はやり直さない(1 回だけ)', !preg_match('/Invoke-HostWithRetry[^\n]*alteration deploy/', $upd));
+    check_bool('入れ替えたら起動を見届け、駄目なら戻し方を選ばせる', str_contains($upd, 'if ($bad.Count -gt 0) { Invoke-Recover $backup -AfterUp -BuildServices $buildServices; return }'));
+    check_bool('戻すための配備では控えを取り直さない', preg_match('/if \(\$Rollback\) \{\s*& \$deploy -Action deploy -GitHub none -Yes/', $upd) === 1);
+    check_bool('本番を変える前は yes と打たせる(大文字小文字も区別)', str_contains($upd, "-ceq 'yes'"));
+    check_bool('Logto の移行は新しい像の使い捨てコンテナで当てる', str_contains($upd, 'docker compose run --rm --entrypoint sh logto -c \'cd /etc/logto && npm run alteration deploy $newText\''));
+    check_bool('移行の前に一覧を見せる', strpos($upd, 'alteration list') < strpos($upd, 'alteration deploy'));
+    check_bool('1 つだけの up -d を叩かない', preg_match('/docker compose up -d [a-z]/', $upd) === 0);
+    check_bool('Logto は 1 つずつ(飛ばすときは skip と打たせる)', str_contains($upd, "-cne 'skip'"));
+    check_bool('タグの無い固定は上げない(上げ先が分からない)', str_contains($upd, 'Where-Object { -not $_.Untagged -and -not $_.IsLogto }'));
+    check_bool('latest に戻す道が無い(digest を必ず書く)', str_contains($upd, '"$($p.Prefix)$($c.NewRef)@$($c.NewDigest)$($p.Suffix)"'));
+    check_bool('ホストの出力は画面へ流す(関数の戻り値に混ぜない)', str_contains($upd, '& ssh @sshArgs | Out-Host'));
+    // 手元だけ書き換えて止めた回のあと、本番 1.44.0 なのに「最新です」と出た(2026-10-16、利用者の指摘)
+    check_bool('Logto のいまの版は本番で動いているものから読む', str_contains($upd, "\$runningImage = if (\$null -ne \$hostState) { \"\$(\$hostState.Running['logto'])\" }")
+        && strpos($upd, '$hostState = Get-HostState') < strpos($upd, '$current = ConvertTo-Version $currentText'));
+    check_bool('修正版も本番と比べる(手元だけ新しいものを ☆ で出す)', str_contains($upd, "elseif (\$onHost.State -eq 'no') { 'pending' }"));
+    check_bool('やめたときの既定は手元を戻す(Enter = 戻す)', substr_count($upd, '(Enter = 戻す / n = 残す)') === 3 && !str_contains($upd, 'Enter = 残す'));
 
     km_check_heading('github-mirror: 検査を外す道を作らない');
     check_bool('まとめて出すときに -Force を渡さない', !preg_match('/pushArgs \+= .*-Force/', $all));
@@ -3406,6 +3445,14 @@ function km_check_update_notice(): void
     check_bool('ビルド元は build --pull と書く', str_contains($baseBody, 'build --pull'));
     check_bool('系列タグの本文に ** を残さない', !str_contains($seriesBody, '**'));
     check_bool('ビルド元の本文に ** を残さない', !str_contains($baseBody, '**'));
+    // 1 行に詰めると digest が折り返されて、どちらが今か読めない(2026-10-12、利用者の指摘)
+    check_bool(
+        'いま使っているものと新しく出たものを別の行に書く',
+        str_contains($baseBody, "いま使っているもの:\n        sha256:c")
+            && str_contains($baseBody, "新しく出たもの:\n        sha256:d")
+    );
+    check_bool('ビルド元は Dockerfile の digest を書き換えると書く', str_contains($baseBody, 'Dockerfile(docker/php・docker/soketi)の digest'));
+    check_bool('件数を先に書く', str_contains($baseBody, '更新が 1 件あります。'));
 }
 
 // ========================================================================= self
@@ -3903,7 +3950,8 @@ function km_check_hardening(): void
         'KM_CERT' => 'KM_CERT: ${KM_CERT:-/etc/letsencrypt/live/${KM_DOMAIN}/fullchain.pem}',
         'KM_CERT_KEY' => 'KM_CERT_KEY: ${KM_CERT_KEY:-/etc/letsencrypt/live/${KM_DOMAIN}/privkey.pem}',
         'APP_URL' => 'APP_URL: ${APP_URL:-https://${KM_DOMAIN}}',
-        'LOGTO_ENDPOINT' => 'LOGTO_ENDPOINT: ${LOGTO_ENDPOINT:-https://${KM_DOMAIN}:3001}',
+        // 2026-10-19 から 443 番の auth.<ドメイン>(.env の KM_AUTH_DOMAIN で名前を変えられる。:3001 は外した)
+        'LOGTO_ENDPOINT' => 'LOGTO_ENDPOINT: ${LOGTO_ENDPOINT:-https://${KM_AUTH_DOMAIN:-auth.${KM_DOMAIN}}}',
         // Console と phpMyAdmin は管理用のホスト名(無ければ KM_DOMAIN)。ゲートの Cookie がホスト名ごとのため(2026-09-15)
         'LOGTO_ADMIN_ENDPOINT' => 'ADMIN_ENDPOINT: ${LOGTO_ADMIN_ENDPOINT:-https://${KM_ADMIN_DOMAIN:-${KM_DOMAIN}}:3002}',
         'PMA_ABSOLUTE_URI' => 'PMA_ABSOLUTE_URI: ${PMA_ABSOLUTE_URI:-https://${KM_ADMIN_DOMAIN:-${KM_DOMAIN}}:8281/}',
@@ -4000,6 +4048,18 @@ function km_check_hardening(): void
     }
     check('VPS: 管理系ポートは 0.0.0.0 だけで待つ', [], $adminPorts);
     check_bool('phpMyAdmin は root を既定で断る(server-ops 12)', str_contains($file('docker/phpmyadmin/config.user.inc.php'), "KM_PMA_ALLOW_ROOT") && str_contains($file('docker/phpmyadmin/config.user.inc.php'), "'AllowNoPassword'] = false"));
+    // 環境保管領域(2026-10-19)。パスワードがあるときだけ有効。無いまま controluser を書くと空のパスワードで繋ぎに行く
+    $pmaConfig = $file('docker/phpmyadmin/config.user.inc.php');
+    check_bool('phpMyAdmin の環境保管領域は KM_PMA_CONTROLPASS があるときだけ・表は 19 個', str_contains($pmaConfig, "if (\$kmPmaControlPass !== '' && isset(\$cfg['Servers'])")
+        && str_contains($pmaConfig, "['pmadb'] = 'phpmyadmin';") && substr_count($pmaConfig, "=> 'pma__") === 19);
+    // 2026-10-19: 「機能」の画面でログイン Cookie の有効期間が空の文字列で保存され、ログイン後の全画面が TypeError になった
+    check_bool('phpMyAdmin のログインの有効期間は利用者ごとの設定で変えさせない(UserprefsDisallow)', str_contains($pmaConfig, '$cfg[\'UserprefsDisallow\'] = [\'LoginCookieValidity\'];'));
+    check_bool('compose は制御用のパスワードを .env から渡すだけ(既定は空)', str_contains($file('compose.yaml'), 'KM_PMA_CONTROLPASS: ${KM_PMA_CONTROLPASS:-}')
+        && preg_match('/^KM_PMA_CONTROLPASS=$/m', $file('.env.example')) === 1);
+    $pmaCell = $file('docs/05-containers.ipynb');
+    check_bool('制御用の利用者は phpmyadmin.* だけ・TLS 必須・パスワードは引数に載せない(docs/05 §1-2)', str_contains($pmaCell, 'IDENTIFIED BY \'$PASS\' REQUIRE SSL;')
+        && str_contains($pmaCell, "GRANT SELECT, INSERT, UPDATE, DELETE ON phpmyadmin.* TO 'pma'@'%';") && !str_contains($pmaCell, 'mariadb -uroot -p')
+        && !str_contains($pmaCell, 'echo "$PASS"'));
 
     km_check_heading('hardening B・C: nginx(同時接続・待ち時間・転送ヘッダー)');
     $nginx = (string) preg_replace('/^\s*#.*$/m', '', $file('nginx/default.conf.template'));
@@ -4024,12 +4084,22 @@ function km_check_hardening(): void
     // 公式イメージの nginx.conf が http に 65 を書いており、並べると "is duplicate" で起動しない
     check_bool('keepalive_timeout を http に書かない', !str_contains($httpPart, 'keepalive_timeout'));
     $connLimits = [];
-    foreach (['443 ssl' => 100, '3001 ssl' => 100, '6001 ssl' => 50, '8281 ssl' => 50, '3002 ssl' => 50, '8025 ssl' => 50] as $listen => $limit) {
+    foreach (['443 ssl' => 100, '8281 ssl' => 50, '3002 ssl' => 50, '8025 ssl' => 50] as $listen => $limit) {
         if (!str_contains($server($listen), "limit_conn km_conn {$limit};")) {
             $connLimits[] = $listen;
         }
     }
-    check('各 server の limit_conn(443・3001 は 100、他は 50)', [], $connLimits);
+    // サインインの入口(auth.<ドメイン> の 443。2026-10-19 に 3001 から移した)は 443 の 2 つ目の server
+    $authChunk = '';
+    foreach ($chunks as $chunk) {
+        if (str_contains($chunk, 'server_name ${KM_AUTH_DOMAIN};')) {
+            $authChunk = $chunk;
+        }
+    }
+    if (!str_contains($authChunk, 'limit_conn km_conn 100;')) {
+        $connLimits[] = 'auth';
+    }
+    check('各 server の limit_conn(443・auth は 100、他は 50)', [], $connLimits);
     // `${KM_APP_PORT}` の `}` で location の中身を読む `[^}]*` が途切れないよう、置換の印を先に潰す
     $https = (string) preg_replace('/\$\{[A-Z_]+\}/', 'VAR', $server('443 ssl'));
     preg_match('/location\s+~\*?\s+(\S+)/', $https, $firstRegex);
@@ -4037,7 +4107,8 @@ function km_check_hardening(): void
     check('443 の最初の正規表現は `.php/` の 404', '\.php/', $firstRegex[1] ?? null);
     check_bool('include 専用の 404 は `\.php(/|$)`', str_contains($https, 'logto-client)\.php(/|$) {'));
     check_bool('proxy-web.conf に proxy_read_timeout を書かない(location で重複すると起動しない)', !str_contains((string) preg_replace('/^\s*#.*$/m', '', $file('nginx/km/proxy-web.conf')), 'proxy_read_timeout'));
-    check('443 で 300s を許すのは downloads.php だけ', 1, substr_count($https, 'proxy_read_timeout 300s;'));
+    // 2 つ目は Soketi の WebSocket(/ws/app/。2026-10-19 に 6001 番から移した。1 本を長く張る)
+    check('443 で 300s を許すのは downloads.php と /ws/app/ だけ', 2, substr_count($https, 'proxy_read_timeout 300s;'));
     check_bool('未認証で重い口を km_api で絞る(メソッドを問わない)', str_contains($https, 'location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update|positioning-params|learning)|logto_me)\.php$ {') && str_contains($https, 'limit_req zone=km_api burst=120 nodelay;'));
     check_bool('アプリの地図は km_appmap で絞る', preg_match('#location = /api/app-map\.php \{\s*limit_req zone=km_appmap burst=30 nodelay;#', $https) === 1);
     check_bool('callback.php は認可コードをログに残さない', preg_match('#location = /callback\.php \{\s*access_log [^;]+ km_no_query;#', $https) === 1);
@@ -4059,12 +4130,14 @@ function km_check_hardening(): void
     }
     check('set_time_limit を延ばした画面は nginx の待ちもそれより長い', [], $shortProxy);
     // 利用者が付けた X-Forwarded-For を足すと、Logto 側で IP を偽れる(server-ops 7)。HSTS は nginx の1本だけ
-    foreach (['3001', '3002'] as $port) {
-        $logtoServer = $server("{$port} ssl");
+    foreach (['auth' => $authChunk, '3002' => $server('3002 ssl')] as $port => $logtoServer) {
         check_bool("{$port}: X-Forwarded-For は送信元だけ", str_contains($logtoServer, 'proxy_set_header X-Forwarded-For $remote_addr;') && !str_contains($logtoServer, '$proxy_add_x_forwarded_for'));
         check_bool("{$port}: Logto の HSTS を隠す", str_contains($logtoServer, 'proxy_hide_header Strict-Transport-Security;'));
     }
-    check_bool('6001: 管理画面以外の Origin を断る(server-authz 4)', str_contains($server('6001 ssl'), 'if ($km_ws_origin_denied)'));
+    // 3001(Logto)と 6001(Soketi)は 2026-10-19 に外した(学校の回線は 443 番以外を通さない。サインインと WebSocket は 443 番へ)。
+    // Origin の見張りと /apps/ を出さないことは、443 の /ws/app/ の検査(「443 番へ寄せる」)が見る
+    check_bool('3001 と 6001 は待ち受けない・publish しない', !preg_match('/listen (\[::\]:)?(3001|6001) /', $nginx)
+        && !preg_match('/"(\d+\.\d+\.\d+\.\d+:)?(3001|6001):(3001|6001)"/', $file('compose.vps.yaml') . $file('compose.yaml')));
     /*
      * `proxy_pass http://logto:3001;` と直に書くと、nginx は起動時の IP を持ち続ける。
      * 相手を作り直すと IP が変わり、居なくなった IP へ送って 502 になる(2026-09-14 に Logto で発生)。
@@ -4185,7 +4258,6 @@ function km_check_hardening(): void
     $soketiDockerfile = $file('docker/soketi/Dockerfile');
     check_bool('Soketi は Node 24 の土台にフォークの /app を載せる(§7 の 4)', preg_match('/^FROM node:24-trixie-slim@sha256:[0-9a-f]{64}$/m', $soketiDockerfile) === 1 && str_contains($soketiDockerfile, 'COPY --from=fork /app /app'));
     check_bool('Soketi の pm2 の置き場は /tmp(read_only の下で起動するため)', str_contains($soketiDockerfile, 'ENV PM2_HOME=/tmp/.pm2'));
-    check_bool('6001: 配信の HTTP API(/apps/)を外に出さない', preg_match('#location \^~ /apps/ \{\s*return 404;#', $server('6001 ssl')) === 1);
     check_bool('allow-admin.conf は Docker の網(172.16.0.0/12)を許さない(§7 の 8)', preg_match('#^\s*allow 172\.16\.0\.0/12;#m', $file('nginx/km/allow-admin.conf')) !== 1);
     check_bool('Logto は LOGTO_DB_USER があればそれで繋ぐ(§7 の 3)', str_contains($baseServices['logto'] ?? '', 'DB_URL: postgres://${LOGTO_DB_USER:-${POSTGRES_USER}}:${LOGTO_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/${POSTGRES_DB}'));
     $roleSql = $file('scripts/logto-db-role.sql');
@@ -4695,6 +4767,164 @@ function km_check_hardening(): void
     $pushPs = $file('scripts/apk-push.ps1');
     check_bool('受け箱(PC): 2 つが同じ鍵・枠のパッケージ名・同じ版でなければ送らない・3 つのファイルだけ', str_contains($pushPs, "throw '2 つが違う鍵で署名されています'")
         && str_contains($pushPs, "\$allowed = @('KosenMap-admin.apk', 'KosenMap.apk', 'README.md', 'latest.json')") && str_starts_with($pushPs, "\u{FEFF}"));
+    /*
+     * ## Logto の確認コード欄の自動入力(2026-10-12。nginx/km/logto-otp-autocomplete.js)
+     * nginx が Logto Core(auth.<ドメイン> の 443。2026-10-19 までは 3001)の HTML にスクリプトを差し込み、1 つ目の枠に autocomplete="one-time-code" を付ける。
+     */
+    $otpJs = $file('nginx/km/logto-otp-autocomplete.js');
+    $logtoAuth = '';
+    if (preg_match('/^server \{\n    listen 443 ssl;\n    listen \[::\]:443 ssl;\n    http2 on;\n    server_name \$\{KM_AUTH_DOMAIN\};.*?\n\}\n/ms', $file('nginx/default.conf.template'), $logtoAuthMatch) === 1) {
+        $logtoAuth = (string) preg_replace('/^\s*#.*$/m', '', $logtoAuthMatch[0]);
+    }
+    check_bool('自動入力: Logto Core(auth の 443)だけで HTML に差し込み、Logto には圧縮させない', $logtoAuth !== ''
+        && str_contains($logtoAuth, "sub_filter '</head>' '<script src=\"/km/logto-otp-autocomplete.js\" defer></script></head>';")
+        && str_contains($logtoAuth, 'proxy_set_header Accept-Encoding "";')
+        && str_contains($logtoAuth, "location = /km/logto-otp-autocomplete.js {\n        alias /etc/nginx/km/logto-otp-autocomplete.js;")
+        && substr_count($file('nginx/default.conf.template'), 'sub_filter \'</head>\'') === 1);
+    check_bool('自動入力: スクリプトは 1 つ目の枠に one-time-code を付けるだけ(値を読まない・送らない)', $otpJs !== ''
+        && str_contains($otpJs, 'input[inputmode="numeric"][data-id="0"]') && str_contains($otpJs, "setAttribute('autocomplete', 'one-time-code')")
+        && !str_contains($otpJs, '.value') && !preg_match('/fetch\(|XMLHttpRequest|sendBeacon|localStorage|cookie/', $otpJs)
+        && str_contains($file('scripts/deploy-to-host.ps1'), "'./nginx/km/logto-otp-autocomplete.js'"));
+
+    /*
+     * ## サインインと通知を 443 番に寄せる(2026-10-19、利用者の指示)
+     * 学校の回線は 443 番以外を通さない(利用者が確かめた。解除は難しい)。:3001(Logto)と :6001(Soketi)では、
+     * 学内から誰もサインインできず、管理画面のチャットと死活監視もいつも「未接続」だった。
+     *   - Logto: auth.<ドメイン> の 443 番(nginx の auth の server)。.env の KM_AUTH_DOMAIN で切り替える(無ければ :3001)
+     *   - Soketi: 管理画面の 443 番の /ws/app/ → Soketi の /app/
+     */
+    km_check_heading('443 番へ寄せる: サインイン(auth.<ドメイン>)と通知(/ws/app/)');
+    $vps = $file('compose.vps.yaml');
+    $switch = '${LOGTO_ENDPOINT:-https://${KM_AUTH_DOMAIN:-auth.${KM_DOMAIN}}}';
+    check_bool('web の LOGTO_ENDPOINT と logto の ENDPOINT は同じ導き方(発行元 iss が食い違わない)',
+        str_contains($vps, "LOGTO_ENDPOINT: {$switch}") && str_contains($vps, "ENDPOINT: {$switch}")
+        && substr_count($vps, $switch) === 2 && !str_contains($vps, 'https://${KM_DOMAIN}:3001}' . "\n"));
+    check_bool('nginx には KM_AUTH_DOMAIN をいつも渡す(空だと server_name が壊れて起動しない)',
+        str_contains($vps, 'KM_AUTH_DOMAIN: ${KM_AUTH_DOMAIN:-auth.${KM_DOMAIN}}')
+        && str_contains($file('compose.yaml'), 'KM_AUTH_DOMAIN: ${KM_AUTH_DOMAIN:-auth.${KM_DOMAIN:-192.168.3.29}}'));
+    check_bool('auth の server: 443 番・Logto Core へ・書き込みだけ数える・送信元は置き換え・Logto の HSTS を消す・100 本', $logtoAuth !== ''
+        && str_contains($logtoAuth, 'proxy_pass http://km_logto_core;') && str_contains($logtoAuth, 'proxy_set_header X-Forwarded-Port 443;')
+        && str_contains($logtoAuth, 'proxy_set_header X-Forwarded-For $remote_addr;') && str_contains($logtoAuth, 'proxy_hide_header Strict-Transport-Security;')
+        && str_contains($logtoAuth, 'limit_req zone=km_auth burst=30 nodelay;') && str_contains($logtoAuth, 'limit_conn km_conn 100;')
+        && !str_contains($logtoAuth, 'auth_request'));
+    // 443 の本体の server(先頭の 1 つ。auth の server はその後ろ)
+    $mainHttps = '';
+    if (preg_match('/^server \{\n    listen 443 ssl;.*?\n\}\n/ms', $file('nginx/default.conf.template'), $mainMatch) === 1) {
+        $mainHttps = $mainMatch[0];
+    }
+    $wsLocation = '';
+    if (preg_match('/location \^~ \/ws\/app\/ \{.*?\n    \}\n/s', $mainHttps, $wsMatch) === 1) {
+        $wsLocation = $wsMatch[0];
+    }
+    check_bool('/ws/app/: 管理画面の Origin だけ・公開側のホストでは 404・Soketi の /app/ へ', $wsLocation !== ''
+        && str_contains($wsLocation, "if (\$km_ws_origin_denied) {\n            return 403;")
+        && str_contains($wsLocation, "if (\$km_host_role = public) {\n            return 404;")
+        && str_contains($wsLocation, 'proxy_pass http://km_soketi/app/;') && str_contains($wsLocation, 'proxy_set_header Upgrade $http_upgrade;'));
+    check_bool('/ws/ のほか(配信の HTTP API /apps/ など)は外に出さない', preg_match('#location \^~ /ws/ \{\s*return 404;#', $mainHttps) === 1);
+    check_bool('管理用のホストでは /ws/app/ を返す($km_leave_admin_host)', str_contains($file('nginx/default.conf.template'), '|vendor-web/|ws/app/|'));
+    $siteLib = $file('src/lib/site.php');
+    check_bool('PHP の Logto の入口は LOGTO_ENDPOINT が正本(km_site_url の logto-core)', str_contains($siteLib, "if (\$service === 'logto-core') {\n        return km_site_logto_endpoint() . \$path;")
+        && str_contains($siteLib, "\$endpoint = trim((string) getenv('LOGTO_ENDPOINT'));"));
+    $wsPages = [];
+    foreach (['src/admin/chat.php', 'src/admin/monitor.php'] as $page) {
+        $code = $file($page);
+        if (str_contains($code, 'wsPort: 6001') || !str_contains($code, 'wsPath: <?= json_encode(km_site_ws_path()') || !str_contains($code, 'wssPort: <?= (int) km_site_ws_port() ?>')) {
+            $wsPages[] = $page;
+        }
+    }
+    check('チャットと死活監視は管理画面の 443 番の /ws で張る', [], $wsPages);
+    check_bool('CSP の connect-src は WebSocket の宛先を km_site_ws_origin から', str_contains($file('src/lib/csp.php'), '$connect[] = km_site_ws_origin();'));
+    $savedEndpoint = getenv('LOGTO_ENDPOINT');
+    putenv('LOGTO_ENDPOINT=https://auth.example.jp/');
+    $authEndpoint = km_site_logto_endpoint();
+    putenv('LOGTO_ENDPOINT=not a url');
+    $brokenEndpoint = km_site_logto_endpoint();
+    $savedEndpoint === false ? putenv('LOGTO_ENDPOINT') : putenv('LOGTO_ENDPOINT=' . $savedEndpoint);
+    check('LOGTO_ENDPOINT があればそれ(末尾のスラッシュは落とす)', 'https://auth.example.jp', $authEndpoint);
+    // 2026-10-19 に :3001 の入口を外したので、落とし先も auth.<本体のホスト>(compose の既定と同じ形)
+    check_bool('LOGTO_ENDPOINT が壊れていれば https://auth.<本体のホスト> に落とす', str_starts_with($brokenEndpoint, 'https://auth.') && !str_contains($brokenEndpoint, ':3001'));
+    $gradle = (string) @file_get_contents('C:/Users/itota/Documents/Test/app/build.gradle.kts');
+    if ($gradle === '') {
+        check_skip('管理アプリの Logto の入口', 'Android の作業場が無い');
+    } else {
+        check_bool('管理アプリの Logto の入口の既定は https://auth.<ドメイン>', str_contains($gradle, '?: "https://auth.$kosenmapDomain").trimEnd(\'/\')'));
+    }
+    /*
+     * ## Logto のメールのテンプレート(2026-10-12。docs/logto-email-templates.json。Console へ貼るのは利用者)
+     * Gmail などがコードを拾いやすいよう、コードは本文に 1 回だけ・単独の行に置く。URL(verify.php)は載せない。
+     */
+    $mailTemplates = json_decode($file('docs/logto-email-templates.json'), true);
+    $templateTypes = ['SignIn', 'Register', 'ForgotPassword', 'Generic', 'BindNewIdentifier', 'UserPermissionValidation', 'MfaVerification', 'BindMfa', 'OrganizationInvitation'];
+    $templateOk = is_array($mailTemplates) && count($mailTemplates) === 9
+        && array_column($mailTemplates, 'usageType') === $templateTypes;
+    foreach (is_array($mailTemplates) ? $mailTemplates : [] as $template) {
+        $content = (string) ($template['content'] ?? '');
+        $templateOk = $templateOk && ($template['contentType'] ?? '') === 'text/plain'
+            && substr_count($content, '{{code}}') === 1 && str_contains($content, "\n\n{{code}}\n\n")
+            && !str_contains($content, 'verify.php') && !str_contains($content, '{{link}}')
+            && str_contains((string) ($template['subject'] ?? ''), '(Verification Code)') && !str_contains((string) ($template['subject'] ?? ''), '{{code}}');
+    }
+    check_bool('Logto のテンプレート: 9 種類・コードは本文に 1 回だけ単独の行・URL なし・件名にコードを出さない', $templateOk);
+    // 確認コードの橋渡し verify.php は Old/src/ へ退避した。healthcheck は DB を触らない healthz.php を見る
+    $healthz = $file('src/healthz.php');
+    check_bool('verify.php は退避済み・healthcheck は healthz.php(DB を触らず、外には 404)', !is_file(km_check_repo_root() . '/src/verify.php')
+        && str_contains($file('compose.yaml'), '"http://127.0.0.1/healthz.php"]') && !str_contains($file('compose.yaml'), '/verify.php"')
+        && str_contains($healthz, "!== '127.0.0.1'") && !preg_match('/km_db|require/', $healthz)
+        && str_contains($file('nginx/default.conf.template'), "location = /healthz.php {\n        return 404;\n    }")
+        && !str_contains($file('nginx/default.conf.template'), 'location = /verify.php'));
+
+    /*
+     * ## イベントモード: 管理アプリのイベントの取り込み(2026-10-14。lib/map-event-import.php)
+     * アプリの MapEvent → Website の重ね合わせ。変換は DB を使わない関数なので、ここで試す。
+     */
+    require_once __DIR__ . '/../lib/map-event-import.php';
+    $uuidOf = static fn (string $c): string => str_repeat($c, 8) . '-' . str_repeat($c, 4) . '-' . str_repeat($c, 4) . '-' . str_repeat($c, 4) . '-' . str_repeat($c, 12);
+    $known = [
+        str_repeat('a', 32) => ['floor' => '1', 'type' => 'road', 'x' => 100.0, 'y' => 1100.0],
+        str_repeat('b', 32) => ['floor' => '1', 'type' => 'room', 'x' => 500.0, 'y' => 500.0],
+        str_repeat('c', 32) => ['floor' => '2', 'type' => 'road', 'x' => 10.0, 'y' => 10.0],
+        str_repeat('d', 32) => ['floor' => '1', 'type' => 'wall', 'x' => 101.0, 'y' => 1101.0],
+    ];
+    $appEvent = json_decode((string) json_encode([
+        'uuid' => 'ev-1', 'name' => '高専祭', 'startAtMillis' => 1792540800000, 'endAtMillis' => null,
+        'closedLineKeys' => ['1F:' . $uuidOf('b') . ':' . $uuidOf('a'), '1F:' . $uuidOf('a') . ':' . $uuidOf('e'), 'broken'],
+        'closedNodeUuids' => [$uuidOf('b')],
+        'closedFloors' => ['2F'],
+        'places' => [
+            ['uuid' => 'p1', 'name' => 'たこ焼き', 'floor' => '1F', 'x' => 102.0, 'y' => 98.0, 'category' => '模擬店', 'note' => '', 'staffOnly' => false],
+            ['uuid' => 'p2', 'name' => '本部', 'floor' => '1F', 'x' => 1.0, 'y' => 1.0, 'category' => '', 'note' => '', 'staffOnly' => true],
+            ['uuid' => 'p3', 'name' => 'くじ引き', 'floor' => '1F', 'x' => 1.0, 'y' => 1.0, 'category' => 'くじ', 'note' => '2回まで', 'staffOnly' => false],
+        ],
+        'nameOverrides' => [$uuidOf('b') => 'お化け屋敷', $uuidOf('e') => '無い部屋'],
+        'hiddenNodeUuids' => [$uuidOf('a')],
+    ]));
+    $fromApp = km_map_event_from_app($appEvent, $known);
+    check_bool('取り込み: 線の通行止めは DB の id の組・向きを揃える・無い地点と読めないキーは数える', $fromApp['closedEdges'] === [[str_repeat('a', 32), str_repeat('b', 32)]]
+        && $fromApp['skipped']['badLineKey'] === 1);
+    check_bool('取り込み: 地点の通行止め + 階の通行止めはその階の地点を全部閉じる', $fromApp['closedNodes'] === [str_repeat('b', 32), str_repeat('c', 32)]);
+    check_bool('取り込み: 名前の上書きと出さない地点(Website に無い地点は飛ばして数える)', $fromApp['aliases'] === [str_repeat('b', 32) => 'お化け屋敷']
+        && $fromApp['hidden'] === [str_repeat('a', 32)] && $fromApp['skipped']['unknownNode'] === 2);
+    $firstPoi = $fromApp['pois'][0] ?? [];
+    check_bool('取り込み: 一時地点は種別を言葉で寄せ・Y を反転・同じ階の一番近い通れる地点に繋ぐ(壁には繋がない)', count($fromApp['pois']) === 2
+        && ($firstPoi['category'] ?? '') === 'food' && ($firstPoi['y'] ?? 0) === 1102 && ($firstPoi['anchorNodeId'] ?? '') === str_repeat('a', 32)
+        && ($fromApp['pois'][1]['category'] ?? '') === 'other' && ($fromApp['pois'][1]['note'] ?? '') === 'くじ 2回まで');
+    check_bool('取り込み: スタッフ限定の一時地点は入れない・期間はミリ秒から', $fromApp['skipped']['staffOnly'] === 1
+        && $fromApp['startsAt'] === date('Y-m-d H:i:s', 1792540800) && $fromApp['endsAt'] === null);
+    $eventsLib = $file('src/lib/map-events.php');
+    check_bool('取り込み: 新しいイベントは無効のまま・印は別表(ALTER を使わない)・中身は丸ごと入れ替える', str_contains($file('src/lib/map-event-import.php'), 'VALUES (?, ?, ?, 0, 1, NULL, NULL, NOW(), NOW())')
+        && str_contains($eventsLib, 'CREATE TABLE IF NOT EXISTS km_map_event_sources') && !preg_match('/ALTER\s+TABLE/i', $eventsLib)
+        && str_contains($file('src/lib/map-event-import.php'), 'foreach (KM_MAP_EVENT_CHILD_TABLES as $table) {'));
+    check_bool('アプリから取り込んだイベントは Website の地図編集で変えさせない(4 つの操作すべて)', substr_count($file('src/admin/api/map-edit.php'), 'km_map_event_assert_editable($pdo, $eventId);') === 4);
+    check_bool('出さない地点の表が無くても重ね合わせ(通行止め)は続ける', (bool) preg_match('/try \{\s*\$stmt = \$pdo->prepare\("SELECT node_id AS nodeId FROM km_map_event_hidden/', $eventsLib));
+    $indexPage = $file('src/index.php');
+    $appJs = $file('src/Main/app.js');
+    check_bool('公開ページ: 案内の文が無ければ「イベントモード中…」・?room= は字の形だけ確かめて DB には渡さない', str_contains($indexPage, "'イベントモード中…('")
+        && str_contains($indexPage, "preg_match('/^[0-9A-Fa-f-]{32,36}\$/', \$roomParam) === 1")
+        && str_contains($indexPage, '<meta name="km-focus-room" content="<?= km_home_e($kmFocusRoom) ?>">')
+        && !preg_match('/km_db\(\)[^;]*\$room/', $indexPage));
+    check_bool('公開ページ: 名前は置き換え・出さない地点は描かず候補にも出さない・QR の部屋を開く', str_contains($appJs, "if (node.alias) {\n            return node.alias;\n        }")
+        && str_contains($appJs, 'if (node.hidden && !window.isAdmin) continue;') && str_contains($appJs, "        if (node.hidden) return false;")
+        && str_contains($appJs, 'window.setTimeout(focusRoomFromUrl, 0);'));
     // 診断 W-54(2026-10-05): 見取り図の口も、錠を見る前に仮アカウントを表から確かめ直す(セッションを閉じる前に)
     $floorImage = $file('src/api/floor-image.php');
     check_bool('W-54: 見取り図の口は錠を見る前に km_map_guest_verify() を呼ぶ', strpos($floorImage, 'km_map_guest_verify();') !== false
@@ -5506,6 +5736,66 @@ function km_check_powershell(): void
     }
     // 見えない3バイトが shebang の前に入ると、`#!/bin/sh` が効かなくなる
     check('BOM の付いた .sh は無い', [], $withBom);
+
+    /*
+     * **どの PS1 も -Help でオプションとその意味を出す**(2026-10-16、利用者の指示)。
+     * 説明は各スクリプトの先頭のコメント(.SYNOPSIS / .PARAMETER / param() の中のコメント)を km-help.ps1 が読む。
+     * 新しい PS1 を足したら、param の最後に [switch]$Help と、param の直後に if ($Help) { … km-help.ps1 … } を足す。
+     * 読み込む部品(param を持たない km-ssh.ps1 など)は、直に叩いたときだけ $args を見る(. で読むと何もしない)。
+     */
+    km_check_heading('powershell: どの PS1 も -Help でオプションとその意味を出す');
+    $ps1 = array_merge(glob($repoRoot . '/scripts/*.ps1') ?: [], glob($repoRoot . '/src/scripts/js/*.ps1') ?: []);
+    $noHelp = [];
+    $lateHelp = [];
+    foreach ($ps1 as $path) {
+        $code = (string) file_get_contents($path);
+        $name = basename($path);
+        if ($name === 'km-help.ps1') {
+            continue;
+        }
+        if (str_contains($code, "\$MyInvocation.InvocationName -ne '.' -and \$args -contains '-Help'")) {
+            continue;
+        }
+        if (preg_match('/\[switch\]\$Help\s*\r?\n\)/', $code) !== 1 || !str_contains($code, 'km-help.ps1')) {
+            $noHelp[] = $name;
+            continue;
+        }
+        // param の閉じ括弧のすぐあと(空行とコメントだけを挟んで)に if ($Help) が来る。前に処理を置くと -Help でも走る
+        if (preg_match('/\[switch\]\$Help\s*\r?\n\)\s*(?:#[^\n]*\n\s*)*if \(\$Help\) \{/', $code) !== 1) {
+            $lateHelp[] = $name;
+        }
+    }
+    check('-Help の無い .ps1 は無い', [], $noHelp);
+    check('-Help は param の直後で見る(ほかの処理より先)', [], $lateHelp);
+    $helper = (string) @file_get_contents($repoRoot . '/scripts/km-help.ps1');
+    check_bool('km-help.ps1 がある(BOM 付き)', str_starts_with($helper, $bom));
+    check_bool('km-help.ps1 は .PARAMETER と param() の中のコメントの両方から説明を読む',
+        str_contains($helper, '$info.Parameters.ContainsKey(') && str_contains($helper, '$described.ContainsKey('));
+    // 必須の値があるスクリプトは、-Help を別の組にする(-Help だけで必須の値を聞かれて止まらないように)
+    $mandatoryNotSplit = [];
+    foreach ($ps1 as $path) {
+        // スクリプトの param(行の頭から始まるもの)だけを見る。関数の param(字下げあり)の Mandatory は関係ない
+        if (preg_match('/^param\((.*?)^\)/ms', (string) file_get_contents($path), $block) !== 1 || !str_contains($block[1], 'Mandatory')) {
+            continue;
+        }
+        if (preg_match('/Mandatory\s*=\s*\$true\)/', $block[1]) === 1
+            || !str_contains($block[1], "[Parameter(ParameterSetName = 'Help')][switch]\$Help")) {
+            $mandatoryNotSplit[] = basename($path);
+        }
+    }
+    check('必須の値があるスクリプトは -Help を別の組にする', [], $mandatoryNotSplit);
+    // 同じ部品を 4 か所に置く。手元にある写しは同じ中身であること(無ければ見ない)
+    $copies = ['C:/Users/itota/Documents/Test/scripts/km-help.ps1', 'F:/Pull/Ichinoseki_Kosen/scripts/km-help.ps1', 'F:/Pull/Ichinoseki_Kosen_Web/tools/km-help.ps1'];
+    $differ = [];
+    foreach ($copies as $copy) {
+        if (is_file($copy) && hash_file('sha256', $copy) !== hash('sha256', $helper)) {
+            $differ[] = $copy;
+        }
+    }
+    check('km-help.ps1 の写しはどれも同じ中身', [], $differ);
+    $py = (string) @file_get_contents($repoRoot . '/scripts/ar-depth-cloud.py');
+    check_bool('手元で動かす Python(ar-depth-cloud.py)にも -Help', str_contains($py, 'parser.add_argument("-Help", "-h", "--help", action="help"'));
+    check_bool('check.php 自身も -Help', str_contains((string) file_get_contents(__FILE__), "in_array('-Help', \$arguments, true)"));
 }
 
 // ======================================================================= shell
@@ -6779,9 +7069,152 @@ function km_check_layout(): void
     // 覚えられない環境(プライベートウィンドウ)で落ちないこと
     check_bool('保存の失敗で止まらない', substr_count($welcomeJs, 'try {') >= 2);
     check_bool('設定から読み直せる', str_contains($index, 'data-km-welcome-open'));
+    // QR(/?room=)から来た人には出さない(2026-10-14)。出すと開いた部屋の詳細が幕の下に隠れる
+    check_bool('QR から来た人には出さない', str_contains($welcomeJs, 'meta[name="km-focus-room"]') && str_contains($welcomeJs, 'if (!seen() && !fromRoomQr) open();'));
 
-    km_check_heading('layout: ラベルの重なりは屋外だけ(2026-09-25)');
-    check_bool('屋内では間引かない', str_contains($appJs, "if (String(window.currentFloor) !== 'outside') return;"));
+    km_check_heading('tutorial: 初回の操作案内(2026-10-15)');
+    $tutorialJs = (string) file_get_contents(__DIR__ . '/../Main/tutorial.js');
+    // スマホ(2026-10-19、利用者の指摘「スマホでチュートリアルの表示がうまくいっていない」):
+    // 閉じた検索の欄の中の欄(カテゴリー検索)に吹き出しを置き、画面の外へ出て見えなかった。キーボードの裏にも隠れた
+    check_bool('tutorial: 見える範囲の外にある所は「見えない」とみなす(visual viewport で測る)', str_contains($tutorialJs, 'const vv = window.visualViewport;')
+        && str_contains($tutorialJs, 'return r.bottom > box.top + 4 && r.top < box.top + box.height - 4'));
+    check_bool('tutorial: 検索の欄の中の所が見えなければ「検索」を指して開いてもらう', str_contains($tutorialJs, "el.closest('#search-panel') && toggle && visible(toggle)"));
+    check_bool('tutorial: 吹き出しは必ず見える範囲に収める・キーボードの出し入れで置き直す', str_contains($tutorialJs, 'top = clampTop(top, ch);')
+        && str_contains($tutorialJs, "window.visualViewport.addEventListener('resize', place);") && str_contains($tutorialJs, "window.visualViewport.removeEventListener('resize', place);"));
+    check_bool('tutorial: スマホで検索の欄の中を指すときは上に置く(次の欄とキーボードを覆わない)', str_contains($tutorialJs, "const preferAbove = narrowScreen() && el.closest && el.closest('#search-panel') !== null;"));
+    check_bool('tutorial.js を welcome.js のあとに読む', ($tw = strpos($index, "Main/welcome.js')")) !== false && $tw < (int) strpos($index, "Main/tutorial.js')"));
+    check_bool('「はじめに」を閉じてから始める', str_contains($welcomeJs, "new CustomEvent('km-welcome-closed')") && str_contains($tutorialJs, "'km-welcome-closed'"));
+    check_bool('地図が出てから始める', str_contains($appJs, "new CustomEvent('km-map-ready')") && str_contains($tutorialJs, "'km-map-ready'"));
+    check_bool('QR から来た人と錠のときは出さない', str_contains($tutorialJs, 'meta[name="km-focus-room"]') && str_contains($tutorialJs, "classList.contains('km-map-unavailable')"));
+    check_bool('最初の手順は出発地(検索が閉じていれば「検索」から)', str_contains($tutorialJs, 'ここを押して、出発地を決めてください。') && str_contains($tutorialJs, 'when: searchCollapsed'));
+    check_bool('幕は見た目だけ(案内の上からも押せる)', preg_match('/\.km-tour \{[^}]*pointer-events: none/', $css) === 1);
+    check_bool('テスト用アカウントは来場者ごとに出す', str_contains($tutorialJs, "SEEN_KEY + ':visit:'"));
+    check_bool('設定からもう一度見られる', str_contains($index, 'data-km-tutorial-open'));
+    check_bool('押す所を追いかける(シートが滑って出る)', str_contains($tutorialJs, 'window.requestAnimationFrame(follow);'));
+
+    km_check_heading('map-access: イベント中だけパスワード無しで地図を出す(2026-10-15)');
+    $accessLib = (string) file_get_contents(__DIR__ . '/../lib/map-access.php');
+    check_bool('既定は出さない(厳密に true のときだけ)', str_contains($accessLib, "'eventOpensMap' => (\$config['eventOpensMap'] ?? false) === true,"));
+    check('設定が無ければイベントを見に行かない', false, km_map_event_opens_view(['mapMode' => 'password']));
+    check_bool('地図の錠だけに効く(氏名の錠には足さない)', str_contains($accessLib, "km_map_teacher_like_session(false) || km_map_event_opens_view(\$config)")
+        && !preg_match("/'password' => km_map_password_entered\(\\\$config\) \|\| km_map_teacher_like_session\(true\)[^,]*km_map_event_opens_view/", $accessLib));
+    check_bool('確かめられなければ開けない', str_contains($accessLib, "error_log('km_map_event_opens_view failed (map stays locked): '") && str_contains($accessLib, '$active = false;'));
+    check_bool('保存で設定ファイルに書く', str_contains($accessLib, "\"    'eventOpensMap' => \" . var_export(\$resolvedEventOpensMap, true)"));
+    check_bool('管理画面にチェックがある', str_contains((string) file_get_contents(__DIR__ . '/../admin/map-settings.php'), 'name="event_opens_map"'));
+
+    km_check_heading('test-mode: テスト用アカウントは係の人の合言葉でだけログアウトできる(2026-10-19)');
+    require_once __DIR__ . '/../lib/test-mode.php';
+    $pinHash = password_hash('Kakari2026', PASSWORD_DEFAULT);
+    $t0 = 1_760_000_000;
+    check('合言葉が決まっていなければ出さない', 'unset', km_test_signout_decide('', [], 'Kakari2026', $t0)['result']);
+    check('合言葉が合えば出す・数えを戻す', ['result' => 'ok', 'fail' => ['count' => 0, 'until' => 0]], km_test_signout_decide($pinHash, ['count' => 3], 'Kakari2026', $t0));
+    check('違えば数える', ['result' => 'wrong', 'fail' => ['count' => 1, 'until' => 0]], km_test_signout_decide($pinHash, [], 'kakari2026', $t0));
+    check('空は違う', 'wrong', km_test_signout_decide($pinHash, [], '', $t0)['result']);
+    $fifth = km_test_signout_decide($pinHash, ['count' => 4], 'x', $t0);
+    check('5 回続けて違えば 10 分受け付けない', ['result' => 'locked', 'fail' => ['count' => 0, 'until' => $t0 + 600]], $fifth);
+    check('受け付けない間は正しい合言葉でも出さない', 'locked', km_test_signout_decide($pinHash, $fifth['fail'], 'Kakari2026', $t0 + 599)['result']);
+    check('10 分たてば受け付ける', 'ok', km_test_signout_decide($pinHash, $fifth['fail'], 'Kakari2026', $t0 + 600)['result']);
+    check('合言葉の形は英数字 4〜32 字', [true, false, false, false, true], [km_test_signout_pin_valid('1234'), km_test_signout_pin_valid('123'), km_test_signout_pin_valid('ab cd'), km_test_signout_pin_valid('あいうえ'), km_test_signout_pin_valid(str_repeat('a', 32))]);
+    $signOutCode = (string) file_get_contents(__DIR__ . '/../sign-out.php');
+    check_bool('sign-out.php は Logto から出す前に合言葉を確かめる(ボタンを隠すだけにしない)',
+        strpos($signOutCode, 'km_test_signout_decide(') !== false && strpos($signOutCode, 'km_test_signout_decide(') < strpos($signOutCode, '$client->signOut('));
+    check_bool('合言葉はハッシュだけを置く', str_contains((string) file_get_contents(__DIR__ . '/../lib/test-mode.php'), 'km_setting_set($pdo, KM_TEST_SIGNOUT_PIN_SETTING, password_hash($pin, PASSWORD_DEFAULT));'));
+    $homeCode = (string) file_get_contents(__DIR__ . '/../index.php');
+    check_bool('展示の PC の地図の画面には、押せばすぐ出るログアウトを出さない', preg_match('/<\?php if \(\$kmTestMode !== null\): \?>.*?<details class="km-test-signout">.*?name="signout_pin".*?<\?php else: \?>.*?logout-btn/s', $homeCode) === 1);
+    $accountCode = (string) file_get_contents(__DIR__ . '/../account.php');
+    check_bool('テスト用アカウントではアカウントの画面を使わせない(表示名・退会・サインアウト)', str_contains($accountCode, "\$blockedReason = 'test';\n            \$signedIn = false;")
+        && strpos($accountCode, "\$blockedReason = 'test';") < strpos($accountCode, "if ((\$_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && !km_csrf_verify()) {"));
+
+    km_check_heading('test-mode: テスト用アカウント(展示の PC。2026-10-15)');
+    $testLib = (string) file_get_contents(__DIR__ . '/../lib/test-mode.php');
+    $testApi = (string) file_get_contents(__DIR__ . '/../api/test-events.php');
+    $testJs = (string) file_get_contents(__DIR__ . '/../Main/test-mode.js');
+    $now = 1_760_000_000_000;
+    $parsed = km_test_events_parse([
+        'visit' => '0123456789abcdef',
+        'events' => [
+            ['kind' => 'search', 't' => $now - 1000, 'field' => 'goal', 'text' => "  図書館\n ", 'node' => 'abc123'],
+            ['kind' => 'route', 't' => $now, 'node' => 'a', 'node2' => 'b', 'text' => 'vertical=any'],
+            ['kind' => 'evil', 'text' => 'x'],
+            ['kind' => 'detail', 'node' => '../etc/passwd'],
+            ['kind' => 'floor', 'floor' => 'outside', 't' => $now + 999_999_999],
+        ],
+    ], $now);
+    check('種類の分からない記録は捨てる', 4, $parsed === null ? -1 : count($parsed['rows']));
+    check('語は前後の空白と改行を落とす', '図書館', $parsed['rows'][0]['text'] ?? null);
+    check('欄は start / goal だけ', 'goal', $parsed['rows'][0]['field'] ?? null);
+    check('地点の id は英数字だけ(パスのような値は捨てる)', null, ($parsed['rows'][2] ?? ['node' => 'x'])['node']);
+    check('未来の時刻はサーバーの今にする', gmdate('Y-m-d H:i:s', intdiv($now, 1000)) . '.000', $parsed['rows'][3]['at'] ?? null);
+    check('visit の形が違えば丸ごと断る', null, km_test_events_parse(['visit' => 'xyz', 'events' => []], $now));
+    $many = km_test_events_parse(['visit' => '0123456789abcdef', 'events' => array_fill(0, 80, ['kind' => 'open'])], $now);
+    check('1 回に受けるのは 50 件まで', KM_TEST_EVENTS_PER_REQUEST, count($many['rows'] ?? []));
+    check_bool('アンケートは https だけ', km_test_survey_url_valid('https://forms.gle/abc') && km_test_survey_url_valid('')
+        && !km_test_survey_url_valid('http://example.com') && !km_test_survey_url_valid('javascript:alert(1)') && !km_test_survey_url_valid('https://a.example/"><x'));
+    check('操作方法は空の行を飛ばす', ['一', '二'], km_test_guide_lines("一\n\n  二  \r\n"));
+    check_bool('印を確かめられなければ付いていない扱い', str_contains($testLib, "error_log('km_test_account_is_marked failed (treated as not marked): '") && str_contains($testLib, 'return false;'));
+    // 公開ページ: 印のあるときだけ JS と札を出す。開くたびに印を立て直す
+    check_bool('開くたびに印を外してから確かめ直す', strpos($index, 'unset($_SESSION[KM_TEST_MODE_SESSION_KEY]);') !== false
+        && strpos($index, 'unset($_SESSION[KM_TEST_MODE_SESSION_KEY]);') < (int) strpos($index, 'km_test_account_is_marked($testPdo'));
+    check_bool('test-mode.js は印のあるときだけ読む', preg_match("/if \(\\\$kmTestMode !== null \|\| \\\$kmEventCollect !== null\): \?>\s*(<\?php[^?]*\?>\s*)?<script defer src=\"<\?= km_home_e\(km_public_asset\('Main\/test-mode\.js'\)\) \?>\"><\/script>/", $index) === 1);
+    check_bool('test-mode.js は app.js より先', (int) strpos($index, "Main/test-mode.js')") < (int) strpos($index, '<script defer src="<?= km_home_e(km_public_asset(\'Main/app.js\')) ?>"></script>'));
+    check_bool('札と操作方法は小さくできる・始めからがある', substr_count($index, 'data-km-test-min') === 2 && str_contains($index, 'id="km-test-restart"'));
+    check_bool('app.js は kmTestLog が在るときだけ送る', str_contains($appJs, "if (typeof window.kmTestLog === 'function') window.kmTestLog(kind, data);") && !str_contains($appJs, "/api/test-events.php"));
+    foreach (['search', 'category', 'pick', 'route', 'detail', 'floor'] as $kind) {
+        check_bool("app.js が記録する: {$kind}", str_contains($appJs, "testLog('{$kind}'"));
+    }
+    // API: セッションの印・期限・CSRF の順に見てから書く
+    $markAt = strpos($testApi, '$sub = km_test_collect_subject($_SESSION, time());');
+    check_bool('API は印と CSRF を見てから書く', $markAt !== false && $markAt < (int) strpos($testApi, 'if (!km_csrf_verify())')
+        && (int) strpos($testApi, 'if (!km_csrf_verify())') < (int) strpos($testApi, 'km_test_events_insert('));
+    $nowS = 1_760_000_000;
+    check('送り主: テスト用の印が先', 'abc', km_test_collect_subject([KM_TEST_MODE_SESSION_KEY => ['sub' => 'abc', 'until' => $nowS + 1], KM_EVENT_COLLECT_SESSION_KEY => ['subject' => 'event:3', 'until' => $nowS + 1]], $nowS));
+    check('送り主: イベント中の来場者', 'event:3', km_test_collect_subject([KM_EVENT_COLLECT_SESSION_KEY => ['subject' => 'event:3', 'until' => $nowS + 1]], $nowS));
+    check('API は期限切れの印を断る', null, km_test_collect_subject([KM_TEST_MODE_SESSION_KEY => ['sub' => 'abc', 'until' => $nowS - 1], KM_EVENT_COLLECT_SESSION_KEY => ['subject' => 'event:3', 'until' => $nowS - 1]], $nowS));
+    check('イベントの印は event: で始まるものだけ', null, km_test_collect_subject([KM_EVENT_COLLECT_SESSION_KEY => ['subject' => 'someone', 'until' => $nowS + 1]], $nowS));
+    check('イベントの記録に誰かは書かない(番号だけ・並べ替える)', 'event:2-5', km_event_collect_subject([5, '2', 0]));
+    check_bool('Logto の ID と event: は取り違えない', !km_test_valid_sub('event:1'));
+    check_bool('絞り込みは決まった文字列だけ', km_test_source_where("x' OR 1=1") === '1 = 1' && km_test_source_where('event') === "sub LIKE 'event:%'");
+    check('自動の始めからの既定は 3 分', 3, KM_TEST_IDLE_DEFAULT);
+    // イベント中の許可: チェック済みで出す・決めるまで送らない・外したら溜めた分も捨てる
+    check_bool('許可はチェック済みで出す', str_contains($index, '<input type="checkbox" id="km-collect-consent" checked>'));
+    check_bool('イベントの記録はテスト用アカウントのときは出さない', str_contains($index, 'if ($kmEvent !== null && $kmTestMode === null) {'));
+    check_bool('開くたびにイベントの印も立て直す', strpos($index, 'unset($_SESSION[KM_EVENT_COLLECT_SESSION_KEY]);') !== false
+        && strpos($index, 'unset($_SESSION[KM_EVENT_COLLECT_SESSION_KEY]);') < (int) strpos($index, 'km_event_collect_enabled(km_db())'));
+    check_bool('決めるまでは送らない', str_contains($testJs, "if (consent !== 'yes') return;   // 決めるまでは溜めるだけ"));
+    check_bool('許可しないなら記録もしない・溜めた分も捨てる', str_contains($testJs, "if (consent === 'no') return;") && str_contains($testJs, 'queue = [];   // 許可しないなら'));
+    check_bool('タブを移っただけでは許可したことにしない', preg_match("/visibilitychange', function \(\) \{\s*if \(document\.visibilityState === 'hidden'\) flush\(true\);/", $testJs) === 1);
+    // 自動の始めから: 触られていない画面は戻さない・戻す前に知らせる
+    check_bool('触られるまで自動で戻さない', str_contains($testJs, '// 触られるまでは数えない(arm しない)') && str_contains($testJs, 'const IDLE_WARNING_SECONDS = 15;'));
+    check_bool('戻す前の知らせに「このまま使う」', str_contains($testJs, "keep.textContent = 'このまま使う';") && str_contains($testJs, "restart('idle');"));
+    check_bool('API は 64KB までしか読まない', str_contains($testApi, "file_get_contents('php://input', false, null, 0, 65536)"));
+    check_bool('JS はトークンを X-KM-CSRF で送る', str_contains($testJs, "'X-KM-CSRF': token"));
+    check_bool('始めからで記録を区切り、来場者の覚えを消す', str_contains($testJs, 'storageSet(window.sessionStorage, VISIT_KEY, newVisitId());')
+        && str_contains($testJs, "'km-map-tuning-v1'") && str_contains($testJs, "window.location.replace('/');"));
+    $repoRootForTest = km_check_repo_root();
+    if ($repoRootForTest !== null) {
+        check_bool('nginx: 記録の入口は本文 64KB・回数を絞る', preg_match('/location = \/api\/test-events\.php \{\s*client_max_body_size 64k;\s*limit_req zone=km_api/', (string) @file_get_contents($repoRootForTest . '/nginx/default.conf.template')) === 1);
+    } else {
+        check_skip('nginx: 記録の入口', '手元の作業ツリーで');
+    }
+    check_bool('CSV は式として読ませない', str_contains($testLib, "preg_replace('/^([=+\\-@])/', \"'\$1\""));
+    check_bool('管理画面に CSRF と記録の消去の確認', str_contains((string) file_get_contents(__DIR__ . '/../admin/test-mode.php'), "!km_csrf_verify()")
+        && str_contains((string) file_get_contents(__DIR__ . '/../admin/test-mode.php'), 'data-km-confirm="テスト用アカウントの記録を全部消します。'));
+
+    km_check_heading('layout: ラベルの重なり(屋外は消す・屋内は消さない。2026-09-25 / 引き出し線 2026-10-14)');
+    check_bool('屋内では消さない(屋外だけ hideWhenCrowded)', str_contains($appJs, 'hideWhenCrowded: outdoors') && str_contains($appJs, "const outdoors = String(window.currentFloor) === 'outside';"));
+    $labelLayoutJs = (string) file_get_contents(__DIR__ . '/../Main/label-layout.js');
+    // 頭の preload にも app.js があるので、<script> の並びで比べる
+    $scriptTag = static fn (string $file): string => '<script defer src="<?= km_home_e(km_public_asset(\'Main/' . $file . '\')) ?>"></script>';
+    check_bool('label-layout.js を app.js より先に読む', ($p1 = strpos($index, $scriptTag('label-layout.js'))) !== false && $p1 < (int) strpos($index, $scriptTag('app.js')));
+    $repoRootForLabels = km_check_repo_root();
+    if ($repoRootForLabels !== null) {
+        check_bool('配備の必須ファイルに label-layout.js', str_contains((string) file_get_contents($repoRootForLabels . '/scripts/deploy-to-host.ps1'), "'./src/Main/label-layout.js'"));
+    } else {
+        check_skip('配備の必須ファイルに label-layout.js', '手元の作業ツリーで');
+    }
+    check_bool('線は札の後ろに描く', preg_match('/\.km-label\.km-label-led::after\s*\{[^}]*z-index:\s*-1/s', $css) === 1);
+    // CSP は style 属性を止める。線の位置は CSSOM(setProperty)で入れる
+    check_bool('線の位置は setProperty で入れる', str_contains($appJs, "el.style.setProperty('--km-lead-x'") && !str_contains($appJs, "setAttribute('style'"));
     check_bool('薄い建物名は間引きの数に入れない', str_contains($appJs, "faded && el.classList.contains('km-label-facility')"));
     check_bool('薄い建物名は押せない', preg_match('/#map\.km-facility-faded \.km-label-facility\s*\{[^}]*pointer-events:\s*none/s', $css) === 1);
     // Leaflet はツールチップへ opacity を直接書く
@@ -6800,6 +7233,14 @@ function km_check_layout(): void
             str_contains($kotlin, 'FADED("faded")') && str_contains($kotlin, 'HIDDEN("hidden")') && str_contains($kotlin, 'SHOWN("shown")')
         );
         check_bool('アプリも屋外だけ間引く', str_contains((string) file_get_contents(dirname($renderer) . '/MapScreen.kt'), 'declutterLabels = currentFloor == OUTSIDE_FLOOR'));
+        // 引き出し線の数(ずらし・横の間・線の間)がアプリと同じ
+        $layoutKt = (string) @file_get_contents(dirname($renderer) . '/LabelLayout.kt');
+        check_bool(
+            'アプリと同じ置き方の数',
+            str_contains($kotlin, 'LABEL_NUDGE_STEPS = listOf(0f, -14f, 14f, -30f, 30f)') && str_contains($labelLayoutJs, 'const NUDGES = [0, -14, 14, -30, 30];')
+            && str_contains($layoutKt, 'LABEL_ADJACENT_GAP = 4f') && str_contains($labelLayoutJs, 'const ADJACENT_GAP = 4;')
+            && str_contains($layoutKt, 'LABEL_LEADER_GAPS = listOf(36f, 68f)') && str_contains($labelLayoutJs, 'const LEADER_GAPS = [36, 68];')
+        );
     } else {
         check_skip('アプリと突き合わせ', 'アプリの原本が無い(本番のホストなど)');
     }
@@ -7351,10 +7792,17 @@ function km_check_qr(): void
 
 $arguments = array_slice($argv, 1);
 
-if (in_array('--help', $arguments, true) || in_array('-h', $arguments, true)
+// -Help は PS1 の -Help と揃えた(2026-10-16、利用者の指示「オプションとその意味を表示できるように」)
+if (in_array('-Help', $arguments, true) || in_array('--help', $arguments, true) || in_array('-h', $arguments, true)
     || in_array('--list', $arguments, true)) {
-    echo "使い方: php src/scripts/check.php [名前 …]\n\n";
-    echo "  引数なし … 純粋な検査をすべて走らせる\n\n";
+    echo "使い方: php src/scripts/check.php [名前 …] [オプション]\n\n";
+    echo "  自己検査。DB も Logto も Web サーバーも要らない範囲で、取り違えたときの被害が大きい判定を確かめる。\n\n";
+    echo "オプション:\n";
+    echo "  (なし)          純粋な検査をすべて走らせる\n";
+    echo "  名前 …          その検査だけ走らせる(下の一覧から。いくつでも)\n";
+    echo "  --list          検査の名前の一覧を出す(走らせない)\n";
+    echo "  -Help / -h / --help  このオプションとその意味を出して終わる\n\n";
+    echo "終わり方: 0 すべて通過 / 1 落ちたものがある / 2 知らない名前を渡した・要る拡張(mbstring)が無い\n\n";
     echo "  純粋(既定で走る):\n";
     foreach (KM_CHECK_PURE as $name) {
         echo "    {$name}\n";

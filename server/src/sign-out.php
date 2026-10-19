@@ -19,14 +19,31 @@ require_once __DIR__ . '/lib/admin-log.php';
  * 古いブックマークや手打ちの GET には、押せば出られるボタンだけの画面を返す
  * (勝手にはサインアウトしない。「押したのに何も起きない」にもしない)。
  */
-if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST' || !km_csrf_verify()) {
+/*
+ * **テスト用アカウント(展示の PC)は、係の人の合言葉が要る**(2026-10-19、利用者の指示。lib/test-mode.php の「ログアウトの合言葉」)。
+ * ボタンを隠すだけにしない —— ここで止める。確かめられないとき(DB の不調など)は印が無いとみなし、普段どおり出す
+ * (km_test_account_is_marked は確かめられなければ false を返す。ログアウトは閉じ込めるより出られる方へ倒す)。
+ */
+require_once __DIR__ . '/lib/test-mode.php';
+$kmTestSignout = false;
+$kmTestPdo = null;
+try {
+    if ($client->isAuthenticated()) {
+        $kmTestPdo = km_db();
+        $kmTestSignout = km_test_account_is_marked($kmTestPdo, (string) ($client->getIdTokenClaims()->sub ?? ''));
+    }
+} catch (Throwable $exception) {
+    error_log('sign-out.php: テスト用アカウントか確かめられません(普段どおり出します): ' . $exception->getMessage());
+    $kmTestSignout = false;
+}
+
+/** 「押せば出られる」画面。テスト用アカウントには合言葉の欄を出す */
+function km_signout_form_page(string $message, bool $askPin, int $status): never
+{
     km_csp_send('public');
     header('Cache-Control: no-store');
-    $postBack = ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST';
-    if ($postBack) {
-        // トークンが古い(別タブで入り直した等)。もう一度押せば新しいトークンで通る
-        http_response_code(403);
-    }
+    http_response_code($status);
+    $e = static fn (string $value): string => htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     ?>
 <!DOCTYPE html>
 <html lang="ja">
@@ -36,11 +53,13 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST' || !km_csrf_verify()) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>サインアウト | 高専マップ案内</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="<?= htmlspecialchars(km_public_asset('Main/styles.css'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>">
-    <link rel="stylesheet" href="<?= htmlspecialchars(km_public_asset('Main/document.css'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>">
+    <link rel="stylesheet" href="<?= $e(km_public_asset('Main/styles.css')) ?>">
+    <link rel="stylesheet" href="<?= $e(km_public_asset('Main/document.css')) ?>">
     <style<?= km_csp_nonce_attr() ?>>
         /* ボタンをリンクと同じ見た目にする(document.css の .km-doc-link は a 用) */
         button.km-doc-link { background: none; font: inherit; cursor: pointer; }
+        .km-signout-pin { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 0.75rem 0; }
+        .km-signout-pin input { font: inherit; padding: 0.4rem 0.6rem; border: 1px solid #94a3b8; border-radius: 6px; }
     </style>
 </head>
 
@@ -53,13 +72,15 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST' || !km_csrf_verify()) {
     </header>
     <main class="km-doc-main">
         <section class="km-doc-section">
-            <?php if ($postBack): ?>
-                <p>ページの有効期限が切れていたため、サインアウトできませんでした。もう一度押してください。</p>
-            <?php else: ?>
-                <p>下のボタンを押すとサインアウトします。</p>
-            <?php endif; ?>
+            <p><?= $e($message) ?></p>
             <form method="post" action="/sign-out.php">
                 <?= km_csrf_field() ?>
+                <?php if ($askPin): ?>
+                    <label class="km-signout-pin">
+                        <span>係の人の合言葉</span>
+                        <input type="password" name="signout_pin" maxlength="32" autocomplete="off" required>
+                    </label>
+                <?php endif; ?>
                 <button type="submit" class="km-doc-link">サインアウトする</button>
             </form>
         </section>
@@ -70,6 +91,44 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST' || !km_csrf_verify()) {
 <?php
     exit;
 }
+
+$kmTestPinMessage = 'これは展示用のアカウントです。サインアウトは係の人が合言葉を入れて行います。';
+
+if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST' || !km_csrf_verify()) {
+    $postBack = ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST';
+    // トークンが古い(別タブで入り直した等)。もう一度押せば新しいトークンで通る
+    km_signout_form_page(
+        $postBack ? 'ページの有効期限が切れていたため、サインアウトできませんでした。もう一度押してください。'
+            : ($kmTestSignout ? $kmTestPinMessage : '下のボタンを押すとサインアウトします。'),
+        $kmTestSignout,
+        $postBack ? 403 : 200
+    );
+}
+
+if ($kmTestSignout) {
+    try {
+        $kmPinHash = km_test_signout_pin_hash($kmTestPdo);
+    } catch (Throwable $exception) {
+        error_log('sign-out.php: 合言葉を読めません: ' . $exception->getMessage());
+        $kmPinHash = '';
+    }
+    $kmDecision = km_test_signout_decide(
+        $kmPinHash,
+        (array) ($_SESSION[KM_TEST_SIGNOUT_FAIL_KEY] ?? []),
+        (string) ($_POST['signout_pin'] ?? ''),
+        time()
+    );
+    $_SESSION[KM_TEST_SIGNOUT_FAIL_KEY] = $kmDecision['fail'];
+    if ($kmDecision['result'] !== 'ok') {
+        $kmLeft = KM_TEST_SIGNOUT_MAX_FAILS - (int) $kmDecision['fail']['count'];
+        km_signout_form_page(match ($kmDecision['result']) {
+            'unset' => 'ログアウトの合言葉が決まっていないため、サインアウトできません。管理画面「テスト用アカウント」で合言葉を決めるか、このアカウントのテスト用の印を外してください。',
+            'locked' => '合言葉を続けて間違えたため、しばらく受け付けません。10 分ほどたってからやり直してください。',
+            default => "合言葉が違います(あと {$kmLeft} 回続けて間違えると、10 分受け付けなくなります)。",
+        }, $kmDecision['result'] !== 'unset', $kmDecision['result'] === 'locked' ? 429 : 403);
+    }
+}
+unset($_SESSION[KM_TEST_SIGNOUT_FAIL_KEY]);
 
 /*
  * 監査ログに「誰が出たか」を残す(診断 server-ops#8)。**印を消す前に**組み立てる ——

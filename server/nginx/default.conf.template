@@ -33,7 +33,7 @@ server_tokens off;
 # proxy_read_timeout(上流の応答待ち)の既定も 60 秒にする。以前は proxy-web.conf が
 # 全部 300 秒にしていたので、止まった PHP に 5 分ずつ接続を握られた。
 # 本当に長く待つものだけ location で 300 秒に戻す:
-#   /admin/downloads.php(APK の差し替え)・8281(phpMyAdmin のインポート)・6001(WebSocket)・3001/3002
+#   /admin/downloads.php(APK の差し替え)・8281(phpMyAdmin のインポート)・/ws/app/(WebSocket)・auth の server と 3002(Logto)
 # 地図の取り込みと配信(/admin/map-sync.php・/admin/map-publish.php)は PHP が set_time_limit(120) を
 # 明示しているので、そちらに合わせて 180 秒にする(60 秒で切ると、PHP は最後まで書き込むのに画面だけ 504 になる)。
 # AR の撮影の zip(/admin/ar-captures.php)は set_time_limit(840) なので 900 秒(2026-10-06)。
@@ -194,8 +194,9 @@ map "$km_admin_split$km_on_admin_host" $km_host_role {
 #   /Main/ /vendor-web/ 地図エディタが読む JS・CSS(admin/map-editor.php)
 #   /api/map-data.php・floor-image.php … 地図エディタのデータと見取り図(管理者の印で錠を越える)
 #   /api/download.php  admin/downloads.php の「落とす」
+#   /ws/app/           チャットと死活監視の WebSocket(Soketi。2026-10-19 に 6001 番からここへ移した)
 map "$km_host_role:$uri" $km_leave_admin_host {
-    "~^admin:/(admin/|Main/|vendor-web/|sign-in\.php$|sign-out\.php$|callback\.php$|favicon\.svg$|api/(map-data|floor-image|download)\.php$)"  0;
+    "~^admin:/(admin/|Main/|vendor-web/|ws/app/|sign-in\.php$|sign-out\.php$|callback\.php$|favicon\.svg$|api/(map-data|floor-image|download)\.php$)"  0;
     "~^admin:"   1;
     default      0;
 }
@@ -270,7 +271,7 @@ map $host $km_permissions_policy {
     default "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()";
 }
 
-# Soketi(6001)へ WebSocket を張ってよい Origin(2026-09-14 の診断で追加。server-authz 4)。
+# Soketi(443 番の /ws/app/。2026-10-19 までは 6001 番)へ WebSocket を張ってよい Origin(2026-09-14 の診断で追加。server-authz 4)。
 #
 # Soketi には許可する Origin を env で指定する口が無い(1.6.1 の dist/cli を実測)。そこで nginx で見る。
 # 正規の相手は管理画面(${KM_ADMIN_URL})のチャットと死活監視だけ。
@@ -288,9 +289,10 @@ map $http_origin $km_ws_origin_denied {
 # **クエリ文字列を書かない**アクセスログ。
 #
 # 既定の combined は `$request`(= メソッド + URI + クエリ)を丸ごと書く。
-# 確認コードを URL で受け取るページ(/verify.php?code=123456)にそれを使うと、
-# **まだ有効なコードがログファイルに残ってしまう**。`$uri` だけを書く形にして、
+# URL に秘密が乗るページ(お試しの閲覧リンク・OIDC のコールバック・アプリの受け箱など)にそれを使うと、
+# **まだ有効な値がログファイルに残ってしまう**。`$uri` だけを書く形にして、
 # そのページにだけ適用する(他のページは従来どおり combined)。
+# 最初に作ったのは確認コードの橋渡し /verify.php のため(2026-10-12 に Old/src/ へ退避)。
 log_format km_no_query '$remote_addr - - [$time_local] "$request_method $uri $server_protocol" '
                        '$status $body_bytes_sent "$http_referer" "$http_user_agent"';
 
@@ -521,7 +523,7 @@ server {
     # /lib/… の .php 以外(万一置かれたもの)が404を素通りしてしまう。
     #
     # ★ ここで add_header を1つでも書くと、server ブロックの add_header は
-    #   **すべて継承されなくなる**(nginx の仕様。/verify.php の location と同じ罠)。
+    #   **すべて継承されなくなる**(nginx の仕様。/guest.php の location と同じ罠)。
     #   必要なものを全部書き直す。
     #
     # 差し替えても反映されるよう、URL 側に版を付けてある:
@@ -566,36 +568,20 @@ server {
         proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
     }
 
-    # 確認コードの橋渡しページ。**URL にコードが乗るのでログには残さない**
-    # (上の km_no_query は $uri だけを書く)。
-    location = /verify.php {
-        access_log /var/log/nginx/access.log km_no_query;
-
-        # **ここで add_header を1つでも書くと、server ブロックの add_header は
-        # すべて継承されなくなる**(nginx の仕様)。必要なものを全部書き直す。
-        #
-        # Referrer-Policy だけ no-referrer に強める。URL に確認コードが入るので、
-        # どこへも参照元として渡さない。**同じヘッダーが複数あると後勝ちになる**ため、
-        # PHP 側(verify.php)と同じ値にしてある — 食い違うと弱い方が採用される。
-        add_header X-Content-Type-Options nosniff always;
-        add_header X-Frame-Options SAMEORIGIN always;
-        add_header Referrer-Policy no-referrer always;
-        add_header Permissions-Policy $km_permissions_policy always;
-        add_header Content-Security-Policy $km_csp_fallback always;
-        include /etc/nginx/km/hsts-*.conf;
-
-        include /etc/nginx/km/proxy-web.conf;
-        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    # web の healthcheck だけが叩くページ(compose.yaml。2026-10-12)。外には出さない
+    # (以前ここにあった確認コードの橋渡し /verify.php は、メールから URL を外したので Old/src/ へ退避した)
+    location = /healthz.php {
+        return 404;
     }
 
     # お試しの閲覧リンク(2026-09-30、lib/map-guest.php)。**URL にリンクの中身が乗るのでログには残さない**。
-    # 参照元も渡さない(verify.php と同じ)。トークンの総当たりに備えて入口でも回数を絞る。
+    # 参照元も渡さない。トークンの総当たりに備えて入口でも回数を絞る。
     location = /guest.php {
         access_log /var/log/nginx/access.log km_no_query;
         access_log /var/log/km-visit/visit-$km_visit_day.jsonl km_visit;
         limit_req zone=km_public burst=5 nodelay;
 
-        # ここで add_header を書くと server ブロックの add_header は継承されない(上の verify.php と同じ)
+        # ここで add_header を書くと server ブロックの add_header は継承されない(nginx の仕様。必要なものを全部書き直す)
         add_header X-Content-Type-Options nosniff always;
         add_header X-Frame-Options SAMEORIGIN always;
         add_header Referrer-Policy no-referrer always;
@@ -704,6 +690,15 @@ server {
         proxy_read_timeout 900s;
     }
 
+    # テスト用アカウント(展示の PC)の操作の記録(2026-10-15、lib/test-mode.php)。
+    # 本文は数 KB(1 回 50 件まで)。PHP 側も 64KB までしか読まない
+    location = /api/test-events.php {
+        client_max_body_size 64k;
+        limit_req zone=km_api burst=60 nodelay;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+
     # アプリのランキングへの記録(POST だけ数える。取得の GET は数えない)
     location = /api/app-ranking.php {
         limit_req zone=km_app burst=60 nodelay;
@@ -750,7 +745,45 @@ server {
 
     # OIDC のコールバック。**URL に認可コードが乗るのでログには残さない**(2026-09-14 に追加。server-ops 16)。
     # 以前は location / に入り、既定の combined 形式で `?code=…&state=…` ごと記録していた。
-    # verify.php と違って add_header は書かない(server の add_header をそのまま継承させる)。
+    # guest.php と違って add_header は書かない(server の add_header をそのまま継承させる)。
+    # ---------------------------------------------------------------------
+    # **Soketi の WebSocket を 443 番で受ける**(2026-10-19、利用者の指示。学校の回線は 443 番以外を通さない)。
+    #
+    # 以前はブラウザが <ドメイン>:6001 へ直に張っていたので、学内からはチャットと死活監視がいつも「未接続」だった。
+    # pusher-js は wsPath を前に付けて wss://<管理画面>/ws/app/<key> へ張る(admin/chat.php・monitor.php。lib/site.php の km_site_ws_path)。
+    # ここで /ws を外して Soketi の /app/ へ渡す。守りは以前の 6001 の server と同じ:
+    #   - Origin は管理画面だけ($km_ws_origin_denied)
+    #   - 配信の HTTP API(/apps/)は外に出さない —— /ws/app/ だけを通し、ほかの /ws/ は 404
+    #   - 管理画面を別オリジンにしているときは、公開側のホストでは開かない(管理用のホストだけ。$km_host_role)
+    # 6001 の server は 2026-10-19 に外した(移行を確かめたあと。compose.vps.yaml の publish も外した)。
+    # ---------------------------------------------------------------------
+    location ^~ /ws/app/ {
+        if ($km_ws_origin_denied) {
+            return 403;
+        }
+        if ($km_host_role = public) {
+            return 404;
+        }
+        proxy_pass http://km_soketi/app/;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-Host $http_host;
+        proxy_set_header X-Forwarded-Port 443;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+        proxy_buffering off;
+    }
+    location ^~ /ws/ {
+        return 404;
+    }
+
     location = /callback.php {
         access_log /var/log/nginx/access.log km_no_query;
         include /etc/nginx/km/proxy-web.conf;
@@ -777,7 +810,7 @@ server {
     # 他のサイトの枠に入れさせない(security-review-2026-09-10 の 16)。
     # **frame-ancestors だけを足す** —— 中身の CSP は相手(phpMyAdmin / Mailpit)が決めるので触らない。
     # CSP は複数あると全部が効く(厳しい側になる)ので、相手の設定を緩めることはない。
-    # 3001(Logto)には付けない: Logto が自分で frame-ancestors(Console の 3002 を含む)を送っており、
+    # Logto(auth の server)には付けない: Logto が自分で frame-ancestors(Console の 3002 を含む)を送っており、
     # こちらで 'self' だけに絞ると Console のサインイン画面の下見が壊れる(2026-09-14 に実測)
     add_header Content-Security-Policy "frame-ancestors 'self'" always;
     include /etc/nginx/km/hsts-*.conf;
@@ -810,15 +843,25 @@ server {
     include /etc/nginx/km/gate-location.conf;
 }
 
-# Logto Core(認証エンドポイント)
+# ---------------------------------------------------------------------------
+# **Logto Core を 443 番で受ける: auth.<ドメイン>**(2026-10-19、利用者の指示)
 #
-# **ここにはゲートを掛けない。** ログインそのものの入口で、塞ぐと誰もログインできなくなる
-# (ゲートの判定自体が Logto のセッションに依っているので、鶏と卵になる)。
-# 代わりに入口のレート制限だけ掛ける。
+# 学校の回線は 443 番以外を通さない(利用者が確かめた。解除は難しい)。以前の 3001 番の入口では、
+# **学内から誰もサインインできなかった**(展示の PC・教職員・学内 Wi-Fi の管理アプリ)。
+# 名前を分けて 443 番に置く。Logto の ENDPOINT(= 発行元 iss)は https://<KM_AUTH_DOMAIN>(compose.vps.yaml の LOGTO_ENDPOINT)。
+# **3001 の server は 2026-10-19 に外した**(本番で切り替えて確かめたあと。publish も外した)。
+#
+# ここにはゲートを掛けない。ログインそのものの入口で、塞ぐと誰もログインできなくなる
+# (ゲートの判定自体が Logto のセッションに依っているので、鶏と卵になる)。代わりに入口のレート制限だけ掛ける。
+#
+# 名前は**証明書に入っていること**(host-cert.sh issue --also auth.<ドメイン>)と、**DNS が向いていること**。
+# server_name が KM_DOMAIN と同じにはならない(compose が auth. を前に付ける)ので、名前の衝突は起きない。
+# ---------------------------------------------------------------------------
 server {
-    listen 3001 ssl;
-    listen [::]:3001 ssl;
-    server_name ${KM_DOMAIN};
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name ${KM_AUTH_DOMAIN};
     # 待ち時間と同時接続(2026-09-14)。サインインの入口で、学校の NAT から大勢が来るので 443 と同じ 100 本
     keepalive_timeout 30s;
     limit_conn km_conn 100;
@@ -827,10 +870,27 @@ server {
     add_header Referrer-Policy strict-origin-when-cross-origin always;
     include /etc/nginx/km/hsts-*.conf;
 
+    # 確認コード欄に autocomplete="one-time-code" を付けるスクリプト(2026-10-12。中身と理由は km/logto-otp-autocomplete.js)。
+    # Logto のサインイン画面の CSP は script-src 'self' を許すので、同じ origin から返す
+    location = /km/logto-otp-autocomplete.js {
+        alias /etc/nginx/km/logto-otp-autocomplete.js;
+        default_type application/javascript;
+        types { }
+        add_header Cache-Control "public, max-age=3600" always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Referrer-Policy strict-origin-when-cross-origin always;
+        include /etc/nginx/km/hsts-*.conf;
+    }
+
     location / {
-        # 書き込み(サインインの送信・トークン交換)だけを数える。
-        # コンソールの読み取りとプリフライトは対象外 —— ここを数えていたせいで
-        # 管理コンソールが 429 だらけになり、サインイン画面の資材まで落ちていた。
+        # Logto の HTML(サインイン・登録・パスワード再設定の画面)の </head> の前に、上のスクリプトを 1 行差し込む。
+        # sub_filter が書き換えるのは text/html だけ(OIDC の JSON には触れない)。
+        # **Logto に圧縮させない** —— 圧縮された HTML は書き換えられない。外向きの圧縮は gzip_proxied any が行う
+        proxy_set_header Accept-Encoding "";
+        sub_filter '</head>' '<script src="/km/logto-otp-autocomplete.js" defer></script></head>';
+        sub_filter_once on;
+
+        # 書き込み(サインインの送信・トークン交換)だけを数える。コンソールの読み取りとプリフライトは対象外
         limit_req zone=km_auth burst=30 nodelay;
 
         proxy_pass http://km_logto_core;
@@ -838,18 +898,15 @@ server {
 
         proxy_set_header Host $http_host;
         proxy_set_header X-Forwarded-Host $http_host;
-        proxy_set_header X-Forwarded-Port 3001;
+        proxy_set_header X-Forwarded-Port 443;
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header X-Real-IP $remote_addr;
         # **利用者が付けた X-Forwarded-For を足さずに、実際の送信元だけで置き換える**(2026-09-14。server-ops 7)。
-        # Logto は TRUST_PROXY_HEADER=1 で XFF の左端を送信元として監査ログやレート判定に使う。
-        # 以前の $proxy_add_x_forwarded_for は相手の値の後ろに付け足すので、左端を自由に偽れた。
-        # 前段に別のプロキシは無い(nginx が入口)ので、$remote_addr 1 つで正しい。
+        # Logto は TRUST_PROXY_HEADER=1 で XFF の左端を送信元として監査ログやレート判定に使う。前段に別のプロキシは無い
         proxy_set_header X-Forwarded-For $remote_addr;
 
-        # **Logto 自身の HSTS を消す**(2026-09-14)。Logto は `includeSubDomains` 付きの HSTS を送っており
-        # (本番で実測)、nginx の hsts-enable.conf と二重になったうえ、あちらで**わざと付けていない**
-        # includeSubDomains が効いてしまっていた(理由は hsts-enable.conf.example)。HSTS は nginx の 1 本だけにする。
+        # **Logto 自身の HSTS を消す**(2026-09-14)。Logto は includeSubDomains 付きの HSTS を送るが、
+        # nginx の hsts-enable.conf は**わざと付けていない**(理由は hsts-enable.conf.example)。HSTS は nginx の 1 本だけにする
         proxy_hide_header Strict-Transport-Security;
 
         proxy_set_header Upgrade $http_upgrade;
@@ -887,9 +944,9 @@ server {
         proxy_set_header X-Forwarded-Port 3002;
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header X-Real-IP $remote_addr;
-        # 3001 と同じ理由で、送信元だけに置き換える(2026-09-14。server-ops 7)
+        # auth の server と同じ理由で、送信元だけに置き換える(2026-09-14。server-ops 7)
         proxy_set_header X-Forwarded-For $remote_addr;
-        # 3001 と同じ理由で、Logto の includeSubDomains 付き HSTS を消す(2026-09-14)
+        # auth の server と同じ理由で、Logto の includeSubDomains 付き HSTS を消す(2026-09-14)
         proxy_hide_header Strict-Transport-Security;
 
         proxy_set_header Upgrade $http_upgrade;
@@ -898,53 +955,6 @@ server {
     }
 
     include /etc/nginx/km/gate-location.conf;
-}
-
-# Soketi
-#
-# **ここにもゲートを掛けない。** ブラウザが直接 WebSocket を張る先で、購読の可否は
-# 9443 側の chat-auth.php(CSRF 検証 + チャンネル許可リスト)が署名で決めている。
-server {
-    listen 6001 ssl;
-    listen [::]:6001 ssl;
-    server_name ${KM_DOMAIN};
-    # 待ち時間と同時接続(2026-09-14。server-ops 3)。WebSocket は 1 本を長く張るので、1 つの送信元に 50 本まで。
-    # keepalive_timeout は Upgrade したあとの接続には効かない(そちらは下の proxy_read_timeout)。
-    keepalive_timeout 30s;
-    limit_conn km_conn 50;
-
-    # 管理画面以外のページから張られた接続を断る(2026-09-14。map $km_ws_origin_denied の注記を参照)。
-    # **管理画面を別の名前(localhost など)で開くとチャットが「未接続」になる。** そのときは ${KM_APP_URL} で開く。
-    if ($km_ws_origin_denied) {
-        return 403;
-    }
-
-    # **配信の HTTP API(/apps/…)を外に出さない**(2026-09-15)。
-    # ブラウザが使うのは WebSocket の /app/<key> だけで、/apps/<id>/events などは PHP が
-    # コンテナの中から soketi:6001 へ直に叩く(lib/soketi.php)。署名は Soketi が見るが、
-    # **時刻の古い署名も通る**(2026-09-15 に使い捨てで実測)—— 一度漏れた署名付きの要求を
-    # 外から何度でも投げ直せる。使わない口は入口で閉じる。
-    location ^~ /apps/ {
-        return 404;
-    }
-
-    location / {
-        proxy_pass http://km_soketi;
-        proxy_http_version 1.1;
-
-        proxy_set_header Host $http_host;
-        proxy_set_header X-Forwarded-Host $http_host;
-        proxy_set_header X-Forwarded-Port 6001;
-        proxy_set_header X-Forwarded-Proto https;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $connection_upgrade;
-        proxy_read_timeout 300s;
-        proxy_send_timeout 300s;
-        proxy_buffering off;
-    }
 }
 
 # Mailpit(開発用のメール受け皿)
@@ -964,7 +974,7 @@ server {
     # 他のサイトの枠に入れさせない(security-review-2026-09-10 の 16)。
     # **frame-ancestors だけを足す** —— 中身の CSP は相手(phpMyAdmin / Mailpit)が決めるので触らない。
     # CSP は複数あると全部が効く(厳しい側になる)ので、相手の設定を緩めることはない。
-    # 3001(Logto)には付けない: Logto が自分で frame-ancestors(Console の 3002 を含む)を送っており、
+    # Logto(auth の server)には付けない: Logto が自分で frame-ancestors(Console の 3002 を含む)を送っており、
     # こちらで 'self' だけに絞ると Console のサインイン画面の下見が壊れる(2026-09-14 に実測)
     add_header Content-Security-Policy "frame-ancestors 'self'" always;
     include /etc/nginx/km/hsts-*.conf;
