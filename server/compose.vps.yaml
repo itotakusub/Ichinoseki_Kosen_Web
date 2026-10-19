@@ -17,7 +17,7 @@
 #   KM_APP_URL / APP_URL   https://${KM_DOMAIN}
 #   KM_APP_PORT            443
 #   KM_CERT / KM_CERT_KEY  /etc/letsencrypt/live/${KM_DOMAIN}/fullchain.pem・privkey.pem
-#   LOGTO_ENDPOINT         https://${KM_AUTH_DOMAIN}(.env に KM_AUTH_DOMAIN を書いたとき。2026-10-19)。書いていなければ https://${KM_DOMAIN}:3001
+#   LOGTO_ENDPOINT         https://${KM_AUTH_DOMAIN}(無ければ https://auth.${KM_DOMAIN}。2026-10-19 に :3001 から移した)
 #   KM_AUTH_DOMAIN(nginx)  auth.${KM_DOMAIN}(443 番の Logto の入口の名前。証明書と DNS が要る)
 #   LOGTO_ADMIN_ENDPOINT   https://${KM_DOMAIN}:3002
 #   PMA_ABSOLUTE_URI       https://${KM_DOMAIN}:8281/
@@ -120,9 +120,9 @@ services:
       APP_URL: ${APP_URL:-https://${KM_DOMAIN}}
       # 管理画面の URL。**KM_ADMIN_DOMAIN を .env に書いたときだけ公開側と別になる**(ファイル先頭の一覧)
       ADMIN_URL: ${ADMIN_URL:-https://${KM_ADMIN_DOMAIN:-${KM_DOMAIN}}}
-      # Logto の入口(2026-10-19)。**.env に KM_AUTH_DOMAIN を書くと 443 番の https://<その名前> に切り替わる**(学校の回線は 443 番以外を通さない)。
-      # 書いていなければ今までどおり :3001。logto の ENDPOINT と必ず同じ導き方にする(発行元 iss が食い違うとサインインが全部落ちる)
-      LOGTO_ENDPOINT: ${LOGTO_ENDPOINT:-https://${KM_AUTH_DOMAIN:-${KM_DOMAIN}:3001}}
+      # Logto の入口は 443 番の https://<KM_AUTH_DOMAIN>(2026-10-19。学校の回線は 443 番以外を通さない。:3001 の入口は外した)。
+      # logto の ENDPOINT と必ず同じ導き方にする(発行元 iss が食い違うとサインインが全部落ちる)
+      LOGTO_ENDPOINT: ${LOGTO_ENDPOINT:-https://${KM_AUTH_DOMAIN:-auth.${KM_DOMAIN}}}
       # アクセストークンの audience(compose.yaml の web の注記を参照)。
       # 導いた値はドメインを変えた瞬間に変わってしまうので、**移すときは host-domain.sh apply が
       # KM_API_RESOURCE を .env に書く**(据え置くなら旧の値、--api-resource なら新しい値。Logto の登録と揃える)。
@@ -139,8 +139,8 @@ services:
   # Console の戻り先は Logto が ADMIN_ENDPOINT から作るので、DB は書き換えなくてよい(scripts/logto-domain.php の注記)
   logto:
     environment:
-      # web の LOGTO_ENDPOINT と同じ導き方(2026-10-19。KM_AUTH_DOMAIN を書くと 443 番の auth.<ドメイン>)
-      ENDPOINT: ${LOGTO_ENDPOINT:-https://${KM_AUTH_DOMAIN:-${KM_DOMAIN}:3001}}
+      # web の LOGTO_ENDPOINT と同じ導き方(2026-10-19。443 番の auth.<ドメイン>)
+      ENDPOINT: ${LOGTO_ENDPOINT:-https://${KM_AUTH_DOMAIN:-auth.${KM_DOMAIN}}}
       ADMIN_ENDPOINT: ${LOGTO_ADMIN_ENDPOINT:-https://${KM_ADMIN_DOMAIN:-${KM_DOMAIN}}:3002}
 
   phpmyadmin:
@@ -160,19 +160,14 @@ services:
     profiles: ["mailpit"]
 
   reverse-proxy:
-    # 公開するのは4つ:
+    # 公開するのは 2 つ(と下の管理系):
     #
     #   80    ACME(証明書更新)と HTTPS への転送
-    #   443   本体
-    #   3001  Logto の古い入口。**2026-10-19 から正は auth.<ドメイン> の 443 番**(学校の回線が 443 番以外を通さないため)。
-    #         .env の KM_AUTH_DOMAIN を消せば 3001 に戻せるよう、移行の間だけ残す
-    #   6001  Soketi の古い入口。2026-10-19 から管理画面は 443 番の /ws/ で張る。移行の間だけ残す
+    #   443   本体・管理画面・**サインイン(auth.<ドメイン>)・チャットと死活監視の WebSocket(/ws/app/)**
     #
-    # **3001 と 6001 を publish しないと、ログインもチャットも死活監視も動かない。**
-    # 当初この2つが抜けていて 80/443 だけになっていた。公開ページは動くので
-    # 「ほぼ移行できた」ように見えるが、**管理画面に入れない**
-    # (PHP からも `https://ドメイン:3001/oidc/...` へ届かなくなる)。
-    # Android アプリも Logto のトークンを取れなくなる。
+    # **3001(Logto)と 6001(Soketi)は 2026-10-19 に外した。** 学校の回線は 443 番以外を通さないので、
+    # サインインも WebSocket も 443 番に寄せた(nginx の auth の server と /ws/app/)。本番で切り替えて確かめたあと、
+    # 戻すために残していた入口を閉じた。**足し戻すときは nginx の server も要る**(publish だけでは何も答えない)。
     #
     # **管理系(8281 / 3002 / 8025)も publish する。** ただし守りは nginx 側で掛ける。
     #
@@ -197,8 +192,6 @@ services:
     ports: !override
       - "80:80"
       - "443:443"
-      - "3001:3001"
-      - "6001:6001"
       - "0.0.0.0:8281:8281"
       - "0.0.0.0:3002:3002"
     # **8025(Mailpit の画面)は publish しない**(2026-09-18)。

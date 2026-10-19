@@ -167,7 +167,9 @@ services:
       # **`${…:-既定}` で書く。** 直書きだと .env で上書きできず、別のホストへ
       # 移したときに **Logto が旧ホストの URL でトークンを発行し続ける**。
       # 既定値は現行の校内 LAN そのままなので、.env に足さなければ挙動は変わらない。
-      ENDPOINT: ${LOGTO_ENDPOINT:-https://192.168.3.29:3001}
+      # **2026-10-19 から 443 番の auth.<KM_DOMAIN>**(nginx の auth の server。:3001 の入口は外した)。
+      # 名前で受けるので、IP アドレスだけの校内 LAN 単体の構成ではサインインできない(ローカル環境は compose.vps.yaml を重ねて名前で動く)
+      ENDPOINT: ${LOGTO_ENDPOINT:-https://${KM_AUTH_DOMAIN:-auth.${KM_DOMAIN:-192.168.3.29}}}
       ADMIN_ENDPOINT: ${LOGTO_ADMIN_ENDPOINT:-https://192.168.3.29:3002}
       TRUST_PROXY_HEADER: "1"
     depends_on:
@@ -383,7 +385,8 @@ services:
       # 旧ホストの値で固定していた。結果、別のホストへ移すと
       # 管理画面が「認証の設定が未完了」(503)になる —— 公開ページは動くので
       # 移行がほぼ終わったように見えてから気付くことになる(192.168.3.98 で実際に踏んだ)。
-      LOGTO_ENDPOINT: ${LOGTO_ENDPOINT:-https://192.168.3.29:3001}
+      # logto の ENDPOINT と同じ導き方(2026-10-19。443 番の auth.<KM_DOMAIN>)
+      LOGTO_ENDPOINT: ${LOGTO_ENDPOINT:-https://${KM_AUTH_DOMAIN:-auth.${KM_DOMAIN:-192.168.3.29}}}
       APP_URL: ${APP_URL:-https://192.168.3.29:9443}
       # 管理画面の URL(2026-09-15。lib/site.php の km_site_admin_parts)。**既定は APP_URL と同じ = 別オリジンにしない。**
       # reverse-proxy の KM_ADMIN_URL と同じ値にすること
@@ -618,15 +621,13 @@ services:
       KM_ADMIN_DOMAIN: ${KM_ADMIN_DOMAIN:-${KM_DOMAIN:-192.168.3.29}}
       KM_ADMIN_URL: ${KM_ADMIN_URL:-${KM_APP_URL:-https://192.168.3.29:9443}}
       # 443 番の Logto の入口の名前(2026-10-19。nginx の auth の server)。**いつも定義する**(空だと server_name が壊れる)。
-      # 校内 LAN では使わない(Logto は :3001 のまま)。VPS は compose.vps.yaml が auth.<ドメイン> を渡す
+      # web と logto の LOGTO_ENDPOINT と同じ導き方。VPS は compose.vps.yaml が auth.<ドメイン> を渡す
       KM_AUTH_DOMAIN: ${KM_AUTH_DOMAIN:-auth.${KM_DOMAIN:-192.168.3.29}}
     ports:
       - "192.168.3.29:8080:80"
       - "192.168.3.29:9443:443"
       - "192.168.3.29:8281:8281"
-      - "192.168.3.29:3001:3001"
       - "192.168.3.29:3002:3002"
-      - "192.168.3.29:6001:6001"
       - "192.168.3.29:8025:8025"
     volumes:
       # テンプレートは起動時に envsubst で /etc/nginx/conf.d/default.conf へ展開される。
@@ -714,7 +715,7 @@ services:
       # ---------------------------------------------------------------
       # 入口の上限(2026-09-14 の診断で追加。server-ops 3・server-authz 4)。
       #
-      # 6001 はインターネットに公開していて、接続に要る app key はブラウザに出る値なので守りにならない。
+      # Soketi はインターネットから届く(2026-10-19 からは 443 番の /ws/app/ 経由。それまでは 6001 番)。接続に要る app key はブラウザに出る値なので守りにならない。
       # それまで上限が 1 つも無く、接続を大量に張られるとメモリと記述子を使い切って
       # 管理画面のチャットと死活監視の配信が止まった。名前は本番の soketi 1.6.1 の dist/cli から実測したもの。
       #

@@ -21,7 +21,7 @@
 #   メール … mailserver(外へ送る)ではなく Mailpit(溜めるだけ)。certbot も起動しない
 #   名前   … コンテナの中から <KM_DOMAIN> が nginx に届くように、edge の網で別名を付ける
 #            (LAN の DNS や PC の hosts はコンテナには効かない。web は Logto を
-#             https://<KM_DOMAIN>:3001 で、証明書を検証して呼ぶ)
+#             https://auth.<KM_DOMAIN> で、証明書を検証して呼ぶ。2026-10-19 までは :3001)
 #   信頼   … web と Logto に自作 CA を信頼させる
 #
 # ## 書き方の決まり
@@ -52,6 +52,8 @@ services:
         aliases:
           - ${KM_DOMAIN:?KM_DOMAIN を .env に書くこと(host-local.sh init)}
           - ${KM_ADMIN_DOMAIN:-${KM_DOMAIN}}
+          # サインインの入口(2026-10-19。443 番の auth.<ドメイン>)。web が Logto をこの名前で呼ぶ
+          - ${KM_AUTH_DOMAIN:-auth.${KM_DOMAIN}}
 
   # **Let's Encrypt も外へのメール送信もしない。** profile の内側に入れて起動させない
   # (`docker compose --profile public up -d` と明示したときだけ起動する)

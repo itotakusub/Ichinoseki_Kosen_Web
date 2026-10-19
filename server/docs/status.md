@@ -368,7 +368,9 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
   - 管理アプリ **v10(1000010)**: 入口の既定を `https://auth.<ドメイン>` に。試験 812 件 × 2、署名は v9 と同じ。受け箱へ送った(**公開は 10-4 の切り替えのあと**。前に公開するとサインインできない)
   - 3001・6001 の入口は戻せるよう移行の間だけ残す(docs/14 §10-7)
   - 手順は [14](14-domain-ito4.ipynb) §10(DNS → 配備 `-Action up -Backup` → 証明書 → `.env` の切り替え → 確かめる)。check.php 1924 件。**nginx の設定は手元で読み込ませて確かめていない**(docker が無い)
-  - **2026-10-19 に利用者が本番で切り替え、正常に移行できた。** 残りは 3001・6001 の撤去(docs/14 §10-7)
+  - **2026-10-19 に利用者が本番で切り替え、正常に移行できた。**
+  - **同日、3001・6001 の入口を外した**(利用者の指示): nginx の server 2 つ・compose.vps.yaml と compose.yaml の publish。Logto の入口の既定は `https://auth.<KM_DOMAIN>`(.env に KM_AUTH_DOMAIN が無くても :3001 に戻らない)。
+    ローカル環境は compose.local.yaml の別名と host-local.sh の証明書に auth.<ドメイン> を足した。check.php は「3001 と 6001 を待ち受けない・publish しない」を見張る(1926 件)。**配備は -Action up**。戻し方は docs/14 §10-6
 - **phpMyAdmin の環境保管領域(2026-10-19、利用者の指示)**: 「環境保管領域が完全に設定されていません」を消す。
   DB `phpmyadmin`(像の `sql/create_tables.sql` の 19 表)と制御用の利用者 `pma`(`phpmyadmin.*` の読み書きだけ・`REQUIRE SSL`)。
   `docker/phpmyadmin/config.user.inc.php` は `.env` の `KM_PMA_CONTROLPASS` があるときだけ `controluser`・`pmadb`・表の名前を入れる(無ければ今までどおり)。

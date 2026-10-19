@@ -1,7 +1,7 @@
 /*
  * Logto のサインイン画面の確認コード欄に autocomplete="one-time-code" を付ける(2026-10-12、利用者の希望)。
  *
- * nginx(default.conf.template の 3001)が Logto の HTML の </head> の前に差し込む。Logto の中身には手を入れない。
+ * nginx(default.conf.template の auth の server。2026-10-19 までは 3001)が Logto の HTML の </head> の前に差し込む。Logto の中身には手を入れない。
  *
  * - Logto 1.44.0 のコードの 6 つの枠は autocomplete="off" で、ブラウザや OS に「確認コードの欄」と伝わらず、
  *   メールのコードの自動入力の候補が出ない(packages/experience/src/shared/components/VerificationCode)。

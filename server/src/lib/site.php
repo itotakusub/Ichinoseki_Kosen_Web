@@ -21,7 +21,9 @@ declare(strict_types=1);
 const KM_SITE_DEFAULT_URL = 'https://192.168.3.29:9443';
 
 /**
- * サービスごとの公開ポート。**画面の表示と死活監視で同じ表を使う**ため、ここに置く。
+ * サービスごとのポート。**画面の表示と死活監視で同じ表を使う**ため、ここに置く。
+ * logto-core(3001)と soketi(6001)はコンテナの中の番号で、外には出していない(2026-10-19 から 443 番の auth.<ドメイン> と /ws/app/。
+ * ブラウザから見た番号は km_site_port が返す)。
  * 変えるときは compose.yaml の ports と nginx の listen も揃えること。
  */
 const KM_SITE_PORTS = [
@@ -258,10 +260,10 @@ function km_site_port(string $service): ?int
  *
  * 学校の回線は 443 番以外を通さない(利用者が確かめた。解除は難しい)。以前の入口は `https://<ドメイン>:3001` で、
  * **学内からは誰もサインインできなかった**(展示の PC のテスト用アカウント・教職員・学内 Wi-Fi の管理アプリ)。
- * そこで `auth.<ドメイン>` の 443 番に Logto を置いた(nginx の auth の server)。切り替えは .env の KM_AUTH_DOMAIN で、
- * 書いていなければ今までどおり :3001(compose.vps.yaml の LOGTO_ENDPOINT の導き方)。
+ * そこで `auth.<ドメイン>` の 443 番に Logto を置いた(nginx の auth の server。compose が LOGTO_ENDPOINT を渡す)。
+ * 本番で切り替えて確かめたあと、:3001 の入口は外した(2026-10-19)。
  *
- * env が無いとき(コンテナの外の CLI など)だけ、昔の形(本体のホスト + 3001)へ落とす。
+ * env が無いとき(コンテナの外の CLI など)は `https://auth.<本体のホスト>` へ落とす(compose の既定と同じ形)。
  */
 function km_site_logto_endpoint(): string
 {
@@ -271,7 +273,7 @@ function km_site_logto_endpoint(): string
     }
     $parts = km_site_parts();
 
-    return $parts['scheme'] . '://' . $parts['host'] . ':' . KM_SITE_PORTS['logto-core'];
+    return $parts['scheme'] . '://auth.' . $parts['host'];
 }
 
 /**
