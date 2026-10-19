@@ -2544,7 +2544,8 @@ body.km-map-unavailable .km-route-bar {
     box-shadow: 0 10px 30px rgba(15, 23, 42, 0.3);
 }
 .km-tour-count { margin: 0 0 4px; font-size: 0.75rem; font-weight: 700; color: #92400E; }
-.km-tour-text { margin: 0 0 12px; font-size: 1rem; font-weight: 700; line-height: 1.55; }
+.km-tour-text { margin: 0 0 12px; font-size: 1rem; font-weight: 700; line-height: 1.55; overflow-y: auto; }
+/* 見える範囲がとても狭い(スマホでキーボードが出た)ときは、本文だけ巻物になる(max-height は tutorial.js が入れる) */
 .km-tour-actions { display: flex; justify-content: flex-end; gap: 8px; }
 /* 吹き出しの矢印(押す所を指す)。位置は JS が入れる */
 .km-tour-arrow {

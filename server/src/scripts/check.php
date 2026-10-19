@@ -7074,6 +7074,14 @@ function km_check_layout(): void
 
     km_check_heading('tutorial: 初回の操作案内(2026-10-15)');
     $tutorialJs = (string) file_get_contents(__DIR__ . '/../Main/tutorial.js');
+    // スマホ(2026-10-19、利用者の指摘「スマホでチュートリアルの表示がうまくいっていない」):
+    // 閉じた検索の欄の中の欄(カテゴリー検索)に吹き出しを置き、画面の外へ出て見えなかった。キーボードの裏にも隠れた
+    check_bool('tutorial: 見える範囲の外にある所は「見えない」とみなす(visual viewport で測る)', str_contains($tutorialJs, 'const vv = window.visualViewport;')
+        && str_contains($tutorialJs, 'return r.bottom > box.top + 4 && r.top < box.top + box.height - 4'));
+    check_bool('tutorial: 検索の欄の中の所が見えなければ「検索」を指して開いてもらう', str_contains($tutorialJs, "el.closest('#search-panel') && toggle && visible(toggle)"));
+    check_bool('tutorial: 吹き出しは必ず見える範囲に収める・キーボードの出し入れで置き直す', str_contains($tutorialJs, 'top = clampTop(top, ch);')
+        && str_contains($tutorialJs, "window.visualViewport.addEventListener('resize', place);") && str_contains($tutorialJs, "window.visualViewport.removeEventListener('resize', place);"));
+    check_bool('tutorial: スマホで検索の欄の中を指すときは上に置く(次の欄とキーボードを覆わない)', str_contains($tutorialJs, "const preferAbove = narrowScreen() && el.closest && el.closest('#search-panel') !== null;"));
     check_bool('tutorial.js を welcome.js のあとに読む', ($tw = strpos($index, "Main/welcome.js')")) !== false && $tw < (int) strpos($index, "Main/tutorial.js')"));
     check_bool('「はじめに」を閉じてから始める', str_contains($welcomeJs, "new CustomEvent('km-welcome-closed')") && str_contains($tutorialJs, "'km-welcome-closed'"));
     check_bool('地図が出てから始める', str_contains($appJs, "new CustomEvent('km-map-ready')") && str_contains($tutorialJs, "'km-map-ready'"));

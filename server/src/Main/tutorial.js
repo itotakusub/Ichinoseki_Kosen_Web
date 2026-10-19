@@ -22,12 +22,53 @@
 
     function byId(id) { return document.getElementById(id); }
 
+    /*
+     * **いま見えている範囲**(2026-10-19、利用者の指摘「スマホでチュートリアルの表示がうまくいっていない」)。
+     * スマホで欄を押すとキーボードが出て、見える範囲(visual viewport)が半分ほどになる。
+     * window.innerHeight はキーボードを差し引かないので、それで置くと吹き出しがキーボードの裏に隠れた。
+     * 位置(getBoundingClientRect・position: fixed)はどちらもレイアウトの座標なので、見える範囲もその座標で返す。
+     */
+    function viewportBox() {
+        const vv = window.visualViewport;
+        if (vv) {
+            return { top: vv.offsetTop, left: vv.offsetLeft, width: vv.width, height: vv.height };
+        }
+        return { top: 0, left: 0, width: window.innerWidth, height: window.innerHeight };
+    }
+
+    /**
+     * 押す所が見えているか。**見える範囲の外にあるものは見えていないとみなす**(2026-10-19)。
+     * スマホでは検索の欄が閉じると、中の欄(カテゴリー検索など)は画面の下の外へ滑っていく。
+     * 以前は大きさだけを見ていたので、外にある欄に枠と吹き出しを置き、**暗い幕だけが残って吹き出しが見えなかった。**
+     */
     function visible(el) {
         if (!el) return false;
         const r = el.getBoundingClientRect();
         if (r.width === 0 || r.height === 0) return false;
         const style = window.getComputedStyle(el);
-        return style.visibility !== 'hidden' && style.display !== 'none' && Number(style.opacity) > 0.05;
+        if (style.visibility === 'hidden' || style.display === 'none' || Number(style.opacity) <= 0.05) return false;
+        const box = viewportBox();
+        return r.bottom > box.top + 4 && r.top < box.top + box.height - 4
+            && r.right > box.left + 4 && r.left < box.left + box.width - 4;
+    }
+
+    function narrowScreen() {
+        return window.innerWidth <= 768;
+    }
+
+    /*
+     * 押す所が見えないときの代わり。**検索の欄の中にある所**(出発地・目的地・案内開始・カテゴリー検索)は、
+     * スマホでは欄が閉じていると見えないので、「検索」のボタンを指して開いてもらう。開けば毎フレームの見直しで元の手順に戻る。
+     */
+    const OPEN_SEARCH_TEXT = '「検索」を押して、道順を調べる欄を開いてください。';
+    function resolveTarget(step) {
+        const el = step.target ? step.target() : null;
+        if (el && visible(el)) return { el: el, text: step.text };
+        const toggle = byId('mobile-search-toggle');
+        if (el && el.closest && el.closest('#search-panel') && toggle && visible(toggle)) {
+            return { el: toggle, text: step.fallbackText || OPEN_SEARCH_TEXT };
+        }
+        return { el: null, text: step.text };
     }
 
     function searchCollapsed() {
@@ -68,6 +109,8 @@
         {
             target: function () { return byId('category-select'); },
             text: 'トイレや階段は「カテゴリー検索」でまとめて探せます。',
+            // スマホで検索の欄が閉じているとき(案内開始のあとは閉じる)
+            fallbackText: 'トイレや階段は、「検索」を開いた中の「カテゴリー検索」でまとめて探せます。',
         },
         {
             target: null,
@@ -150,6 +193,11 @@
         follow();
         window.addEventListener('resize', place);
         window.addEventListener('scroll', place, true);
+        // キーボードの出し入れで見える範囲が変わる(window の resize は来ないことがある)
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', place);
+            window.visualViewport.addEventListener('scroll', place);
+        }
         document.addEventListener('keydown', onKey);
     }
 
@@ -162,10 +210,13 @@
     function follow() {
         if (!layer) return;
         const step = order[current];
-        const el = step && step.target ? step.target() : null;
-        if (el) {
-            const r = el.getBoundingClientRect();
-            const key = [r.left, r.top, r.width, r.height, window.innerWidth, window.innerHeight].map(Math.round).join(',');
+        if (step) {
+            // 押す所(と、見えないときの代わり)の位置と、見える範囲(キーボードで縮む)を見る
+            const resolved = resolveTarget(step);
+            const r = resolved.el ? resolved.el.getBoundingClientRect() : { left: 0, top: 0, width: 0, height: 0 };
+            const box = viewportBox();
+            const key = [r.left, r.top, r.width, r.height, box.top, box.left, box.width, box.height].map(Math.round).join(',')
+                + '|' + resolved.text;
             if (key !== lastRect) {
                 lastRect = key;
                 place();
@@ -178,23 +229,36 @@
         if (event.key === 'Escape') finish();
     }
 
-    /** 押す所の周りに枠を置き、吹き出しを上か下(入らなければ真ん中)に置く */
+    /**
+     * 押す所の周りに枠を置き、吹き出しを上か下(入らなければ横、それも駄目なら真ん中)に置く。
+     * **吹き出しは必ず見えている範囲に収める**(2026-10-19)。見える範囲はキーボードで縮む(viewportBox)。
+     */
     function place() {
         if (!layer || current < 0) return;
         const step = order[current];
-        const el = step.target ? step.target() : null;
+        const resolved = resolveTarget(step);
+        const el = resolved.el;
+        const textEl = card.querySelector('.km-tour-text');
+        if (textEl.textContent !== resolved.text) textEl.textContent = resolved.text;
         const arrow = card.querySelector('.km-tour-arrow');
-        const vw = window.innerWidth;
-        const vh = window.innerHeight;
-        const cw = Math.min(320, vw - 24);
+        const box = viewportBox();
+        const minTop = box.top + 8;
+        const maxBottom = box.top + box.height - 8;
+        const cw = Math.min(320, box.width - 24);
         card.style.width = cw + 'px';
+        // キーボードで見える範囲がとても狭いときは、本文を巻物にする(はみ出して隠れないように)。
+        // 吹き出し全体を巻物にすると、外にはみ出して描いている矢印が切れるので、本文だけ
+        textEl.style.maxHeight = Math.max(48, Math.round(box.height - 120)) + 'px';
+        const clampTop = function (value, height) {
+            return Math.max(minTop, Math.min(value, maxBottom - height));
+        };
 
-        if (!el || !visible(el)) {
-            // 押す所が無い手順: 画面全体を少し暗くして、真ん中に吹き出しだけ
+        if (!el) {
+            // 押す所が無い手順: 画面全体を少し暗くして、見えている範囲の真ん中に吹き出しだけ
             spot.classList.add('is-none');
-            card.classList.remove('is-below', 'is-above');
-            card.style.left = Math.round((vw - cw) / 2) + 'px';
-            card.style.top = Math.round(vh / 2 - card.offsetHeight / 2) + 'px';
+            card.classList.remove('is-below', 'is-above', 'is-left');
+            card.style.left = Math.round(box.left + (box.width - cw) / 2) + 'px';
+            card.style.top = Math.round(clampTop(box.top + box.height / 2 - card.offsetHeight / 2, card.offsetHeight)) + 'px';
             arrow.hidden = true;
             return;
         }
@@ -208,26 +272,33 @@
 
         const ch = card.offsetHeight;
         const gap = 16;
-        const below = r.bottom + PAD + gap + ch <= vh - 8;
-        const above = r.top - PAD - gap - ch >= 8;
-        let top;
-        let left = Math.min(Math.max(12, r.left + r.width / 2 - cw / 2), vw - cw - 12);
-        card.classList.toggle('is-below', below || !above);
-        card.classList.toggle('is-above', !below && above);
-        if (below || !above) {
-            top = Math.min(r.bottom + PAD + gap, vh - ch - 8);
+        const fitsBelow = r.bottom + PAD + gap + ch <= maxBottom;
+        const fitsAbove = r.top - PAD - gap - ch >= minTop;
+        /*
+         * **スマホで検索の欄の中を指すときは上に置く**(2026-10-19)。下に置くと、次に押す欄(目的地・案内開始)を覆い、
+         * 欄を押して出るキーボードの裏にも隠れた。上は欄の見出しと地図なので、覆っても困らない。
+         */
+        const preferAbove = narrowScreen() && el.closest && el.closest('#search-panel') !== null;
+        let placeAbove;
+        if (preferAbove) {
+            placeAbove = fitsAbove || !fitsBelow;
         } else {
-            top = r.top - PAD - gap - ch;
+            placeAbove = !fitsBelow && fitsAbove;
         }
-        // 横に余裕が無い(右端の階の列など)ときは、左に置く
-        if (!below && !above && r.left > cw + 40) {
+        let left = Math.min(Math.max(box.left + 12, r.left + r.width / 2 - cw / 2), box.left + box.width - cw - 12);
+        let top = placeAbove ? r.top - PAD - gap - ch : r.bottom + PAD + gap;
+        card.classList.toggle('is-below', !placeAbove);
+        card.classList.toggle('is-above', placeAbove);
+        // 上にも下にも入らず、横に余裕がある(右端の階の列など)ときは、左に置く
+        if (!fitsBelow && !fitsAbove && r.left - box.left > cw + 40) {
             left = r.left - PAD - gap - cw;
-            top = Math.min(Math.max(8, r.top + r.height / 2 - ch / 2), vh - ch - 8);
+            top = r.top + r.height / 2 - ch / 2;
             card.classList.remove('is-below', 'is-above');
             card.classList.add('is-left');
         } else {
             card.classList.remove('is-left');
         }
+        top = clampTop(top, ch);
         card.style.left = Math.round(left) + 'px';
         card.style.top = Math.round(top) + 'px';
         arrow.hidden = false;
@@ -272,6 +343,10 @@
         if (layer) {
             window.removeEventListener('resize', place);
             window.removeEventListener('scroll', place, true);
+            if (window.visualViewport) {
+                window.visualViewport.removeEventListener('resize', place);
+                window.visualViewport.removeEventListener('scroll', place);
+            }
             document.removeEventListener('keydown', onKey);
             layer.remove();
         }
