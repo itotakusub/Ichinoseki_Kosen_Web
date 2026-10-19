@@ -240,6 +240,75 @@ function km_event_collect_enabled(PDO $pdo): bool
     return km_setting_get($pdo, KM_EVENT_COLLECT_SETTING, '1') === '1';
 }
 
+// ---- ログアウトの合言葉(2026-10-19、利用者の指示「テストユーザーのときは簡単にログアウトできないように」) ----
+/*
+ * 展示の PC では来場者が代わる代わる触る。ログアウトを押されると「テスト中」が外れて記録も止まり、
+ * 係の人がサインインし直すまで普通の地図に戻ってしまう。
+ *
+ * - テスト用アカウントは、**係の人の合言葉を入れたときだけ**ログアウトできる(sign-out.php が見る。ボタンを隠すだけにしない)
+ * - 合言葉は管理画面「テスト用アカウント」で決める。**ハッシュだけを置く**(km_settings。password_hash)
+ * - 決めていなければログアウトできない(管理画面で決めるか、テスト用の印を外す)
+ * - 外したら数え、5 回続けて外すと 10 分受け付けない(セッションで数える。Cookie を消せば数え直せるが、
+ *   そのときはサインインも消える —— どちらにしても「ボタン 1 つで出る」ことは無い)
+ * - アカウントの画面(account.php。表示名の変更・退会)も、テスト用アカウントでは開けない
+ */
+const KM_TEST_SIGNOUT_PIN_SETTING = 'test_mode_signout_pin_hash';
+const KM_TEST_SIGNOUT_FAIL_KEY = 'km_test_signout_fail';
+const KM_TEST_SIGNOUT_MAX_FAILS = 5;
+const KM_TEST_SIGNOUT_LOCK_SECONDS = 600;
+
+/** 合言葉の形: 英数字 4〜32 字(空白・記号を入れない。展示の PC で打ちやすいように) */
+function km_test_signout_pin_valid(string $pin): bool
+{
+    return preg_match('/^[0-9A-Za-z]{4,32}$/', $pin) === 1;
+}
+
+function km_test_signout_pin_hash(PDO $pdo): string
+{
+    return km_setting_get($pdo, KM_TEST_SIGNOUT_PIN_SETTING, '');
+}
+
+/** 空なら消す(= テスト用アカウントはログアウトできない)。形が違えば例外 */
+function km_test_signout_pin_set(PDO $pdo, string $pin): void
+{
+    if ($pin === '') {
+        km_setting_set($pdo, KM_TEST_SIGNOUT_PIN_SETTING, '');
+
+        return;
+    }
+    if (!km_test_signout_pin_valid($pin)) {
+        throw new InvalidArgumentException('合言葉は英数字 4〜32 字にしてください。');
+    }
+    km_setting_set($pdo, KM_TEST_SIGNOUT_PIN_SETTING, password_hash($pin, PASSWORD_DEFAULT));
+}
+
+/**
+ * 合言葉を確かめる(DB を使わない。check.php が試す)。
+ *
+ * @param array{count?:int, until?:int} $fail セッションの数え(外した回数と、受け付けない期限)
+ * @return array{result:'ok'|'wrong'|'locked'|'unset', fail:array{count:int, until:int}}
+ */
+function km_test_signout_decide(string $hash, array $fail, string $pin, int $now): array
+{
+    $count = (int) ($fail['count'] ?? 0);
+    $until = (int) ($fail['until'] ?? 0);
+    if ($hash === '') {
+        return ['result' => 'unset', 'fail' => ['count' => $count, 'until' => $until]];
+    }
+    if ($until > $now) {
+        return ['result' => 'locked', 'fail' => ['count' => $count, 'until' => $until]];
+    }
+    if ($pin !== '' && strlen($pin) <= 64 && password_verify($pin, $hash)) {
+        return ['result' => 'ok', 'fail' => ['count' => 0, 'until' => 0]];
+    }
+    $count++;
+    if ($count >= KM_TEST_SIGNOUT_MAX_FAILS) {
+        return ['result' => 'locked', 'fail' => ['count' => 0, 'until' => $now + KM_TEST_SIGNOUT_LOCK_SECONDS]];
+    }
+
+    return ['result' => 'wrong', 'fail' => ['count' => $count, 'until' => 0]];
+}
+
 /** イベント中の来場者の記録のアカウント欄。**純粋関数**(誰かは書かない。どのイベントかだけ) */
 function km_event_collect_subject(array $eventIds): string
 {

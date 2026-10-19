@@ -90,6 +90,24 @@ if ($signedIn) {
     }
 }
 
+/*
+ * **テスト用アカウント(展示の PC)では、このページを使わせない**(2026-10-19、利用者の指示)。
+ * 来場者が代わる代わる触るので、表示名の変更・パスワードの変更・**退会**・サインアウトを押せないようにする
+ * (サインアウトは sign-out.php が係の人の合言葉で止める。lib/test-mode.php)。
+ * 確かめられないときは印が無いとみなす(km_test_account_is_marked)。
+ */
+if ($signedIn) {
+    require_once __DIR__ . '/lib/test-mode.php';
+    try {
+        if (km_test_account_is_marked(km_db(), (string) ($claims->sub ?? ''))) {
+            $blockedReason = 'test';
+            $signedIn = false;
+        }
+    } catch (Throwable $exception) {
+        error_log('account.php: テスト用アカウントか確かめられません: ' . $exception->getMessage());
+    }
+}
+
 $errors = [];
 $notice = null;
 $account = null;
@@ -458,8 +476,14 @@ if ($signedIn) {
             <div class="km-account-alert warn" role="alert">
                 アカウントの状態を確認できませんでした。時間をおいてもう一度お試しください。
             </div>
+        <?php elseif ($blockedReason === 'test'): ?>
+            <div class="km-account-alert warn" role="alert">
+                これは展示用のアカウントです。アカウントの設定は使えません。地図へ戻ってお使いください。
+            </div>
         <?php endif; ?>
-        <?php if (!$signedIn): ?>
+        <?php if ($blockedReason === 'test'): ?>
+            <?php // 展示用: サインインの案内も出さない(上の注意だけ) ?>
+        <?php elseif (!$signedIn): ?>
             <section class="km-doc-section">
                 <h2>サインインが必要です</h2>
                 <p>このページでは、ご自身の利用者名・表示名・パスワードを変更できます。</p>

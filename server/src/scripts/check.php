@@ -7094,8 +7094,30 @@ function km_check_layout(): void
     check_bool('保存で設定ファイルに書く', str_contains($accessLib, "\"    'eventOpensMap' => \" . var_export(\$resolvedEventOpensMap, true)"));
     check_bool('管理画面にチェックがある', str_contains((string) file_get_contents(__DIR__ . '/../admin/map-settings.php'), 'name="event_opens_map"'));
 
-    km_check_heading('test-mode: テスト用アカウント(展示の PC。2026-10-15)');
+    km_check_heading('test-mode: テスト用アカウントは係の人の合言葉でだけログアウトできる(2026-10-19)');
     require_once __DIR__ . '/../lib/test-mode.php';
+    $pinHash = password_hash('Kakari2026', PASSWORD_DEFAULT);
+    $t0 = 1_760_000_000;
+    check('合言葉が決まっていなければ出さない', 'unset', km_test_signout_decide('', [], 'Kakari2026', $t0)['result']);
+    check('合言葉が合えば出す・数えを戻す', ['result' => 'ok', 'fail' => ['count' => 0, 'until' => 0]], km_test_signout_decide($pinHash, ['count' => 3], 'Kakari2026', $t0));
+    check('違えば数える', ['result' => 'wrong', 'fail' => ['count' => 1, 'until' => 0]], km_test_signout_decide($pinHash, [], 'kakari2026', $t0));
+    check('空は違う', 'wrong', km_test_signout_decide($pinHash, [], '', $t0)['result']);
+    $fifth = km_test_signout_decide($pinHash, ['count' => 4], 'x', $t0);
+    check('5 回続けて違えば 10 分受け付けない', ['result' => 'locked', 'fail' => ['count' => 0, 'until' => $t0 + 600]], $fifth);
+    check('受け付けない間は正しい合言葉でも出さない', 'locked', km_test_signout_decide($pinHash, $fifth['fail'], 'Kakari2026', $t0 + 599)['result']);
+    check('10 分たてば受け付ける', 'ok', km_test_signout_decide($pinHash, $fifth['fail'], 'Kakari2026', $t0 + 600)['result']);
+    check('合言葉の形は英数字 4〜32 字', [true, false, false, false, true], [km_test_signout_pin_valid('1234'), km_test_signout_pin_valid('123'), km_test_signout_pin_valid('ab cd'), km_test_signout_pin_valid('あいうえ'), km_test_signout_pin_valid(str_repeat('a', 32))]);
+    $signOutCode = (string) file_get_contents(__DIR__ . '/../sign-out.php');
+    check_bool('sign-out.php は Logto から出す前に合言葉を確かめる(ボタンを隠すだけにしない)',
+        strpos($signOutCode, 'km_test_signout_decide(') !== false && strpos($signOutCode, 'km_test_signout_decide(') < strpos($signOutCode, '$client->signOut('));
+    check_bool('合言葉はハッシュだけを置く', str_contains((string) file_get_contents(__DIR__ . '/../lib/test-mode.php'), 'km_setting_set($pdo, KM_TEST_SIGNOUT_PIN_SETTING, password_hash($pin, PASSWORD_DEFAULT));'));
+    $homeCode = (string) file_get_contents(__DIR__ . '/../index.php');
+    check_bool('展示の PC の地図の画面には、押せばすぐ出るログアウトを出さない', preg_match('/<\?php if \(\$kmTestMode !== null\): \?>.*?<details class="km-test-signout">.*?name="signout_pin".*?<\?php else: \?>.*?logout-btn/s', $homeCode) === 1);
+    $accountCode = (string) file_get_contents(__DIR__ . '/../account.php');
+    check_bool('テスト用アカウントではアカウントの画面を使わせない(表示名・退会・サインアウト)', str_contains($accountCode, "\$blockedReason = 'test';\n            \$signedIn = false;")
+        && strpos($accountCode, "\$blockedReason = 'test';") < strpos($accountCode, "if ((\$_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && !km_csrf_verify()) {"));
+
+    km_check_heading('test-mode: テスト用アカウント(展示の PC。2026-10-15)');
     $testLib = (string) file_get_contents(__DIR__ . '/../lib/test-mode.php');
     $testApi = (string) file_get_contents(__DIR__ . '/../api/test-events.php');
     $testJs = (string) file_get_contents(__DIR__ . '/../Main/test-mode.js');

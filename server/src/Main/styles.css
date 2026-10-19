@@ -712,6 +712,61 @@ body {
     white-space: nowrap;
 }
 
+/*
+ * 展示の PC の「係の人」のログアウト(2026-10-19)。来場者に押させないため、目立たない小さな札にして、
+ * 開くと合言葉の欄が出る。止めるのは sign-out.php(合言葉が合わなければ出さない)。
+ */
+.km-test-signout {
+    position: relative;
+}
+.km-test-signout > summary {
+    list-style: none;
+    cursor: pointer;
+    font-size: var(--text-label);
+    color: var(--secondary);
+    opacity: 0.6;
+    padding: 0.2rem 0.55rem;
+    border: 1px dashed var(--border-strong);
+    border-radius: 999px;
+    user-select: none;
+}
+.km-test-signout > summary::-webkit-details-marker {
+    display: none;
+}
+.km-test-signout[open] > summary {
+    opacity: 1;
+}
+.km-test-signout > form {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 1300;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.6rem;
+    color: var(--text);
+    background: var(--glass-heavy);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-lg);
+    white-space: nowrap;
+}
+.km-test-signout label {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: var(--text-label);
+}
+.km-test-signout input {
+    width: 8rem;
+    font: inherit;
+    padding: 0.3rem 0.5rem;
+    color: var(--text);
+    background: var(--glass-heavy);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-xs);
+}
 /* 「ダウンロード・設定」へ移したときの並び(スマホ)。panel.js が入れ替える */
 #km-auth-slot .action-group-left {
     flex-wrap: wrap;

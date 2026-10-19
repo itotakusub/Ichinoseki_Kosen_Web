@@ -398,11 +398,29 @@ if ($kmEvent !== null && $kmTestMode === null) {
                                 <?php // サインインの期限が切れ、取り直せなかった教職員(W-50)。黙って氏名を消さず、理由を出す ?>
                                 <span class="user-chip" role="status">教職員の表示を出すには、サインインし直してください</span>
                             <?php endif; ?>
-                            <?php // POST + CSRF でだけ出られる。GET だと他サイトのリンクで追い出せた ?>
-                            <form method="post" action="/sign-out.php" class="km-signout-form">
-                                <?= km_csrf_field() ?>
-                                <button type="submit" class="secondary-btn logout-btn">ログアウト</button>
-                            </form>
+                            <?php if ($kmTestMode !== null): ?>
+                                <?php
+                                // **展示の PC では来場者に押させない**(2026-10-19)。閉じた欄の中に、係の人の合言葉の欄を置く。
+                                // 止めるのは sign-out.php(合言葉が合わなければ出さない)。ここは押し間違いを防ぐだけ
+                                ?>
+                                <details class="km-test-signout">
+                                    <summary>係の人</summary>
+                                    <form method="post" action="/sign-out.php">
+                                        <?= km_csrf_field() ?>
+                                        <label>
+                                            <span>合言葉</span>
+                                            <input type="password" name="signout_pin" maxlength="32" autocomplete="off" required>
+                                        </label>
+                                        <button type="submit" class="secondary-btn">ログアウト</button>
+                                    </form>
+                                </details>
+                            <?php else: ?>
+                                <?php // POST + CSRF でだけ出られる。GET だと他サイトのリンクで追い出せた ?>
+                                <form method="post" action="/sign-out.php" class="km-signout-form">
+                                    <?= km_csrf_field() ?>
+                                    <button type="submit" class="secondary-btn logout-btn">ログアウト</button>
+                                </form>
+                            <?php endif; ?>
                         <?php else: ?>
                             <?php
                             // **管理画面のオリジン(admin.ito4.jp)でサインインさせる**(2026-09-17)。公開側でサインインしてから

@@ -371,6 +371,10 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
   - **2026-10-19 に利用者が本番で切り替え、正常に移行できた。**
   - **同日、3001・6001 の入口を外した**(利用者の指示): nginx の server 2 つ・compose.vps.yaml と compose.yaml の publish。Logto の入口の既定は `https://auth.<KM_DOMAIN>`(.env に KM_AUTH_DOMAIN が無くても :3001 に戻らない)。
     ローカル環境は compose.local.yaml の別名と host-local.sh の証明書に auth.<ドメイン> を足した。check.php は「3001 と 6001 を待ち受けない・publish しない」を見張る(1926 件)。**配備は -Action up**。戻し方は docs/14 §10-6
+- **テスト用アカウントは係の人の合言葉でだけログアウトできる(2026-10-19、利用者の指示「テストユーザーのときは簡単にログアウトできないように」)**:
+  `sign-out.php` がテスト用アカウントなら合言葉を確かめる(Logto から出す前。ボタンを隠すだけにしない)。5 回続けて外すと 10 分受け付けない。合言葉が決まっていなければ出さない。
+  合言葉は管理画面「テスト用アカウント」で決める(`km_settings` にハッシュだけ)。地図の画面は、押せばすぐ出るボタンの代わりに閉じた「係の人」の欄(合言葉と ログアウト)。
+  アカウントの画面(表示名・パスワード・退会・サインアウト)はテスト用アカウントでは使えない。確かめられないとき(DB の不調)は普段どおり出す。check.php 1939 件。見た目は手元の見本で確かめた(ライト・ダーク)
 - **phpMyAdmin の環境保管領域(2026-10-19、利用者の指示)**: 「環境保管領域が完全に設定されていません」を消す。
   DB `phpmyadmin`(像の `sql/create_tables.sql` の 19 表)と制御用の利用者 `pma`(`phpmyadmin.*` の読み書きだけ・`REQUIRE SSL`)。
   `docker/phpmyadmin/config.user.inc.php` は `.env` の `KM_PMA_CONTROLPASS` があるときだけ `controluser`・`pmadb`・表の名前を入れる(無ければ今までどおり)。

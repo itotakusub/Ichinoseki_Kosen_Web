@@ -84,6 +84,19 @@ try {
                 exit;
             }
         }
+        // ログアウトの合言葉(2026-10-19)。**ハッシュだけを置く**。空にして保存すると消える(テスト用アカウントはログアウトできなくなる)
+        if ($formAction === 'signout_pin') {
+            $pin = (string) ($_POST['signout_pin'] ?? '');
+            $clear = isset($_POST['signout_pin_clear']);
+            if (!$clear && !km_test_signout_pin_valid($pin)) {
+                $errors[] = 'ログアウトの合言葉は英数字 4〜32 字にしてください。';
+            } else {
+                km_test_signout_pin_set($pdo, $clear ? '' : $pin);
+                km_admin_log_record('settings', 'test.settings', $clear ? 'ログアウトの合言葉を消した' : 'ログアウトの合言葉を変えた');
+                header('Location: ./test-mode.php?pin=' . ($clear ? 'cleared' : 'set'), true, 303);
+                exit;
+            }
+        }
         if ($formAction === 'guide_default') {
             km_test_guide_set($pdo, KM_TEST_GUIDE_DEFAULT);
             km_admin_log_record('settings', 'test.settings', '操作方法を既定に戻した');
@@ -104,6 +117,10 @@ try {
         $notice = 'テスト用の印を付けました。そのアカウントで公開ページを開き直すと「テスト中」になります。';
     } elseif (isset($_GET['unmarked'])) {
         $notice = 'テスト用の印を外しました。';
+    } elseif (($_GET['pin'] ?? '') === 'set') {
+        $notice = 'ログアウトの合言葉を決めました。展示の PC では、係の人がこの合言葉でログアウトします。';
+    } elseif (($_GET['pin'] ?? '') === 'cleared') {
+        $notice = 'ログアウトの合言葉を消しました。テスト用アカウントは、印を外すまでログアウトできません。';
     } elseif (isset($_GET['deleted'])) {
         $notice = '記録を ' . (int) $_GET['deleted'] . ' 件消しました。';
     }
@@ -113,6 +130,7 @@ try {
     $guideText = km_test_guide_text($pdo);
     $idleMinutes = km_test_idle_minutes($pdo);
     $eventCollect = km_event_collect_enabled($pdo);
+    $signoutPinSet = km_test_signout_pin_hash($pdo) !== '';
     $summary = km_test_events_summary($pdo, $source);
     $recent = km_test_events_recent($pdo, 100, $source);
     $nodeNames = km_test_node_names($pdo, array_merge(
@@ -130,6 +148,7 @@ try {
     $guideText = KM_TEST_GUIDE_DEFAULT;
     $idleMinutes = KM_TEST_IDLE_DEFAULT;
     $eventCollect = true;
+    $signoutPinSet = false;
     $summary = null;
     $recent = [];
     $nodeNames = [];
@@ -291,6 +310,34 @@ require __DIR__ . '/_inc/partials/page-header.php';
                       <?= km_csrf_field() ?>
                       <input type="hidden" name="form_action" value="guide_default">
                       <button type="submit" class="btn btn-sm btn-outline-secondary">操作方法を既定に戻す</button>
+                    </form>
+                  </div>
+                </div>
+
+                <!-- ログアウトの合言葉(2026-10-19) -->
+                <div class="card mb-4">
+                  <div class="card-header"><h3 class="card-title">ログアウトの合言葉(係の人)</h3></div>
+                  <div class="card-body">
+                    <p class="mb-2">
+                      テスト用アカウントは、<strong>この合言葉を入れたときだけ</strong>ログアウトできます(来場者が押しても出られません)。
+                      アカウントの設定の画面も開けません。いまは
+                      <?= $signoutPinSet ? '<span class="badge text-bg-success">決まっています</span>' : '<span class="badge text-bg-warning">決まっていません(ログアウトできません)</span>' ?>
+                    </p>
+                    <form method="post">
+                      <?= km_csrf_field() ?>
+                      <input type="hidden" name="form_action" value="signout_pin">
+                      <div class="mb-2">
+                        <label for="signout-pin" class="form-label">新しい合言葉(英数字 4〜32 字)</label>
+                        <div class="row"><div class="col-8 col-md-6">
+                          <input type="password" id="signout-pin" name="signout_pin" class="form-control" maxlength="32" autocomplete="new-password">
+                        </div></div>
+                        <div class="form-text">保存するのはハッシュだけです(あとから読み出せません)。忘れたら決め直してください。</div>
+                      </div>
+                      <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" id="signout-pin-clear" name="signout_pin_clear" value="1">
+                        <label class="form-check-label" for="signout-pin-clear">合言葉を消す(テスト用アカウントはログアウトできなくなる)</label>
+                      </div>
+                      <button type="submit" class="btn btn-primary">保存</button>
                     </form>
                   </div>
                 </div>
