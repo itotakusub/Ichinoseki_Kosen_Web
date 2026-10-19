@@ -7127,6 +7127,15 @@ function km_check_layout(): void
     } else {
         check_bool('「係の人」の欄の CSS がある', false);
     }
+    // 2026-10-19(同日、利用者の指示): テスト用アカウントでは「ダウンロード・設定」を開けない。⚙️ も引き出しも書かない
+    check_bool('テスト用アカウントでは「ダウンロード・設定」の ⚙️ を出さない', preg_match('/<\?php if \(\$kmTestMode === null\): \?>\s*<div class="action-group-right">\s*<button id="info-panel-toggle"/', $homeCode) === 1);
+    check_bool('テスト用アカウントでは引き出しごと書かない(APK・アカウント設定への導線をページに残さない)', preg_match('/<\?php if \(\$kmTestMode === null\): \?>\s*<div id="km-drawer-scrim".*?<\/aside>\s*<\?php endif; \?>/s', $homeCode) === 1);
+    check_bool('引き出しが無ければログインの欄はバーに残す(panel.js は受け皿が無いと動かさない)', str_contains((string) file_get_contents(__DIR__ . '/../Main/panel.js'), "if (!authLinks || !authSlot || !topActions) return;"));
+    if (preg_match('/^\.action-group-left \{(.*?)^\}/ms', (string) file_get_contents(__DIR__ . '/../Main/styles.css'), $leftCss) === 1) {
+        check_bool('バーに残ったログインの欄はスマホで折り返す(画面の右へはみ出さない)', str_contains($leftCss[1], 'flex-wrap: wrap;') && str_contains($leftCss[1], 'min-width: 0;'));
+    } else {
+        check_bool('.action-group-left の CSS がある', false);
+    }
     $accountCode = (string) file_get_contents(__DIR__ . '/../account.php');
     check_bool('テスト用アカウントではアカウントの画面を使わせない(表示名・退会・サインアウト)', str_contains($accountCode, "\$blockedReason = 'test';\n            \$signedIn = false;")
         && strpos($accountCode, "\$blockedReason = 'test';") < strpos($accountCode, "if ((\$_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && !km_csrf_verify()) {"));

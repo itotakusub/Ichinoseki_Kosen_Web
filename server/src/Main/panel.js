@@ -28,6 +28,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const narrowScreen = window.matchMedia('(max-width: 768px)');
 
     function placeAuthLinks() {
+        // テスト用アカウント(展示の PC)では引き出しごと書かない(index.php)。受け皿が無ければバーに残す
         if (!authLinks || !authSlot || !topActions) return;
 
         if (narrowScreen.matches) {

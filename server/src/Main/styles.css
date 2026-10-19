@@ -693,6 +693,7 @@ body {
     /* 入りきらないときは右側から折る。切り落とさない */
     flex-wrap: wrap;
     justify-content: flex-end;
+    min-width: 0;   /* 無いと中身の幅のまま押し出し、画面の右からはみ出す */
 }
 
 /* **横並び。** 以前は縦積みで、バーが2段にも3段にもなっていた */
@@ -703,6 +704,15 @@ body {
     align-items: center;
     gap: 0.5rem;
 }
+/*
+ * 入りきらないときは折り返す。テスト用アカウント(展示の PC)はスマホでも「ダウンロード・設定」が無く
+ * (2026-10-19)ログインの欄がバーに残るので、ここで折らないと「係の人」の欄が画面の右へはみ出す
+ */
+.action-group-left {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    min-width: 0;
+}
 
 /* フェーズ4で追加: ログイン中のユーザー名表示 */
 .user-chip {
@@ -710,6 +720,10 @@ body {
     font-weight: 600;
     color: var(--secondary);
     white-space: nowrap;
+    /* 長い表示名で画面の外へ出さない(末尾を … にする) */
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 /*
@@ -745,7 +759,7 @@ body {
 .km-test-signout[open] > summary {
     opacity: 1;
 }
-/* 入りきらないとき(スマホでは「ダウンロード・設定」の中へ移る)は折り返す。はみ出させない */
+/* 入りきらないとき(スマホ。テスト用アカウントでは上のバーに残る)は折り返す。はみ出させない */
 .km-test-signout > form {
     display: inline-flex;
     flex-wrap: wrap;

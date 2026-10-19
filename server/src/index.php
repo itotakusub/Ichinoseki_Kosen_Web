@@ -436,9 +436,16 @@ if ($kmEvent !== null && $kmTestMode === null) {
                         <?php endif; ?>
                     </div>
 
+                    <?php
+                    // **テスト用アカウントでは「ダウンロード・設定」を出さない**(2026-10-19、利用者の指示)。
+                    // 展示の PC で来場者が APK・アカウント設定・お問い合わせへ迷い込まないように。引き出しごと書かない(下)。
+                    // ログアウトの欄はスマホでも上のバーに残る(受け皿が無ければ panel.js は動かさない)
+                    ?>
+                    <?php if ($kmTestMode === null): ?>
                     <div class="action-group-right">
                         <button id="info-panel-toggle" class="icon-btn" title="ダウンロード・設定" aria-label="ダウンロード・設定">⚙️</button>
                     </div>
+                    <?php endif; ?>
                 </div>
             </div>
         </header>
@@ -656,8 +663,12 @@ if ($kmEvent !== null && $kmTestMode === null) {
          * 以前はルート案内と同じ「下から出るシート」を流用していて、開くと地図の下半分と
          * 左下の操作・右下のズームが隠れた。PC もスマホも**右から滑り出させ**、
          * 後ろの薄い幕を押しても閉じられるようにする(panel.js)。
+         *
+         * テスト用アカウント(展示の PC)では**書かない**(2026-10-19、利用者の指示)。開く手段を隠すだけでは、
+         * 中の APK やアカウント設定への導線がページに残る。
          */
         ?>
+        <?php if ($kmTestMode === null): ?>
         <div id="km-drawer-scrim" class="km-drawer-scrim" hidden></div>
         <aside id="info-panel" class="km-drawer glass-panel" aria-labelledby="info-panel-title" aria-hidden="true" inert>
             <div class="km-drawer-head">
@@ -766,6 +777,7 @@ if ($kmEvent !== null && $kmTestMode === null) {
                 </div>
             </div>
         </aside>
+        <?php endif; ?>
     </div>
 
     <?php
