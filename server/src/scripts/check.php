@@ -3950,7 +3950,8 @@ function km_check_hardening(): void
         'KM_CERT' => 'KM_CERT: ${KM_CERT:-/etc/letsencrypt/live/${KM_DOMAIN}/fullchain.pem}',
         'KM_CERT_KEY' => 'KM_CERT_KEY: ${KM_CERT_KEY:-/etc/letsencrypt/live/${KM_DOMAIN}/privkey.pem}',
         'APP_URL' => 'APP_URL: ${APP_URL:-https://${KM_DOMAIN}}',
-        'LOGTO_ENDPOINT' => 'LOGTO_ENDPOINT: ${LOGTO_ENDPOINT:-https://${KM_DOMAIN}:3001}',
+        // 2026-10-19: .env の KM_AUTH_DOMAIN を書くと 443 番の auth.<ドメイン>。無ければ今までどおり :3001
+        'LOGTO_ENDPOINT' => 'LOGTO_ENDPOINT: ${LOGTO_ENDPOINT:-https://${KM_AUTH_DOMAIN:-${KM_DOMAIN}:3001}}',
         // Console と phpMyAdmin は管理用のホスト名(無ければ KM_DOMAIN)。ゲートの Cookie がホスト名ごとのため(2026-09-15)
         'LOGTO_ADMIN_ENDPOINT' => 'ADMIN_ENDPOINT: ${LOGTO_ADMIN_ENDPOINT:-https://${KM_ADMIN_DOMAIN:-${KM_DOMAIN}}:3002}',
         'PMA_ABSOLUTE_URI' => 'PMA_ABSOLUTE_URI: ${PMA_ABSOLUTE_URI:-https://${KM_ADMIN_DOMAIN:-${KM_DOMAIN}}:8281/}',
@@ -4084,7 +4085,8 @@ function km_check_hardening(): void
     check('443 の最初の正規表現は `.php/` の 404', '\.php/', $firstRegex[1] ?? null);
     check_bool('include 専用の 404 は `\.php(/|$)`', str_contains($https, 'logto-client)\.php(/|$) {'));
     check_bool('proxy-web.conf に proxy_read_timeout を書かない(location で重複すると起動しない)', !str_contains((string) preg_replace('/^\s*#.*$/m', '', $file('nginx/km/proxy-web.conf')), 'proxy_read_timeout'));
-    check('443 で 300s を許すのは downloads.php だけ', 1, substr_count($https, 'proxy_read_timeout 300s;'));
+    // 2 つ目は Soketi の WebSocket(/ws/app/。2026-10-19 に 6001 番から移した。1 本を長く張る)
+    check('443 で 300s を許すのは downloads.php と /ws/app/ だけ', 2, substr_count($https, 'proxy_read_timeout 300s;'));
     check_bool('未認証で重い口を km_api で絞る(メソッドを問わない)', str_contains($https, 'location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update|positioning-params|learning)|logto_me)\.php$ {') && str_contains($https, 'limit_req zone=km_api burst=120 nodelay;'));
     check_bool('アプリの地図は km_appmap で絞る', preg_match('#location = /api/app-map\.php \{\s*limit_req zone=km_appmap burst=30 nodelay;#', $https) === 1);
     check_bool('callback.php は認可コードをログに残さない', preg_match('#location = /callback\.php \{\s*access_log [^;]+ km_no_query;#', $https) === 1);
@@ -4751,15 +4753,86 @@ function km_check_hardening(): void
     if (preg_match('/^server \{\n    listen 3001 ssl;.*?\n\}\n/ms', $file('nginx/default.conf.template'), $logtoCoreMatch) === 1) {
         $logtoCore = (string) preg_replace('/^\s*#.*$/m', '', $logtoCoreMatch[0]);
     }
-    check_bool('自動入力: Logto Core(3001)だけで HTML に差し込み、Logto には圧縮させない', $logtoCore !== ''
+    // 2026-10-19 から 443 番の auth.<ドメイン> の server にも同じものがある(移行の間は 2 つ)
+    $logtoAuth = '';
+    if (preg_match('/^server \{\n    listen 443 ssl;\n    listen \[::\]:443 ssl;\n    http2 on;\n    server_name \$\{KM_AUTH_DOMAIN\};.*?\n\}\n/ms', $file('nginx/default.conf.template'), $logtoAuthMatch) === 1) {
+        $logtoAuth = (string) preg_replace('/^\s*#.*$/m', '', $logtoAuthMatch[0]);
+    }
+    check_bool('自動入力: Logto Core(3001 と auth の 443)だけで HTML に差し込み、Logto には圧縮させない', $logtoCore !== '' && $logtoAuth !== ''
+        && str_contains($logtoAuth, "sub_filter '</head>' '<script src=\"/km/logto-otp-autocomplete.js\" defer></script></head>';")
+        && str_contains($logtoAuth, 'proxy_set_header Accept-Encoding "";')
+        && str_contains($logtoAuth, "location = /km/logto-otp-autocomplete.js {\n        alias /etc/nginx/km/logto-otp-autocomplete.js;")
         && str_contains($logtoCore, "sub_filter '</head>' '<script src=\"/km/logto-otp-autocomplete.js\" defer></script></head>';")
         && str_contains($logtoCore, 'proxy_set_header Accept-Encoding "";')
         && str_contains($logtoCore, "location = /km/logto-otp-autocomplete.js {\n        alias /etc/nginx/km/logto-otp-autocomplete.js;")
-        && substr_count($file('nginx/default.conf.template'), 'sub_filter \'</head>\'') === 1);
+        && substr_count($file('nginx/default.conf.template'), 'sub_filter \'</head>\'') === 2);
     check_bool('自動入力: スクリプトは 1 つ目の枠に one-time-code を付けるだけ(値を読まない・送らない)', $otpJs !== ''
         && str_contains($otpJs, 'input[inputmode="numeric"][data-id="0"]') && str_contains($otpJs, "setAttribute('autocomplete', 'one-time-code')")
         && !str_contains($otpJs, '.value') && !preg_match('/fetch\(|XMLHttpRequest|sendBeacon|localStorage|cookie/', $otpJs)
         && str_contains($file('scripts/deploy-to-host.ps1'), "'./nginx/km/logto-otp-autocomplete.js'"));
+
+    /*
+     * ## サインインと通知を 443 番に寄せる(2026-10-19、利用者の指示)
+     * 学校の回線は 443 番以外を通さない(利用者が確かめた。解除は難しい)。:3001(Logto)と :6001(Soketi)では、
+     * 学内から誰もサインインできず、管理画面のチャットと死活監視もいつも「未接続」だった。
+     *   - Logto: auth.<ドメイン> の 443 番(nginx の auth の server)。.env の KM_AUTH_DOMAIN で切り替える(無ければ :3001)
+     *   - Soketi: 管理画面の 443 番の /ws/app/ → Soketi の /app/
+     */
+    km_check_heading('443 番へ寄せる: サインイン(auth.<ドメイン>)と通知(/ws/app/)');
+    $vps = $file('compose.vps.yaml');
+    $switch = '${LOGTO_ENDPOINT:-https://${KM_AUTH_DOMAIN:-${KM_DOMAIN}:3001}}';
+    check_bool('web の LOGTO_ENDPOINT と logto の ENDPOINT は同じ導き方(発行元 iss が食い違わない)',
+        str_contains($vps, "LOGTO_ENDPOINT: {$switch}") && str_contains($vps, "ENDPOINT: {$switch}")
+        && substr_count($vps, $switch) === 2 && !str_contains($vps, 'https://${KM_DOMAIN}:3001}' . "\n"));
+    check_bool('nginx には KM_AUTH_DOMAIN をいつも渡す(空だと server_name が壊れて起動しない)',
+        str_contains($vps, 'KM_AUTH_DOMAIN: ${KM_AUTH_DOMAIN:-auth.${KM_DOMAIN}}')
+        && str_contains($file('compose.yaml'), 'KM_AUTH_DOMAIN: ${KM_AUTH_DOMAIN:-auth.${KM_DOMAIN:-192.168.3.29}}'));
+    check_bool('auth の server: 443 番・Logto Core へ・書き込みだけ数える・送信元は置き換え・Logto の HSTS を消す・100 本', $logtoAuth !== ''
+        && str_contains($logtoAuth, 'proxy_pass http://km_logto_core;') && str_contains($logtoAuth, 'proxy_set_header X-Forwarded-Port 443;')
+        && str_contains($logtoAuth, 'proxy_set_header X-Forwarded-For $remote_addr;') && str_contains($logtoAuth, 'proxy_hide_header Strict-Transport-Security;')
+        && str_contains($logtoAuth, 'limit_req zone=km_auth burst=30 nodelay;') && str_contains($logtoAuth, 'limit_conn km_conn 100;')
+        && !str_contains($logtoAuth, 'auth_request'));
+    // 443 の本体の server(先頭の 1 つ。auth の server はその後ろ)
+    $mainHttps = '';
+    if (preg_match('/^server \{\n    listen 443 ssl;.*?\n\}\n/ms', $file('nginx/default.conf.template'), $mainMatch) === 1) {
+        $mainHttps = $mainMatch[0];
+    }
+    $wsLocation = '';
+    if (preg_match('/location \^~ \/ws\/app\/ \{.*?\n    \}\n/s', $mainHttps, $wsMatch) === 1) {
+        $wsLocation = $wsMatch[0];
+    }
+    check_bool('/ws/app/: 管理画面の Origin だけ・公開側のホストでは 404・Soketi の /app/ へ', $wsLocation !== ''
+        && str_contains($wsLocation, "if (\$km_ws_origin_denied) {\n            return 403;")
+        && str_contains($wsLocation, "if (\$km_host_role = public) {\n            return 404;")
+        && str_contains($wsLocation, 'proxy_pass http://km_soketi/app/;') && str_contains($wsLocation, 'proxy_set_header Upgrade $http_upgrade;'));
+    check_bool('/ws/ のほか(配信の HTTP API /apps/ など)は外に出さない', preg_match('#location \^~ /ws/ \{\s*return 404;#', $mainHttps) === 1);
+    check_bool('管理用のホストでは /ws/app/ を返す($km_leave_admin_host)', str_contains($file('nginx/default.conf.template'), '|vendor-web/|ws/app/|'));
+    $siteLib = $file('src/lib/site.php');
+    check_bool('PHP の Logto の入口は LOGTO_ENDPOINT が正本(km_site_url の logto-core)', str_contains($siteLib, "if (\$service === 'logto-core') {\n        return km_site_logto_endpoint() . \$path;")
+        && str_contains($siteLib, "\$endpoint = trim((string) getenv('LOGTO_ENDPOINT'));"));
+    $wsPages = [];
+    foreach (['src/admin/chat.php', 'src/admin/monitor.php'] as $page) {
+        $code = $file($page);
+        if (str_contains($code, 'wsPort: 6001') || !str_contains($code, 'wsPath: <?= json_encode(km_site_ws_path()') || !str_contains($code, 'wssPort: <?= (int) km_site_ws_port() ?>')) {
+            $wsPages[] = $page;
+        }
+    }
+    check('チャットと死活監視は管理画面の 443 番の /ws で張る', [], $wsPages);
+    check_bool('CSP の connect-src は WebSocket の宛先を km_site_ws_origin から', str_contains($file('src/lib/csp.php'), '$connect[] = km_site_ws_origin();'));
+    $savedEndpoint = getenv('LOGTO_ENDPOINT');
+    putenv('LOGTO_ENDPOINT=https://auth.example.jp/');
+    $authEndpoint = km_site_logto_endpoint();
+    putenv('LOGTO_ENDPOINT=not a url');
+    $brokenEndpoint = km_site_logto_endpoint();
+    $savedEndpoint === false ? putenv('LOGTO_ENDPOINT') : putenv('LOGTO_ENDPOINT=' . $savedEndpoint);
+    check('LOGTO_ENDPOINT があればそれ(末尾のスラッシュは落とす)', 'https://auth.example.jp', $authEndpoint);
+    check_bool('LOGTO_ENDPOINT が壊れていれば本体のホスト + :3001 に落とす', str_ends_with($brokenEndpoint, ':3001'));
+    $gradle = (string) @file_get_contents('C:/Users/itota/Documents/Test/app/build.gradle.kts');
+    if ($gradle === '') {
+        check_skip('管理アプリの Logto の入口', 'Android の作業場が無い');
+    } else {
+        check_bool('管理アプリの Logto の入口の既定は https://auth.<ドメイン>', str_contains($gradle, '?: "https://auth.$kosenmapDomain").trimEnd(\'/\')'));
+    }
     /*
      * ## Logto のメールのテンプレート(2026-10-12。docs/logto-email-templates.json。Console へ貼るのは利用者)
      * Gmail などがコードを拾いやすいよう、コードは本文に 1 回だけ・単独の行に置く。URL(verify.php)は載せない。

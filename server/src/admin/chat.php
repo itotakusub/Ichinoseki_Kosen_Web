@@ -281,8 +281,10 @@ require __DIR__ . '/_inc/partials/page-header.php';
               const pusher = new Pusher(appKey, {
                 cluster: 'mt1',
                 wsHost: <?= json_encode(km_site_ws_host(), JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>,
-                wsPort: 6001,
-                wssPort: 6001,
+                // 管理画面の 443 番の /ws/ を通す(2026-10-19。学校の回線は 6001 番を通さない。lib/site.php の km_site_ws_host)
+                wsPort: <?= (int) km_site_ws_port() ?>,
+                wssPort: <?= (int) km_site_ws_port() ?>,
+                wsPath: <?= json_encode(km_site_ws_path(), JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>,
                 forceTLS: true,
                 enabledTransports: ['ws', 'wss'],
                 disableStats: true,

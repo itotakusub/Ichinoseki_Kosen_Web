@@ -194,8 +194,9 @@ map "$km_admin_split$km_on_admin_host" $km_host_role {
 #   /Main/ /vendor-web/ 地図エディタが読む JS・CSS(admin/map-editor.php)
 #   /api/map-data.php・floor-image.php … 地図エディタのデータと見取り図(管理者の印で錠を越える)
 #   /api/download.php  admin/downloads.php の「落とす」
+#   /ws/app/           チャットと死活監視の WebSocket(Soketi。2026-10-19 に 6001 番からここへ移した)
 map "$km_host_role:$uri" $km_leave_admin_host {
-    "~^admin:/(admin/|Main/|vendor-web/|sign-in\.php$|sign-out\.php$|callback\.php$|favicon\.svg$|api/(map-data|floor-image|download)\.php$)"  0;
+    "~^admin:/(admin/|Main/|vendor-web/|ws/app/|sign-in\.php$|sign-out\.php$|callback\.php$|favicon\.svg$|api/(map-data|floor-image|download)\.php$)"  0;
     "~^admin:"   1;
     default      0;
 }
@@ -745,6 +746,44 @@ server {
     # OIDC のコールバック。**URL に認可コードが乗るのでログには残さない**(2026-09-14 に追加。server-ops 16)。
     # 以前は location / に入り、既定の combined 形式で `?code=…&state=…` ごと記録していた。
     # guest.php と違って add_header は書かない(server の add_header をそのまま継承させる)。
+    # ---------------------------------------------------------------------
+    # **Soketi の WebSocket を 443 番で受ける**(2026-10-19、利用者の指示。学校の回線は 443 番以外を通さない)。
+    #
+    # 以前はブラウザが <ドメイン>:6001 へ直に張っていたので、学内からはチャットと死活監視がいつも「未接続」だった。
+    # pusher-js は wsPath を前に付けて wss://<管理画面>/ws/app/<key> へ張る(admin/chat.php・monitor.php。lib/site.php の km_site_ws_path)。
+    # ここで /ws を外して Soketi の /app/ へ渡す。守りは 6001 の server と同じ:
+    #   - Origin は管理画面だけ($km_ws_origin_denied)
+    #   - 配信の HTTP API(/apps/)は外に出さない —— /ws/app/ だけを通し、ほかの /ws/ は 404
+    #   - 管理画面を別オリジンにしているときは、公開側のホストでは開かない(管理用のホストだけ。$km_host_role)
+    # 6001 の server は移行の間だけ残す(古い画面を開いたままの人のため)。
+    # ---------------------------------------------------------------------
+    location ^~ /ws/app/ {
+        if ($km_ws_origin_denied) {
+            return 403;
+        }
+        if ($km_host_role = public) {
+            return 404;
+        }
+        proxy_pass http://km_soketi/app/;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-Host $http_host;
+        proxy_set_header X-Forwarded-Port 443;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+        proxy_buffering off;
+    }
+    location ^~ /ws/ {
+        return 404;
+    }
+
     location = /callback.php {
         access_log /var/log/nginx/access.log km_no_query;
         include /etc/nginx/km/proxy-web.conf;
@@ -864,6 +903,70 @@ server {
         # **Logto 自身の HSTS を消す**(2026-09-14)。Logto は `includeSubDomains` 付きの HSTS を送っており
         # (本番で実測)、nginx の hsts-enable.conf と二重になったうえ、あちらで**わざと付けていない**
         # includeSubDomains が効いてしまっていた(理由は hsts-enable.conf.example)。HSTS は nginx の 1 本だけにする。
+        proxy_hide_header Strict-Transport-Security;
+
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_read_timeout 300s;
+    }
+}
+
+# ---------------------------------------------------------------------------
+# **Logto Core を 443 番で受ける: auth.<ドメイン>**(2026-10-19、利用者の指示)
+#
+# 学校の回線は 443 番以外を通さない(利用者が確かめた。解除は難しい)。上の 3001 番の入口では、
+# **学内から誰もサインインできなかった**(展示の PC・教職員・学内 Wi-Fi の管理アプリ)。
+# 名前を分けて 443 番に置く。Logto は ENDPOINT(= 発行元 iss)を 1 つしか持てないので、どちらの入口を正にするかは
+# .env の KM_AUTH_DOMAIN で決める(compose.vps.yaml の LOGTO_ENDPOINT)。書いていなければ今までどおり 3001 が正。
+#
+# 中身は 3001 の server と同じ(確認コード欄の自動入力・書き込みだけ数える・HSTS の付け替え・送信元の置き換え)。
+# **片方を直したら、もう片方も直す。** 3001 の server は移行の間だけ残す(戻すときは .env の KM_AUTH_DOMAIN を消すだけ)。
+#
+# 名前は**証明書に入っていること**(host-cert.sh issue --also auth.<ドメイン>)と、**DNS が向いていること**。
+# server_name が KM_DOMAIN と同じにはならない(compose が auth. を前に付ける)ので、名前の衝突は起きない。
+# ---------------------------------------------------------------------------
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name ${KM_AUTH_DOMAIN};
+    # 待ち時間と同時接続。サインインの入口で、学校の NAT から大勢が来るので 3001 と同じ 100 本
+    keepalive_timeout 30s;
+    limit_conn km_conn 100;
+
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+    include /etc/nginx/km/hsts-*.conf;
+
+    # 確認コード欄に autocomplete="one-time-code" を付けるスクリプト(3001 の server と同じ)
+    location = /km/logto-otp-autocomplete.js {
+        alias /etc/nginx/km/logto-otp-autocomplete.js;
+        default_type application/javascript;
+        types { }
+        add_header Cache-Control "public, max-age=3600" always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Referrer-Policy strict-origin-when-cross-origin always;
+        include /etc/nginx/km/hsts-*.conf;
+    }
+
+    location / {
+        # 理由はどれも 3001 の server と同じ
+        proxy_set_header Accept-Encoding "";
+        sub_filter '</head>' '<script src="/km/logto-otp-autocomplete.js" defer></script></head>';
+        sub_filter_once on;
+
+        limit_req zone=km_auth burst=30 nodelay;
+
+        proxy_pass http://km_logto_core;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-Host $http_host;
+        proxy_set_header X-Forwarded-Port 443;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+
         proxy_hide_header Strict-Transport-Security;
 
         proxy_set_header Upgrade $http_upgrade;

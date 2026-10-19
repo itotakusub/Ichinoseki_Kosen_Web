@@ -185,6 +185,10 @@ function km_site_url(?string $service = null, string $path = ''): string
     if ($service === null) {
         return km_site_origin() . $path;
     }
+    // Logto の入口は LOGTO_ENDPOINT が正本(2026-10-19。auth.<ドメイン> の 443 番に寄せた。km_site_logto_endpoint の注記)
+    if ($service === 'logto-core') {
+        return km_site_logto_endpoint() . $path;
+    }
 
     $parts = km_site_parts();
     if (!array_key_exists($service, KM_SITE_PORTS)) {
@@ -234,19 +238,73 @@ function km_site_port(string $service): ?int
         // 本体が既定ポートなら平文も既定ポート、そうでなければ LAN 構成の 8080
         return $parts['port'] === null ? 80 : KM_SITE_PORTS['web-http'];
     }
+    // Logto と Soketi はブラウザから見た入口の番号(2026-10-19 に 443 番へ寄せた。km_site_logto_endpoint の注記)
+    if ($service === 'logto-core') {
+        $port = parse_url(km_site_logto_endpoint(), PHP_URL_PORT);
+
+        return is_int($port) ? $port : null;
+    }
+    if ($service === 'soketi') {
+        return km_site_ws_port();
+    }
 
     return KM_SITE_PORTS[$service] ?? null;
 }
 
-/** Soketi へブラウザから張る WebSocket の接続先(ホストとポートだけ)。 */
+/**
+ * **Logto(サインイン)の入口。** 末尾にスラッシュは付けない。正本は環境変数 `LOGTO_ENDPOINT`(compose が渡す)。
+ *
+ * ## 443 番へ寄せた(2026-10-19、利用者の指示)
+ *
+ * 学校の回線は 443 番以外を通さない(利用者が確かめた。解除は難しい)。以前の入口は `https://<ドメイン>:3001` で、
+ * **学内からは誰もサインインできなかった**(展示の PC のテスト用アカウント・教職員・学内 Wi-Fi の管理アプリ)。
+ * そこで `auth.<ドメイン>` の 443 番に Logto を置いた(nginx の auth の server)。切り替えは .env の KM_AUTH_DOMAIN で、
+ * 書いていなければ今までどおり :3001(compose.vps.yaml の LOGTO_ENDPOINT の導き方)。
+ *
+ * env が無いとき(コンテナの外の CLI など)だけ、昔の形(本体のホスト + 3001)へ落とす。
+ */
+function km_site_logto_endpoint(): string
+{
+    $endpoint = trim((string) getenv('LOGTO_ENDPOINT'));
+    if ($endpoint !== '' && is_array($parsed = parse_url($endpoint)) && isset($parsed['host'])) {
+        return rtrim($endpoint, '/');
+    }
+    $parts = km_site_parts();
+
+    return $parts['scheme'] . '://' . $parts['host'] . ':' . KM_SITE_PORTS['logto-core'];
+}
+
+/**
+ * Soketi へブラウザから張る WebSocket の接続先。
+ *
+ * **管理画面と同じオリジンの 443 番の /ws/ を通す**(2026-10-19)。以前は `<ドメイン>:6001` に直に張っていたが、
+ * 学校の回線は 443 番以外を通さないので、学内からはチャットと死活監視がいつも「未接続」だった。
+ * nginx は 443 の server の `location ^~ /ws/app/` で Soketi の /app/ へ渡す(Origin は管理画面だけ)。
+ * pusher-js は wsHost:wssPort + wsPath + /app/<key> へ張る。
+ */
 function km_site_ws_host(): string
 {
-    return km_site_host();
+    return km_site_admin_parts()['host'];
 }
 
 function km_site_ws_port(): int
 {
-    return KM_SITE_PORTS['soketi'];
+    return km_site_admin_parts()['port'] ?? (km_site_admin_parts()['scheme'] === 'https' ? 443 : 80);
+}
+
+function km_site_ws_path(): string
+{
+    return '/ws';
+}
+
+/** CSP の connect-src に書く WebSocket の宛先(既定ポートなら番号を付けない)。 */
+function km_site_ws_origin(): string
+{
+    $port = km_site_ws_port();
+    $scheme = km_site_admin_parts()['scheme'] === 'https' ? 'wss' : 'ws';
+    $omit = ($scheme === 'wss' && $port === 443) || ($scheme === 'ws' && $port === 80);
+
+    return $scheme . '://' . km_site_ws_host() . ($omit ? '' : ':' . $port);
 }
 
 /** 「host:port」の表示用。接続先を人に見せるところで使う。 */
@@ -288,8 +346,13 @@ function km_site_service_map(): array
          *             URL を渡すと、管理画面に「開く」ボタンだけが残り、押しても繋がらない
          */
         $noUrl = $service === 'mariadb' || ($service === 'mailpit' && !km_site_is_local());
+        $url = $noUrl ? null : km_site_url($service);
+        // Soketi は管理画面の 443 番の /ws/ の奥(km_site_ws_host の注記)。開く画面は無いので、表示用に入口だけ見せる
+        if ($service === 'soketi') {
+            $url = km_site_admin_origin() . km_site_ws_path() . '/';
+        }
         $map[$service] = [
-            'url' => $noUrl ? null : km_site_url($service),
+            'url' => $url,
             'port' => $port,
         ];
     }

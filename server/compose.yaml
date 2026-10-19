@@ -189,7 +189,7 @@ services:
 
   mariadb:
     # 2026-09-15 に動いていた中身(タグを残す理由は postgres と同じ)
-    image: mariadb:11.4@sha256:1292844148b311e4ed4300022a996d39083f415a963e970cf47cad1b3b18e3a6
+    image: mariadb:11.4@sha256:250e1609e93c0e6aecf64bfbab2d84d5e89d2481540fe77447ff6c855c3b1873
     container_name: km-mariadb
     restart: unless-stopped
     security_opt:
@@ -613,6 +613,9 @@ services:
       # **既定は公開側と同じ = 別オリジンにしない。** web の ADMIN_URL と同じ値にすること
       KM_ADMIN_DOMAIN: ${KM_ADMIN_DOMAIN:-${KM_DOMAIN:-192.168.3.29}}
       KM_ADMIN_URL: ${KM_ADMIN_URL:-${KM_APP_URL:-https://192.168.3.29:9443}}
+      # 443 番の Logto の入口の名前(2026-10-19。nginx の auth の server)。**いつも定義する**(空だと server_name が壊れる)。
+      # 校内 LAN では使わない(Logto は :3001 のまま)。VPS は compose.vps.yaml が auth.<ドメイン> を渡す
+      KM_AUTH_DOMAIN: ${KM_AUTH_DOMAIN:-auth.${KM_DOMAIN:-192.168.3.29}}
     ports:
       - "192.168.3.29:8080:80"
       - "192.168.3.29:9443:443"

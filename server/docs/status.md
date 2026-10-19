@@ -360,6 +360,14 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
   - 確かめ: 全部の `-Help` を 7 と 5.1 で流した(説明の抜けなし・終了 0)。普段の呼び方(new-map-qr -Code … -MatrixOnly、deploy -WhatIfOnly、update-containers -DryRun)が変わらないこと、
     必須の値は -Help 無しなら今まで通り必須なことも確かめた。check.php 1912 件
   - `Test/scripts/check-php-api (1).ps1` は check-php-api.ps1 の古い写し(行き先が使わなくなった校内 LAN のまま)だったので、同日 `Test/Old/duplicate-scripts-20261016/` へ退避した(GitHub の控えも `Old/` の同じ名前へ)
+- **サインインと通知を 443 番に寄せる(2026-10-19、利用者の指示。学校の回線は 443 番以外を通さない。解除は難しい)**:
+  - それまで: サインインは `ito4.jp:3001`、チャットと死活監視は `ito4.jp:6001` で、**学内からは誰もサインインできなかった**(展示の PC・教職員・学内 Wi-Fi の管理アプリ)
+  - サインイン: nginx に `auth.<ドメイン>` の 443 番の server(中身は 3001 と同じ。確認コード欄の差し込みも)。切り替えは **.env の `KM_AUTH_DOMAIN`**(compose.vps.yaml の LOGTO_ENDPOINT と Logto の ENDPOINT を同じ導き方に。書かなければ :3001)。
+    PHP は `km_site_url('logto-core')` を LOGTO_ENDPOINT に従わせた(発行元 iss もここから)。host-cert.sh status が証明書に auth の名前があるかを見る
+  - 通知: 管理画面の 443 番の `/ws/app/` → Soketi の `/app/`(Origin は管理画面だけ・公開側のホストでは 404・/apps/ は外に出さない)。pusher-js は `wsPath: '/ws'`。CSP も合わせた。**配備した時点で効く**
+  - 管理アプリ **v10(1000010)**: 入口の既定を `https://auth.<ドメイン>` に。試験 812 件 × 2、署名は v9 と同じ。受け箱へ送った(**公開は 10-4 の切り替えのあと**。前に公開するとサインインできない)
+  - 3001・6001 の入口は戻せるよう移行の間だけ残す(docs/14 §10-7)
+  - 手順は [14](14-domain-ito4.ipynb) §10(DNS → 配備 `-Action up -Backup` → 証明書 → `.env` の切り替え → 確かめる)。check.php 1924 件。**nginx の設定は手元で読み込ませて確かめていない**(docker が無い)
 
 ### 診断(2026-10-05)の反映(2026-10-06、利用者の指示)
 
