@@ -4052,6 +4052,8 @@ function km_check_hardening(): void
     $pmaConfig = $file('docker/phpmyadmin/config.user.inc.php');
     check_bool('phpMyAdmin の環境保管領域は KM_PMA_CONTROLPASS があるときだけ・表は 19 個', str_contains($pmaConfig, "if (\$kmPmaControlPass !== '' && isset(\$cfg['Servers'])")
         && str_contains($pmaConfig, "['pmadb'] = 'phpmyadmin';") && substr_count($pmaConfig, "=> 'pma__") === 19);
+    // 2026-10-19: 「機能」の画面でログイン Cookie の有効期間が空の文字列で保存され、ログイン後の全画面が TypeError になった
+    check_bool('phpMyAdmin のログインの有効期間は利用者ごとの設定で変えさせない(UserprefsDisallow)', str_contains($pmaConfig, '$cfg[\'UserprefsDisallow\'] = [\'LoginCookieValidity\'];'));
     check_bool('compose は制御用のパスワードを .env から渡すだけ(既定は空)', str_contains($file('compose.yaml'), 'KM_PMA_CONTROLPASS: ${KM_PMA_CONTROLPASS:-}')
         && preg_match('/^KM_PMA_CONTROLPASS=$/m', $file('.env.example')) === 1);
     $pmaCell = $file('docs/05-containers.ipynb');

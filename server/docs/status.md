@@ -375,7 +375,9 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
   DB `phpmyadmin`(像の `sql/create_tables.sql` の 19 表)と制御用の利用者 `pma`(`phpmyadmin.*` の読み書きだけ・`REQUIRE SSL`)。
   `docker/phpmyadmin/config.user.inc.php` は `.env` の `KM_PMA_CONTROLPASS` があるときだけ `controluser`・`pmadb`・表の名前を入れる(無ければ今までどおり)。
   パスワードはホストで作って .env へ(画面・リポジトリ・コマンドの引数に出さない)。手順は [05](05-containers.ipynb) §1-2(配備 → 🔴 のセル → 🟢 で確かめる)。
-  控え(host-backup.sh)には入らない(本体の DB だけを取る)。check.php 1927 件。**本番ではまだ作っていない**
+  控え(host-backup.sh)には入らない(本体の DB だけを取る)。同日、利用者が本番で作った
+  - **同日、ログイン後の全画面が TypeError になった**: 「設定 → 機能」の保存で `LoginCookieValidity` に空の文字列が入り、phpMyAdmin 5.2.3 が型の違いで止まった(保存した設定はログインのたびに読まれ、セッションにも覚えられる)。
+    設定を 2 段階認証だけ残して空にし、セッションを消して直った(docs/05 §1-2 のセル。写しは `km_userconfig_backup`)。`UserprefsDisallow` でこの項目を利用者ごとの設定から外した(有効期間は 30 分に固定)。check.php 1927 件
 
 ### 診断(2026-10-05)の反映(2026-10-06、利用者の指示)
 
