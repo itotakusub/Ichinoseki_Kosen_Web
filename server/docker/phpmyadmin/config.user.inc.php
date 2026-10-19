@@ -36,3 +36,51 @@ unset($kmPmaServer, $kmPmaAllowRoot);
  */
 $cfg['LoginCookieValidity'] = 1800;
 ini_set('session.gc_maxlifetime', '1800');
+
+/*
+ * ## 環境保管領域(phpMyAdmin configuration storage。2026-10-19、利用者の指示)
+ *
+ * ブックマーク・SQL の履歴・表の表示の設定・関連(リレーション)・デザイナーなどを保存する DB(phpmyadmin)と、
+ * そこへ入る制御用の利用者(controluser)。無いと画面の下に「環境保管領域が完全に設定されていません」と出続け、
+ * それらの機能が使えない。
+ *
+ * **.env に KM_PMA_CONTROLPASS があるときだけ有効にする。** 無いまま controluser だけ書くと、
+ * 空のパスワードで繋ぎに行き、ログインのたびに接続の失敗を出す。作り方は docs/05-containers の §1-2
+ * (DB と表は phpMyAdmin の像の sql/create_tables.sql、利用者は phpmyadmin.* だけ・TLS 必須)。
+ *
+ * 制御用の接続は、同じホストなら本体の接続の TLS の設定(PMA_SSL・PMA_SSL_CA)をそのまま使う(phpMyAdmin の仕様)。
+ */
+$kmPmaControlPass = (string) getenv('KM_PMA_CONTROLPASS');
+if ($kmPmaControlPass !== '' && isset($cfg['Servers']) && is_array($cfg['Servers'])) {
+    $kmPmaTables = [
+        'bookmarktable' => 'pma__bookmark',
+        'relation' => 'pma__relation',
+        'table_info' => 'pma__table_info',
+        'table_coords' => 'pma__table_coords',
+        'pdf_pages' => 'pma__pdf_pages',
+        'column_info' => 'pma__column_info',
+        'history' => 'pma__history',
+        'table_uiprefs' => 'pma__table_uiprefs',
+        'tracking' => 'pma__tracking',
+        'userconfig' => 'pma__userconfig',
+        'recent' => 'pma__recent',
+        'favorite' => 'pma__favorite',
+        'users' => 'pma__users',
+        'usergroups' => 'pma__usergroups',
+        'navigationhiding' => 'pma__navigationhiding',
+        'savedsearches' => 'pma__savedsearches',
+        'central_columns' => 'pma__central_columns',
+        'designer_settings' => 'pma__designer_settings',
+        'export_templates' => 'pma__export_templates',
+    ];
+    foreach (array_keys($cfg['Servers']) as $kmPmaServer) {
+        $cfg['Servers'][$kmPmaServer]['controluser'] = (string) (getenv('KM_PMA_CONTROLUSER') ?: 'pma');
+        $cfg['Servers'][$kmPmaServer]['controlpass'] = $kmPmaControlPass;
+        $cfg['Servers'][$kmPmaServer]['pmadb'] = 'phpmyadmin';
+        foreach ($kmPmaTables as $kmPmaKey => $kmPmaTable) {
+            $cfg['Servers'][$kmPmaServer][$kmPmaKey] = $kmPmaTable;
+        }
+    }
+    unset($kmPmaServer, $kmPmaTables, $kmPmaKey, $kmPmaTable);
+}
+unset($kmPmaControlPass);

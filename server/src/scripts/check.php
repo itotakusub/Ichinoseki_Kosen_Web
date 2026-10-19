@@ -4048,6 +4048,16 @@ function km_check_hardening(): void
     }
     check('VPS: 管理系ポートは 0.0.0.0 だけで待つ', [], $adminPorts);
     check_bool('phpMyAdmin は root を既定で断る(server-ops 12)', str_contains($file('docker/phpmyadmin/config.user.inc.php'), "KM_PMA_ALLOW_ROOT") && str_contains($file('docker/phpmyadmin/config.user.inc.php'), "'AllowNoPassword'] = false"));
+    // 環境保管領域(2026-10-19)。パスワードがあるときだけ有効。無いまま controluser を書くと空のパスワードで繋ぎに行く
+    $pmaConfig = $file('docker/phpmyadmin/config.user.inc.php');
+    check_bool('phpMyAdmin の環境保管領域は KM_PMA_CONTROLPASS があるときだけ・表は 19 個', str_contains($pmaConfig, "if (\$kmPmaControlPass !== '' && isset(\$cfg['Servers'])")
+        && str_contains($pmaConfig, "['pmadb'] = 'phpmyadmin';") && substr_count($pmaConfig, "=> 'pma__") === 19);
+    check_bool('compose は制御用のパスワードを .env から渡すだけ(既定は空)', str_contains($file('compose.yaml'), 'KM_PMA_CONTROLPASS: ${KM_PMA_CONTROLPASS:-}')
+        && preg_match('/^KM_PMA_CONTROLPASS=$/m', $file('.env.example')) === 1);
+    $pmaCell = $file('docs/05-containers.ipynb');
+    check_bool('制御用の利用者は phpmyadmin.* だけ・TLS 必須・パスワードは引数に載せない(docs/05 §1-2)', str_contains($pmaCell, 'IDENTIFIED BY \'$PASS\' REQUIRE SSL;')
+        && str_contains($pmaCell, "GRANT SELECT, INSERT, UPDATE, DELETE ON phpmyadmin.* TO 'pma'@'%';") && !str_contains($pmaCell, 'mariadb -uroot -p')
+        && !str_contains($pmaCell, 'echo "$PASS"'));
 
     km_check_heading('hardening B・C: nginx(同時接続・待ち時間・転送ヘッダー)');
     $nginx = (string) preg_replace('/^\s*#.*$/m', '', $file('nginx/default.conf.template'));

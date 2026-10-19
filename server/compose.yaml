@@ -298,6 +298,10 @@ services:
       # root でのログインを一時的に許すときだけ .env に 1(docker/phpmyadmin/config.user.inc.php)。
       # **普段は空 = 禁止。** 2026-09-14 まではイメージの既定で root も空パスワードも通っていた(server-ops 12)
       KM_PMA_ALLOW_ROOT: ${KM_PMA_ALLOW_ROOT:-}
+      # 環境保管領域の制御用の利用者(2026-10-19)。**パスワードがあるときだけ有効**(docker/phpmyadmin/config.user.inc.php)。
+      # 作り方は docs/05-containers の §1-2(パスワードはホストで作って .env に書く。画面にもリポジトリにも出さない)
+      KM_PMA_CONTROLUSER: ${KM_PMA_CONTROLUSER:-pma}
+      KM_PMA_CONTROLPASS: ${KM_PMA_CONTROLPASS:-}
       PMA_HOST: mariadb
       PMA_PORT: "3306"
       PMA_SSL: "1"
