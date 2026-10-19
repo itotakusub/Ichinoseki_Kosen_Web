@@ -714,10 +714,18 @@ body {
 
 /*
  * 展示の PC の「係の人」のログアウト(2026-10-19)。来場者に押させないため、目立たない小さな札にして、
- * 開くと合言葉の欄が出る。止めるのは sign-out.php(合言葉が合わなければ出さない)。
+ * 押すと**その場で横に**合言葉の欄が開く。止めるのは sign-out.php(合言葉が合わなければ出さない)。
+ *
+ * **浮かせて開かない**(同日、利用者の指摘「PC で前後の配置がおかしい」)。上のバーは #ui-layer(z-index 1000)の中にあり、
+ * その外の「テスト中」の札(.km-test-stack、1200)より手前には出られない —— 浮かせた欄が札の後ろに回り込み、
+ * 札の左端から右へ開いたので画面の右端からもはみ出した。バーの中で横に並べれば、重なりもはみ出しも起きない。
  */
 .km-test-signout {
-    position: relative;
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
+    max-width: 100%;
 }
 .km-test-signout > summary {
     list-style: none;
@@ -728,6 +736,7 @@ body {
     padding: 0.2rem 0.55rem;
     border: 1px dashed var(--border-strong);
     border-radius: 999px;
+    white-space: nowrap;
     user-select: none;
 }
 .km-test-signout > summary::-webkit-details-marker {
@@ -736,30 +745,24 @@ body {
 .km-test-signout[open] > summary {
     opacity: 1;
 }
+/* 入りきらないとき(スマホでは「ダウンロード・設定」の中へ移る)は折り返す。はみ出させない */
 .km-test-signout > form {
-    position: absolute;
-    top: calc(100% + 6px);
-    left: 0;
-    z-index: 1300;
-    display: flex;
+    display: inline-flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 0.4rem;
-    padding: 0.6rem;
-    color: var(--text);
-    background: var(--glass-heavy);
-    border: 1px solid var(--border-strong);
-    border-radius: var(--radius-sm);
-    box-shadow: var(--shadow-lg);
-    white-space: nowrap;
+    max-width: 100%;
 }
 .km-test-signout label {
-    display: flex;
+    display: inline-flex;
     align-items: center;
     gap: 0.35rem;
     font-size: var(--text-label);
+    color: var(--text);
 }
 .km-test-signout input {
-    width: 8rem;
+    width: 7.5rem;
+    max-width: 100%;
     font: inherit;
     padding: 0.3rem 0.5rem;
     color: var(--text);

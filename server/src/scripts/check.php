@@ -7121,6 +7121,12 @@ function km_check_layout(): void
     check_bool('合言葉はハッシュだけを置く', str_contains((string) file_get_contents(__DIR__ . '/../lib/test-mode.php'), 'km_setting_set($pdo, KM_TEST_SIGNOUT_PIN_SETTING, password_hash($pin, PASSWORD_DEFAULT));'));
     $homeCode = (string) file_get_contents(__DIR__ . '/../index.php');
     check_bool('展示の PC の地図の画面には、押せばすぐ出るログアウトを出さない', preg_match('/<\?php if \(\$kmTestMode !== null\): \?>.*?<details class="km-test-signout">.*?name="signout_pin".*?<\?php else: \?>.*?logout-btn/s', $homeCode) === 1);
+    // 2026-10-19(同日): 浮かせて開いた欄が「テスト中」の札(#ui-layer の外・1200)の後ろに回り、画面の右からもはみ出した。バーの中で横に開く
+    if (preg_match('/^\.km-test-signout > form \{(.*?)^\}/ms', (string) file_get_contents(__DIR__ . '/../Main/styles.css'), $signoutCss) === 1) {
+        check_bool('「係の人」の欄は浮かせず、上のバーの中で開く(入りきらなければ折り返す)', !str_contains($signoutCss[1], 'position: absolute') && str_contains($signoutCss[1], 'flex-wrap: wrap;'));
+    } else {
+        check_bool('「係の人」の欄の CSS がある', false);
+    }
     $accountCode = (string) file_get_contents(__DIR__ . '/../account.php');
     check_bool('テスト用アカウントではアカウントの画面を使わせない(表示名・退会・サインアウト)', str_contains($accountCode, "\$blockedReason = 'test';\n            \$signedIn = false;")
         && strpos($accountCode, "\$blockedReason = 'test';") < strpos($accountCode, "if ((\$_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && !km_csrf_verify()) {"));
