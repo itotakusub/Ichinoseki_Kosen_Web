@@ -4109,7 +4109,7 @@ function km_check_hardening(): void
     check_bool('proxy-web.conf に proxy_read_timeout を書かない(location で重複すると起動しない)', !str_contains((string) preg_replace('/^\s*#.*$/m', '', $file('nginx/km/proxy-web.conf')), 'proxy_read_timeout'));
     // 2 つ目は Soketi の WebSocket(/ws/app/。2026-10-19 に 6001 番から移した。1 本を長く張る)
     check('443 で 300s を許すのは downloads.php と /ws/app/ だけ', 2, substr_count($https, 'proxy_read_timeout 300s;'));
-    check_bool('未認証で重い口を km_api で絞る(メソッドを問わない)', str_contains($https, 'location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update|positioning-params|learning|poster-image)|logto_me)\.php$ {') && str_contains($https, 'limit_req zone=km_api burst=120 nodelay;'));
+    check_bool('未認証で重い口を km_api で絞る(メソッドを問わない)', str_contains($https, 'location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update|positioning-params|learning|poster-image|table)|logto_me)\.php$ {') && str_contains($https, 'limit_req zone=km_api burst=120 nodelay;'));
     check_bool('アプリの地図は km_appmap で絞る', preg_match('#location = /api/app-map\.php \{\s*limit_req zone=km_appmap burst=30 nodelay;#', $https) === 1);
     check_bool('callback.php は認可コードをログに残さない', preg_match('#location = /callback\.php \{\s*access_log [^;]+ km_no_query;#', $https) === 1);
     /*
@@ -7209,6 +7209,9 @@ function km_check_layout(): void
         check('イベントで出さない地点・地図に無い地点は指さない(場所を漏らさない)', ['', 'n1', ''], array_column($publicPosters, 'nodeId'));
         check('画像の URL は番号と版だけ', '/api/poster-image.php?id=1&v=' . strtotime('2026-10-21 10:00:00'), $publicPosters[1]['imageUrl'] ?? null);
         check_bool('保存名は公開の地図データに載せない', !array_key_exists('storedName', $publicPosters[0]) && !str_contains((string) json_encode($publicPosters), 'poster_x.png'));
+        $posterDb->exec("INSERT INTO km_posters VALUES (5, '広告', NULL, NULL, NULL, 'poster_v.png', NULL, 10, 20, 7, 1, '2026-10-21 10:00:00', '2026-10-21 10:00:00')");
+        check('広告は「管理画面で地点に置いていない」ものだけ(隠した地点・消えた地点のポスターは広告にしない)', [2 => false, 1 => false, 5 => true, 4 => false],
+            array_column(km_posters_public($posterDb, true, $posterNodes), 'isAd', 'id'));
         $posterDb->exec('CREATE TABLE km_map_node_links (node_id TEXT PRIMARY KEY, url TEXT, label TEXT, updated_at TEXT)');
         $posterDb->exec("INSERT INTO km_map_node_links VALUES ('n1', 'https://example.com/lab', '研究室', ''), ('n2', 'javascript:alert(1)', NULL, '')");
         check('地点の URL: 通らない値は表に入っていても出さない', ['n1'], array_keys(km_node_links_for_map($posterDb)));
@@ -7239,6 +7242,83 @@ function km_check_layout(): void
         && str_contains($appJsForPosters, "if (node.linkUrl && /^https?:\\/\\//i.test(node.linkUrl)) {"));
     check_bool('監査ログ: ポスターと地点の URL の操作に文言がある', isset(KM_ADMIN_LOG_ACTION_LABELS['poster.mode'], KM_ADMIN_LOG_ACTION_LABELS['poster.create'], KM_ADMIN_LOG_ACTION_LABELS['poster.update'], KM_ADMIN_LOG_ACTION_LABELS['poster.delete'], KM_ADMIN_LOG_ACTION_LABELS['map.node_link']));
     check_bool('管理画面: サイドバーから開ける', str_contains((string) file_get_contents(__DIR__ . '/../admin/_inc/partials/sidebar.php'), '<a href="./posters.php" class="<?= $link(\'posters\') ?>">'));
+
+    km_check_heading('posters: 広告(10%)とチュートリアルの終わりの知らせ(2026-10-21)');
+    check('広告の確率は 10%(利用者の指示。全部同じ)', 0.1, KM_POSTER_AD_CHANCE);
+    require_once __DIR__ . '/../lib/legal.php';
+    $termsText = (string) json_encode(km_legal_terms(), JSON_UNESCAPED_UNICODE);
+    check_bool('利用規約: 第 7 条に広告の確率(定数から書く)・情報を集めないこと', str_contains($termsText, '第7条(ポスター・広告の表示)')
+        && str_contains($termsText, '**10% の確率**') && str_contains($termsText, '外部の広告配信事業者へ送ったりすることはありません')
+        && str_contains($termsText, '第11条(準拠法)') && KM_LEGAL_UPDATED >= '2026-10-21');
+    $tutorialJs = (string) file_get_contents(__DIR__ . '/../Main/tutorial.js');
+    $tutorialEndJs = (string) file_get_contents(__DIR__ . '/../Main/tutorial-end.js');
+    check_bool('チュートリアルが終わったら知らせる(最後まで・スキップ・Esc のどれでも finish を通る)', str_contains($tutorialJs, "new CustomEvent('km-tutorial-finished'")
+        && str_contains($tutorialJs, "skip.addEventListener('click', finish);") && str_contains($tutorialJs, "if (event.key === 'Escape') finish();"));
+    check_bool('広告: 地点なし(isAd)だけ・確率は data-ad-chance・閉じたら終わりの知らせ', str_contains($tutorialEndJs, 'poster.isAd === true')
+        && str_contains($tutorialEndJs, 'Math.random() < chance') && str_contains($tutorialEndJs, 'showAd(list[Math.floor(Math.random() * list.length)], showEnd);')
+        && str_contains($tutorialEndJs, "link.rel = 'noopener noreferrer';") && !str_contains($tutorialEndJs, 'innerHTML'));
+    check_bool('公開ページ: 終わりの知らせ(アンケートは URL があるときだけ・スマホの QR)と確率を置く', str_contains($homeCode, 'data-ad-chance="<?= km_home_e((string) KM_POSTER_AD_CHANCE) ?>"')
+        && str_contains($homeCode, "<?php if (\$kmTutorialEnd['surveyUrl'] !== ''): ?>") && str_contains($homeCode, 'スマホでもマップを見ることができます')
+        && str_contains($homeCode, "km_public_asset('Main/tutorial-end.js')"));
+    $tutorialEndError = static function (string $text, string $url): string {
+        try {
+            // 書き込みの前に断るものだけを試す(DB は使わない)
+            if (mb_strlen(trim($text)) > KM_TUTORIAL_END_TEXT_MAX) {
+                throw new InvalidArgumentException('long');
+            }
+            require_once __DIR__ . '/../lib/test-mode.php';
+            if (!km_test_survey_url_valid(trim($url))) {
+                throw new InvalidArgumentException('url');
+            }
+            return '';
+        } catch (InvalidArgumentException $exception) {
+            return $exception->getMessage();
+        }
+    };
+    check('終わりの知らせ: 本文は 200 字まで・アンケートは https だけ', ['', 'long', 'url', 'url'], [
+        $tutorialEndError('ok', 'https://forms.gle/x'), $tutorialEndError(str_repeat('あ', 201), ''),
+        $tutorialEndError('ok', 'http://example.com/'), $tutorialEndError('ok', 'javascript:alert(1)'),
+    ]);
+
+    km_check_heading('table-api: テーブル管理の外部接続(2026-10-21)');
+    require_once __DIR__ . '/../lib/table-api.php';
+    $apiUser = 'kmx_' . str_repeat('a', 16);
+    $apiPass = str_repeat('b', 48);
+    check('ユーザー名とキー: Basic(PHP が分けたもの)', [$apiUser, $apiPass], km_table_api_credentials(['PHP_AUTH_USER' => $apiUser, 'PHP_AUTH_PW' => $apiPass]));
+    check('ユーザー名とキー: Authorization の Basic・Bearer <ID>:<キー>', [[$apiUser, $apiPass], [$apiUser, $apiPass]], [
+        km_table_api_credentials(['HTTP_AUTHORIZATION' => 'Basic ' . base64_encode($apiUser . ':' . $apiPass)]),
+        km_table_api_credentials(['HTTP_AUTHORIZATION' => 'Bearer ' . $apiUser . ':' . $apiPass]),
+    ]);
+    check('ユーザー名とキー: 形の違うもの・無いものは断る(クエリでは受けない)', [null, null, null, null], [
+        km_table_api_credentials([]),
+        km_table_api_credentials(['PHP_AUTH_USER' => 'root', 'PHP_AUTH_PW' => $apiPass]),
+        km_table_api_credentials(['PHP_AUTH_USER' => $apiUser, 'PHP_AUTH_PW' => 'short']),
+        km_table_api_credentials(['HTTP_AUTHORIZATION' => 'Bearer ' . $apiUser, 'QUERY_STRING' => 'key=' . $apiPass]),
+    ]);
+    $apiValuesError = static function (mixed $input): string {
+        try {
+            km_table_api_values($input);
+            return '';
+        } catch (InvalidArgumentException $exception) {
+            return 'x';
+        }
+    };
+    check('書き込む値: {列: 値} だけ(id・入れ子・配列の形・変な列名は断る)', ['x', 'x', 'x', 'x', 'x', ''], [
+        $apiValuesError([]), $apiValuesError(['a', 'b']), $apiValuesError(['id' => 1]), $apiValuesError(['name' => ['x']]),
+        $apiValuesError(['na`me' => 'x']), $apiValuesError(['name' => 'x']),
+    ]);
+    check('書き込む値: null は空(→ NULL)・真偽は 1/0・数は文字に', ['a' => '', 'b' => '1', 'c' => '0', 'd' => '3.5'], km_table_api_values(['a' => null, 'b' => true, 'c' => false, 'd' => 3.5]));
+    $apiLib = (string) file_get_contents(__DIR__ . '/../lib/table-api.php');
+    $apiEndpointCode = (string) file_get_contents(__DIR__ . '/../api/table.php');
+    check_bool('キーは SHA-256 だけを置く・ユーザー名とキーはこちらで作る(乱数)', str_contains($apiLib, "hash('sha256', \$secret)") && str_contains($apiLib, "\$keyId = 'kmx_' . bin2hex(random_bytes(8));")
+        && str_contains($apiLib, '$secret = bin2hex(random_bytes(24));') && !preg_match('/CREATE TABLE IF NOT EXISTS km_table_api_keys \([^;]*\bsecret\s+VARCHAR/s', $apiLib));
+    check_bool('最小限の権限: 1 つの表だけ・kmt_ だけ・既定は読む + 足す・取り消し/表の削除で止まる', KM_TABLE_API_DEFAULT_PERMISSIONS === ['can_read', 'can_insert']
+        && str_contains($apiLib, 'WHERE key_id = ? AND revoked_at IS NULL') && str_contains($apiLib, '!km_table_is_managed_name($table) || !km_table_exists($pdo, $table) || km_table_is_deleted($pdo, $table)')
+        && str_contains($apiEndpointCode, "if (!is_string(\$tableParam) || (\$tableParam !== '' && \$tableParam !== \$connection['table'])) {"));
+    check_bool('口: 操作ごとに権限を見てから触る・Cookie を使わない・書き込みは記録に残す', strpos($apiEndpointCode, 'if (!$connection[$need]) {') < strpos($apiEndpointCode, 'km_table_rows(')
+        && !str_contains($apiEndpointCode, 'km_session_start') && substr_count($apiEndpointCode, "km_admin_log_record('table', 'table.api_write'") === 3
+        && isset(KM_ADMIN_LOG_ACTION_LABELS['table.api_create'], KM_ADMIN_LOG_ACTION_LABELS['table.api_revoke'], KM_ADMIN_LOG_ACTION_LABELS['table.api_write']));
+    check_bool('管理画面: キーは作った直後の 1 回だけ出す', str_contains((string) file_get_contents(__DIR__ . '/../admin/tables.php'), "unset(\$_SESSION['km_table_api_new']);"));
 
     km_check_heading('map-floors: 階と平面図の差し替え・追加・削除・zip(2026-10-21)');
     require_once __DIR__ . '/../lib/map-floors.php';

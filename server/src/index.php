@@ -950,6 +950,47 @@ if ($kmEvent !== null && $kmTestMode === null) {
 
     <?php
     /*
+     * チュートリアルが終わったときの知らせ(2026-10-21、利用者の指示。lib/posters.php)。
+     * 開け閉ては Main/tutorial-end.js。広告(地点に置いていないポスター)は data-ad-chance の確率で先に出し、閉じたらこれを出す。
+     * 本文・アンケートの URL は管理画面「ポスター・広告」で変える。QR は外のサービスを使わずここで作る(lib/qr.php)。
+     * 読めなければ既定の本文だけで出す(fail open)。
+     */
+    $kmTutorialEnd = ['text' => '', 'surveyUrl' => '', 'phoneQr' => true];
+    try {
+        require_once __DIR__ . '/lib/posters.php';
+        $kmTutorialEnd = km_tutorial_end_config(km_db());
+    } catch (Throwable $exception) {
+        error_log('KosenMap home: tutorial end config failed (default text): ' . $exception->getMessage());
+        $kmTutorialEnd['text'] = KM_TUTORIAL_END_TEXT_DEFAULT;
+    }
+    $kmEndQr = static function (string $url, string $label): string {
+        require_once __DIR__ . '/lib/qr.php';
+        return str_replace('アクセスコードの QR', km_home_e($label), km_qr_svg(km_qr_matrix($url), 4, 2));
+    };
+    $kmSiteUrl = km_site_url(null, '/');
+    ?>
+    <div id="km-tutorial-end" class="km-end-scrim" data-ad-chance="<?= km_home_e((string) KM_POSTER_AD_CHANCE) ?>" hidden>
+        <div class="km-end-card" role="dialog" aria-modal="true" aria-labelledby="km-end-title">
+            <p id="km-end-title" class="km-end-title">🎉 チュートリアルが終わりました</p>
+            <p class="km-end-text"><?= km_home_e($kmTutorialEnd['text']) ?></p>
+            <?php if ($kmTutorialEnd['surveyUrl'] !== ''): ?>
+                <div class="km-end-row">
+                    <div class="km-end-qr"><?= $kmEndQr($kmTutorialEnd['surveyUrl'], 'アンケートの QR') ?></div>
+                    <p>このページのアンケートを募集中です。<a href="<?= km_home_e($kmTutorialEnd['surveyUrl']) ?>" target="_blank" rel="noopener noreferrer">こちら</a>から答えられます(スマホで QR を読んでも開けます)。</p>
+                </div>
+            <?php endif; ?>
+            <?php if ($kmTutorialEnd['phoneQr']): ?>
+                <div class="km-end-row">
+                    <div class="km-end-qr"><?= $kmEndQr($kmSiteUrl, '地図の QR') ?></div>
+                    <p>スマホでもマップを見ることができます。QR を読むか、<span class="km-end-url"><?= km_home_e(preg_replace('#^https?://#', '', rtrim($kmSiteUrl, '/'))) ?></span> を開いてください。</p>
+                </div>
+            <?php endif; ?>
+            <button type="button" class="primary-btn km-end-close" data-km-end-close>閉じる</button>
+        </div>
+    </div>
+
+    <?php
+    /*
      * defer を付ける。末尾に置いてあるので実行順は元から HTML パースの後だが、
      * defer にすると**パースと並行してダウンロード**される。相互の順序は保たれるので
      * leaflet.js → app.js の依存関係は崩れない。
@@ -986,6 +1027,8 @@ if ($kmEvent !== null && $kmTestMode === null) {
     <script defer src="<?= km_home_e(km_public_asset('Main/welcome.js')) ?>"></script>
     <?php /* 初回の操作案内(2026-10-15)。「はじめに」を閉じてから・地図が出てから始める */ ?>
     <script defer src="<?= km_home_e(km_public_asset('Main/tutorial.js')) ?>"></script>
+    <?php /* チュートリアルの終わりに、広告(確率)と「チュートリアルが終わりました」(2026-10-21) */ ?>
+    <script defer src="<?= km_home_e(km_public_asset('Main/tutorial-end.js')) ?>"></script>
 
 </body>
 

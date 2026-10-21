@@ -39,6 +39,26 @@ const KM_POSTER_MODES = [
 /** まだ選んでいないとき。**出さない側に倒す**(作りかけのポスターが勝手に出ない) */
 const KM_POSTER_MODE_DEFAULT = 'off';
 
+/**
+ * 広告の出る確率(2026-10-21、利用者の指示「広告が出る確率は全て 10% に統一」)。
+ *
+ * **広告 = 地点に置いていないポスター。** 操作の案内(チュートリアル)が終わったときに、この確率で 1 件を出す
+ * (Main/tutorial-end.js)。地点に置いたポスターは地点の詳細と一覧に出るもので、確率は掛からない。
+ * **利用規約の第 7 条はこの値から書く**(lib/legal.php)。変えるときはここだけを変える。
+ */
+const KM_POSTER_AD_CHANCE = 0.1;
+
+/**
+ * チュートリアルの終わりに出す知らせ(2026-10-21)。広告を出したときは、広告を閉じたあとに出す。
+ * 本文とアンケートの URL は管理画面「ポスター・広告」で変える。アンケートの URL が空なら、
+ * テスト用アカウントの画面で決めたアンケートの URL を使う(どちらも空ならアンケートの行を出さない)。
+ */
+const KM_TUTORIAL_END_TEXT_SETTING = 'tutorial_end_text';
+const KM_TUTORIAL_END_SURVEY_SETTING = 'tutorial_end_survey_url';
+const KM_TUTORIAL_END_PHONE_SETTING = 'tutorial_end_phone_qr';
+const KM_TUTORIAL_END_TEXT_DEFAULT = '行きたい場所を検索して、経路を調べてみてください。';
+const KM_TUTORIAL_END_TEXT_MAX = 200;
+
 /** 画像の種類は lib/raster-image.php の KM_RASTER_IMAGE_TYPES(SVG は入れない) */
 const KM_POSTER_IMAGE_TYPES = KM_RASTER_IMAGE_TYPES;
 /** 1 枚の上限。nginx の /admin/ は 12m(multipart の分の余裕を残す) */
@@ -597,6 +617,11 @@ function km_posters_public(PDO $pdo, bool $eventActive, array $nodes): array
             'description' => (string) ($row['description'] ?? ''),
             'linkUrl' => (string) ($row['linkUrl'] ?? ''),
             'nodeId' => $nodeId,
+            /*
+             * 広告か(**管理画面で地点に置いていない**もの)。上で外した地点(イベントで出さない・地図に無い)の
+             * ポスターは広告にしない —— 地点を指したつもりのものが、確率で幕に出てくるのはおかしい。
+             */
+            'isAd' => (string) ($row['nodeId'] ?? '') === '',
             'width' => (int) $row['width'],
             'height' => (int) $row['height'],
             'updatedEpoch' => (int) $row['updatedEpoch'],
@@ -733,4 +758,62 @@ function km_poster_node_options(PDO $pdo): array
 function km_poster_floor_label(string $floor): string
 {
     return $floor === 'outside' ? '外' : $floor . 'F';
+}
+
+// ---------------------------------------------------------------- チュートリアルの終わりの知らせ
+
+/** 設定を**表を作らずに**読む(公開ページの経路)。無ければ既定 */
+function km_poster_setting_read(PDO $pdo, string $name, string $default): string
+{
+    try {
+        $statement = $pdo->prepare('SELECT value FROM km_settings WHERE name = ?');
+        $statement->execute([$name]);
+        $value = $statement->fetchColumn();
+    } catch (Throwable $exception) {
+        return $default;
+    }
+
+    return is_string($value) ? $value : $default;
+}
+
+/**
+ * チュートリアルの終わりに出す知らせの中身。
+ *
+ * @return array{text:string, ownSurveyUrl:string, surveyUrl:string, phoneQr:bool}
+ *   ownSurveyUrl は管理画面で入れた値(空なら未設定)。surveyUrl は実際に出す URL(テスト用アカウントの画面の値へ落ちる)
+ */
+function km_tutorial_end_config(PDO $pdo): array
+{
+    require_once __DIR__ . '/test-mode.php';
+    $text = trim(km_poster_setting_read($pdo, KM_TUTORIAL_END_TEXT_SETTING, ''));
+    $own = trim(km_poster_setting_read($pdo, KM_TUTORIAL_END_SURVEY_SETTING, ''));
+    $survey = $own !== '' ? $own : trim(km_poster_setting_read($pdo, KM_TEST_SURVEY_SETTING, ''));
+    if ($survey !== '' && (!km_test_survey_url_valid($survey))) {
+        $survey = '';
+    }
+
+    return [
+        'text' => $text === '' ? KM_TUTORIAL_END_TEXT_DEFAULT : $text,
+        'ownSurveyUrl' => $own,
+        'surveyUrl' => $survey,
+        'phoneQr' => km_poster_setting_read($pdo, KM_TUTORIAL_END_PHONE_SETTING, '1') !== '0',
+    ];
+}
+
+/** 管理画面から保存する。アンケートの URL は https だけ(QR にしてスマホで開かせる。lib/test-mode.php と同じ確かめ) */
+function km_tutorial_end_save(PDO $pdo, string $text, string $surveyUrl, bool $phoneQr): void
+{
+    require_once __DIR__ . '/test-mode.php';
+    require_once __DIR__ . '/settings.php';
+    $text = trim(str_replace(["\r\n", "\r"], "\n", $text));
+    $surveyUrl = trim($surveyUrl);
+    if (mb_strlen($text) > KM_TUTORIAL_END_TEXT_MAX) {
+        throw new InvalidArgumentException('知らせの本文は ' . KM_TUTORIAL_END_TEXT_MAX . ' 字までにしてください。');
+    }
+    if (!km_test_survey_url_valid($surveyUrl)) {
+        throw new InvalidArgumentException('アンケートの URL は https:// で始まる 255 字までの URL にしてください(空にするとテスト用アカウントの画面のものを使います)。');
+    }
+    km_setting_set($pdo, KM_TUTORIAL_END_TEXT_SETTING, $text);
+    km_setting_set($pdo, KM_TUTORIAL_END_SURVEY_SETTING, $surveyUrl);
+    km_setting_set($pdo, KM_TUTORIAL_END_PHONE_SETTING, $phoneQr ? '1' : '0');
 }

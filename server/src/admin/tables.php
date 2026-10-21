@@ -6,6 +6,7 @@ define('KM_ADMIN', true);
 require __DIR__ . '/_inc/guard.php';
 require_once dirname(__DIR__) . '/lib/db.php';
 require_once dirname(__DIR__) . '/lib/table-manage.php';
+require_once dirname(__DIR__) . '/lib/table-api.php';
 require_once dirname(__DIR__) . '/lib/admin-log.php';
 
 /** 許可されている型の候補(UI からはこの固定リストだけを選ばせる。将来もっと細かい指定が
@@ -48,6 +49,37 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && !km_csrf_verify()) {
             // 例外の文面をそのまま出さない(lib/user-error.php)。入力の検証だけはそのまま出る
             $errors[] = km_admin_error_message($exception, 'テーブルを作成できませんでした。');
         }
+    } elseif ($action === 'api_create') {
+        /*
+         * 外部接続を作る(2026-10-21、lib/table-api.php)。ユーザー名(接続 ID)とキーはここで作り、
+         * **キーはこのあと 1 度だけ画面に出す**(セッションに 1 回分だけ置き、出したら消す)。
+         */
+        try {
+            $pdo = km_db();
+            $permissions = array_values(array_filter(
+                array_keys(KM_TABLE_API_PERMISSIONS),
+                static fn (string $key): bool => isset($_POST['perm'][$key])
+            ));
+            $table = trim((string) ($_POST['api_table'] ?? ''));
+            $created = km_table_api_create($pdo, $table, (string) ($_POST['api_label'] ?? ''), $permissions, (string) ($KM_USER['name'] ?? ''));
+            $_SESSION['km_table_api_new'] = ['keyId' => $created['keyId'], 'secret' => $created['secret'], 'table' => $table];
+            km_admin_log_record('table', 'table.api_create', $table . ' ' . $created['keyId'] . '(' . implode('・', array_map(static fn (string $p): string => KM_TABLE_API_PERMISSIONS[$p], $permissions)) . ')');
+            header('Location: ./tables.php?api=created#km-table-api', true, 303);
+            exit;
+        } catch (Throwable $exception) {
+            error_log('tables.php api_create failed: ' . $exception->getMessage());
+            $errors[] = km_admin_error_message($exception, '外部接続を作れませんでした。');
+        }
+    } elseif ($action === 'api_revoke') {
+        try {
+            $label = km_table_api_revoke(km_db(), (int) ($_POST['api_id'] ?? 0));
+            km_admin_log_record('table', 'table.api_revoke', $label);
+            header('Location: ./tables.php?api=revoked#km-table-api', true, 303);
+            exit;
+        } catch (Throwable $exception) {
+            error_log('tables.php api_revoke failed: ' . $exception->getMessage());
+            $errors[] = km_admin_error_message($exception, '外部接続を取り消せませんでした。');
+        }
     } elseif ($action === 'delete') {
         $name = trim((string) ($_POST['name'] ?? ''));
         $confirmName = trim((string) ($_POST['confirm_name'] ?? ''));
@@ -77,12 +109,21 @@ if (isset($_GET['created'])) {
 
 $tables = [];
 $dbError = null;
+$apiKeys = [];
 try {
     $pdo = km_db();
     $tables = km_table_list($pdo);
+    $apiKeys = km_table_api_list($pdo);
 } catch (Throwable $exception) {
     $dbError = $exception->getMessage();
 }
+// 作ったばかりの接続のキー。**1 度だけ出して消す**(再読み込みでは出ない)
+$apiNew = is_array($_SESSION['km_table_api_new'] ?? null) ? $_SESSION['km_table_api_new'] : null;
+unset($_SESSION['km_table_api_new']);
+$apiNotice = ['created' => '外部接続を作りました。', 'revoked' => '外部接続を取り消しました。この接続 ID とキーは、もう使えません。'][(string) ($_GET['api'] ?? '')] ?? null;
+$apiEndpoint = km_table_api_endpoint();
+$apiActive = array_values(array_filter($apiKeys, static fn (array $k): bool => $k['revokedAt'] === null));
+$apiRevokedCount = count($apiKeys) - count($apiActive);
 
 $KM_PAGE = [
     'nav' => 'tables',
@@ -233,6 +274,113 @@ require __DIR__ . '/_inc/partials/page-header.php';
               </div>
             </div>
             <!--end::Row-->
+
+            <?php
+            /*
+             * 外部接続(2026-10-21、lib/table-api.php)。外のプログラム・表計算から、443 番の /api/table.php で
+             * 1 つの表を読み書きする。ユーザー名(接続 ID)とキーは自動で作り、キーは作った直後の 1 回だけ出す。
+             */
+            ?>
+            <div class="card mt-4" id="km-table-api">
+              <div class="card-header"><h3 class="card-title">外部接続</h3></div>
+              <div class="card-body">
+                <?php if ($apiNotice !== null): ?>
+                  <div class="alert alert-success" role="alert"><?= km_e($apiNotice) ?></div>
+                <?php endif; ?>
+                <?php if ($apiNew !== null): ?>
+                  <div class="alert alert-warning" role="alert">
+                    <p class="fw-bold mb-2">この接続のユーザー名とキーです。<strong>キーはいまだけ表示します</strong>(閉じると二度と出ません。控え損ねたら取り消して作り直してください)。</p>
+                    <dl class="row mb-2 fs-7">
+                      <dt class="col-sm-3">接続先(URL)</dt><dd class="col-sm-9"><code class="user-select-all"><?= km_e($apiEndpoint) ?></code></dd>
+                      <dt class="col-sm-3">表</dt><dd class="col-sm-9"><code><?= km_e((string) $apiNew['table']) ?></code></dd>
+                      <dt class="col-sm-3">ユーザー名(接続 ID)</dt><dd class="col-sm-9"><code class="user-select-all"><?= km_e((string) $apiNew['keyId']) ?></code></dd>
+                      <dt class="col-sm-3">キー(パスワード)</dt><dd class="col-sm-9"><code class="user-select-all"><?= km_e((string) $apiNew['secret']) ?></code></dd>
+                    </dl>
+                    <div class="fs-7">使い方の例(curl):</div>
+                    <pre class="km-api-example mb-0"><code>curl -u <?= km_e((string) $apiNew['keyId']) ?>:<?= km_e((string) $apiNew['secret']) ?> "<?= km_e($apiEndpoint) ?>?table=<?= km_e((string) $apiNew['table']) ?>&amp;limit=10"
+curl -u <?= km_e((string) $apiNew['keyId']) ?>:<?= km_e((string) $apiNew['secret']) ?> -X POST -H "Content-Type: application/json" \
+  -d '{"values": {"列名": "値"}}' "<?= km_e($apiEndpoint) ?>?table=<?= km_e((string) $apiNew['table']) ?>"</code></pre>
+                  </div>
+                <?php endif; ?>
+
+                <p class="fs-7 text-body-secondary">
+                  外のプログラムや表計算から、<strong>1 つの表だけ</strong>を HTTPS(443 番)で読み書きします。ユーザー名とキーは自動で作ります。
+                  MariaDB の利用者は作りません(システムの表 <code>km_</code> には届きません)。できることは接続ごとに選べ、既定は<strong>読む + 足す</strong>です。
+                  行を足す・直す・消すと、操作の記録に残ります。表を削除するか接続を取り消すと、すぐに使えなくなります。
+                </p>
+                <div class="row">
+                  <div class="col-12 col-xl-7">
+                    <?php if ($apiActive === []): ?>
+                      <p class="text-body-secondary fs-7">使える接続はまだありません。</p>
+                    <?php else: ?>
+                      <div class="table-responsive">
+                        <table class="table table-sm align-middle">
+                          <thead><tr><th scope="col">名前・表</th><th scope="col">ユーザー名</th><th scope="col">できること</th><th scope="col">最後に使った</th><th scope="col"></th></tr></thead>
+                          <tbody>
+                            <?php foreach ($apiActive as $key): ?>
+                              <tr>
+                                <td><div class="fw-bold"><?= km_e((string) $key['label']) ?></div><code class="fs-7"><?= km_e((string) $key['tableName']) ?></code></td>
+                                <td><code class="fs-7"><?= km_e((string) $key['keyId']) ?></code></td>
+                                <td>
+                                  <?php foreach (KM_TABLE_API_PERMISSIONS as $column => $permLabel): ?>
+                                    <?php if ((int) $key[$column] === 1): ?><span class="badge <?= in_array($column, ['can_update', 'can_delete'], true) ? 'text-bg-warning' : 'text-bg-secondary' ?>"><?= km_e($permLabel) ?></span><?php endif; ?>
+                                  <?php endforeach; ?>
+                                </td>
+                                <td class="fs-7"><?= km_e((string) ($key['lastUsedAt'] ?? 'まだ')) ?></td>
+                                <td>
+                                  <form method="post" class="m-0" data-km-confirm="「<?= km_e((string) $key['label']) ?>」を取り消します。この接続はすぐに使えなくなります。よろしいですか?">
+                                    <?= km_csrf_field() ?>
+                                    <input type="hidden" name="action" value="api_revoke">
+                                    <input type="hidden" name="api_id" value="<?= (int) $key['id'] ?>">
+                                    <button type="submit" class="btn btn-sm btn-outline-danger">取り消す</button>
+                                  </form>
+                                </td>
+                              </tr>
+                            <?php endforeach; ?>
+                          </tbody>
+                        </table>
+                      </div>
+                    <?php endif; ?>
+                    <?php if ($apiRevokedCount > 0): ?>
+                      <p class="fs-7 text-body-secondary mb-0">取り消した接続: <?= $apiRevokedCount ?> 件(記録として残しています)</p>
+                    <?php endif; ?>
+                  </div>
+                  <div class="col-12 col-xl-5">
+                    <?php if ($tables === []): ?>
+                      <p class="fs-7 text-body-secondary">先に表を作ってください。</p>
+                    <?php else: ?>
+                      <form method="post">
+                        <?= km_csrf_field() ?>
+                        <input type="hidden" name="action" value="api_create">
+                        <div class="mb-2">
+                          <label class="form-label" for="km-api-table">表</label>
+                          <select class="form-select" id="km-api-table" name="api_table" required>
+                            <?php foreach ($tables as $table): ?>
+                              <option value="<?= km_e((string) $table['name']) ?>"><?= km_e((string) $table['name']) ?></option>
+                            <?php endforeach; ?>
+                          </select>
+                        </div>
+                        <div class="mb-2">
+                          <label class="form-label" for="km-api-label">接続の名前</label>
+                          <input class="form-control" id="km-api-label" name="api_label" maxlength="<?= KM_TABLE_API_LABEL_MAX ?>" required placeholder="例: 集計シート・受付の端末">
+                        </div>
+                        <fieldset class="mb-3">
+                          <legend class="form-label fs-6 mb-1">できること</legend>
+                          <?php foreach (KM_TABLE_API_PERMISSIONS as $column => $permLabel): ?>
+                            <div class="form-check form-check-inline">
+                              <input class="form-check-input" type="checkbox" id="km-api-<?= km_e($column) ?>" name="perm[<?= km_e($column) ?>]" value="1" <?= in_array($column, KM_TABLE_API_DEFAULT_PERMISSIONS, true) ? 'checked' : '' ?>>
+                              <label class="form-check-label" for="km-api-<?= km_e($column) ?>"><?= km_e($permLabel) ?></label>
+                            </div>
+                          <?php endforeach; ?>
+                          <div class="form-text">要るものだけに印を付けてください(直す・消すは、外から行を書き換え・消去できるようになります)。</div>
+                        </fieldset>
+                        <button type="submit" class="btn btn-primary">接続を作る(ユーザー名とキーを自動で作る)</button>
+                      </form>
+                    <?php endif; ?>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
           <!--end::Container-->
         </div>

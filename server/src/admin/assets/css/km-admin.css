@@ -114,3 +114,6 @@
 .km-floor-preview { display: block; width: 100%; max-height: 14rem; object-fit: contain; background: var(--bs-tertiary-bg); border: 1px solid var(--bs-border-color); border-radius: 0.5rem; }
 .km-floor-preview-empty { display: block; padding: 2rem 0.5rem; text-align: center; color: var(--bs-secondary-color); background: var(--bs-tertiary-bg); border-radius: 0.5rem; }
 .km-w-24rem { max-width: 24rem; }
+
+/* テーブル管理の外部接続(admin/tables.php。2026-10-21)。作った直後の使い方の例 */
+.km-api-example { white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; background: var(--bs-tertiary-bg); padding: 0.5rem 0.75rem; border-radius: 0.375rem; }

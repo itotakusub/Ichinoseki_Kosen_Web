@@ -47,6 +47,17 @@ try {
             }
         }
 
+        if ($formAction === 'tutorial_end') {
+            try {
+                km_tutorial_end_save($pdo, (string) ($_POST['end_text'] ?? ''), (string) ($_POST['end_survey_url'] ?? ''), isset($_POST['end_phone_qr']));
+                km_admin_log_record('settings', 'poster.tutorial_end');
+                header('Location: ./posters.php?saved=tutorial_end#tutorial-end', true, 303);
+                exit;
+            } catch (InvalidArgumentException $exception) {
+                $errors[] = $exception->getMessage();
+            }
+        }
+
         if ($formAction === 'save') {
             $posterId = ctype_digit((string) ($_POST['id'] ?? '')) ? (int) $_POST['id'] : null;
             $source = (string) ($_POST['image_source'] ?? 'keep');
@@ -129,6 +140,7 @@ try {
         'deleted' => 'ポスターを消しました(画像も消しました)。',
         'link' => '地点の URL を保存しました。',
         'link_removed' => '地点の URL を外しました。',
+        'tutorial_end' => 'チュートリアルの終わりの知らせを保存しました。',
     ][(string) ($_GET['saved'] ?? '')] ?? null;
 
     $mode = km_poster_mode($pdo);
@@ -141,6 +153,7 @@ try {
     $posters = km_posters_all($pdo);
     $links = km_node_links_all($pdo);
     $nodeOptions = km_poster_node_options($pdo);
+    $tutorialEnd = km_tutorial_end_config($pdo);
 } catch (Throwable $exception) {
     error_log('posters.php: ' . $exception->getMessage());
     $dbError = km_admin_error_message($exception, '詳しくはサーバーのログを照合してください。');
@@ -150,7 +163,9 @@ try {
     $posters = [];
     $links = [];
     $nodeOptions = [];
+    $tutorialEnd = ['text' => KM_TUTORIAL_END_TEXT_DEFAULT, 'ownSurveyUrl' => '', 'surveyUrl' => '', 'phoneQr' => true];
 }
+$adPercent = (int) round(KM_POSTER_AD_CHANCE * 100);
 
 $nodeNames = [];
 foreach ($nodeOptions as $option) {
@@ -273,7 +288,8 @@ require __DIR__ . '/_inc/partials/page-header.php';
                     <ul class="mb-2">
                       <li><strong>地図の地点の詳細</strong>に、その地点のポスター(画像・見出し・説明・URL)が出ます。ポスターのある地点の名前には 🖼 が付きます。</li>
                       <li>地図の右上の <strong>🖼️</strong>(出しているポスターがあるときだけ出ます)から、ポスターを並べた<strong>一覧のページ</strong>を開けます。画像を押すと、地図のその地点へ移って詳細を開きます。</li>
-                      <li>地点に置かないポスターは、一覧のページにだけ出ます(URL を押すと開きます)。</li>
+                      <li><strong>地点に置かないポスターは「広告」</strong>です。チュートリアル(操作の案内)が終わったときに、<strong><?= $adPercent ?>% の確率</strong>で 1 件を出します(どの広告も同じ確率。利用規約の第 7 条に書いてあります)。一覧のページにも出ます。</li>
+                      <li>広告を閉じたら(出なかったときはすぐ)、下の「チュートリアルの終わりの知らせ」を出します。</li>
                     </ul>
                     <a class="btn btn-sm btn-outline-primary" href="<?= km_e(km_site_url(null, '/posters.php')) ?>" target="_blank" rel="noopener">一覧のページを開く</a>
                     <span class="text-body-secondary ms-1">(「表示しない」の間は「いまはありません」と出ます)</span>
@@ -303,7 +319,11 @@ require __DIR__ . '/_inc/partials/page-header.php';
                                 </td>
                                 <td>
                                   <div class="fw-bold"><?= km_e($poster['title']) ?></div>
-                                  <div class="fs-7"><i class="bi bi-geo-alt"></i> <?= km_e($nodeLabel($poster['nodeId'])) ?></div>
+                                  <?php if ($poster['nodeId'] === ''): ?>
+                                    <div class="fs-7"><span class="badge text-bg-warning">広告</span> チュートリアルの終わりに <?= $adPercent ?>%</div>
+                                  <?php else: ?>
+                                    <div class="fs-7"><i class="bi bi-geo-alt"></i> <?= km_e($nodeLabel($poster['nodeId'])) ?></div>
+                                  <?php endif; ?>
                                   <?php if ($poster['linkUrl'] !== ''): ?>
                                     <div class="fs-7 text-truncate km-poster-url"><i class="bi bi-link-45deg"></i> <a href="<?= km_e($poster['linkUrl']) ?>" target="_blank" rel="noopener noreferrer"><?= km_e($poster['linkUrl']) ?></a></div>
                                   <?php endif; ?>
@@ -405,7 +425,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
                     <div class="mb-3">
                       <label class="form-label" for="km-poster-node">地点(任意)</label>
                       <?php $nodeSelect('node_id', 'km-poster-node', (string) $value('nodeId'), true); ?>
-                      <div class="form-text">この地点の詳細にポスターが出ます。一覧のページで画像を押すと、ここへ移ります。</div>
+                      <div class="form-text">この地点の詳細にポスターが出ます。一覧のページで画像を押すと、ここへ移ります。<strong>地点に置かないと「広告」</strong>になり、チュートリアルの終わりに <?= $adPercent ?>% の確率で出ます。</div>
                     </div>
                     <div class="row g-2 mb-3 align-items-end">
                       <div class="col-5">
@@ -444,6 +464,35 @@ require __DIR__ . '/_inc/partials/page-header.php';
                   </form>
                 </div>
               </div>
+            </div>
+
+            <div class="card mb-4" id="tutorial-end">
+              <div class="card-header"><h3 class="card-title">チュートリアルの終わりの知らせ</h3></div>
+              <form method="post" class="card-body">
+                <?= km_csrf_field() ?>
+                <input type="hidden" name="form_action" value="tutorial_end">
+                <p class="fs-7 text-body-secondary">
+                  チュートリアルが終わったとき(最後まで進んだ・スキップした)に出します。広告を出したときは、広告を閉じたあとに出ます。
+                  見出しは「🎉 チュートリアルが終わりました」で固定です。<strong>ポスターの出し方(3 段階)とは関係なく出ます。</strong>
+                </p>
+                <div class="mb-3">
+                  <label class="form-label" for="km-end-text">本文</label>
+                  <textarea class="form-control" id="km-end-text" name="end_text" rows="2" maxlength="<?= KM_TUTORIAL_END_TEXT_MAX ?>"><?= km_e($tutorialEnd['text']) ?></textarea>
+                </div>
+                <div class="mb-3">
+                  <label class="form-label" for="km-end-survey">アンケートの URL(https)</label>
+                  <input class="form-control" type="url" id="km-end-survey" name="end_survey_url" maxlength="255" placeholder="https://forms.gle/…" value="<?= km_e($tutorialEnd['ownSurveyUrl']) ?>">
+                  <div class="form-text">
+                    「このページのアンケートを募集中です。こちら」と QR を出します。空なら <a href="./test-mode.php">テスト用アカウント</a>の画面で決めたアンケートの URL を使います
+                    <?php if ($tutorialEnd['ownSurveyUrl'] === '' && $tutorialEnd['surveyUrl'] !== ''): ?>(いまは <code><?= km_e($tutorialEnd['surveyUrl']) ?></code>)<?php elseif ($tutorialEnd['surveyUrl'] === ''): ?>(いまはどちらも空なので、アンケートの行は出しません)<?php endif; ?>。
+                  </div>
+                </div>
+                <div class="form-check mb-3">
+                  <input class="form-check-input" type="checkbox" id="km-end-phone" name="end_phone_qr" value="1" <?= $tutorialEnd['phoneQr'] ? 'checked' : '' ?>>
+                  <label class="form-check-label" for="km-end-phone">「スマホでもマップを見ることができます」と、地図の QR(<?= km_e(km_site_url(null, '/')) ?>)を出す</label>
+                </div>
+                <button type="submit" class="btn btn-primary">保存</button>
+              </form>
             </div>
 
             <div class="card mb-4" id="node-links">

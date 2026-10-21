@@ -340,6 +340,7 @@
     function finish() {
         if (detach) { detach(); detach = null; }
         markSeen();
+        const wasRunning = layer !== null;
         if (layer) {
             window.removeEventListener('resize', place);
             window.removeEventListener('scroll', place, true);
@@ -350,8 +351,18 @@
             document.removeEventListener('keydown', onKey);
             layer.remove();
         }
+        const lastIndex = current;
         layer = null;
         current = -1;
+        /*
+         * 終わったことを知らせる(2026-10-21)。最後まで進んだときも、スキップ・Esc のときも出す ——
+         * 受けるのは Main/tutorial-end.js(広告を確率で出し、閉じたら「チュートリアルが終わりました」の知らせ)。
+         */
+        if (wasRunning) {
+            document.dispatchEvent(new CustomEvent('km-tutorial-finished', {
+                detail: { completed: lastIndex >= order.length - 1 },
+            }));
+        }
     }
 
     function start() {
