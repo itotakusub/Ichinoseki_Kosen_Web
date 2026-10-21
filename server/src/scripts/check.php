@@ -4109,7 +4109,7 @@ function km_check_hardening(): void
     check_bool('proxy-web.conf に proxy_read_timeout を書かない(location で重複すると起動しない)', !str_contains((string) preg_replace('/^\s*#.*$/m', '', $file('nginx/km/proxy-web.conf')), 'proxy_read_timeout'));
     // 2 つ目は Soketi の WebSocket(/ws/app/。2026-10-19 に 6001 番から移した。1 本を長く張る)
     check('443 で 300s を許すのは downloads.php と /ws/app/ だけ', 2, substr_count($https, 'proxy_read_timeout 300s;'));
-    check_bool('未認証で重い口を km_api で絞る(メソッドを問わない)', str_contains($https, 'location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update|positioning-params|learning)|logto_me)\.php$ {') && str_contains($https, 'limit_req zone=km_api burst=120 nodelay;'));
+    check_bool('未認証で重い口を km_api で絞る(メソッドを問わない)', str_contains($https, 'location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update|positioning-params|learning|poster-image)|logto_me)\.php$ {') && str_contains($https, 'limit_req zone=km_api burst=120 nodelay;'));
     check_bool('アプリの地図は km_appmap で絞る', preg_match('#location = /api/app-map\.php \{\s*limit_req zone=km_appmap burst=30 nodelay;#', $https) === 1);
     check_bool('callback.php は認可コードをログに残さない', preg_match('#location = /callback\.php \{\s*access_log [^;]+ km_no_query;#', $https) === 1);
     /*
@@ -7128,7 +7128,7 @@ function km_check_layout(): void
         check_bool('「係の人」の欄の CSS がある', false);
     }
     // 2026-10-19(同日、利用者の指示): テスト用アカウントでは「ダウンロード・設定」を開けない。⚙️ も引き出しも書かない
-    check_bool('テスト用アカウントでは「ダウンロード・設定」の ⚙️ を出さない', preg_match('/<\?php if \(\$kmTestMode === null\): \?>\s*<div class="action-group-right">\s*<button id="info-panel-toggle"/', $homeCode) === 1);
+    check_bool('テスト用アカウントでは「ダウンロード・設定」の ⚙️ を出さない', preg_match('/<\?php if \(\$kmTestMode === null\): \?>\s*<button id="info-panel-toggle"/', $homeCode) === 1);
     check_bool('テスト用アカウントでは引き出しごと書かない(APK・アカウント設定への導線をページに残さない)', preg_match('/<\?php if \(\$kmTestMode === null\): \?>\s*<div id="km-drawer-scrim".*?<\/aside>\s*<\?php endif; \?>/s', $homeCode) === 1);
     check_bool('引き出しが無ければログインの欄はバーに残す(panel.js は受け皿が無いと動かさない)', str_contains((string) file_get_contents(__DIR__ . '/../Main/panel.js'), "if (!authLinks || !authSlot || !topActions) return;"));
     if (preg_match('/^\.action-group-left \{(.*?)^\}/ms', (string) file_get_contents(__DIR__ . '/../Main/styles.css'), $leftCss) === 1) {
@@ -7139,6 +7139,106 @@ function km_check_layout(): void
     $accountCode = (string) file_get_contents(__DIR__ . '/../account.php');
     check_bool('テスト用アカウントではアカウントの画面を使わせない(表示名・退会・サインアウト)', str_contains($accountCode, "\$blockedReason = 'test';\n            \$signedIn = false;")
         && strpos($accountCode, "\$blockedReason = 'test';") < strpos($accountCode, "if ((\$_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && !km_csrf_verify()) {"));
+
+    km_check_heading('posters: ポスター・広告と地点の URL(2026-10-21)');
+    require_once __DIR__ . '/../lib/posters.php';
+    require_once __DIR__ . '/../lib/admin-log.php';
+    require_once __DIR__ . '/../lib/csp.php';
+    check_bool('出し方の 3 段階: 表示しない は出さない', !km_poster_mode_shows('off', true) && !km_poster_mode_shows('off', false));
+    check_bool('出し方の 3 段階: イベント中のみ はイベント中だけ', km_poster_mode_shows('event', true) && !km_poster_mode_shows('event', false));
+    check_bool('出し方の 3 段階: 常に表示 はいつでも', km_poster_mode_shows('always', true) && km_poster_mode_shows('always', false));
+    check_bool('知らない出し方は出さない', !km_poster_mode_shows('sometimes', true));
+    check('まだ選んでいなければ「表示しない」', 'off', KM_POSTER_MODE_DEFAULT);
+    check_bool('リンクの URL は http / https だけ', km_poster_url_valid('https://www.ichinoseki.ac.jp/') && km_poster_url_valid('http://example.com/a?b=1')
+        && !km_poster_url_valid('javascript:alert(1)') && !km_poster_url_valid('data:text/html,x') && !km_poster_url_valid('ftp://example.com/')
+        && !km_poster_url_valid('//example.com/') && !km_poster_url_valid('/posters.php'));
+    check_bool('URL: 利用者名入り・空白・長すぎるものは断る', !km_poster_url_valid('https://user:pass@example.com/')
+        && !km_poster_url_valid("https://example.com/a b") && !km_poster_url_valid("https://example.com/\n") && !km_poster_url_valid('https://example.com/' . str_repeat('a', 500)));
+    check_bool('取りに行く先: 公開のアドレスは通す', km_poster_ip_allowed('8.8.8.8'));
+    $blockedIps = ['10.0.0.1', '172.17.0.1', '192.168.3.29', '127.0.0.1', '169.254.169.254', '100.64.0.1', '0.0.0.0', '::1', 'fd00::1', 'localhost'];
+    check('取りに行く先: 私的な網・自分・メタデータ・IPv6 は通さない', [], array_values(array_filter($blockedIps, 'km_poster_ip_allowed')));
+    $pngHeader = static fn (int $w, int $h): string => "\x89PNG\r\n\x1a\n" . pack('N', 13) . 'IHDR' . pack('NN', $w, $h) . "\x08\x02\x00\x00\x00" . pack('N', 0);
+    check('画像: 中身が PNG なら png', 'png', km_poster_image_check($pngHeader(600, 800))['ext']);
+    $posterImageError = static function (string $bytes): string {
+        try {
+            km_poster_image_check($bytes);
+            return '';
+        } catch (InvalidArgumentException $exception) {
+            return $exception->getMessage();
+        }
+    };
+    check_bool('画像: SVG・PDF・空は断る', $posterImageError('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>') !== ''
+        && $posterImageError("%PDF-1.7\n") !== '' && $posterImageError('') !== '');
+    check_bool('画像: 縦横 ' . KM_POSTER_MAX_DIMENSION . 'px を超えるものは断る(小さなファイルでも展開で端末のメモリが尽きる)', str_contains($posterImageError($pngHeader(5000, 10)), '4096px'));
+    check_bool('画像: A4 を 300dpi で取り込んだ大きさは通す', $posterImageError($pngHeader(2480, 3508)) === '');
+    $posterValidateError = static function (array $input): string {
+        try {
+            km_poster_validate($input);
+            return '';
+        } catch (InvalidArgumentException $exception) {
+            return $exception->getMessage();
+        }
+    };
+    check_bool('入力: 見出しは要る・URL は形を見る・地点の id にパスを入れさせない', $posterValidateError(['title' => '  ']) !== ''
+        && $posterValidateError(['title' => 'a', 'linkUrl' => 'javascript:x']) !== ''
+        && $posterValidateError(['title' => 'a', 'nodeId' => '../etc/passwd']) !== ''
+        && $posterValidateError(['title' => 'a', 'sortOrder' => '1.5']) !== '');
+    $validatedPoster = km_poster_validate(['title' => ' 模擬店 ', 'description' => "a\r\nb", 'linkUrl' => '', 'nodeId' => '', 'sortOrder' => '-2', 'isEnabled' => true]);
+    check('入力: 空の URL・地点は null、改行は \n にそろえる', ['模擬店', "a\nb", null, null, -2, true], array_values($validatedPoster));
+    check_bool('保存名は自分で採番した形だけ(パスをはみ出させない・SVG を通さない)', km_poster_stored_name_valid('poster_' . str_repeat('a', 32) . '.webp')
+        && !km_poster_stored_name_valid('poster_' . str_repeat('a', 32) . '.svg') && !km_poster_stored_name_valid('../poster_' . str_repeat('a', 32) . '.png')
+        && !km_poster_stored_name_valid('avatar_' . str_repeat('a', 32) . '.png'));
+    if (extension_loaded('pdo_sqlite')) {
+        $posterDb = new PDO('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
+        check('表が無ければ「表示しない」・空(公開の経路で表を作らない)', ['off', []], [km_poster_mode($posterDb), km_posters_public($posterDb, true, [])]);
+        $posterDb->sqliteCreateFunction('UNIX_TIMESTAMP', static fn ($value): int => (int) strtotime((string) $value), 1);
+        $posterDb->exec('CREATE TABLE km_settings (name TEXT PRIMARY KEY, value TEXT, updated_at TEXT)');
+        $posterDb->exec('CREATE TABLE km_posters (id INTEGER PRIMARY KEY, title TEXT, description TEXT, link_url TEXT, node_id TEXT, image_stored_name TEXT,
+            image_source_url TEXT, image_width INT, image_height INT, sort_order INT, is_enabled INT, created_at TEXT, updated_at TEXT)');
+        $posterDb->exec("INSERT INTO km_posters VALUES
+            (1, '後ろ', NULL, 'https://example.com/', 'n1', 'poster_x.png', NULL, 10, 20, 5, 1, '2026-10-21 10:00:00', '2026-10-21 10:00:00'),
+            (2, '前', '説明', NULL, 'hiddenNode', 'poster_y.png', NULL, 10, 20, 1, 1, '2026-10-21 10:00:00', '2026-10-21 10:00:00'),
+            (3, '止めた', NULL, NULL, 'n1', 'poster_z.png', NULL, 10, 20, 0, 0, '2026-10-21 10:00:00', '2026-10-21 10:00:00'),
+            (4, '消えた地点', NULL, NULL, 'gone', 'poster_w.png', NULL, 10, 20, 9, 1, '2026-10-21 10:00:00', '2026-10-21 10:00:00')");
+        $posterNodes = ['n1' => ['name' => '図書館', 'floor' => '1'], 'hiddenNode' => ['name' => '倉庫', 'floor' => '2', 'hidden' => true]];
+        check('「表示しない」の間は出さない', [], km_posters_public($posterDb, true, $posterNodes));
+        $posterDb->exec("INSERT INTO km_settings VALUES ('poster_display_mode', 'event', '')");
+        check('「イベント中のみ」でイベントの外なら出さない', [], km_posters_public($posterDb, false, $posterNodes));
+        $publicPosters = km_posters_public($posterDb, true, $posterNodes);
+        check('止めたものは出さない・並び順どおり', [2, 1, 4], array_column($publicPosters, 'id'));
+        check('イベントで出さない地点・地図に無い地点は指さない(場所を漏らさない)', ['', 'n1', ''], array_column($publicPosters, 'nodeId'));
+        check('画像の URL は番号と版だけ', '/api/poster-image.php?id=1&v=' . strtotime('2026-10-21 10:00:00'), $publicPosters[1]['imageUrl'] ?? null);
+        check_bool('保存名は公開の地図データに載せない', !array_key_exists('storedName', $publicPosters[0]) && !str_contains((string) json_encode($publicPosters), 'poster_x.png'));
+        $posterDb->exec('CREATE TABLE km_map_node_links (node_id TEXT PRIMARY KEY, url TEXT, label TEXT, updated_at TEXT)');
+        $posterDb->exec("INSERT INTO km_map_node_links VALUES ('n1', 'https://example.com/lab', '研究室', ''), ('n2', 'javascript:alert(1)', NULL, '')");
+        check('地点の URL: 通らない値は表に入っていても出さない', ['n1'], array_keys(km_node_links_for_map($posterDb)));
+    } else {
+        check_skip('posters: 公開に出すもの', 'pdo_sqlite が無い');
+    }
+    $posterLib = (string) file_get_contents(__DIR__ . '/../lib/posters.php');
+    check_bool('外から取るとき: リダイレクトを curl に任せない・名前を引いた先を固定する', str_contains($posterLib, 'CURLOPT_FOLLOWLOCATION => false') && str_contains($posterLib, 'CURLOPT_RESOLVE =>')
+        && str_contains($posterLib, 'CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS') && preg_match('/foreach \(\$addresses as \$address\) \{\s*if \(!km_poster_ip_allowed\(\$address\)\)/', $posterLib) === 1);
+    check_bool('CSP: 公開ページの img-src に外部を足していない(画像は取り込んで自前で配る)', str_contains(km_csp_policy('public'), "img-src 'self' data:;") && str_contains(km_csp_policy('admin'), "img-src 'self' data:;"));
+    $posterImageApi = (string) file_get_contents(__DIR__ . '/../api/poster-image.php');
+    check_bool('公開の画像の口: いま出しているもので、止めていないものだけ', str_contains($posterImageApi, 'if (km_posters_showing_now($pdo)) {') && str_contains($posterImageApi, 'WHERE id = ? AND is_enabled = 1'));
+    check_bool('管理画面の画像・プレビューの口は guard.php の内側', str_starts_with(ltrim(substr((string) file_get_contents(__DIR__ . '/../admin/api/poster-image.php'), 0, 200)), '<?php')
+        && str_contains((string) file_get_contents(__DIR__ . '/../admin/api/poster-image.php'), "require dirname(__DIR__) . '/_inc/guard.php';")
+        && str_contains((string) file_get_contents(__DIR__ . '/../admin/api/poster-preview.php'), "require dirname(__DIR__) . '/_inc/guard.php';"));
+    check_bool('URL のプレビュー: POST と CSRF を見てから取りに行く', preg_match('/!== \'POST\'.*?km_csrf_verify\(\).*?km_poster_fetch_remote/s', (string) file_get_contents(__DIR__ . '/../admin/api/poster-preview.php')) === 1);
+    $mapDataLib = (string) file_get_contents(__DIR__ . '/../lib/map-data.php');
+    check_bool('地図データ: 錠の内側でだけポスターを載せ、地点に URL を付ける', str_contains($mapDataLib, "'posters' => km_posters_public(\$pdo, \$overlay['events'] !== [], \$nodesById),")
+        && strpos($mapDataLib, "'posters' => km_posters_public(") > strpos($mapDataLib, 'if (!$viewUnlocked) {') && str_contains($mapDataLib, "\$node['linkUrl'] = \$nodeLinks[\$id]['url'];"));
+    check_bool('公開ページ: ?poster= は数字の形だけ確かめる・🖼️ は出しているポスターがあるときだけ', str_contains($homeCode, "preg_match('/^[1-9]\\d{0,9}\$/', \$posterParam) === 1")
+        && str_contains($homeCode, '<?php if ($kmPosterCount > 0): ?>') && str_contains($homeCode, '<meta name="km-focus-poster" content="<?= km_home_e($kmFocusPoster) ?>">'));
+    $wallPage = (string) file_get_contents(__DIR__ . '/../posters.php');
+    check_bool('一覧のページ: 地図の錠が掛かっていれば地点を出さない・地図へは ?room= で移る', str_contains($wallPage, "km_posters_public(\$pdo, km_poster_event_active(\$pdo), [])")
+        && str_contains($wallPage, "'/?room=' . rawurlencode(\$poster['nodeId']) . '&poster=' . (int) \$poster['id']") && str_contains($wallPage, 'km_map_guest_verify();'));
+    $appJsForPosters = (string) file_get_contents(__DIR__ . '/../Main/app.js');
+    check_bool('地図: ポスターと地点の URL は escapeHtml を通し、http(s) だけをリンクにする', str_contains($appJsForPosters, '${escapeHtml(poster.title)}')
+        && str_contains($appJsForPosters, 'href="${escapeHtml(poster.linkUrl)}" target="_blank" rel="noopener noreferrer"')
+        && str_contains($appJsForPosters, "if (node.linkUrl && /^https?:\\/\\//i.test(node.linkUrl)) {"));
+    check_bool('監査ログ: ポスターと地点の URL の操作に文言がある', isset(KM_ADMIN_LOG_ACTION_LABELS['poster.mode'], KM_ADMIN_LOG_ACTION_LABELS['poster.create'], KM_ADMIN_LOG_ACTION_LABELS['poster.update'], KM_ADMIN_LOG_ACTION_LABELS['poster.delete'], KM_ADMIN_LOG_ACTION_LABELS['map.node_link']));
+    check_bool('管理画面: サイドバーから開ける', str_contains((string) file_get_contents(__DIR__ . '/../admin/_inc/partials/sidebar.php'), '<a href="./posters.php" class="<?= $link(\'posters\') ?>">'));
 
     km_check_heading('test-mode: テスト用アカウント(展示の PC。2026-10-15)');
     $testLib = (string) file_get_contents(__DIR__ . '/../lib/test-mode.php');

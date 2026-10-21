@@ -218,6 +218,24 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 返したものと同じで、教職員氏名は解除していなければ既に null になっている)。
     window.graphData = graphData;
 
+    /*
+     * ---- ポスター(2026-10-21、lib/posters.php) ----
+     *
+     * 出し方(表示しない / イベント中のみ / 常に表示)はサーバーが決め、出さないときは空で届く。
+     * 地点に置いたものは、その地点の詳細に出し、地図の名前に 🖼️ を付ける。
+     * 一覧のページ(/posters.php)から来たとき(`?room=…&poster=<番号>`)は、そのポスターを詳細の先頭に出す。
+     */
+    const postersById = new Map();
+    const postersByNode = new Map();
+    (graphData.posters || []).forEach(function (poster) {
+        postersById.set(Number(poster.id), poster);
+        if (!poster.nodeId) return;
+        if (!postersByNode.has(poster.nodeId)) postersByNode.set(poster.nodeId, []);
+        postersByNode.get(poster.nodeId).push(poster);
+    });
+    const focusPosterMeta = document.querySelector('meta[name="km-focus-poster"]');
+    const focusPosterId = focusPosterMeta ? Number(focusPosterMeta.getAttribute('content')) : 0;
+
     // ---- 初期設定 ----
     /*
      * 階を移るときの好み(2026-09-22)。**端末に覚える**(閲覧者ごとの好みなのでサーバーへは送らない)。
@@ -772,10 +790,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         const type = String(node.type || 'room');
         const setting = mapStyle.typeSetting(tuning, type);
         const box = nodeBox(type).box;
+        // ポスターのある地点。図形に輪を付け、名前に 🖼️ を付ける(styles.css の .km-node-has-poster)
+        const hasPoster = postersByNode.has(id);
 
         const marker = L.marker([node.y, node.x], {
             icon: L.divIcon({
-                className: 'km-node km-node-' + type,
+                className: 'km-node km-node-' + type + (hasPoster ? ' km-node-has-poster' : ''),
                 html: nodeIconHtml(node, type),
                 iconSize: [box, box],
                 iconAnchor: [box / 2, box / 2],
@@ -786,7 +806,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
 
         // ツールチップは html: true で描くので、DB 由来の文字列は必ずエスケープする
-        let tooltipContent = escapeHtml(displayNameFor(node));
+        let tooltipContent = (hasPoster ? '<span class="km-label-poster" aria-hidden="true">🖼️</span>' : '')
+            + escapeHtml(displayNameFor(node));
         if (window.isAdmin) {
             /*
              * **`style="…"` を書かない。** CSP に `'unsafe-inline'` が無く、
@@ -988,6 +1009,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             rows += `<div class="km-detail-row km-detail-closed"><span>立入禁止</span>`
                 + `<b>${escapeHtml(node.closureReason || '')}</b></div>`;
         }
+        // 地点の URL(2026-10-21)。サーバーが http / https だけに確かめてあるが、ここでも形を見てから出す
+        if (node.linkUrl && /^https?:\/\//i.test(node.linkUrl)) {
+            rows += `<a class="km-detail-link" href="${escapeHtml(node.linkUrl)}" target="_blank" rel="noopener noreferrer">`
+                + `${escapeHtml(node.linkLabel || 'くわしく見る')} ↗</a>`;
+        }
+        const posters = posterListHtml(id);
 
         /*
          * **押せないボタンを出さない。** 目的地にできない地点で
@@ -1023,10 +1050,98 @@ document.addEventListener('DOMContentLoaded', async () => {
                     <span class="km-detail-floor">${escapeHtml(floorLabel)}</span>
                 </div>
                 ${rows}
+                ${posters}
                 ${enter}
                 ${actions}
             </div>
         `;
+    }
+
+    /**
+     * 地点の詳細に出すポスター(2026-10-21)。一覧のページから来たポスターを先頭にし、印を付ける。
+     * 画像の箱は**大きさを決めてある**(styles.css の .km-poster-thumb) —— 画像が読み終わってから
+     * 吹き出しの高さが変わると、寄せた位置からずれる。押すと大きく見られる(openPosterViewer)。
+     */
+    function posterListHtml(nodeId) {
+        const list = (postersByNode.get(nodeId) || []).slice();
+        if (list.length === 0) return '';
+        list.sort(function (a, b) {
+            return (Number(b.id) === focusPosterId) - (Number(a.id) === focusPosterId);
+        });
+
+        return `<div class="km-poster-list" aria-label="ポスター">${list.map(function (poster) {
+            const focused = Number(poster.id) === focusPosterId;
+            const link = poster.linkUrl && /^https?:\/\//i.test(poster.linkUrl)
+                ? `<a class="km-poster-link" href="${escapeHtml(poster.linkUrl)}" target="_blank" rel="noopener noreferrer">くわしく見る ↗</a>`
+                : '';
+            return `<figure class="km-poster${focused ? ' is-focused' : ''}">
+                <button type="button" class="km-poster-thumb" data-km-poster-view="${escapeHtml(String(poster.id))}"
+                        aria-label="${escapeHtml(poster.title)}(大きく見る)">
+                    <img src="${escapeHtml(poster.imageUrl)}" alt="" width="${Number(poster.width) || 0}" height="${Number(poster.height) || 0}">
+                </button>
+                <figcaption class="km-poster-caption">
+                    <b class="km-poster-title">${escapeHtml(poster.title)}</b>
+                    ${poster.description ? `<span class="km-poster-desc">${escapeHtml(poster.description)}</span>` : ''}
+                    ${link}
+                </figcaption>
+            </figure>`;
+        }).join('')}</div>`;
+    }
+
+    /*
+     * ポスターを大きく見る。**地図の上に重ねる 1 枚の幕**(styles.css の .km-poster-viewer)。
+     * Esc・幕・✕ で閉じ、閉じたら押した画像へフォーカスを戻す。
+     */
+    let posterViewer = null;
+    let posterViewerReturn = null;
+    function closePosterViewer() {
+        if (!posterViewer || posterViewer.hidden) return;
+        posterViewer.hidden = true;
+        if (posterViewerReturn && document.contains(posterViewerReturn)) posterViewerReturn.focus();
+        posterViewerReturn = null;
+    }
+    function openPosterViewer(posterId, opener) {
+        const poster = postersById.get(Number(posterId));
+        if (!poster) return;
+        if (!posterViewer) {
+            posterViewer = document.createElement('div');
+            posterViewer.className = 'km-poster-viewer';
+            posterViewer.hidden = true;
+            posterViewer.setAttribute('role', 'dialog');
+            posterViewer.setAttribute('aria-modal', 'true');
+            posterViewer.setAttribute('aria-label', 'ポスター');
+            posterViewer.innerHTML = `
+                <div class="km-poster-viewer-card">
+                    <button type="button" class="icon-btn km-poster-viewer-close" aria-label="閉じる">&times;</button>
+                    <img class="km-poster-viewer-image" alt="">
+                    <div class="km-poster-viewer-body">
+                        <b class="km-poster-viewer-title"></b>
+                        <p class="km-poster-viewer-desc"></p>
+                        <a class="km-poster-link km-poster-viewer-link" target="_blank" rel="noopener noreferrer">くわしく見る ↗</a>
+                    </div>
+                </div>`;
+            posterViewer.addEventListener('click', function (event) {
+                if (event.target === posterViewer || event.target.closest('.km-poster-viewer-close')) closePosterViewer();
+            });
+            document.addEventListener('keydown', function (event) {
+                if (event.key === 'Escape') closePosterViewer();
+            });
+            document.body.append(posterViewer);
+        }
+        const image = posterViewer.querySelector('.km-poster-viewer-image');
+        image.src = poster.imageUrl;
+        image.alt = poster.title;
+        posterViewer.querySelector('.km-poster-viewer-title').textContent = poster.title;
+        const desc = posterViewer.querySelector('.km-poster-viewer-desc');
+        desc.textContent = poster.description || '';
+        desc.hidden = !poster.description;
+        const link = posterViewer.querySelector('.km-poster-viewer-link');
+        const hasLink = Boolean(poster.linkUrl && /^https?:\/\//i.test(poster.linkUrl));
+        link.hidden = !hasLink;
+        if (hasLink) link.href = poster.linkUrl; else link.removeAttribute('href');
+        posterViewerReturn = opener || null;
+        posterViewer.hidden = false;
+        posterViewer.querySelector('.km-poster-viewer-close').focus();
     }
 
     /** その階のマーカー一式を作る(作成済みならそれを返す)。種類ごとに分ける。 */
@@ -1452,6 +1567,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             // 出さない地点・地図から消えた部屋。**黙らない** —— QR を読んだのに何も起きないと壊れて見える
             showRoomNotice('この部屋は今は案内していません。地図から探してください。');
             return;
+        }
+        if (focusPosterId && !postersById.has(focusPosterId)) {
+            // 一覧のページを開いたあとで出し方が変わった・止められた。部屋は開く
+            showRoomNotice('このポスターは今は掲示していません。');
         }
         const floor = String(node.floor);
         const open = () => {
@@ -2621,6 +2740,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         const enterButton = event.target.closest('[data-km-enter]');
         if (enterButton) {
             window.kmEnterBuilding(enterButton.dataset.kmEnter, enterButton.dataset.kmNode);
+            return;
+        }
+        // ポスターの画像(地点の詳細)。大きく見る
+        const posterButton = event.target.closest('[data-km-poster-view]');
+        if (posterButton) {
+            openPosterViewer(posterButton.dataset.kmPosterView, posterButton);
             return;
         }
         const button = event.target.closest('[data-km-pick]');

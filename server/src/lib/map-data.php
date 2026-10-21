@@ -201,6 +201,9 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
         $nodeColumns .= ', ' . $column . ($alias === null ? '' : ' AS ' . $alias);
     }
     $nodeStmt = $pdo->query("SELECT {$nodeColumns} FROM km_map_nodes");
+    // 地点の URL(2026-10-21、lib/posters.php)。表が無ければ空
+    require_once __DIR__ . '/posters.php';
+    $nodeLinks = km_node_links_for_map($pdo);
     $nodesById = [];
     $nodeTypes = [];
     foreach ($nodeStmt->fetchAll() as $node) {
@@ -228,6 +231,11 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
          */
         if (isset($overlay['hiddenNodes'][$id])) {
             $node['hidden'] = true;
+        }
+        // 地点の URL。詳細に「くわしく」のリンクを出す(Main/app.js の nodeDetailHtml)
+        if (isset($nodeLinks[$id])) {
+            $node['linkUrl'] = $nodeLinks[$id]['url'];
+            $node['linkLabel'] = $nodeLinks[$id]['label'];
         }
         $nodesById[$id] = $node;
     }
@@ -321,6 +329,12 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
         'passwordRequested' => km_map_password_requested($config),
         'event' => $event,
         'eventPois' => $overlay['pois'],
+        /*
+         * ポスター(2026-10-21、lib/posters.php)。**出し方の 3 段階**(表示しない / イベント中のみ / 常に表示)を見て、
+         * 出さないときは空。地点は上の一覧に在って出しているものだけ指す(錠・イベントで隠した地点を漏らさない)。
+         * 錠が掛かっているときは上で返しているので、ここへは来ない。
+         */
+        'posters' => km_posters_public($pdo, $overlay['events'] !== [], $nodesById),
         'buildings' => km_map_building_overlays($pdo),
         /*
          * 建物の階(2026-09-24。lib/building-floors.php)。**平面図 1 枚が 1 つの階。**

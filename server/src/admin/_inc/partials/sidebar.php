@@ -24,6 +24,7 @@ $openMenus = [
     'mapPublish' => 'database',
     'mapEditor' => 'database',
     'mapEvents' => 'database',
+    'posters' => 'database',
     'login' => 'auth',
     'projects' => 'content',
     'timeline' => 'content',
@@ -159,6 +160,13 @@ $parentLink = static fn(string $id): string => 'nav-link' . ($openMenu === $id ?
                     <a href="./map-events.php" class="<?= $link('mapEvents') ?>">
                       <i class="nav-icon bi bi-cone-striped"></i>
                       <p data-i18n="side.mapEvents">イベントモード</p>
+                    </a>
+                  </li>
+                  <?php // ポスター・広告と地点の URL(2026-10-21、lib/posters.php) ?>
+                  <li class="nav-item">
+                    <a href="./posters.php" class="<?= $link('posters') ?>">
+                      <i class="nav-icon bi bi-image"></i>
+                      <p data-i18n="side.posters">ポスター・広告</p>
                     </a>
                   </li>
                   <li class="nav-item">

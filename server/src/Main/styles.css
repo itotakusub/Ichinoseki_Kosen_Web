@@ -1835,6 +1835,144 @@ body.km-map-unavailable .km-route-bar {
 .km-detail-row span { color: var(--secondary); }
 .km-detail-closed b { color: #dc2626; }
 
+/* 地点の URL(2026-10-21、lib/posters.php)。詳細の行の下に 1 本 */
+.km-detail-link {
+    display: inline-block;
+    margin: 0.4rem 0 0.1rem;
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: var(--primary);
+    overflow-wrap: anywhere;
+}
+
+/*
+ * ポスター(2026-10-21)。地点の詳細の中に、画像(押すと大きく)・見出し・説明・URL。
+ * **画像の箱の大きさを決めておく** —— 読み終わってから吹き出しの高さが変わると、寄せた位置からずれる。
+ * 縦長のポスターも切らずに箱へ収める(object-fit: contain)。
+ */
+.km-poster-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin: 0.5rem 0 0.25rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid rgba(148, 163, 184, 0.3);
+}
+.km-poster {
+    display: flex;
+    gap: 0.6rem;
+    align-items: flex-start;
+    margin: 0;
+    padding: 0.35rem;
+    border-radius: var(--radius-sm);
+}
+/* 一覧のページから選んで来たポスター */
+.km-poster.is-focused {
+    background: color-mix(in srgb, var(--primary) 10%, transparent);
+    outline: 2px solid var(--primary);
+}
+.km-poster-thumb {
+    flex: 0 0 84px;
+    width: 84px;
+    height: 112px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--text) 5%, transparent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    cursor: zoom-in;
+}
+.km-poster-thumb img {
+    max-width: 100%;
+    max-height: 100%;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+}
+.km-poster-caption {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    min-width: 0;
+    font-size: 0.78rem;
+}
+.km-poster-title { font-size: 0.85rem; overflow-wrap: anywhere; }
+.km-poster-desc { color: var(--secondary); white-space: pre-wrap; overflow-wrap: anywhere; }
+.km-poster-link {
+    align-self: flex-start;
+    margin-top: 0.15rem;
+    padding: 0.2rem 0.7rem;
+    border-radius: 999px;
+    background: var(--primary);
+    color: var(--on-primary) !important;   /* Leaflet の吹き出しのリンク色に負けない */
+    font-weight: 700;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+/* 地図の上の印: ポスターのある地点に輪、名前に 🖼️ */
+.km-node-has-poster .km-node-shape {
+    filter: drop-shadow(0 0 0 #f59e0b) drop-shadow(0 0 2px #f59e0b) drop-shadow(0 0 2px #f59e0b);
+}
+.km-label-poster { margin-right: 0.2em; }
+
+/* 右上の 🖼️(ポスターの一覧)。<a> なので下線を消す */
+a.icon-btn { text-decoration: none; color: inherit; }
+
+/* ポスターを大きく見る幕(Main/app.js の openPosterViewer)。テスト中の札(1200)より上、読み込み画面(2000)より下 */
+.km-poster-viewer {
+    position: fixed;
+    inset: 0;
+    z-index: 1600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    background: rgba(15, 23, 42, 0.7);
+}
+.km-poster-viewer[hidden] { display: none; }
+.km-poster-viewer-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    max-width: min(640px, 100%);
+    max-height: 100%;
+    background: var(--glass-heavy);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+    overflow: hidden;
+}
+.km-poster-viewer-image {
+    display: block;
+    min-height: 0;
+    max-width: 100%;
+    max-height: calc(100vh - 200px);
+    margin: 0 auto;
+    object-fit: contain;
+    background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+.km-poster-viewer-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    padding: 0.75rem 1rem 1rem;
+}
+.km-poster-viewer-title { font-size: 1rem; overflow-wrap: anywhere; }
+.km-poster-viewer-desc { margin: 0; color: var(--secondary); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.9rem; }
+.km-poster-viewer-desc[hidden],
+.km-poster-viewer-link[hidden] { display: none; }
+.km-poster-viewer-close {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background: var(--glass-heavy);
+    font-size: 1.5rem;
+    line-height: 1;
+}
+
 /*
  * 暗いときのラベル。**白のピルのままにしない** ——
  * 沈めた見取り図の上で、白い札だけが光って読みにくくなる。

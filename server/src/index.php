@@ -194,6 +194,15 @@ if (is_string($roomParam) && preg_match('/^[0-9A-Fa-f-]{32,36}$/', $roomParam) =
     $roomId = str_replace('-', '', $roomParam);
     $kmFocusRoom = strlen($roomId) === 32 ? $roomId : null;
 }
+/*
+ * ポスターの一覧(/posters.php)から来たときのポスター(2026-10-21)。`/?room=<地点>&poster=<番号>`。
+ * 部屋へ移るのは上の room で、こちらは詳細の中でそのポスターを先頭に出すだけ。**数字の形だけ確かめる。**
+ */
+$kmFocusPoster = null;
+$posterParam = $_GET['poster'] ?? '';
+if (is_string($posterParam) && preg_match('/^[1-9]\d{0,9}$/', $posterParam) === 1) {
+    $kmFocusPoster = $posterParam;
+}
 
 $inlineMapData = null;
 $kmEvent = null;             // イベントモードの案内(バナー)。無ければ null
@@ -263,6 +272,9 @@ if ($kmEvent !== null && $kmTestMode === null) {
     <?php if ($kmFocusRoom !== null): ?>
         <?php /* QR の部屋(上の $kmFocusRoom。32 字の 16 進だけ)。Main/app.js の focusRoomFromUrl が読む */ ?>
         <meta name="km-focus-room" content="<?= km_home_e($kmFocusRoom) ?>">
+        <?php if ($kmFocusPoster !== null): ?>
+            <meta name="km-focus-poster" content="<?= km_home_e($kmFocusPoster) ?>">
+        <?php endif; ?>
     <?php endif; ?>
     <?php if ($kmTestMode !== null): ?>
         <?php /* テスト用アカウントの印と、自動で「始めから」にするまでの分(Main/test-mode.js が読む。一般の人には出さない) */ ?>
@@ -441,9 +453,19 @@ if ($kmEvent !== null && $kmTestMode === null) {
                     // 展示の PC で来場者が APK・アカウント設定・お問い合わせへ迷い込まないように。引き出しごと書かない(下)。
                     // ログアウトの欄はスマホでも上のバーに残る(受け皿が無ければ panel.js は動かさない)
                     ?>
-                    <?php if ($kmTestMode === null): ?>
+                    <?php
+                    // ポスターの一覧(2026-10-21、lib/posters.php)。**いま出しているポスターがあるときだけ**出す
+                    // (出し方が「表示しない」・イベントの外の「イベント中のみ」では、km_map_data が空で返す)。展示の PC でも出す
+                    $kmPosterCount = count($kmMapData['posters'] ?? []);
+                    ?>
+                    <?php if ($kmTestMode === null || $kmPosterCount > 0): ?>
                     <div class="action-group-right">
-                        <button id="info-panel-toggle" class="icon-btn" title="ダウンロード・設定" aria-label="ダウンロード・設定">⚙️</button>
+                        <?php if ($kmPosterCount > 0): ?>
+                            <a href="/posters.php" class="icon-btn km-poster-btn" title="ポスター(<?= $kmPosterCount ?> 枚)" aria-label="ポスターの一覧(<?= $kmPosterCount ?> 枚)">🖼️</a>
+                        <?php endif; ?>
+                        <?php if ($kmTestMode === null): ?>
+                            <button id="info-panel-toggle" class="icon-btn" title="ダウンロード・設定" aria-label="ダウンロード・設定">⚙️</button>
+                        <?php endif; ?>
                     </div>
                     <?php endif; ?>
                 </div>

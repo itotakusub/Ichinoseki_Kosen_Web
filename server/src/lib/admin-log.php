@@ -204,6 +204,12 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     'test.settings' => 'がテスト用の表示(アンケート・操作方法)を変更しました',
     'test.events_csv' => 'がテスト用アカウントの記録を書き出しました',
     'test.events_delete' => 'がテスト用アカウントの記録を消しました',
+    // ポスター・広告と地点の URL(2026-10-21、admin/posters.php)
+    'poster.mode' => 'がポスターの出し方を変更しました',
+    'poster.create' => 'がポスターを足しました',
+    'poster.update' => 'がポスターを変更しました',
+    'poster.delete' => 'がポスターを消しました',
+    'map.node_link' => 'が地点の URL を変更しました',
     'map.event_cleanup_mode' => 'が期限切れイベントの掃除方法を変更しました',
     'map.event_cleanup' => 'が期限切れのイベントを削除しました',
     /*
