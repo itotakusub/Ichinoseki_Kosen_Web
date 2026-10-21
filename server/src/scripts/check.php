@@ -7451,7 +7451,7 @@ function km_check_layout(): void
     /*
      * ## PHP の RCE のつなぎ(2026-10-21。CVE-2026-109618 / 109619、利用者の指示「全部止める」)
      * 修正版の PHP を当てるまで、multipart の本文を PHP へ渡さない。**修正版の digest を当てて php -v で確かめたら、
-     * nginx の map と 2 つの if と一緒に、この節を外す**(docs/05-containers.ipynb)。
+     * nginx の map と 2 つの if と一緒に、この節を外す**(docs/05-containers.ipynb)。**下のメンテナンス中の画面の節は残す**(ずっと使う)。
      * nginx の雛形はリポジトリにしか無い(配備先の src だけでは読めない)ので、そのときは飛ばす
      */
     $shieldRepoRoot = km_check_repo_root();
@@ -7477,6 +7477,29 @@ function km_check_layout(): void
             $firstLocation = strpos($shieldBody, "\n    location ");
             check_bool("{$shieldName}: server の直下で multipart を 403 にする", $shieldAt !== false && $firstLocation !== false && $shieldAt < $firstLocation);
         }
+
+        /*
+         * ## メンテナンス中の画面(2026-10-21、利用者の指示。nginx/km/maintenance.conf)
+         * web や Logto が居ないとき(nginx が出す 502)だけ、nginx が自分で 503 の画面を返す。
+         * 相手が自分で返す 5xx・待ち切れの 504・回数の制限(429)では出さない。
+         */
+        km_check_heading('maintenance: web・Logto が居ないときはメンテナンス中の画面(2026-10-21)');
+        $maintConf = (string) @file_get_contents($shieldRepoRoot . '/nginx/km/maintenance.conf');
+        $maintCode = (string) preg_replace('/^\s*#.*$/m', '', $maintConf);
+        $maintHtml = (string) @file_get_contents($shieldRepoRoot . '/nginx/km/maintenance.html');
+        check_bool('nginx が出す 502 だけを 503 の画面にする(504 は含めない・相手の応答は横取りしない)', str_contains($maintCode, 'error_page 502 =503 /__km_maintenance;')
+            && !str_contains($maintCode, '504') && !str_contains($shieldCode . $maintCode, 'proxy_intercept_errors'));
+        check_bool('画面の口は内部だけ・503 にも見出しを付ける(always)', str_contains($maintCode, "location = /__km_maintenance {\n    internal;\n    alias /etc/nginx/km/maintenance.html;")
+            && str_contains($maintCode, "add_header Content-Security-Policy \"default-src 'none'; style-src 'unsafe-inline';") && substr_count($maintCode, ' always;') >= 6);
+        $mainInclude = isset($shieldServers['443 の Web アプリ']) && str_contains($shieldServers['443 の Web アプリ'], "    include /etc/nginx/km/maintenance.conf;\n");
+        $authInclude = preg_match('/^server \{\n    listen 443 ssl;\n    listen \[::\]:443 ssl;\n    http2 on;\n    server_name \$\{KM_AUTH_DOMAIN\};.*?\n\}\n/ms', $shieldCode, $maintAuth) === 1
+            && str_contains($maintAuth[0], "    include /etc/nginx/km/maintenance.conf;\n");
+        check_bool('443 の Web アプリと Logto の入口(auth)が読み込む', $mainInclude && $authInclude && substr_count($shieldCode, 'include /etc/nginx/km/maintenance.conf;') === 2);
+        check_bool('管理用のホストでも公開側へ飛ばさない($km_leave_admin_host の例外)', str_contains($shieldCode, '|__km_maintenance$)"  0;'));
+        check_bool('画面は外のものを読まず、JS を持たない', $maintHtml !== '' && !preg_match('/<script|https?:\/\/|<link|<img|@import/i', $maintHtml)
+            && str_contains($maintHtml, 'メンテナンス中'));
+        $maintDeploy = (string) @file_get_contents($shieldRepoRoot . '/scripts/deploy-to-host.ps1');
+        check_bool('配備の荷に必ず入れる(conf が無いと nginx が起動しない)', str_contains($maintDeploy, "'./nginx/km/maintenance.conf'") && str_contains($maintDeploy, "'./nginx/km/maintenance.html'"));
     }
 
     km_check_heading('test-mode: テスト用アカウント(展示の PC。2026-10-15)');

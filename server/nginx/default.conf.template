@@ -195,8 +195,9 @@ map "$km_admin_split$km_on_admin_host" $km_host_role {
 #   /api/map-data.php・floor-image.php … 地図エディタのデータと見取り図(管理者の印で錠を越える)
 #   /api/download.php  admin/downloads.php の「落とす」
 #   /ws/app/           チャットと死活監視の WebSocket(Soketi。2026-10-19 に 6001 番からここへ移した)
+#   /__km_maintenance  メンテナンス中の画面(km/maintenance.conf。内部の移動なので、飛ばすと 404 になる)
 map "$km_host_role:$uri" $km_leave_admin_host {
-    "~^admin:/(admin/|Main/|vendor-web/|ws/app/|sign-in\.php$|sign-out\.php$|callback\.php$|favicon\.svg$|api/(map-data|floor-image|download)\.php$)"  0;
+    "~^admin:/(admin/|Main/|vendor-web/|ws/app/|sign-in\.php$|sign-out\.php$|callback\.php$|favicon\.svg$|api/(map-data|floor-image|download)\.php$|__km_maintenance$)"  0;
     "~^admin:"   1;
     default      0;
 }
@@ -404,6 +405,9 @@ server {
     if ($km_php_shield_multipart) {
         return 403;
     }
+
+    # web が居ないとき(nginx が出す 502)は、メンテナンス中の画面にする(2026-10-21。中身と理由は km/maintenance.conf)
+    include /etc/nginx/km/maintenance.conf;
 
     add_header X-Content-Type-Options nosniff always;
     add_header Referrer-Policy strict-origin-when-cross-origin always;
@@ -893,6 +897,9 @@ server {
     add_header X-Content-Type-Options nosniff always;
     add_header Referrer-Policy strict-origin-when-cross-origin always;
     include /etc/nginx/km/hsts-*.conf;
+
+    # Logto が居ないときは、メンテナンス中の画面にする(2026-10-21。中身と理由は km/maintenance.conf)
+    include /etc/nginx/km/maintenance.conf;
 
     # 確認コード欄に autocomplete="one-time-code" を付けるスクリプト(2026-10-12。中身と理由は km/logto-otp-autocomplete.js)。
     # Logto のサインイン画面の CSP は script-src 'self' を許すので、同じ origin から返す

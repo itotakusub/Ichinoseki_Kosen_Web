@@ -425,6 +425,10 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
     止まる間は、ファイル管理・ポスター・階の画像・地図の取り込み・APK・プロフィールの画像・アプリのアカウント画像・パノラマ・AR・phpMyAdmin の取り込みが使えない(JS の FormData は 0 件で、ほかの画面と API は止まらない)。
     `99-limits.ini` に `session.upload_progress.enabled = 0`(使っていない。修正版の後も残す)。check.php 2029 件。
     **配備: `-Backup -Yes` → reverse-proxy と web の restart**(利用者)
+  - **修正版まで止めて待つ(同日、利用者の判断)**: 入口(nginx)と certbot だけを動かし、ほかは `docker stop`。止め方・戻し方は [05](05-containers.ipynb) §10-1b。
+    **メンテナンス中の画面**(利用者の指示): `nginx/km/maintenance.conf` を 443 の本体と auth の server が読み込み、nginx 自身が出す 502(転送先が居ない)だけを
+    `nginx/km/maintenance.html` の 503 にする(504・429・相手が返す 5xx では出さない)。外のものを読まない 1 枚の HTML(CSS は中・JS なし・CSP は default-src 'none')。
+    管理用のホストでも公開側へ飛ばさない(`$km_leave_admin_host` の例外)。配備の荷に必ず入れる(`deploy-to-host.ps1` の mustContain)。check.php 2035 件。**この画面はつなぎを外した後も残す**
   - **まだ**: 修正版の像が出たら `update-containers.ps1` の 2 で web と phpmyadmin を当てる → `php -v` → つなぎ(nginx の map と 2 つの if・check.php の php-rce-shield の節)を外す → 破られていないかを確かめる(利用者)。手元の `Downloaded/php-8.4.24…` も替える
 
 ### 診断(2026-10-05)の反映(2026-10-06、利用者の指示)
