@@ -119,25 +119,17 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        /*
+         * 教職員氏名と教員室・研究室(2026-10-22、利用者の指示「権限チェックを厳格化。例外なし」)。
+         * **パスワードでは開かない。** 本校の教職員(組織のメンバー)としてサインインした人にだけ出し、
+         * 氏名とメモは先生が許可した地点だけ(lib/node-visibility.php)。入力欄は出さない。
+         */
         if (meta.namesUnlocked) {
-            showStatus('教職員氏名', '✅ 現在表示中です。');
+            showStatus('教職員氏名', '✅ 教職員としてサインインしています。教員室・研究室を表示し、先生が許可した地点では氏名とメモも表示します。');
             return;
         }
 
-        if (meta.mode === 'hidden') {
-            showStatus('教職員氏名', '現在、氏名の表示は無効化されています。');
-            return;
-        }
-
-        if (meta.mode !== 'password') {
-            // 地図データを取得できていない(サーバー未接続など)場合はここに来る。
-            showStatus('教職員氏名', '現在の状態を確認できませんでした。');
-            return;
-        }
-
-        window.kmRenderUnlockForm(unlockSection, {
-            heading: '教職員氏名の表示',
-        });
+        showStatus('教職員氏名', '教員室・研究室と教職員氏名は、本校の教職員としてサインインしたときだけ表示します。');
     }
 
     /**

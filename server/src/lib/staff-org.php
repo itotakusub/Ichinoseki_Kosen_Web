@@ -380,5 +380,17 @@ function km_staff_request_decide(PDO $pdo, int $id, string $action, string $deci
     $update = $pdo->prepare('UPDATE km_staff_requests SET status = ?, decided_at = NOW(), decided_by = ? WHERE id = ? AND status = ?');
     $update->execute([$to, mb_substr($decidedBy, 0, 64), $id, $from]);
 
+    if ($action === 'revoke') {
+        /*
+         * 取り消した人の「名前・備考を地図に出してよい」も消す(2026-10-22。lib/staff-nodes.php の showNames)。
+         * 割り当ては残るので、その地点は「許可の無い先生がいる」= 名前を出さない側に倒れる。表がまだ無ければ消すものも無い
+         */
+        try {
+            $pdo->prepare('DELETE FROM km_staff_node_consents WHERE user_id = ?')->execute([$userId]);
+        } catch (Throwable $exception) {
+            error_log('km_staff_request_decide: consents not cleared (table missing?): ' . $exception->getMessage());
+        }
+    }
+
     return ['userId' => $userId, 'status' => $to];
 }

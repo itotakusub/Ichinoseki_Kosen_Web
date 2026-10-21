@@ -67,6 +67,8 @@ const KM_ACCOUNT_DELETE_TABLES = [
     // 教職員の地点の割り当てと変更の提案(lib/staff-nodes.php。段 G)。提案には氏名が入りうる
     'km_staff_node_assignments',
     'km_staff_node_edits',
+    // 名前・備考を地図に出してよいかの許可(lib/staff-nodes.php の showNames。2026-10-22)
+    'km_staff_node_consents',
 ];
 
 /**

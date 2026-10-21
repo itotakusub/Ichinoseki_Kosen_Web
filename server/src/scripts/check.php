@@ -928,7 +928,8 @@ function km_check_map_access(): void
     // **どちらか一方でも要求していれば出す。** 片方しか見ないと、
     // 地図だけ錠を掛けたときに入力欄が出ず、利用者に開ける手段が無くなる。
     check('地図だけ password でも出す', true, km_map_password_requested($config('hidden', 'password')));
-    check('氏名だけ password でも出す', true, km_map_password_requested($config('password', 'public')));
+    // 2026-10-22 から Web の氏名はパスワードで開かない(組織メンバー + 先生の許可だけ。lib/node-visibility.php)。入れても何も変わらない欄は出さない
+    check('氏名だけ password では出さない(Web の氏名はパスワードで開かない)', false, km_map_password_requested($config('password', 'public')));
     check('どちらも要らなければ出さない', false, km_map_password_requested($config('hidden', 'public')));
     check('public / public でも出さない', false, km_map_password_requested($config('public', 'public')));
 
@@ -1045,7 +1046,8 @@ function km_check_map_access(): void
     // 上書きされて氏名が1件ずつ消える(map-editor.js は読んだ値をそのまま送り返す)
     check_bool(
         '氏名も forAdmin で素通りする',
-        str_contains($mapDataBody, '$unlocked = $forAdmin || (km_map_names_unlocked($config)')
+        str_contains($mapDataBody, "\$unlocked = \$forAdmin || (\$member && !\$overlay['hideOccupantNames']);")
+            && str_contains($mapDataBody, 'if (!$forAdmin) {')
     );
 
     $guard = file_get_contents(__DIR__ . '/../admin/_inc/guard.php');
@@ -1924,6 +1926,75 @@ function km_check_staff_org_map(): void
     check_bool('アプリ: 教職員には閲覧不可の地点も配る', str_contains($appMap, '$privileged = $isStaff || $isTeacher;') && str_contains($appMap, 'if (!$privileged) {'));
     check_bool('アプリ: hidden の切り替えは教職員だけ(イベント運営は対象外)', str_contains($src('lib/app-map.php'), "return \$isTeacher && \$config['teacherSeesHidden'];"));
     check_bool('設定: hidden の切り替えの既定は見せない(厳密に true のときだけ)', str_contains($src('lib/map-access.php'), "'teacherSeesHidden' => (\$config['teacherSeesHidden'] ?? false) === true,"));
+
+    /*
+     * ## 教員室・研究室と先生の名前・備考(2026-10-22、利用者の指示「権限チェックを厳格化。例外なし」「先生が申請し管理者が承認」)
+     * lib/node-visibility.php・lib/staff-nodes.php の showNames。**Website だけ**(アプリへの配信は今のまま)。
+     */
+    km_check_heading('node-visibility: 教員室・研究室は組織メンバーだけ・氏名とメモは先生の許可だけ(2026-10-22)');
+    require_once __DIR__ . '/../lib/node-visibility.php';
+    check('見分け方: 種類 2・名前・見出しのどれかに「教員室」「研究室」', [true, true, true, false, false], [
+        km_map_node_is_restricted(['type2' => '教員室', 'name' => '管-115']),
+        km_map_node_is_restricted(['type2' => '実験室', 'name' => '物理化学研究室']),
+        km_map_node_is_restricted(['title' => '第一研究室']),
+        km_map_node_is_restricted(['type2' => '会議室', 'name' => '会議室']),
+        km_map_node_is_restricted([]),
+    ]);
+    check('出し方の表(教員室か・組織メンバーか・許可・イベント中)', [
+        ['show' => false, 'names' => false], ['show' => false, 'names' => false],
+        ['show' => true, 'names' => false], ['show' => true, 'names' => true], ['show' => true, 'names' => false],
+        ['show' => true, 'names' => false], ['show' => true, 'names' => true],
+    ], [
+        km_map_node_visibility(true, false, false, false), km_map_node_visibility(true, false, true, false),
+        km_map_node_visibility(true, true, false, false), km_map_node_visibility(true, true, true, false), km_map_node_visibility(true, true, true, true),
+        km_map_node_visibility(false, false, true, false), km_map_node_visibility(false, true, true, false),
+    ]);
+    // 許可の数え方: 割り当てた先生が全員許可した地点だけ。割り当ての無い許可・表が無いときは数えない
+    $consentDb = new PDO('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+    check('許可: 表が無ければ誰の名前も出さない', [], km_staff_node_consented_ids($consentDb));
+    $consentDb->exec('CREATE TABLE km_staff_node_assignments (node_id TEXT, user_id TEXT)');
+    $consentDb->exec('CREATE TABLE km_staff_node_consents (node_id TEXT, user_id TEXT)');
+    $consentDb->exec("INSERT INTO km_staff_node_assignments VALUES ('a', 'u1'), ('b', 'u1'), ('b', 'u2'), ('d', 'u3')");
+    $consentDb->exec("INSERT INTO km_staff_node_consents VALUES ('a', 'u1'), ('b', 'u1'), ('c', 'u9')");
+    check('許可: 全員が許可した地点だけ(b は 1 人足りない・c は割り当てが無い・d は許可が無い)', ['a' => true], km_staff_node_consented_ids($consentDb));
+
+    $mapDataSrc = $src('lib/map-data.php');
+    check_bool('地図データ: 組織メンバーかは教職員の印だけ(お試し・パスワード・管理者の印を混ぜない)', str_contains($mapDataSrc, '$member = km_map_teacher_session();')
+        && !str_contains($mapDataSrc, 'km_map_teacher_like_session') && !str_contains($mapDataSrc, 'km_map_names_unlocked(') && !str_contains($mapDataSrc, 'km_map_admin_session'));
+    check_bool('地図データ: 教員室・研究室は地点ごと外し、許可が無ければ担当と教員室のメモを消す(編集画面は全部)', str_contains($mapDataSrc, "if (!\$visibility['show']) {\n                continue;")
+        && str_contains($mapDataSrc, "\$node['occupantName'] = null;") && str_contains($mapDataSrc, "if (\$restricted && array_key_exists('note', \$node)) {")
+        && strpos($mapDataSrc, 'if (!$forAdmin) {') < strpos($mapDataSrc, "\$visibility = km_map_node_visibility("));
+    check_bool('パスワードの欄: 地図の錠のときだけ(氏名はパスワードで開かない)', str_contains($src('lib/map-access.php'), "return \$config['mapMode'] === 'password';")
+        && !str_contains($src('Main/panel.js'), "heading: '教職員氏名の表示'"));
+
+    require_once __DIR__ . '/../lib/staff-nodes.php';
+    $consentCurrent = ['title' => '教員室', 'subtitle' => '', 'occupantName' => '', KM_STAFF_NODE_SHOW_NAMES => '0'];
+    check('提案: 表示の許可は 0 / 1 の差だけを持つ', [KM_STAFF_NODE_SHOW_NAMES => ['from' => '0', 'to' => '1']],
+        km_staff_node_diff($consentCurrent, [KM_STAFF_NODE_SHOW_NAMES => '1']));
+    $badConsent = 'ok';
+    try {
+        km_staff_node_diff($consentCurrent, [KM_STAFF_NODE_SHOW_NAMES => 'yes']);
+    } catch (InvalidArgumentException) {
+        $badConsent = 'error';
+    }
+    check('提案: 0 / 1 以外は断る', 'error', $badConsent);
+    check('提案: いまの値に無ければ(管理画面の一覧など)許可の項目は見ない', [], km_staff_node_diff(['title' => '教員室'], [KM_STAFF_NODE_SHOW_NAMES => '1']));
+    $staffNodesSrc = $src('lib/staff-nodes.php');
+    require_once __DIR__ . '/../lib/account-delete.php';
+    check_bool('許可: 取り下げは承認を待たずにすぐ(差を取る前に消す)・承認で送った先生の分だけ付ける', strpos($staffNodesSrc, 'km_staff_node_consent_withdraw($pdo, $nodeId, $userId);') < strpos($staffNodesSrc, '$changes = km_staff_node_diff(km_staff_node_current_fields($pdo, $node, $userId), $input);')
+        && str_contains($staffNodesSrc, 'INSERT IGNORE INTO km_staff_node_consents (node_id, user_id, granted_at, granted_by) VALUES (?, ?, NOW(), ?)')
+        && str_contains($staffNodesSrc, 'km_staff_node_apply($pdo, $nodeId, is_array($changes) ? $changes : [], $userId, $decidedBy);'));
+    check_bool('許可: 割り当てを外す・権限を取り消す・退会で消える', preg_match('/function km_staff_node_unassign.*?km_staff_node_consent_withdraw\(\$pdo, \$nodeId, \$userId\);/s', $staffNodesSrc) === 1
+        && str_contains($src('lib/staff-org.php'), "DELETE FROM km_staff_node_consents WHERE user_id = ?") && in_array('km_staff_node_consents', KM_ACCOUNT_DELETE_TABLES, true));
+    $accountSrc = $src('account.php');
+    check_bool('先生の画面: 外したときも 0 が届く(隠し欄)・今の状態を出す・取り下げを記録する', str_contains($accountSrc, '<input type="hidden" name="node_<?= km_legal_e(KM_STAFF_NODE_SHOW_NAMES) ?>" value="0">')
+        && str_contains($accountSrc, "\$fields[KM_STAFF_NODE_SHOW_NAMES] = (\$_POST['node_' . KM_STAFF_NODE_SHOW_NAMES] ?? '0') === '1' ? '1' : '0';")
+        && str_contains($accountSrc, "km_admin_log_record('content', 'staffnode.consent_withdrawn', \$nodeId);"));
+    require_once __DIR__ . '/../lib/legal.php';
+    $termsForNodes = (string) json_encode(km_legal_terms(), JSON_UNESCAPED_UNICODE);
+    check_bool('利用規約: 第 8 条に教員室・研究室と教職員氏名(例外なし・申請と承認・すぐ取り下げ)', str_contains($termsForNodes, '第8条(教員室・研究室と教職員氏名の表示)')
+        && str_contains($termsForNodes, '例外なく表示しません') && str_contains($termsForNodes, '運営者の承認を待たずにすぐ反映されます') && KM_LEGAL_UPDATED >= '2026-10-22');
+    check_bool('プライバシーポリシー: 表示の承認を取得する情報に書いた', str_contains((string) json_encode(km_legal_privacy(), JSON_UNESCAPED_UNICODE), '担当の地点で教職員氏名とメモを表示してよいかの承認'));
 }
 /**
  * 教職員とアプリ(docs/15 段 E)。アプリは組織付きのトークンで logto_me.php に聞き直して教職員かを決める。
@@ -3045,7 +3116,7 @@ function km_check_github_mirror(): void
     $updCheck = $read('scripts/check-updates.sh');
     $updBackup = $read('scripts/host-backup.sh');
     check_bool('止まっているコンテナも比べる(ps -a)', str_contains($upd, 'for c in $(docker compose ps -a -q 2>/dev/null); do')
-        && str_contains($updCheck, 'for _cid in $(docker compose ps -a -q 2>/dev/null); do') && !preg_match('/docker compose ps -q 2>/dev/null\)/', $upd . $updCheck));
+        && str_contains($updCheck, 'for _cid in $(docker compose ps -a -q 2>/dev/null); do') && !preg_match('#docker compose ps -q 2>/dev/null\)#', $upd . $updCheck));
     check_bool('控え: 止まっている DB は控えのあいだだけ起こし(start)、終わったら止め直す', str_contains($updBackup, 'if ! docker compose start "$_svc" >/dev/null 2>&1; then')
         && str_contains($updBackup, 'STARTED_DBS="$STARTED_DBS $_svc"') && str_contains($updBackup, 'docker compose stop -t 60 $STARTED_DBS')
         && strpos($updBackup, 'docker compose stop -t 60 $STARTED_DBS') < strpos($updBackup, 'rm -rf "$WORK"')
@@ -3140,7 +3211,7 @@ function km_check_staff_nodes(): void
     $legal = $src('lib/legal.php');
     check_bool('プライバシーポリシーに担当の地点の編集がある', str_contains($legal, '**担当の地点の編集:**'));
     check_bool('プライバシーポリシー: 承認するまで反映しないと書いてある', str_contains($legal, '送った内容は**すぐには地図に反映されません。**'));
-    check_bool('プライバシーポリシー: 提案の記録は退会で消えると書いてある', str_contains($legal, '担当の地点の割り当てと変更の提案の記録が同時に削除されます'));
+    check_bool('プライバシーポリシー: 提案の記録は退会で消えると書いてある', str_contains($legal, '担当の地点の割り当てと変更の提案の記録・教職員氏名とメモの表示の承認が同時に削除されます'));
 }
 /**
  * アカウント削除の後片付けと、その入口(webhook)。
@@ -7270,7 +7341,7 @@ function km_check_layout(): void
     $termsText = (string) json_encode(km_legal_terms(), JSON_UNESCAPED_UNICODE);
     check_bool('利用規約: 第 7 条に広告の重み(定数から書く)・1 件なら 100%・数だけ記録すること', str_contains($termsText, '第7条(ポスター・広告の表示)')
         && str_contains($termsText, '**どの広告も同じ重み(10%)で選びます**') && str_contains($termsText, '広告が 1 件なら 100%、2 件ならそれぞれ 50% の確率')
-        && str_contains($termsText, '記録するのは数だけで、誰が見た・押したかは記録しません') && str_contains($termsText, '第11条(準拠法)') && KM_LEGAL_UPDATED >= '2026-10-21');
+        && str_contains($termsText, '記録するのは数だけで、誰が見た・押したかは記録しません') && str_contains($termsText, '第12条(準拠法)') && KM_LEGAL_UPDATED >= '2026-10-21');
     check_bool('プライバシーポリシー: ポスター・広告の数を取得する情報に書いた', str_contains((string) json_encode(km_legal_privacy(), JSON_UNESCAPED_UNICODE), 'ポスター・広告の数(広告を表示した回数・リンクが押された数'));
     $tutorialJs = (string) file_get_contents(__DIR__ . '/../Main/tutorial.js');
     $tutorialEndJs = (string) file_get_contents(__DIR__ . '/../Main/tutorial-end.js');

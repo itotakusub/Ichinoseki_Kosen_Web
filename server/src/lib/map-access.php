@@ -293,7 +293,13 @@ function km_map_teacher_like_session(bool $forNames): bool
     return $forNames ? km_map_guest_names_session() : km_map_guest_session();
 }
 
-/** 現在のリクエストで occupant_name を返してよいか。 */
+/**
+ * 「氏名の錠」(mode)で occupant_name を返してよいか。
+ *
+ * **2026-10-22 から Website の公開ページはこれを見ない**(利用者の指示「権限チェックを厳格化。例外なし」)。
+ * Website の氏名は「組織メンバー + 先生の許可」だけで決まる(lib/node-visibility.php・lib/map-data.php)。
+ * この関数と mode は、Android アプリへの配信の判断(lib/app-map.php の km_app_map_may_send_occupant_names)と揃えるために残す。
+ */
 function km_map_names_unlocked(array $config): bool
 {
     return match ($config['mode']) {
@@ -325,12 +331,13 @@ function km_map_view_unlocked(array $config): bool
 /**
  * パスワードの入力欄を出すべきか。
  *
- * **どちらか一方でもパスワードを要求していれば出す。** 以前は氏名の mode だけを見ており、
- * 地図側だけ password にすると入力欄が出ないまま何も見えなくなる。
+ * **地図そのもの(mapMode)がパスワードを求めているときだけ**(2026-10-22)。
+ * 以前は氏名の mode が password でも出していたが、Website の氏名はパスワードでは開かなくなった
+ * (組織メンバー + 先生の許可だけ。lib/node-visibility.php)。入れても何も変わらない欄は出さない。
  */
 function km_map_password_requested(array $config): bool
 {
-    return $config['mode'] === 'password' || $config['mapMode'] === 'password';
+    return $config['mapMode'] === 'password';
 }
 
 /**

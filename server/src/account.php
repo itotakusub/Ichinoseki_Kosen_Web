@@ -179,20 +179,28 @@ if ($signedIn) {
                         $fields[$field] = $_POST['node_' . $field];
                     }
                 }
+                // 名前・備考を地図に出してよいか(2026-10-22)。チェックボックスなので、外したときは隠し欄の '0' が届く
+                $fields[KM_STAFF_NODE_SHOW_NAMES] = ($_POST['node_' . KM_STAFF_NODE_SHOW_NAMES] ?? '0') === '1' ? '1' : '0';
                 try {
                     $pdo = km_db();
+                    // 取り下げは承認を待たずにすぐ効く(km_staff_node_propose の中)。知らせるために前の状態を読んでおく
+                    $hadConsent = km_staff_node_has_consent($pdo, $nodeId, (string) $KM_USER['sub']);
                     $editId = km_staff_node_propose($pdo, $nodeId, (string) $KM_USER['sub'], $fields);
                 } catch (InvalidArgumentException $exception) {
                     throw new KmLogtoAccountException($exception->getMessage());
                 }
+                $withdrawn = $hadConsent && $fields[KM_STAFF_NODE_SHOW_NAMES] === '0';
+                if ($withdrawn) {
+                    km_admin_log_record('content', 'staffnode.consent_withdrawn', $nodeId);
+                }
                 if ($editId === null) {
-                    header('Location: /account.php?node=same', true, 302);
+                    header('Location: /account.php?node=' . ($withdrawn ? 'withdrawn' : 'same'), true, 302);
                     exit;
                 }
                 km_admin_log_record('content', 'staffnode.proposed', '#' . $editId . ' ' . $nodeId);
                 $node = km_map_node_find($pdo, $nodeId);
                 km_staff_node_edit_notify($editId, (string) $KM_USER['name'], (string) ($node['name'] ?? $nodeId));
-                header('Location: /account.php?node=sent', true, 302);
+                header('Location: /account.php?node=' . ($withdrawn ? 'sent_withdrawn' : 'sent'), true, 302);
                 exit;
             }
 
@@ -306,6 +314,10 @@ if ($signedIn) {
         $notice = '地点の変更を送りました。管理者が確認して承認すると地図に反映されます。';
     } elseif (($_GET['node'] ?? '') === 'same') {
         $notice = '変更された項目が無かったため、送りませんでした(未処理の提案があれば取り下げました)。';
+    } elseif (($_GET['node'] ?? '') === 'withdrawn') {
+        $notice = '名前と備考の表示をやめました(すぐ反映されます)。';
+    } elseif (($_GET['node'] ?? '') === 'sent_withdrawn') {
+        $notice = '名前と備考の表示をやめました(すぐ反映されます)。ほかの変更は送りました。管理者が確認して承認すると地図に反映されます。';
     }
 
     /*
@@ -353,7 +365,7 @@ if ($signedIn) {
                     $staffNodes[] = [
                         'id' => $assignment['nodeId'],
                         'label' => (string) ($node['name'] ?? $assignment['nodeId']),
-                        'fields' => km_staff_node_current_fields($pdo, $node),
+                        'fields' => km_staff_node_current_fields($pdo, $node, (string) $KM_USER['sub']),
                         'pending' => $pendingByNode[$assignment['nodeId']] ?? null,
                     ];
                 }
@@ -391,6 +403,20 @@ if ($signedIn) {
     <link rel="stylesheet" href="<?= km_legal_e(km_public_asset('Main/document.css')) ?>">
     <style<?= km_csp_nonce_attr() ?>>
         .km-account-field { margin-bottom: 1.1rem; }
+
+        /* 担当の地点の「名前と備考を表示する」(2026-10-22)。下の input の幅 100% を外す */
+        .km-account-field label.km-account-check {
+            display: flex;
+            gap: 0.5rem;
+            align-items: flex-start;
+            font-weight: 600;
+        }
+
+        .km-account-field .km-account-check input {
+            width: auto;
+            margin-top: 0.2rem;
+            flex: 0 0 auto;
+        }
 
         .km-account-field label {
             display: block;
@@ -678,12 +704,35 @@ if ($signedIn) {
                                     <?php endif; ?>
                                 </div>
                             <?php endforeach; ?>
+                            <?php
+                            /*
+                             * 名前(担当)と備考(メモ)を地図に出してよいか(2026-10-22。lib/staff-nodes.php の showNames)。
+                             * 入れて送ると申請(管理者の承認で付く)。外して送ると**すぐ**やめる。
+                             */
+                            $consentNow = ($f[KM_STAFF_NODE_SHOW_NAMES] ?? '0') === '1';
+                            $consentAsked = ($p['changes'][KM_STAFF_NODE_SHOW_NAMES]['to'] ?? null) === '1';
+                            $consentId = 'km-node-showNames-' . $staffNode['id'];
+                            ?>
+                            <div class="km-account-field">
+                                <input type="hidden" name="node_<?= km_legal_e(KM_STAFF_NODE_SHOW_NAMES) ?>" value="0">
+                                <label class="km-account-check" for="<?= km_legal_e($consentId) ?>">
+                                    <input type="checkbox" id="<?= km_legal_e($consentId) ?>" name="node_<?= km_legal_e(KM_STAFF_NODE_SHOW_NAMES) ?>" value="1"
+                                           <?= $consentNow || $consentAsked ? 'checked' : '' ?>>
+                                    <span>教職員氏名(担当)とメモを、地図で教職員に表示する</span>
+                                </label>
+                                <p class="km-account-hint">
+                                    いま: <strong><?= $consentNow ? '表示しています' : ($consentAsked ? '申請中(管理者の承認待ち)' : '表示していません') ?></strong>。
+                                    表示するのは、サインインした本校の教職員(組織のメンバー)にだけです。一般の方には、教員室・研究室の地点そのものを出しません。
+                                    入れて送ると申請になり、管理者が承認すると表示されます。<strong>外して送ると、承認を待たずにすぐ表示をやめます。</strong>
+                                    同じ地点に先生が複数いるときは、全員が許可したときだけ表示します。
+                                </p>
+                            </div>
                             <button type="submit" class="primary-btn">変更を送る(管理者の確認後に反映)</button>
                         </form>
                     <?php endforeach; ?>
                     <p class="km-account-hint">
-                        教職員氏名は、地図の公開設定によっては一般の方にも表示されます。取り扱いは
-                        <a href="/privacy.php">プライバシーポリシー</a>をご覧ください。
+                        Web の地図では、教職員氏名とメモは、上の「表示する」を許可した地点だけ、本校の教職員にだけ表示します
+                        (<a href="/terms.php">利用規約</a>)。取り扱いは <a href="/privacy.php">プライバシーポリシー</a>をご覧ください。
                     </p>
                 </section>
             <?php endif; ?>

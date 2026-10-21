@@ -80,6 +80,7 @@ if (isset($_GET['done'], $doneKeys[$_GET['done']])) {
 
 $teachers = [];
 $assignments = [];
+$consents = [];
 $pending = [];
 $recent = [];
 $nodes = [];
@@ -94,6 +95,8 @@ try {
         }
     }
     $assignments = km_staff_node_assignments($pdo);
+    // 名前・備考を地図に出してよいかの許可(2026-10-22。地点 × 先生)
+    $consents = km_staff_node_consents_by_node($pdo);
     $edits = km_staff_node_edits($pdo);
     $pending = array_values(array_filter($edits, static fn (array $e): bool => $e['status'] === 'pending'));
     $recent = array_slice(array_values(array_filter($edits, static fn (array $e): bool => $e['status'] !== 'pending')), 0, 20);
@@ -121,7 +124,11 @@ $whoLabel = static function (string $userId) use ($teachers): string {
     return $name !== '' ? $name . ($email !== '' ? " <{$email}>" : '') : ($email !== '' ? $email : $userId);
 };
 $nodeLabel = static fn (string $nodeId): string => (string) ($nodes[$nodeId]['name'] ?? '');
-$fieldLabel = ['title' => '名前', 'subtitle' => '部屋番号など', 'occupantName' => '教職員氏名', 'note' => 'メモ'];
+$fieldLabel = ['title' => '名前', 'subtitle' => '部屋番号など', 'occupantName' => '教職員氏名', 'note' => 'メモ', KM_STAFF_NODE_SHOW_NAMES => '氏名とメモを地図に表示(教職員にだけ)'];
+// 表示の許可は '1' / '0' で持つ。画面では言葉にする
+$fieldValue = static fn (string $field, string $value): string => $field === KM_STAFF_NODE_SHOW_NAMES
+    ? ($value === '1' ? '表示する(許可)' : '表示しない')
+    : $value;
 $statusLabel = ['approved' => '承認', 'rejected' => '却下', 'withdrawn' => '取り下げ'];
 
 require __DIR__ . '/_inc/partials/head.php';
@@ -148,6 +155,15 @@ require __DIR__ . '/_inc/partials/page-header.php';
               <div data-i18n="page.staffNodes.notice">
                 教職員は、割り当てた地点の名前・部屋番号など・教職員氏名・メモを直して送れます。位置・種類・経路は変えられません。
                 送られた変更は、ここで承認したときだけ地図に入ります。アプリへは、そのあと「地図の公開」で配信されます。
+              </div>
+            </div>
+            <div class="alert alert-secondary d-flex align-items-start" role="alert">
+              <i class="bi bi-shield-lock me-2 mt-1" aria-hidden="true"></i>
+              <div>
+                Web の地図では、<strong>教員室・研究室</strong>(種類 2 か名前に「教員室」「研究室」を含む地点)を組織メンバーの教職員にだけ出します。
+                教職員氏名とメモは、先生が「表示する」を申請し、ここで承認した地点だけ(同じ地点の先生が全員許可したときだけ)出します。
+                先生が取り下げたときは承認を待たずにすぐ消えます。割り当てを外す・教職員の権限を取り消すと、その先生の許可も消えます。
+                テスト用アカウント・お試しの閲覧リンク・地図のパスワードでは開きません(例外なし)。
               </div>
             </div>
 
@@ -188,8 +204,11 @@ require __DIR__ . '/_inc/partials/page-header.php';
                               ?>
                               <div class="mb-2">
                                 <div class="small fw-semibold"><?= km_e($fieldLabel[$field] ?? $field) ?></div>
-                                <div class="small"><del class="text-body-secondary"><?= km_e((string) ($change['from'] ?? '')) ?: '(空)' ?></del></div>
-                                <div class="small"><ins><?= km_e((string) ($change['to'] ?? '')) ?: '(空)' ?></ins></div>
+                                <div class="small"><del class="text-body-secondary"><?= km_e($fieldValue((string) $field, (string) ($change['from'] ?? ''))) ?: '(空)' ?></del></div>
+                                <div class="small"><ins><?= km_e($fieldValue((string) $field, (string) ($change['to'] ?? ''))) ?: '(空)' ?></ins></div>
+                                <?php if ($field === KM_STAFF_NODE_SHOW_NAMES && (string) ($change['to'] ?? '') === '1'): ?>
+                                  <div class="small text-body-secondary">承認すると、この先生の分の許可が付きます。同じ地点の先生が全員許可したときだけ、組織メンバーに氏名とメモを出します。</div>
+                                <?php endif; ?>
                                 <?php if ($moved): ?>
                                   <div class="small text-warning-emphasis">
                                     <span data-i18n="page.staffNodes.changedSince">送られたあとに地図の値が変わっています。いまの値:</span>
@@ -282,6 +301,12 @@ require __DIR__ . '/_inc/partials/page-header.php';
                             <?= km_e($whoLabel($assignment['userId'])) ?>
                             <?php if (!isset($teachers[$assignment['userId']])): ?>
                               <span class="badge text-bg-dark" data-i18n="page.staffNodes.notTeacher">権限なし</span>
+                            <?php endif; ?>
+                            <?php // 名前・備考を地図に出してよいか(この先生の分。2026-10-22) ?>
+                            <?php if (isset($consents[$assignment['nodeId']][$assignment['userId']])): ?>
+                              <span class="badge text-bg-success">氏名・メモ: 表示を許可</span>
+                            <?php else: ?>
+                              <span class="badge text-bg-light">氏名・メモ: 許可なし</span>
                             <?php endif; ?>
                           </td>
                           <td class="text-end">

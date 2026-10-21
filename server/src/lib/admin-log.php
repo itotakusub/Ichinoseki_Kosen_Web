@@ -156,6 +156,7 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     'staffnode.proposed' => 'が地点の変更を提案しました',
     'staffnode.approved' => 'が地点の変更の提案を承認しました',
     'staffnode.rejected' => 'が地点の変更の提案を却下しました',
+    'staffnode.consent_withdrawn' => 'が地点の名前・備考の表示をやめました',
     /*
      * 主語は「あなた」ではない —— 記録するのは webhook を受けたサーバー側で、
      * その時点で**消えた人はもう居ない。**それでも辞書は同じ形にしておく

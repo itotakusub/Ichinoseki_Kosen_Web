@@ -116,11 +116,14 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
     $overlay = km_map_event_overlay($pdo, $previewEventId);
 
     /*
-     * **イベント中は氏名を出さない。**
+     * **教員室・研究室と、先生の名前・備考を誰に出すか**(2026-10-22、利用者の指示「権限チェックを厳格化」。lib/node-visibility.php)。
      *
-     * 高専祭やオープンキャンパスでは外部の来場者が地図を見る。解除パスワードを
-     * 知っている人のセッションであっても、期間中は伏せる。
-     * 判定がここ1箇所しか無いので、ここで潰せば漏れない。
+     *   - 組織メンバー(教職員)でなければ、教員室・研究室の地点を**地点ごと出さない**
+     *   - 組織メンバーには出す。担当(occupantName)と、教員室・研究室のメモ(note)は**先生が許可した地点だけ**
+     *   - **例外は無い**(テスト用アカウント・お試しの閲覧リンク・地図のパスワード・管理者のサインインでも同じ)。
+     *     以前の「氏名の錠」(km_map_names_unlocked。hidden / password / public)は Website の判定には使わない
+     *     (Android アプリへの配信は今もそちら。lib/app-map.php)
+     *   - **イベント中は氏名を出さない**(外部の来場者が見る。許可があっても期間中は伏せる)
      *
      * ## 編集画面には必ず出す($forAdmin)
      *
@@ -132,7 +135,11 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
      *
      * 「見せない」と「編集させる」は両立しない。編集画面では出す。
      */
-    $unlocked = $forAdmin || (km_map_names_unlocked($config) && !$overlay['hideOccupantNames']);
+    require_once __DIR__ . '/node-visibility.php';
+    $member = km_map_teacher_session();
+    // 許可を読むのは組織メンバーのときだけ(それ以外は名前を出さないので、表を引く必要が無い)
+    $consented = (!$forAdmin && $member) ? km_staff_node_consented_ids($pdo) : [];
+    $unlocked = $forAdmin || ($member && !$overlay['hideOccupantNames']);
 
     /*
      * ノード座標系は km_map_floors の列ではなく**別表**に持つ。
@@ -233,8 +240,20 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
         if (!isset($floorIds[(string) $node['floor']])) {
             continue;
         }
-        if (!$unlocked) {
-            $node['occupantName'] = null;
+        if (!$forAdmin) {
+            $restricted = km_map_node_is_restricted($node);
+            $visibility = km_map_node_visibility($restricted, $member, isset($consented[(string) $node['id']]), $overlay['hideOccupantNames']);
+            // 組織メンバーでなければ、教員室・研究室は地点ごと出さない(線も下で両端が在るものだけに絞られる)
+            if (!$visibility['show']) {
+                continue;
+            }
+            if (!$visibility['names']) {
+                $node['occupantName'] = null;
+                // 教員室・研究室のメモには先生の名前が書かれている(アプリの地図の取り込み)。許可が無ければ出さない
+                if ($restricted && array_key_exists('note', $node)) {
+                    $node['note'] = null;
+                }
+            }
         }
         /*
          * 座標は**数として返す。** decimal 列は PDO が文字列で返すので、

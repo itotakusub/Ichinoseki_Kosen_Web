@@ -365,7 +365,7 @@ globalThis.KM_I18N.en = {
   "page.guestLinks.accountCreated": "Created",
   "page.guestLinks.revokedNotice": "Revoked.",
   "page.guestLinks.dbError": "Cannot connect to the database, so the list cannot be shown.",
-  "page.guestLinks.notice": "People who open the link create a temporary account with their name (and affiliation) and can then view the map without the map password until it expires. Staff names on nodes are shown only to temporary accounts you set to 'Show staff names' in the list below (not just by creating one). Temporary accounts are stored only in this server's database; no Logto account is needed. The list below shows who created one, when, and when they last viewed, and each person can be stopped. Anyone with the link can create one, so keep the period short and the number small.",
+  "page.guestLinks.notice": "People who open the link create a temporary account with their name (and affiliation) and can then view the map without the map password until it expires. Faculty offices, labs and staff names are not shown (only to school staff who sign in; no exceptions since 2026-10-22). Temporary accounts are stored only in this server's database; no Logto account is needed. The list below shows who created one, when, and when they last viewed, and each person can be stopped. Anyone with the link can create one, so keep the period short and the number small.",
   "page.guestLinks.hiddenWarning": "Staff names are set to \"always hidden\", so the link will not show them. Turn on \"show to staff even when hidden\" in the map settings (staff will see them too).",
   "page.guestLinks.publicNote": "Staff names are currently public, so no link is needed to see them.",
   "page.guestLinks.newTitle": "Link issued",

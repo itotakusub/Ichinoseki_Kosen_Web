@@ -30,6 +30,17 @@ require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/map-edit.php';
 require_once __DIR__ . '/app-map-sync.php';
 require_once __DIR__ . '/staff-org.php';
+require_once __DIR__ . '/node-visibility.php';
+
+/*
+ * ## 名前・備考を地図に出してよいか(showNames。2026-10-22、利用者の指示)
+ *
+ * Website の公開ページは、教員室・研究室の担当とメモを**先生が許可した地点だけ**、組織メンバーに出す
+ * (lib/node-visibility.php)。許可はほかの項目と同じく**提案として送り、管理者が承認したときに付く**
+ * (表 km_staff_node_consents。地点 × 先生)。**取り下げ(0 にする)は承認を待たずにすぐ効く** —— 取り下げたのに
+ * 名前が出続ける時間を作らない。割り当てを外したとき・教職員の権限を取り消したときも、その人の許可は消える。
+ */
+const KM_STAFF_NODE_SHOW_NAMES = 'showNames';
 
 /** 提案の状態。`withdrawn` は新しい提案で置き換わった・割り当てが外れた。 */
 const KM_STAFF_NODE_EDIT_STATUSES = ['pending', 'approved', 'rejected', 'withdrawn'];
@@ -76,7 +87,49 @@ function km_staff_nodes_ensure_tables(PDO $pdo): void
             INDEX (node_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         SQL);
+    $pdo->exec(<<<'SQL'
+        CREATE TABLE IF NOT EXISTS km_staff_node_consents (
+            node_id VARCHAR(32) NOT NULL,
+            user_id VARCHAR(64) NOT NULL,
+            granted_at DATETIME NOT NULL,
+            granted_by VARCHAR(64) NULL,
+            PRIMARY KEY (node_id, user_id),
+            INDEX (user_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        SQL);
     $ready = true;
+}
+
+/** その先生がその地点で名前・備考の表示を許可しているか(承認済み)。 */
+function km_staff_node_has_consent(PDO $pdo, string $nodeId, string $userId): bool
+{
+    km_staff_nodes_ensure_tables($pdo);
+    $stmt = $pdo->prepare('SELECT 1 FROM km_staff_node_consents WHERE node_id = ? AND user_id = ?');
+    $stmt->execute([$nodeId, $userId]);
+
+    return $stmt->fetchColumn() !== false;
+}
+
+/** 許可を取り下げる。**すぐ効く**(承認を待たない)。無ければ何もしない。消したら true。 */
+function km_staff_node_consent_withdraw(PDO $pdo, string $nodeId, string $userId): bool
+{
+    km_staff_nodes_ensure_tables($pdo);
+    $stmt = $pdo->prepare('DELETE FROM km_staff_node_consents WHERE node_id = ? AND user_id = ?');
+    $stmt->execute([$nodeId, $userId]);
+
+    return $stmt->rowCount() > 0;
+}
+
+/** 地点ごとの許可の数(管理画面の一覧に出す)。@return array<string, array<string, true>> node_id => [user_id => true] */
+function km_staff_node_consents_by_node(PDO $pdo): array
+{
+    km_staff_nodes_ensure_tables($pdo);
+    $result = [];
+    foreach ($pdo->query('SELECT node_id, user_id FROM km_staff_node_consents')->fetchAll() as $row) {
+        $result[(string) $row['node_id']][(string) $row['user_id']] = true;
+    }
+
+    return $result;
 }
 
 /** 地点の ID を受け取った形(UUID・ハイフン無し)から、表の `id`(32 字)にする。形が違えば null。 */
@@ -94,8 +147,11 @@ function km_staff_node_normalize_id(string $input): ?string
     return null;
 }
 
-/** 教職員が変えられる項目の、いまの値(列が無い項目は含めない)。 */
-function km_staff_node_current_fields(PDO $pdo, array $node): array
+/**
+ * 教職員が変えられる項目の、いまの値(列が無い項目は含めない)。
+ * $userId を渡すと、**その先生の**表示の許可(showNames: '1' / '0')も入れる。
+ */
+function km_staff_node_current_fields(PDO $pdo, array $node, ?string $userId = null): array
 {
     $fields = [
         'title' => (string) ($node['title'] ?? $node['name'] ?? ''),
@@ -104,6 +160,9 @@ function km_staff_node_current_fields(PDO $pdo, array $node): array
     ];
     if (in_array('note', km_map_nodes_columns($pdo), true)) {
         $fields['note'] = (string) ($node['note'] ?? '');
+    }
+    if ($userId !== null) {
+        $fields[KM_STAFF_NODE_SHOW_NAMES] = km_staff_node_has_consent($pdo, (string) $node['id'], $userId) ? '1' : '0';
     }
 
     return $fields;
@@ -143,6 +202,8 @@ function km_staff_node_unassign(PDO $pdo, string $nodeId, string $userId): void
     $pdo->prepare('DELETE FROM km_staff_node_assignments WHERE node_id = ? AND user_id = ?')->execute([$nodeId, $userId]);
     $pdo->prepare("UPDATE km_staff_node_edits SET status = 'withdrawn', decided_at = NOW() WHERE node_id = ? AND user_id = ? AND status = 'pending'")
         ->execute([$nodeId, $userId]);
+    // その人の表示の許可も消す(割り当て直したら、もう一度申請してもらう)
+    km_staff_node_consent_withdraw($pdo, $nodeId, $userId);
 }
 
 function km_staff_node_is_assigned(PDO $pdo, string $nodeId, string $userId): bool
@@ -201,6 +262,16 @@ function km_staff_node_diff(array $current, array $input): array
             $changes[$field] = ['from' => $current[$field], 'to' => $to];
         }
     }
+    // 名前・備考の表示の許可('1' / '0' だけ)。いまの値に入っているとき(= 先生が自分の地点を送ったとき)だけ見る
+    if (array_key_exists(KM_STAFF_NODE_SHOW_NAMES, $current) && array_key_exists(KM_STAFF_NODE_SHOW_NAMES, $input)) {
+        $to = (string) $input[KM_STAFF_NODE_SHOW_NAMES];
+        if (!in_array($to, ['0', '1'], true)) {
+            throw new InvalidArgumentException('表示の許可の指定が不正です。');
+        }
+        if ($to !== $current[KM_STAFF_NODE_SHOW_NAMES]) {
+            $changes[KM_STAFF_NODE_SHOW_NAMES] = ['from' => $current[KM_STAFF_NODE_SHOW_NAMES], 'to' => $to];
+        }
+    }
 
     return $changes;
 }
@@ -220,7 +291,11 @@ function km_staff_node_propose(PDO $pdo, string $nodeId, string $userId, array $
         throw new InvalidArgumentException('この地点は編集できません(割り当てられていません)。');
     }
     $node = km_map_node_require($pdo, $nodeId);
-    $changes = km_staff_node_diff(km_staff_node_current_fields($pdo, $node), $input);
+    // 表示の許可の取り下げは**すぐ効かせる**(承認を待たない)。取り下げたあとの値で差を取るので、提案には入らない
+    if (($input[KM_STAFF_NODE_SHOW_NAMES] ?? null) === '0') {
+        km_staff_node_consent_withdraw($pdo, $nodeId, $userId);
+    }
+    $changes = km_staff_node_diff(km_staff_node_current_fields($pdo, $node, $userId), $input);
 
     $pdo->beginTransaction();
     try {
@@ -340,7 +415,7 @@ function km_staff_node_edit_decide(PDO $pdo, int $id, string $action, string $de
                 throw new InvalidArgumentException('送った人の教職員の権限が有効でないため、承認できません。');
             }
             $changes = json_decode((string) $row['changes_json'], true);
-            km_staff_node_apply($pdo, $nodeId, is_array($changes) ? $changes : []);
+            km_staff_node_apply($pdo, $nodeId, is_array($changes) ? $changes : [], $userId, $decidedBy);
         }
         $pdo->commit();
     } catch (Throwable $exception) {
@@ -354,9 +429,11 @@ function km_staff_node_edit_decide(PDO $pdo, int $id, string $action, string $de
 /**
  * 変えた項目だけを地図に書く。書く関数は管理画面の地図編集と同じ(lib/map-edit.php)。
  *
+ * 表示の許可(showNames)は**送った先生の分だけ**付ける・外す(地点 × 先生)。
+ *
  * @param array<string, array{from?:string, to?:string}> $changes
  */
-function km_staff_node_apply(PDO $pdo, string $nodeId, array $changes): void
+function km_staff_node_apply(PDO $pdo, string $nodeId, array $changes, string $userId = '', string $decidedBy = ''): void
 {
     $node = km_map_node_require($pdo, $nodeId);
     $current = km_staff_node_current_fields($pdo, $node);
@@ -377,6 +454,15 @@ function km_staff_node_apply(PDO $pdo, string $nodeId, array $changes): void
     }
     if ($value('note') !== null && array_key_exists('note', $current)) {
         km_map_node_set_note($pdo, $nodeId, $value('note'));
+    }
+    $showNames = $value(KM_STAFF_NODE_SHOW_NAMES);
+    if ($showNames !== null && $userId !== '') {
+        if ($showNames === '1') {
+            $pdo->prepare('INSERT IGNORE INTO km_staff_node_consents (node_id, user_id, granted_at, granted_by) VALUES (?, ?, NOW(), ?)')
+                ->execute([$nodeId, $userId, mb_substr($decidedBy, 0, 64)]);
+        } else {
+            km_staff_node_consent_withdraw($pdo, $nodeId, $userId);
+        }
     }
 }
 
