@@ -4005,7 +4005,7 @@ function km_check_hardening(): void
     check_bool('Apache の Timeout は 60', preg_match('/^Timeout 60$/m', $apache) === 1);
     $limitsIni = (string) preg_replace('/^\s*;.*$/m', '', $file('docker/php/99-limits.ini'));
     $iniMissing = [];
-    foreach (['max_execution_time = 30', 'default_socket_timeout = 15', 'session.use_strict_mode = 1', 'session.use_only_cookies = 1', 'session.use_trans_sid = 0'] as $iniLine) {
+    foreach (['max_execution_time = 30', 'default_socket_timeout = 15', 'session.use_strict_mode = 1', 'session.use_only_cookies = 1', 'session.use_trans_sid = 0', 'session.upload_progress.enabled = 0'] as $iniLine) {
         if (preg_match('/^' . preg_quote($iniLine, '/') . '$/m', $limitsIni) !== 1) {
             $iniMissing[] = $iniLine;
         }
@@ -7447,6 +7447,37 @@ function km_check_layout(): void
     check_bool('zip の小さな画像の口: 置き場はセッションが決める(URL で選ばせない)', str_contains((string) file_get_contents(__DIR__ . '/../admin/api/floor-staging-image.php'), "\$staged = \$_SESSION['km_floor_zip'] ?? null;")
         && str_contains($floorsPage, "const KM_FLOOR_ZIP_SESSION_KEY = 'km_floor_zip';"));
     check_bool('監査ログ: 階の操作に文言がある', isset(KM_ADMIN_LOG_ACTION_LABELS['map.floor_image'], KM_ADMIN_LOG_ACTION_LABELS['map.floor_update'], KM_ADMIN_LOG_ACTION_LABELS['map.floor_add'], KM_ADMIN_LOG_ACTION_LABELS['map.floor_delete'], KM_ADMIN_LOG_ACTION_LABELS['map.floor_zip']));
+
+    /*
+     * ## PHP の RCE のつなぎ(2026-10-21。CVE-2026-109618 / 109619、利用者の指示「全部止める」)
+     * 修正版の PHP を当てるまで、multipart の本文を PHP へ渡さない。**修正版の digest を当てて php -v で確かめたら、
+     * nginx の map と 2 つの if と一緒に、この節を外す**(docs/05-containers.ipynb)。
+     * nginx の雛形はリポジトリにしか無い(配備先の src だけでは読めない)ので、そのときは飛ばす
+     */
+    $shieldRepoRoot = km_check_repo_root();
+    $shieldNginx = $shieldRepoRoot === null ? false : @file_get_contents($shieldRepoRoot . '/nginx/default.conf.template');
+    if ($shieldRepoRoot === null) {
+        check_skip('PHP の RCE のつなぎ(nginx)', '手元の作業ツリーで確認する。配備先に nginx/ は出ない');
+    } elseif (is_string($shieldNginx)) {
+        km_check_heading('php-rce-shield: 修正版を当てるまで multipart を PHP へ渡さない(2026-10-21)');
+        $shieldCode = (string) preg_replace('/^\s*#.*$/m', '', $shieldNginx);
+        $shieldIf = "    if (\$km_php_shield_multipart) {\n        return 403;\n    }\n";
+        check_bool('map: Content-Type に multipart を含めば 1', preg_match('/map \$http_content_type \$km_php_shield_multipart \{\s*default\s+0;\s*"~\*multipart"\s+1;\s*\}/', $shieldCode) === 1);
+        $shieldServers = [];
+        if (preg_match('/^server \{\n    listen 443 ssl;.*?\n\}\n/ms', $shieldCode, $shieldMain) === 1) {
+            $shieldServers['443 の Web アプリ'] = $shieldMain[0];
+        }
+        if (preg_match('/^server \{\n    listen 8281 ssl;.*?\n\}\n/ms', $shieldCode, $shieldPma) === 1) {
+            $shieldServers['8281 の phpMyAdmin'] = $shieldPma[0];
+        }
+        foreach (['443 の Web アプリ', '8281 の phpMyAdmin'] as $shieldName) {
+            $shieldBody = $shieldServers[$shieldName] ?? '';
+            // server の直下(最初の location より前)に置く。location の中では、並び順で素通りする場所が出る
+            $shieldAt = strpos($shieldBody, $shieldIf);
+            $firstLocation = strpos($shieldBody, "\n    location ");
+            check_bool("{$shieldName}: server の直下で multipart を 403 にする", $shieldAt !== false && $firstLocation !== false && $shieldAt < $firstLocation);
+        }
+    }
 
     km_check_heading('test-mode: テスト用アカウント(展示の PC。2026-10-15)');
     $testLib = (string) file_get_contents(__DIR__ . '/../lib/test-mode.php');
