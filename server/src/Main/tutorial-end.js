@@ -2,18 +2,19 @@
 //
 // チュートリアルが終わったとき(2026-10-21、利用者の指示)。Main/tutorial.js の 'km-tutorial-finished' を受ける。
 //
-//   1. 広告(地点に置いていないポスター)があれば、data-ad-chance の確率(10%。lib/posters.php の KM_POSTER_AD_CHANCE)で 1 件を出す
-//   2. 広告を閉じたら(出さなかったときはすぐ)、「チュートリアルが終わりました」の知らせ(index.php の #km-tutorial-end)を出す
+//   1. 広告(地点に置いていないポスター)があれば、**必ず 1 件**を出す。どれにするかは重み(data-ad-weight。全部 10%。
+//      lib/posters.php の KM_POSTER_AD_WEIGHT)で選ぶ —— 全部同じ重みなので、1 件なら 100%・2 件なら 50%(2026-10-21、利用者の指示)
+//   2. 広告を閉じたら(広告が 1 件も無いときはすぐ)、「チュートリアルが終わりました」の知らせ(index.php の #km-tutorial-end)を出す
 //
 // 広告を出すかどうか(表示しない / イベント中のみ / 常に表示)はサーバーが決め、出さないときは地図データの posters が空で届く。
-// 広告の確率は利用規約の第 7 条に書いてある。ここで値を持たない(data-ad-chance を読む)。
+// 重みは利用規約の第 7 条に書いてある。ここで値を持たない(data-ad-weight を読む)。広告を出したら数える(Main/poster-stats.js)。
 
 (function () {
     'use strict';
 
     const end = document.getElementById('km-tutorial-end');
     if (!end) return;
-    const chance = Number(end.dataset.adChance);
+    const weight = Number(end.dataset.adWeight) || 1;
     let returnFocus = null;
 
     function trapEscape(close) {
@@ -99,6 +100,8 @@
             link.target = '_blank';
             link.rel = 'noopener noreferrer';
             link.textContent = 'くわしく見る ↗';
+            // 押したら数える(Main/poster-stats.js。同じ端末は 1 人)
+            link.setAttribute('data-km-poster-link', String(poster.id));
             actions.append(link);
         }
         const done = document.createElement('button');
@@ -111,6 +114,8 @@
         card.append(badge, close, image, body);
         layer.append(card);
         document.body.append(layer);
+        // 出した回数を数える(Main/poster-stats.js)
+        if (typeof window.kmPosterStat === 'function') window.kmPosterStat(poster.id, 'impression');
 
         let closed = false;
         const release = trapEscape(finish);
@@ -127,11 +132,24 @@
         done.focus();
     }
 
+    /**
+     * 重みで 1 件を選ぶ。全部同じ重み(10%)なので、どれも 1 / 件数 の割合になる
+     * (1 件なら 100%・2 件なら 50%・10 件なら 10%)。
+     */
+    function pickAd(list) {
+        let roll = Math.random() * weight * list.length;
+        for (let i = 0; i < list.length; i++) {
+            roll -= weight;
+            if (roll < 0) return list[i];
+        }
+        return list[list.length - 1];
+    }
+
     document.addEventListener('km-tutorial-finished', function () {
         returnFocus = document.activeElement;
         const list = ads();
-        if (list.length > 0 && chance > 0 && Math.random() < chance) {
-            showAd(list[Math.floor(Math.random() * list.length)], showEnd);
+        if (list.length > 0) {
+            showAd(pickAd(list), showEnd);
             return;
         }
         showEnd();

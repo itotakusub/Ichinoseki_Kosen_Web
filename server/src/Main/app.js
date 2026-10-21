@@ -1072,7 +1072,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         return `<div class="km-poster-list" aria-label="ポスター">${list.map(function (poster) {
             const focused = Number(poster.id) === focusPosterId;
             const link = poster.linkUrl && /^https?:\/\//i.test(poster.linkUrl)
-                ? `<a class="km-poster-link" href="${escapeHtml(poster.linkUrl)}" target="_blank" rel="noopener noreferrer">くわしく見る ↗</a>`
+                ? `<a class="km-poster-link" href="${escapeHtml(poster.linkUrl)}" target="_blank" rel="noopener noreferrer" data-km-poster-link="${Number(poster.id)}">くわしく見る ↗</a>`
                 : '';
             return `<figure class="km-poster${focused ? ' is-focused' : ''}">
                 <button type="button" class="km-poster-thumb" data-km-poster-view="${escapeHtml(String(poster.id))}"
@@ -1139,6 +1139,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         const hasLink = Boolean(poster.linkUrl && /^https?:\/\//i.test(poster.linkUrl));
         link.hidden = !hasLink;
         if (hasLink) link.href = poster.linkUrl; else link.removeAttribute('href');
+        // 押したら数える(Main/poster-stats.js。同じ端末は 1 人)
+        link.setAttribute('data-km-poster-link', String(Number(poster.id)));
         posterViewerReturn = opener || null;
         posterViewer.hidden = false;
         posterViewer.querySelector('.km-poster-viewer-close').focus();

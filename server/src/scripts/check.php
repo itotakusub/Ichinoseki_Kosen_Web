@@ -4109,7 +4109,7 @@ function km_check_hardening(): void
     check_bool('proxy-web.conf に proxy_read_timeout を書かない(location で重複すると起動しない)', !str_contains((string) preg_replace('/^\s*#.*$/m', '', $file('nginx/km/proxy-web.conf')), 'proxy_read_timeout'));
     // 2 つ目は Soketi の WebSocket(/ws/app/。2026-10-19 に 6001 番から移した。1 本を長く張る)
     check('443 で 300s を許すのは downloads.php と /ws/app/ だけ', 2, substr_count($https, 'proxy_read_timeout 300s;'));
-    check_bool('未認証で重い口を km_api で絞る(メソッドを問わない)', str_contains($https, 'location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update|positioning-params|learning|poster-image|table)|logto_me)\.php$ {') && str_contains($https, 'limit_req zone=km_api burst=120 nodelay;'));
+    check_bool('未認証で重い口を km_api で絞る(メソッドを問わない)', str_contains($https, 'location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update|positioning-params|learning|poster-image|poster-event|table)|logto_me)\.php$ {') && str_contains($https, 'limit_req zone=km_api burst=120 nodelay;'));
     check_bool('アプリの地図は km_appmap で絞る', preg_match('#location = /api/app-map\.php \{\s*limit_req zone=km_appmap burst=30 nodelay;#', $https) === 1);
     check_bool('callback.php は認可コードをログに残さない', preg_match('#location = /callback\.php \{\s*access_log [^;]+ km_no_query;#', $https) === 1);
     /*
@@ -7243,23 +7243,46 @@ function km_check_layout(): void
     check_bool('監査ログ: ポスターと地点の URL の操作に文言がある', isset(KM_ADMIN_LOG_ACTION_LABELS['poster.mode'], KM_ADMIN_LOG_ACTION_LABELS['poster.create'], KM_ADMIN_LOG_ACTION_LABELS['poster.update'], KM_ADMIN_LOG_ACTION_LABELS['poster.delete'], KM_ADMIN_LOG_ACTION_LABELS['map.node_link']));
     check_bool('管理画面: サイドバーから開ける', str_contains((string) file_get_contents(__DIR__ . '/../admin/_inc/partials/sidebar.php'), '<a href="./posters.php" class="<?= $link(\'posters\') ?>">'));
 
-    km_check_heading('posters: 広告(10%)とチュートリアルの終わりの知らせ(2026-10-21)');
-    check('広告の確率は 10%(利用者の指示。全部同じ)', 0.1, KM_POSTER_AD_CHANCE);
+    km_check_heading('posters: 広告(重み 10%・必ず 1 件)・数・チュートリアルの終わりの知らせ(2026-10-21)');
+    check('広告の重みは 10%(利用者の指示。全部同じ)', 10, KM_POSTER_AD_WEIGHT);
+    check('広告が 1 件なら 100%・2 件なら 50%・10 件なら 10%・無ければ 0(表示しないわけではない)', [1.0, 0.5, 0.1, 0.0],
+        [km_poster_ad_share(1), km_poster_ad_share(2), km_poster_ad_share(10), km_poster_ad_share(0)]);
     require_once __DIR__ . '/../lib/legal.php';
     $termsText = (string) json_encode(km_legal_terms(), JSON_UNESCAPED_UNICODE);
-    check_bool('利用規約: 第 7 条に広告の確率(定数から書く)・情報を集めないこと', str_contains($termsText, '第7条(ポスター・広告の表示)')
-        && str_contains($termsText, '**10% の確率**') && str_contains($termsText, '外部の広告配信事業者へ送ったりすることはありません')
-        && str_contains($termsText, '第11条(準拠法)') && KM_LEGAL_UPDATED >= '2026-10-21');
+    check_bool('利用規約: 第 7 条に広告の重み(定数から書く)・1 件なら 100%・数だけ記録すること', str_contains($termsText, '第7条(ポスター・広告の表示)')
+        && str_contains($termsText, '**どの広告も同じ重み(10%)で選びます**') && str_contains($termsText, '広告が 1 件なら 100%、2 件ならそれぞれ 50% の確率')
+        && str_contains($termsText, '記録するのは数だけで、誰が見た・押したかは記録しません') && str_contains($termsText, '第11条(準拠法)') && KM_LEGAL_UPDATED >= '2026-10-21');
+    check_bool('プライバシーポリシー: ポスター・広告の数を取得する情報に書いた', str_contains((string) json_encode(km_legal_privacy(), JSON_UNESCAPED_UNICODE), 'ポスター・広告の数(広告を表示した回数・リンクが押された数'));
     $tutorialJs = (string) file_get_contents(__DIR__ . '/../Main/tutorial.js');
     $tutorialEndJs = (string) file_get_contents(__DIR__ . '/../Main/tutorial-end.js');
     check_bool('チュートリアルが終わったら知らせる(最後まで・スキップ・Esc のどれでも finish を通る)', str_contains($tutorialJs, "new CustomEvent('km-tutorial-finished'")
         && str_contains($tutorialJs, "skip.addEventListener('click', finish);") && str_contains($tutorialJs, "if (event.key === 'Escape') finish();"));
-    check_bool('広告: 地点なし(isAd)だけ・確率は data-ad-chance・閉じたら終わりの知らせ', str_contains($tutorialEndJs, 'poster.isAd === true')
-        && str_contains($tutorialEndJs, 'Math.random() < chance') && str_contains($tutorialEndJs, 'showAd(list[Math.floor(Math.random() * list.length)], showEnd);')
+    check_bool('広告: 地点なし(isAd)だけ・あれば必ず 1 件を重みで選ぶ・出したら数える・閉じたら終わりの知らせ', str_contains($tutorialEndJs, 'poster.isAd === true')
+        && str_contains($tutorialEndJs, "if (list.length > 0) {\n            showAd(pickAd(list), showEnd);") && str_contains($tutorialEndJs, 'let roll = Math.random() * weight * list.length;')
+        && !str_contains($tutorialEndJs, 'Math.random() < ') && str_contains($tutorialEndJs, "window.kmPosterStat(poster.id, 'impression')")
         && str_contains($tutorialEndJs, "link.rel = 'noopener noreferrer';") && !str_contains($tutorialEndJs, 'innerHTML'));
-    check_bool('公開ページ: 終わりの知らせ(アンケートは URL があるときだけ・スマホの QR)と確率を置く', str_contains($homeCode, 'data-ad-chance="<?= km_home_e((string) KM_POSTER_AD_CHANCE) ?>"')
+    check_bool('公開ページ: 終わりの知らせ(アンケートは URL があるときだけ・スマホの QR)と重みを置く・数える JS を先に読む', str_contains($homeCode, 'data-ad-weight="<?= (int) KM_POSTER_AD_WEIGHT ?>"')
         && str_contains($homeCode, "<?php if (\$kmTutorialEnd['surveyUrl'] !== ''): ?>") && str_contains($homeCode, 'スマホでもマップを見ることができます')
-        && str_contains($homeCode, "km_public_asset('Main/tutorial-end.js')"));
+        && strpos($homeCode, "km_public_asset('Main/poster-stats.js')") < strpos($homeCode, "km_public_asset('Main/tutorial-end.js')")
+        && str_contains($homeCode, '$kmTestMode !== null || $kmEventCollect !== null || $kmHasPosters'));
+    $statMemory = [];
+    check('数: リンクは同じセッションで 1 回だけ・広告の表示は 60 秒に 1 回だけ', [true, false, true, true, false, true], [
+        km_poster_stat_allowed($statMemory, 3, 'click', 1000), km_poster_stat_allowed($statMemory, 3, 'click', 5000), km_poster_stat_allowed($statMemory, 4, 'click', 5000),
+        km_poster_stat_allowed($statMemory, 3, 'impression', 1000), km_poster_stat_allowed($statMemory, 3, 'impression', 1059), km_poster_stat_allowed($statMemory, 3, 'impression', 1060),
+    ]);
+    $statsLib = (string) file_get_contents(__DIR__ . '/../lib/posters.php');
+    $statsApi = (string) file_get_contents(__DIR__ . '/../api/poster-event.php');
+    $statsJs = (string) file_get_contents(__DIR__ . '/../Main/poster-stats.js');
+    check_bool('数: 表は ポスター × 日 の数だけ(IP・利用者・端末を置かない)・出していないポスター/地点のポスターの表示は数えない', preg_match('/CREATE TABLE IF NOT EXISTS km_poster_stats \(\s*poster_id INT NOT NULL,\s*day DATE NOT NULL,\s*impressions INT NOT NULL DEFAULT 0,\s*clicks INT NOT NULL DEFAULT 0,\s*PRIMARY KEY \(poster_id, day\)\s*\)/', $statsLib) === 1
+        && str_contains($statsLib, "|| !km_posters_showing_now(\$pdo)) {") && str_contains($statsLib, "if (\$kind === 'impression' && (string) (\$nodeId ?? '') !== '') {"));
+    check_bool('数える口: POST・CSRF・セッションで絞る・数えたかを外に教えない(204)', str_contains($statsApi, "require_method('POST');") && strpos($statsApi, 'km_csrf_verify()') < strpos($statsApi, 'km_poster_stat_record(')
+        && str_contains($statsApi, 'km_poster_stat_allowed($memory, $posterId, $kind, time())') && str_contains($statsApi, 'http_response_code(204);') && !str_contains($statsApi, 'REMOTE_ADDR'));
+    check_bool('数える JS: 押したことを端末に覚えて 2 度目を送らない・送るのは番号と種類だけ', str_contains($statsJs, "if (kind === 'click' && clickedBefore(id)) return;")
+        && str_contains($statsJs, 'body: JSON.stringify({ poster: posterId, kind: kind }),') && str_contains($statsJs, "a[data-km-poster-link]"));
+    check_bool('リンクに数える印(地図の詳細・大きく見る幕・広告・一覧のページ)', str_contains($appJsForPosters = (string) file_get_contents(__DIR__ . '/../Main/app.js'), 'data-km-poster-link="${Number(poster.id)}"')
+        && str_contains($appJsForPosters, "link.setAttribute('data-km-poster-link', String(Number(poster.id)));") && str_contains($tutorialEndJs, "link.setAttribute('data-km-poster-link', String(poster.id));")
+        && substr_count((string) file_get_contents(__DIR__ . '/../posters.php'), 'data-km-poster-link=') === 2);
+    check_bool('ポスターを消したら数も消す・管理画面に数を出す', str_contains($statsLib, "km_poster_stats_delete(\$pdo, \$id);") && str_contains((string) file_get_contents(__DIR__ . '/../admin/posters.php'), '$stats = km_poster_stats_totals($pdo);'));
     $tutorialEndError = static function (string $text, string $url): string {
         try {
             // 書き込みの前に断るものだけを試す(DB は使わない)

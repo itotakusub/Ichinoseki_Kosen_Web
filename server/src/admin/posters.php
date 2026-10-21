@@ -154,6 +154,7 @@ try {
     $links = km_node_links_all($pdo);
     $nodeOptions = km_poster_node_options($pdo);
     $tutorialEnd = km_tutorial_end_config($pdo);
+    $stats = km_poster_stats_totals($pdo);
 } catch (Throwable $exception) {
     error_log('posters.php: ' . $exception->getMessage());
     $dbError = km_admin_error_message($exception, '詳しくはサーバーのログを照合してください。');
@@ -164,8 +165,11 @@ try {
     $links = [];
     $nodeOptions = [];
     $tutorialEnd = ['text' => KM_TUTORIAL_END_TEXT_DEFAULT, 'ownSurveyUrl' => '', 'surveyUrl' => '', 'phoneQr' => true];
+    $stats = [];
 }
-$adPercent = (int) round(KM_POSTER_AD_CHANCE * 100);
+// 広告(地点なし・出しているもの)の数と、1 件が選ばれる割合(全部同じ重みなので 1 / 件数。lib/posters.php)
+$adCount = count(array_filter($posters, static fn (array $p): bool => $p['nodeId'] === '' && $p['isEnabled']));
+$adShare = (int) round(km_poster_ad_share($adCount) * 100);
 
 $nodeNames = [];
 foreach ($nodeOptions as $option) {
@@ -288,8 +292,9 @@ require __DIR__ . '/_inc/partials/page-header.php';
                     <ul class="mb-2">
                       <li><strong>地図の地点の詳細</strong>に、その地点のポスター(画像・見出し・説明・URL)が出ます。ポスターのある地点の名前には 🖼 が付きます。</li>
                       <li>地図の右上の <strong>🖼️</strong>(出しているポスターがあるときだけ出ます)から、ポスターを並べた<strong>一覧のページ</strong>を開けます。画像を押すと、地図のその地点へ移って詳細を開きます。</li>
-                      <li><strong>地点に置かないポスターは「広告」</strong>です。チュートリアル(操作の案内)が終わったときに、<strong><?= $adPercent ?>% の確率</strong>で 1 件を出します(どの広告も同じ確率。利用規約の第 7 条に書いてあります)。一覧のページにも出ます。</li>
-                      <li>広告を閉じたら(出なかったときはすぐ)、下の「チュートリアルの終わりの知らせ」を出します。</li>
+                      <li><strong>地点に置かないポスターは「広告」</strong>です。チュートリアル(操作の案内)が終わったときに<strong>必ず 1 件</strong>を出します。どれを出すかは<strong>同じ重み(<?= (int) KM_POSTER_AD_WEIGHT ?>%)</strong>で選ぶので、広告が 1 件なら 100%、2 件なら 50% です(利用規約の第 7 条)。<?= $adCount > 0 ? 'いまは出している広告が ' . $adCount . ' 件で、それぞれ ' . $adShare . '%。' : 'いま出している広告はありません。' ?>一覧のページにも出ます。</li>
+                      <li>広告を出した回数と、リンクを押した人数(同じ端末は 1 人)を数えます(下の一覧の「数」。数だけで、誰のものかは残しません)。</li>
+                      <li>広告を閉じたら(広告が無いときはすぐ)、下の「チュートリアルの終わりの知らせ」を出します。</li>
                     </ul>
                     <a class="btn btn-sm btn-outline-primary" href="<?= km_e(km_site_url(null, '/posters.php')) ?>" target="_blank" rel="noopener">一覧のページを開く</a>
                     <span class="text-body-secondary ms-1">(「表示しない」の間は「いまはありません」と出ます)</span>
@@ -309,7 +314,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
                       <div class="table-responsive">
                         <table class="table table-sm align-middle mb-0">
                           <thead>
-                            <tr><th scope="col">画像</th><th scope="col">見出し・地点・URL</th><th scope="col">並び</th><th scope="col">状態</th><th scope="col"></th></tr>
+                            <tr><th scope="col">画像</th><th scope="col">見出し・地点・URL</th><th scope="col">数<span class="fw-normal fs-7">(合計 / 7 日)</span></th><th scope="col">並び</th><th scope="col">状態</th><th scope="col"></th></tr>
                           </thead>
                           <tbody>
                             <?php foreach ($posters as $poster): ?>
@@ -320,7 +325,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
                                 <td>
                                   <div class="fw-bold"><?= km_e($poster['title']) ?></div>
                                   <?php if ($poster['nodeId'] === ''): ?>
-                                    <div class="fs-7"><span class="badge text-bg-warning">広告</span> チュートリアルの終わりに <?= $adPercent ?>%</div>
+                                    <div class="fs-7"><span class="badge text-bg-warning">広告</span> チュートリアルの終わりに<?= $poster['isEnabled'] && $adShare > 0 ? ' ' . $adShare . '%' : '' ?></div>
                                   <?php else: ?>
                                     <div class="fs-7"><i class="bi bi-geo-alt"></i> <?= km_e($nodeLabel($poster['nodeId'])) ?></div>
                                   <?php endif; ?>
@@ -329,8 +334,17 @@ require __DIR__ . '/_inc/partials/page-header.php';
                                   <?php endif; ?>
                                   <div class="fs-7 text-body-secondary"><?= (int) $poster['width'] ?>×<?= (int) $poster['height'] ?>px<?= $poster['sourceUrl'] !== '' ? '・URL から取り込み' : '' ?></div>
                                 </td>
-                                <td><?= (int) $poster['sortOrder'] ?></td>
-                                <td>
+                                <td class="fs-7 text-nowrap">
+                                  <?php $stat = $stats[$poster['id']] ?? ['impressions' => 0, 'clicks' => 0, 'impressions7' => 0, 'clicks7' => 0]; ?>
+                                  <?php if ($poster['nodeId'] === ''): ?>
+                                    <div title="広告として出した回数">表示 <?= (int) $stat['impressions'] ?> 回 / <?= (int) $stat['impressions7'] ?></div>
+                                  <?php endif; ?>
+                                  <?php if ($poster['linkUrl'] !== ''): ?>
+                                    <div title="リンクを押した人数(同じ端末は 1 人)">リンク <?= (int) $stat['clicks'] ?> 人 / <?= (int) $stat['clicks7'] ?></div>
+                                  <?php endif; ?>
+                                  <?php if ($poster['nodeId'] !== '' && $poster['linkUrl'] === ''): ?>—<?php endif; ?>
+                                </td>
+                                <td><?= (int) $poster['sortOrder'] ?></td>                                <td>
                                   <form method="post" class="m-0">
                                     <?= km_csrf_field() ?>
                                     <input type="hidden" name="form_action" value="toggle">
@@ -425,7 +439,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
                     <div class="mb-3">
                       <label class="form-label" for="km-poster-node">地点(任意)</label>
                       <?php $nodeSelect('node_id', 'km-poster-node', (string) $value('nodeId'), true); ?>
-                      <div class="form-text">この地点の詳細にポスターが出ます。一覧のページで画像を押すと、ここへ移ります。<strong>地点に置かないと「広告」</strong>になり、チュートリアルの終わりに <?= $adPercent ?>% の確率で出ます。</div>
+                      <div class="form-text">この地点の詳細にポスターが出ます。一覧のページで画像を押すと、ここへ移ります。<strong>地点に置かないと「広告」</strong>になり、チュートリアルの終わりに出ます(広告どうしは同じ重みで選びます)。</div>
                     </div>
                     <div class="row g-2 mb-3 align-items-end">
                       <div class="col-5">

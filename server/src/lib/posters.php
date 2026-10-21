@@ -40,13 +40,21 @@ const KM_POSTER_MODES = [
 const KM_POSTER_MODE_DEFAULT = 'off';
 
 /**
- * 広告の出る確率(2026-10-21、利用者の指示「広告が出る確率は全て 10% に統一」)。
+ * 広告 1 件あたりの重み(%)(2026-10-21、利用者の指示「広告の確率は全て 10% に統一」)。
  *
- * **広告 = 地点に置いていないポスター。** 操作の案内(チュートリアル)が終わったときに、この確率で 1 件を出す
- * (Main/tutorial-end.js)。地点に置いたポスターは地点の詳細と一覧に出るもので、確率は掛からない。
+ * **広告 = 地点に置いていないポスター。** 操作の案内(チュートリアル)が終わったときに、**広告があれば必ず 1 件を出す**。
+ * どれを出すかは重みで選ぶ。**全部同じ重み**なので、広告が 1 件なら 100%、2 件なら 50%、10 件なら 10%
+ * (同日の利用者の指示「表示しないというわけでは無い。1 枚なら 100%、2 枚なら 50%」。km_poster_ad_share)。
+ * 地点に置いたポスターは地点の詳細と一覧に出るもので、重みは掛からない。
  * **利用規約の第 7 条はこの値から書く**(lib/legal.php)。変えるときはここだけを変える。
  */
-const KM_POSTER_AD_CHANCE = 0.1;
+const KM_POSTER_AD_WEIGHT = 10;
+
+/** 広告が $count 件あるとき、1 件が選ばれる割合(0〜1)。全部同じ重みなので 1 / 件数 */
+function km_poster_ad_share(int $count): float
+{
+    return $count <= 0 ? 0.0 : KM_POSTER_AD_WEIGHT / (KM_POSTER_AD_WEIGHT * $count);
+}
 
 /**
  * チュートリアルの終わりに出す知らせ(2026-10-21)。広告を出したときは、広告を閉じたあとに出す。
@@ -563,6 +571,7 @@ function km_poster_delete(PDO $pdo, int $id): string
         throw new InvalidArgumentException('ポスターが見つかりません(もう消されたかもしれません)。');
     }
     $pdo->prepare('DELETE FROM km_posters WHERE id = ?')->execute([$id]);
+    km_poster_stats_delete($pdo, $id);
     km_poster_remove_image((string) $poster['storedName']);
 
     return (string) $poster['title'];
@@ -816,4 +825,122 @@ function km_tutorial_end_save(PDO $pdo, string $text, string $surveyUrl, bool $p
     km_setting_set($pdo, KM_TUTORIAL_END_TEXT_SETTING, $text);
     km_setting_set($pdo, KM_TUTORIAL_END_SURVEY_SETTING, $surveyUrl);
     km_setting_set($pdo, KM_TUTORIAL_END_PHONE_SETTING, $phoneQr ? '1' : '0');
+}
+// ---------------------------------------------------------------- 表示回数とリンクの人数(2026-10-21)
+
+/**
+ * 数える(利用者の指示「広告の表示回数を保存し、リンクを踏んだ人数も保存」)。
+ *
+ * **数だけを置く**(ポスター × 日 の行)。誰が見た・押したかは残さない(利用規約 第 7 条・プライバシーポリシー 2.)。
+ * - 表示回数(impressions): 広告(地点なし)をチュートリアルの終わりに出した回数
+ * - リンクの人数(clicks): ポスター・広告のリンクを押した数。**同じ端末は 1 人**と数える
+ *   (端末の localStorage に「押した」を覚えて 2 度目を送らない + サーバーもセッションごとに 1 回だけ数える)
+ */
+const KM_POSTER_STAT_KINDS = ['impression', 'click'];
+/** 同じセッションから同じ広告の表示を数える間(秒)。押し続けて数を膨らませない */
+const KM_POSTER_STAT_IMPRESSION_GAP = 60;
+
+function km_poster_stats_ensure_table(PDO $pdo): void
+{
+    static $done = false;
+    if ($done) {
+        return;
+    }
+    $pdo->exec(<<<'SQL'
+        CREATE TABLE IF NOT EXISTS km_poster_stats (
+            poster_id INT NOT NULL,
+            day DATE NOT NULL,
+            impressions INT NOT NULL DEFAULT 0,
+            clicks INT NOT NULL DEFAULT 0,
+            PRIMARY KEY (poster_id, day)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        SQL);
+    $done = true;
+}
+
+/**
+ * セッションの覚えを見て、数えてよいか。**DB を使わない**(scripts/check.php が試す)。数えるなら覚えを書き換える。
+ *
+ * @param array<string, mixed> $memory セッションの km_poster_stat(参照で書き換える)
+ */
+function km_poster_stat_allowed(array &$memory, int $posterId, string $kind, int $now): bool
+{
+    if ($kind === 'click') {
+        if (!empty($memory['click'][$posterId])) {
+            return false;
+        }
+        $memory['click'][$posterId] = true;
+
+        return true;
+    }
+    $last = (int) ($memory['impression'][$posterId] ?? 0);
+    if ($last > 0 && $now - $last < KM_POSTER_STAT_IMPRESSION_GAP) {
+        return false;
+    }
+    $memory['impression'][$posterId] = $now;
+
+    return true;
+}
+
+/**
+ * 1 回ぶん数える。**いま公開ページに出しているポスターだけ**(止めた・出し方が「表示しない」のものは数えない)。
+ * 表示回数は広告(地点なし)だけ。数えなかったら false。
+ */
+function km_poster_stat_record(PDO $pdo, int $posterId, string $kind): bool
+{
+    if (!in_array($kind, KM_POSTER_STAT_KINDS, true) || $posterId <= 0 || !km_posters_showing_now($pdo)) {
+        return false;
+    }
+    $statement = $pdo->prepare('SELECT node_id FROM km_posters WHERE id = ? AND is_enabled = 1');
+    $statement->execute([$posterId]);
+    $nodeId = $statement->fetchColumn();
+    if ($nodeId === false) {
+        return false;
+    }
+    if ($kind === 'impression' && (string) ($nodeId ?? '') !== '') {
+        return false;   // 地点に置いたポスターは広告として出さない
+    }
+
+    km_poster_stats_ensure_table($pdo);
+    $column = $kind === 'impression' ? 'impressions' : 'clicks';
+    $pdo->prepare(
+        "INSERT INTO km_poster_stats (poster_id, day, impressions, clicks) VALUES (?, CURDATE(), ?, ?)
+         ON DUPLICATE KEY UPDATE {$column} = {$column} + 1"
+    )->execute([$posterId, $kind === 'impression' ? 1 : 0, $kind === 'click' ? 1 : 0]);
+
+    return true;
+}
+
+/**
+ * 管理画面の数。ポスターごとの合計と、直近 7 日(今日を含む)。
+ *
+ * @return array<int, array{impressions:int, clicks:int, impressions7:int, clicks7:int}>
+ */
+function km_poster_stats_totals(PDO $pdo): array
+{
+    km_poster_stats_ensure_table($pdo);
+    $rows = $pdo->query(
+        'SELECT poster_id AS posterId, SUM(impressions) AS impressions, SUM(clicks) AS clicks,
+                SUM(CASE WHEN day >= CURDATE() - INTERVAL 6 DAY THEN impressions ELSE 0 END) AS impressions7,
+                SUM(CASE WHEN day >= CURDATE() - INTERVAL 6 DAY THEN clicks ELSE 0 END) AS clicks7
+         FROM km_poster_stats GROUP BY poster_id'
+    )->fetchAll();
+    $totals = [];
+    foreach ($rows as $row) {
+        $totals[(int) $row['posterId']] = [
+            'impressions' => (int) $row['impressions'],
+            'clicks' => (int) $row['clicks'],
+            'impressions7' => (int) $row['impressions7'],
+            'clicks7' => (int) $row['clicks7'],
+        ];
+    }
+
+    return $totals;
+}
+
+/** ポスターを消したら、その数も消す */
+function km_poster_stats_delete(PDO $pdo, int $posterId): void
+{
+    km_poster_stats_ensure_table($pdo);
+    $pdo->prepare('DELETE FROM km_poster_stats WHERE poster_id = ?')->execute([$posterId]);
 }

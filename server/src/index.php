@@ -284,8 +284,9 @@ if ($kmEvent !== null && $kmTestMode === null) {
         <?php /* イベント中の来場者の記録。値は許可の覚え(localStorage)をイベントごとに分けるための名前 */ ?>
         <meta name="km-event-collect" content="<?= km_home_e($kmEventCollect['key']) ?>">
     <?php endif; ?>
-    <?php if ($kmTestMode !== null || $kmEventCollect !== null): ?>
-        <?php /* 記録の送信に使うトークン(api/test-events.php が X-KM-CSRF で見る) */ ?>
+    <?php $kmHasPosters = ($kmMapData['posters'] ?? []) !== []; ?>
+    <?php if ($kmTestMode !== null || $kmEventCollect !== null || $kmHasPosters): ?>
+        <?php /* 記録の送信に使うトークン(api/test-events.php と、ポスターの数を数える api/poster-event.php が X-KM-CSRF で見る) */ ?>
         <meta name="km-csrf" content="<?= km_home_e(km_csrf_token()) ?>">
     <?php endif; ?>
     <title>高専マップ案内</title>
@@ -951,7 +952,7 @@ if ($kmEvent !== null && $kmTestMode === null) {
     <?php
     /*
      * チュートリアルが終わったときの知らせ(2026-10-21、利用者の指示。lib/posters.php)。
-     * 開け閉ては Main/tutorial-end.js。広告(地点に置いていないポスター)は data-ad-chance の確率で先に出し、閉じたらこれを出す。
+     * 開け閉ては Main/tutorial-end.js。広告(地点に置いていないポスター)があれば必ず 1 件を先に出し(どれにするかは data-ad-weight の重み。全部同じ)、閉じたらこれを出す。
      * 本文・アンケートの URL は管理画面「ポスター・広告」で変える。QR は外のサービスを使わずここで作る(lib/qr.php)。
      * 読めなければ既定の本文だけで出す(fail open)。
      */
@@ -969,7 +970,7 @@ if ($kmEvent !== null && $kmTestMode === null) {
     };
     $kmSiteUrl = km_site_url(null, '/');
     ?>
-    <div id="km-tutorial-end" class="km-end-scrim" data-ad-chance="<?= km_home_e((string) KM_POSTER_AD_CHANCE) ?>" hidden>
+    <div id="km-tutorial-end" class="km-end-scrim" data-ad-weight="<?= (int) KM_POSTER_AD_WEIGHT ?>" hidden>
         <div class="km-end-card" role="dialog" aria-modal="true" aria-labelledby="km-end-title">
             <p id="km-end-title" class="km-end-title">🎉 チュートリアルが終わりました</p>
             <p class="km-end-text"><?= km_home_e($kmTutorialEnd['text']) ?></p>
@@ -1028,6 +1029,8 @@ if ($kmEvent !== null && $kmTestMode === null) {
     <?php /* 初回の操作案内(2026-10-15)。「はじめに」を閉じてから・地図が出てから始める */ ?>
     <script defer src="<?= km_home_e(km_public_asset('Main/tutorial.js')) ?>"></script>
     <?php /* チュートリアルの終わりに、広告(確率)と「チュートリアルが終わりました」(2026-10-21) */ ?>
+    <?php /* ポスター・広告の表示回数とリンクの人数を数える(2026-10-21)。tutorial-end.js より先に読む(window.kmPosterStat を使う) */ ?>
+    <script defer src="<?= km_home_e(km_public_asset('Main/poster-stats.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/tutorial-end.js')) ?>"></script>
 
 </body>

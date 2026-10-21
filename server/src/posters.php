@@ -19,6 +19,7 @@ require_once __DIR__ . '/lib/session.php';
 require_once __DIR__ . '/lib/posters.php';
 require_once __DIR__ . '/lib/assets.php';
 require_once __DIR__ . '/lib/csp.php';
+require_once __DIR__ . '/lib/csrf.php';   // 数える口(api/poster-event.php)に渡すトークン
 
 km_csp_send('public');
 
@@ -70,6 +71,10 @@ $placeOf = static function (array $poster) use ($nodes): ?string {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ポスター | 高専マップ案内</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <?php if ($posters !== [] && session_status() === PHP_SESSION_ACTIVE): ?>
+        <?php /* リンクを押した人数を数える(Main/poster-stats.js が X-KM-CSRF で送る) */ ?>
+        <meta name="km-csrf" content="<?= km_posters_e(km_csrf_token()) ?>">
+    <?php endif; ?>
     <link rel="stylesheet" href="<?= km_posters_e(km_public_asset('Main/styles.css')) ?>">
     <link rel="stylesheet" href="<?= km_posters_e(km_public_asset('Main/document.css')) ?>">
     <style<?= km_csp_nonce_attr() ?>>
@@ -203,7 +208,7 @@ $placeOf = static function (array $poster) use ($nodes): ?string {
                     <li class="km-poster-card" id="poster-<?= (int) $poster['id'] ?>">
                         <?php if ($imageHref !== null): ?>
                             <a class="km-poster-card-image" href="<?= km_posters_e($imageHref) ?>"
-                                <?= $mapHref === null ? 'target="_blank" rel="noopener noreferrer"' : '' ?>
+                                <?= $mapHref === null ? 'target="_blank" rel="noopener noreferrer" data-km-poster-link="' . (int) $poster['id'] . '"' : '' ?>
                                 aria-label="<?= km_posters_e($poster['title'] . ($mapHref !== null ? '(地図で見る)' : '(リンクを開く)')) ?>">
                                 <img src="<?= km_posters_e($poster['imageUrl']) ?>" alt="<?= km_posters_e($poster['title']) ?>" width="<?= (int) $poster['width'] ?>" height="<?= (int) $poster['height'] ?>" loading="lazy">
                             </a>
@@ -226,7 +231,7 @@ $placeOf = static function (array $poster) use ($nodes): ?string {
                                 <?php endif; ?>
                                 <?php if ($poster['linkUrl'] !== ''): ?>
                                     <?php /* URL は lib/posters.php が http / https だけに確かめてある */ ?>
-                                    <a class="km-doc-link" href="<?= km_posters_e($poster['linkUrl']) ?>" target="_blank" rel="noopener noreferrer">くわしく見る ↗</a>
+                                    <a class="km-doc-link" href="<?= km_posters_e($poster['linkUrl']) ?>" target="_blank" rel="noopener noreferrer" data-km-poster-link="<?= (int) $poster['id'] ?>">くわしく見る ↗</a>
                                 <?php endif; ?>
                             </div>
                         </div>
@@ -235,6 +240,8 @@ $placeOf = static function (array $poster) use ($nodes): ?string {
             </ul>
         <?php endif; ?>
     </main>
+    <?php /* リンクを押した人数を数える(同じ端末は 1 人。数だけ) */ ?>
+    <script defer src="<?= km_posters_e(km_public_asset('Main/poster-stats.js')) ?>"></script>
 </body>
 
 </html>
