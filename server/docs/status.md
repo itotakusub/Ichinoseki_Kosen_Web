@@ -431,7 +431,7 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
 - **PHP の RCE(CVE-2026-109618 / 109619)のつなぎ(2026-10-21、利用者の指示「修正プランと対策」「全部止める」)**:
   PHP 本体に認証なしの RCE が 2 つ(CVSS v4.0 9.2)。修正版は 10/21 14:00 UTC(日本時間 23:00)。詳細が漏れ、攻撃の道具が出回っている。
   web(php:8.4-apache・PHP 8.4.26)と phpMyAdmin が対象と見る。手順と、破られていないかの確かめ方は [05](05-containers.ipynb) の該当節。
-  - **つなぎ(いま)**: nginx が multipart の要求を 443(公開・管理・API)と 8281(phpMyAdmin)の server の直下で 403 にする(`$km_php_shield_multipart`)。
+  - **つなぎ(10-21〜22。外した)**: nginx が multipart の要求を 443(公開・管理・API)と 8281(phpMyAdmin)の server の直下で 403 にする(`$km_php_shield_multipart`)。
     止まる間は、ファイル管理・ポスター・階の画像・地図の取り込み・APK・プロフィールの画像・アプリのアカウント画像・パノラマ・AR・phpMyAdmin の取り込みが使えない(JS の FormData は 0 件で、ほかの画面と API は止まらない)。
     `99-limits.ini` に `session.upload_progress.enabled = 0`(使っていない。修正版の後も残す)。check.php 2029 件。
     **配備: `-Backup -Yes` → reverse-proxy と web の restart**(利用者)
@@ -444,7 +444,10 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
     止めたサービスは比べられず「変化なし」と出た。→ ①止まっている DB(mariadb・postgres)は**控えのあいだだけ `docker compose start` で起こし、終わったら(失敗しても)止め直す**
     (web などは起こさない)。②どちらも `ps -a`(止まっているものも)にし、一覧に「止まっています」を添える。docker の代わりの台本で、起こす → healthy を待つ → 取る → 止め直すを確かめた。check.php 2048 件。
     **直した版はホストに送るまで効かない** —— 先に `.\deploy-to-host.ps1 -Yes`(控えなし)で送ってから `update-containers.ps1` を流す
-  - **まだ**: 修正版の像が出たら `update-containers.ps1` の 2 で web と phpmyadmin を当てる → `php -v` → つなぎ(nginx の map と 2 つの if・check.php の php-rce-shield の節)を外す → 破られていないかを確かめる(利用者)。手元の `Downloaded/php-8.4.24…` も替える
+  - **修正版を当てた(2026-10-22、利用者)**: `update-containers.ps1` の 2 で web(`php:8.4-apache@sha256:56e7dab…` = PHP 8.4.27)と phpmyadmin を当て、`php -v` を確かめた。
+    **つなぎ(nginx の `$km_php_shield_multipart` と 2 つの if・check.php の節)は同日に外した**(配備 → reverse-proxy の restart が要る)。
+    残すもの: メンテナンス中の画面・`session.upload_progress.enabled = 0`。破られた跡は 10-21 の確認で見つからなかった(書ける場所・設定・web の記録・nginx の POST)
+  - **まだ**: 手元の `Downloaded/php-8.4.24…`(試しの作りと check.php 用)を 8.4.27 に替える
 
 ### 診断(2026-10-05)の反映(2026-10-06、利用者の指示)
 
