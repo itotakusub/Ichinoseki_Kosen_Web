@@ -27,6 +27,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/uploads.php';   // km_upload_dir() / km_upload_format_size()
+require_once __DIR__ . '/raster-image.php';   // 画像の中身の確かめ(階の画像と共通)
 
 /** 出し方の設定(km_settings)の名前と、選べる値 → 画面の言葉。 */
 const KM_POSTER_MODE_SETTING = 'poster_display_mode';
@@ -38,13 +39,8 @@ const KM_POSTER_MODES = [
 /** まだ選んでいないとき。**出さない側に倒す**(作りかけのポスターが勝手に出ない) */
 const KM_POSTER_MODE_DEFAULT = 'off';
 
-/** 画像の種類。**SVG は入れない**(<img> で描くので、中の script が動きうる。lib/profile.php と同じ) */
-const KM_POSTER_IMAGE_TYPES = [
-    IMAGETYPE_PNG => ['png', 'image/png'],
-    IMAGETYPE_JPEG => ['jpg', 'image/jpeg'],
-    IMAGETYPE_GIF => ['gif', 'image/gif'],
-    IMAGETYPE_WEBP => ['webp', 'image/webp'],
-];
+/** 画像の種類は lib/raster-image.php の KM_RASTER_IMAGE_TYPES(SVG は入れない) */
+const KM_POSTER_IMAGE_TYPES = KM_RASTER_IMAGE_TYPES;
 /** 1 枚の上限。nginx の /admin/ は 12m(multipart の分の余裕を残す) */
 const KM_POSTER_MAX_BYTES = 8 * 1024 * 1024;
 /**
@@ -209,32 +205,7 @@ function km_poster_ip_allowed(string $ip): bool
  */
 function km_poster_image_check(string $bytes): array
 {
-    $size = strlen($bytes);
-    if ($size === 0) {
-        throw new InvalidArgumentException('画像が空です。');
-    }
-    if ($size > KM_POSTER_MAX_BYTES) {
-        throw new InvalidArgumentException('画像は ' . km_upload_format_size(KM_POSTER_MAX_BYTES) . ' 以内にしてください。');
-    }
-    $info = @getimagesizefromstring($bytes);
-    $type = is_array($info) ? ($info[2] ?? null) : null;
-    if ($type === null || !isset(KM_POSTER_IMAGE_TYPES[$type])) {
-        throw new InvalidArgumentException('PNG / JPEG / GIF / WebP の画像にしてください(PDF や SVG は使えません)。');
-    }
-    $width = (int) ($info[0] ?? 0);
-    $height = (int) ($info[1] ?? 0);
-    if ($width <= 0 || $height <= 0) {
-        throw new InvalidArgumentException('画像の大きさを読み取れませんでした。');
-    }
-    if ($width > KM_POSTER_MAX_DIMENSION || $height > KM_POSTER_MAX_DIMENSION) {
-        throw new InvalidArgumentException(
-            '画像は縦横それぞれ ' . KM_POSTER_MAX_DIMENSION . 'px 以内にしてください'
-            . '(いまは ' . $width . '×' . $height . 'px)。縮めてから選び直してください。'
-        );
-    }
-    [$ext, $mime] = KM_POSTER_IMAGE_TYPES[$type];
-
-    return ['ext' => $ext, 'mime' => $mime, 'width' => $width, 'height' => $height];
+    return km_raster_image_check($bytes, KM_POSTER_MAX_BYTES, KM_POSTER_MAX_DIMENSION);
 }
 
 /**

@@ -25,6 +25,7 @@ $openMenus = [
     'mapEditor' => 'database',
     'mapEvents' => 'database',
     'posters' => 'database',
+    'mapFloors' => 'database',
     'login' => 'auth',
     'projects' => 'content',
     'timeline' => 'content',
@@ -160,6 +161,13 @@ $parentLink = static fn(string $id): string => 'nav-link' . ($openMenu === $id ?
                     <a href="./map-events.php" class="<?= $link('mapEvents') ?>">
                       <i class="nav-icon bi bi-cone-striped"></i>
                       <p data-i18n="side.mapEvents">イベントモード</p>
+                    </a>
+                  </li>
+                  <?php // 階と平面図(画像の差し替え・階の追加と削除。2026-10-21、lib/map-floors.php) ?>
+                  <li class="nav-item">
+                    <a href="./map-floors.php" class="<?= $link('mapFloors') ?>">
+                      <i class="nav-icon bi bi-layers"></i>
+                      <p data-i18n="side.mapFloors">階と平面図</p>
                     </a>
                   </li>
                   <?php // ポスター・広告と地点の URL(2026-10-21、lib/posters.php) ?>

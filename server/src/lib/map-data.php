@@ -43,8 +43,15 @@ function km_map_floor_image_endpoint(string $floorId, string $svgPath): string
 {
     // ?v= は更新時刻。nginx が静的資材へ長い Cache-Control を付けるため、
     // 版が無いと見取り図を差し替えても反映されない(直リンク時代と同じ理由)。
-    $version = km_public_asset('Main/' . ltrim($svgPath, '/'));
-    $stamp = str_contains($version, '?v=') ? substr($version, strpos($version, '?v=') + 3) : '';
+    if (str_starts_with($svgPath, 'upload:')) {
+        // 管理画面で差し替えた画像(lib/map-floors.php。uploads/ に置く)。版は置いた時刻
+        require_once __DIR__ . '/map-floors.php';
+        $file = km_map_floor_image_file($svgPath);
+        $stamp = $file !== null ? (string) (int) @filemtime($file) : '';
+    } else {
+        $version = km_public_asset('Main/' . ltrim($svgPath, '/'));
+        $stamp = str_contains($version, '?v=') ? substr($version, strpos($version, '?v=') + 3) : '';
+    }
 
     return '/api/floor-image.php?floor=' . rawurlencode($floorId)
         . ($stamp !== '' ? '&v=' . rawurlencode($stamp) : '');
@@ -62,6 +69,8 @@ const KM_FLOOR_IMAGE_TYPES = [
     'jpg' => 'image/jpeg',
     'jpeg' => 'image/jpeg',
     'webp' => 'image/webp',
+    // 管理画面で差し替えた画像は GIF もありうる(lib/map-floors.php は PNG / JPEG / GIF / WebP を受ける)
+    'gif' => 'image/gif',
 ];
 
 /**
@@ -153,7 +162,16 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
     $floors = $pdo
         ->query('SELECT id, label, svg_path AS svgPath, sort_order AS sortOrder FROM km_map_floors ORDER BY sort_order')
         ->fetchAll();
+    /*
+     * 階の種類(2026-10-21、lib/map-floors.php)。campus = 右の階の並びに出す階、building = 建物の中(「中へ」で開く)。
+     * 管理画面で足した階は km_map_floor_custom に種類を持つ(表が無ければ足した階は無い)。
+     */
+    require_once __DIR__ . '/map-floors.php';
+    $customFloors = km_map_floor_custom_rows($pdo);
+    $floorIds = [];
     foreach ($floors as &$floor) {
+        $floorIds[(string) $floor['id']] = true;
+        $floor['kind'] = km_map_floor_kind((string) $floor['id'], $customFloors);
         // **常に PHP 経由にする。** 公開のときだけ直リンクにすると経路が2本になり、
         // 設定を切り替えた瞬間に古い HTML が直リンクを掴んだままになる。
         $floor['svgPath'] = km_map_floor_image_endpoint(
@@ -207,6 +225,14 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
     $nodesById = [];
     $nodeTypes = [];
     foreach ($nodeStmt->fetchAll() as $node) {
+        /*
+         * **階の無い地点は出さない**(2026-10-21)。管理画面で階を消したあと、アプリの地図を取り込むと
+         * その階の地点がまた入りうる。描く階が無いのに経路探索にだけ残ると、見えない階を通る案内になる。
+         * 線はこのあと「両端が在るものだけ」に絞る。
+         */
+        if (!isset($floorIds[(string) $node['floor']])) {
+            continue;
+        }
         if (!$unlocked) {
             $node['occupantName'] = null;
         }
@@ -240,9 +266,11 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
         $nodesById[$id] = $node;
     }
 
-    $edges = $pdo
-        ->query('SELECT from_node_id AS source, to_node_id AS target, distance FROM km_map_edges')
-        ->fetchAll();
+    $edges = array_values(array_filter(
+        $pdo->query('SELECT from_node_id AS source, to_node_id AS target, distance FROM km_map_edges')->fetchAll(),
+        // 両端が出している地点のものだけ(上で階の無い地点を外した)
+        static fn (array $edge): bool => isset($nodesById[(string) $edge['source']], $nodesById[(string) $edge['target']])
+    ));
     foreach ($edges as &$edge) {
         $key = km_map_event_edge_key((string) $edge['source'], (string) $edge['target']);
         if (isset($overlay['closedEdges'][$key])) {
@@ -342,14 +370,7 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
          * 名前の手がかり(keywords)ごと渡す —— **中にまだ地点が無くても案内したい**ので、
          * 地点から導くのでは足りない。
          */
-        'buildingFloors' => array_map(
-            static fn (array $floor): array => [
-                'id' => $floor['id'],
-                'label' => $floor['label'],
-                'keywords' => $floor['keywords'],
-            ],
-            KM_BUILDING_FLOORS
-        ),
+        'buildingFloors' => km_map_data_building_floors($floors, $customFloors),
         /*
          * 経路の重み(2026-09-25)。**管理アプリから配ったときだけ載せる**(lib/route-weights.php)。
          * 載っていなければ Main/dijkstra.js は自分の既定(KM_ROUTE_WEIGHTS)で動く。
@@ -361,6 +382,36 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
             return $stored === null ? null : km_route_weights_for_web($stored);
         })(),
     ];
+}
+
+/**
+ * 「中へ」に出す建物の階。組み込み(lib/building-floors.php)と、管理画面で足した建物の中(lib/map-floors.php)。
+ * **いま在る階だけ**(管理画面で消した階を出さない)。名前は DB の値(管理画面で直せる)。
+ *
+ * @param array<int, array{id:string, label:string}> $floors km_map_floors の行
+ * @param array<string, array{kind:string, keywords:array<int,string>}> $customFloors
+ * @return array<int, array{id:string, label:string, keywords:array<int,string>}>
+ */
+function km_map_data_building_floors(array $floors, array $customFloors): array
+{
+    $labels = [];
+    foreach ($floors as $floor) {
+        $labels[(string) $floor['id']] = (string) $floor['label'];
+    }
+    $result = [];
+    foreach (KM_BUILDING_FLOORS as $floor) {
+        if (isset($labels[$floor['id']])) {
+            $result[] = ['id' => $floor['id'], 'label' => $labels[$floor['id']], 'keywords' => $floor['keywords']];
+        }
+    }
+    foreach ($floors as $floor) {
+        $id = (string) $floor['id'];
+        if (($customFloors[$id]['kind'] ?? '') === 'building') {
+            $result[] = ['id' => $id, 'label' => $labels[$id], 'keywords' => $customFloors[$id]['keywords']];
+        }
+    }
+
+    return $result;
 }
 
 /**

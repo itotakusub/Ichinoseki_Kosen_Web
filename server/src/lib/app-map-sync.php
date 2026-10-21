@@ -530,6 +530,12 @@ function km_app_map_sync_apply(
          * 取り込みのたびに建物の中の地点が隅へ寄る。
          */
         require_once __DIR__ . '/building-floors.php';
+        /*
+         * **管理画面で足した階も除く**(2026-10-21、lib/map-floors.php)。範囲は足したときの画像の大きさで、
+         * アプリはその階を知らない —— 1600×1200 で上書きすると、その階の地点が全部ずれる。
+         */
+        require_once __DIR__ . '/map-floors.php';
+        $customFloors = km_map_floor_custom_rows($pdo);
         $floors = 0;
         $bounds = $pdo->prepare(
             'INSERT INTO km_map_floor_bounds (floor_id, coord_width, coord_height)
@@ -538,7 +544,7 @@ function km_app_map_sync_apply(
         );
         foreach ($pdo->query('SELECT id FROM km_map_floors') as $row) {
             $floorId = (string) $row['id'];
-            if (km_building_floor_is($floorId)) {
+            if (km_building_floor_is($floorId) || isset($customFloors[$floorId])) {
                 continue;
             }
             $bounds->execute([

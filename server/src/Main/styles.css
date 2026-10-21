@@ -1047,6 +1047,22 @@ input[type="text"] {
     font-size: 1.25rem;
 }
 
+/*
+ * 丸に入りきらない名前(管理画面で足した階・建物の中の名前。2026-10-21)は末尾を … にする。
+ * 丸の大きさは変えない(並びの幅が階ごとに揃わなくなる)。読み上げの名前は aria-label に全部ある
+ */
+.floor-toggle-label,
+.floor-nav .floor-btn {
+    max-width: var(--km-floor-size);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.floor-toggle-label {
+    display: block;
+    padding: 0 3px;
+}
+
 /* 畳んでいる間は「いまの階」を出す的なので、階のボタンの選択中と同じ顔にする */
 .floor-nav.is-collapsed .floor-toggle {
     background: var(--primary);

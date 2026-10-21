@@ -2035,7 +2035,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     /** 畳んだ取っ手に出す名前。ボタンの文字(外 / 1F …)をそのまま借りる */
     function floorToggleTextFor(floor) {
         const btn = document.querySelector(`.floor-nav .floor-btn[data-floor="${floor}"]`);
-        return btn ? btn.textContent.trim() : String(floor);
+        // 建物の中は並びにボタンが無い。id(bldg_…)ではなく名前を出す(2026-10-21)
+        return btn ? btn.textContent.trim() : floorLabelFor(floor);
     }
 
     function syncFloorToggle() {

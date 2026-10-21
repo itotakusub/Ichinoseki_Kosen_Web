@@ -210,6 +210,12 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     'poster.update' => 'がポスターを変更しました',
     'poster.delete' => 'がポスターを消しました',
     'map.node_link' => 'が地点の URL を変更しました',
+    // 階と平面図(2026-10-21、admin/map-floors.php)
+    'map.floor_image' => 'が階の画像を差し替えました',
+    'map.floor_update' => 'が階の名前・並び順を変更しました',
+    'map.floor_add' => 'が階を足しました',
+    'map.floor_delete' => 'が階を消しました',
+    'map.floor_zip' => 'が zip で階の画像をまとめて差し替えました',
     'map.event_cleanup_mode' => 'が期限切れイベントの掃除方法を変更しました',
     'map.event_cleanup' => 'が期限切れのイベントを削除しました',
     /*

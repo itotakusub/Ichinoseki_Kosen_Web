@@ -1979,7 +1979,7 @@ function km_check_building_floors(): void
     check('建物の階はアプリ側の値でも引ける', KM_BUILDING_FLOOR_SIZE, km_app_map_floor_height('BLDG_LIBRARY_1F'));
     check('ふつうの階は 1200 のまま', KM_APP_MAP_IMAGE_HEIGHT, km_app_map_floor_height('1'));
     $sync = (string) file_get_contents(__DIR__ . '/../lib/app-map-sync.php');
-    check_bool('取り込みで建物の階の座標系を壊さない', str_contains($sync, 'if (km_building_floor_is($floorId)) {'));
+    check_bool('取り込みで建物の階・管理画面で足した階の座標系を壊さない', str_contains($sync, 'if (km_building_floor_is($floorId) || isset($customFloors[$floorId])) {'));
 
     km_check_heading('building-floors: 施設との結び付き');
     check('メディアセンター(図書館)から 2 つ', ['bldg_library_1f', 'bldg_library_2f'],
@@ -7239,6 +7239,111 @@ function km_check_layout(): void
         && str_contains($appJsForPosters, "if (node.linkUrl && /^https?:\\/\\//i.test(node.linkUrl)) {"));
     check_bool('監査ログ: ポスターと地点の URL の操作に文言がある', isset(KM_ADMIN_LOG_ACTION_LABELS['poster.mode'], KM_ADMIN_LOG_ACTION_LABELS['poster.create'], KM_ADMIN_LOG_ACTION_LABELS['poster.update'], KM_ADMIN_LOG_ACTION_LABELS['poster.delete'], KM_ADMIN_LOG_ACTION_LABELS['map.node_link']));
     check_bool('管理画面: サイドバーから開ける', str_contains((string) file_get_contents(__DIR__ . '/../admin/_inc/partials/sidebar.php'), '<a href="./posters.php" class="<?= $link(\'posters\') ?>">'));
+
+    km_check_heading('map-floors: 階と平面図の差し替え・追加・削除・zip(2026-10-21)');
+    require_once __DIR__ . '/../lib/map-floors.php';
+    require_once __DIR__ . '/../lib/zip-read.php';
+    // 試しの zip を組む(格納 / deflate・印・CRC・申告の大きさを変えられる)
+    $makeZip = static function (array $entries): string {
+        $body = '';
+        $central = '';
+        foreach ($entries as $entry) {
+            $data = (string) $entry['data'];
+            $method = (int) ($entry['method'] ?? 8);
+            $stored = $method === 8 ? (string) gzdeflate($data) : $data;
+            $crc = $entry['crc'] ?? (crc32($data) & 0xFFFFFFFF);
+            $uncomp = $entry['uncomp'] ?? strlen($data);
+            $flags = (int) ($entry['flags'] ?? 0);
+            $name = (string) $entry['name'];
+            $offset = strlen($body);
+            $body .= "PK\x03\x04" . pack('vvvvvVVVvv', 20, $flags, $method, 0, 0, $crc, strlen($stored), $uncomp, strlen($name), 0) . $name . $stored;
+            $central .= "PK\x01\x02" . pack('vvvvvvVVVvvvvvVV', 20, 20, $flags, $method, 0, 0, $crc, strlen($stored), $uncomp, strlen($name), 0, 0, 0, 0, 0, $offset) . $name;
+        }
+        return $body . $central . "PK\x05\x06" . pack('vvvvVVv', 0, 0, count($entries), count($entries), strlen($central), strlen($body), 0);
+    };
+    $zipTmp = tempnam(sys_get_temp_dir(), 'kmzip');
+    $readZip = static function (string $bytes) use ($zipTmp): array|string {
+        file_put_contents($zipTmp, $bytes);
+        try {
+            return km_zip_read_all($zipTmp, 5, 1024 * 1024, 2 * 1024 * 1024);
+        } catch (InvalidArgumentException $exception) {
+            return $exception->getMessage();
+        }
+    };
+    $pngHeaderFloor = "\x89PNG\r\n\x1a\n" . pack('N', 13) . 'IHDR' . pack('NN', 1600, 1200) . "\x08\x02\x00\x00\x00" . pack('N', 0);
+    $zipEntries = $readZip($makeZip([
+        ['name' => '1F.png', 'data' => $pngHeaderFloor, 'method' => 0],
+        ['name' => 'maps/' . mb_convert_encoding('２階.png', 'CP932', 'UTF-8'), 'data' => $pngHeaderFloor . str_repeat("\0", 2000)],
+        ['name' => 'maps/', 'data' => '', 'method' => 0],
+        ['name' => '__MACOSX/._1F.png', 'data' => 'x', 'method' => 0],
+        ['name' => '.DS_Store', 'data' => 'x', 'method' => 0],
+        ['name' => '../../evil.png', 'data' => 'abc'],
+    ]));
+    check('zip: 格納と deflate を読み、フォルダ・__MACOSX・隠しを飛ばし、名前は最後の部分だけ(CP932 も読む)', ['1F.png', '２階.png', 'evil.png'], is_array($zipEntries) ? array_column($zipEntries, 'name') : $zipEntries);
+    check_bool('zip: 中身はそのまま取り出す', is_array($zipEntries) && ($zipEntries[1]['bytes'] ?? '') === $pngHeaderFloor . str_repeat("\0", 2000));
+    check_bool('zip: パスワード付き・CRC 違い・数の上限・大きすぎ・膨らむもの(zip 爆弾)は断る',
+        is_string($readZip($makeZip([['name' => 'a.png', 'data' => 'x', 'flags' => 1]])))
+        && is_string($readZip($makeZip([['name' => 'a.png', 'data' => 'abc', 'crc' => 1]])))
+        && is_string($readZip($makeZip(array_map(static fn (int $i): array => ['name' => $i . '.png', 'data' => 'x'], range(1, 6)))))
+        && is_string($readZip($makeZip([['name' => 'big.png', 'data' => str_repeat('a', 1024 * 1024 + 1)]])))
+        && is_string($readZip($makeZip([['name' => 'bomb.png', 'data' => str_repeat('a', 3 * 1024 * 1024), 'uncomp' => 10]])))
+        && is_string($readZip('not a zip')));
+    @unlink($zipTmp);
+    $floorList = [
+        ['id' => 'outside', 'label' => '外'], ['id' => '1', 'label' => '1F'], ['id' => '2', 'label' => '2F'],
+        ['id' => 'bldg_library_1f', 'label' => '図書館 1F'], ['id' => 'b1', 'label' => '地下 1F'],
+    ];
+    $matched = array_map(static fn (string $name): ?string => km_map_floor_match($name, $floorList),
+        ['１階.png', '1F.PNG', '2階.jpg', '外全体図.png', '外.webp', 'bldg_library_1f.png', '図書館1F.png', '地下１Ｆ.png', 'b1.png', 'unknown.png']);
+    check('zip: 名前から階を当てる(id・名前・元の画像の名前。全角・「階」も)', ['1', '1', '2', 'outside', 'outside', 'bldg_library_1f', 'bldg_library_1f', 'b1', 'b1', null], $matched);
+    check_bool('階の id は小文字・数字・_ で 16 字まで', km_map_floor_id_valid('6') && km_map_floor_id_valid('bldg_new_1f') && !km_map_floor_id_valid('../x')
+        && !km_map_floor_id_valid('A1') && !km_map_floor_id_valid('') && !km_map_floor_id_valid(str_repeat('a', 17)) && !km_map_floor_id_valid('_x'));
+    check_bool('縦横の比: 同じなら知らせない・2% を超えて違えば知らせる', !km_map_floor_aspect_differs(3200, 2400, 1600, 1200)
+        && km_map_floor_aspect_differs(1600, 1600, 1600, 1200) && !km_map_floor_aspect_differs(0, 0, 1600, 1200));
+    check_bool('差し替えた画像のパス: 自分で採番した形だけ(.. や SVG を通さない)', km_map_floor_upload_name_valid('floor_' . str_repeat('0', 32) . '.png')
+        && !km_map_floor_upload_name_valid('floor_' . str_repeat('0', 32) . '.svg') && km_map_floor_image_file('upload:../config/db.local.php') === null
+        && km_map_floor_image_file('../config/db.local.php') === null && km_map_floor_image_file('upload:floor_' . str_repeat('0', 32) . '.png') === null);
+    check_bool('組み込みの画像は Main/ の下から引ける', km_map_floor_image_file('Picture/１階.png') !== null && km_map_floor_image_file('Picture/bldg/bldg_library_1f.png') !== null);
+    check_bool('組み込みの階: 外・1〜5F・建物の階を知っている(元の画像に戻す・消した階を戻す)', count(array_filter(
+        array_merge(array_column(KM_MAP_CAMPUS_FLOORS, 'id'), array_column(KM_BUILDING_FLOORS, 'id')),
+        static fn (string $id): bool => km_map_floor_builtin($id) !== null && km_map_floor_image_file(km_map_floor_builtin($id)['image']) !== null
+    )) === count(KM_MAP_CAMPUS_FLOORS) + count(KM_BUILDING_FLOORS) && km_map_floor_builtin('6') === null);
+    $floorValidateError = static function (string $label, string $sort, string $keywords): string {
+        try {
+            km_map_floor_validate($label, $sort, $keywords);
+            return '';
+        } catch (InvalidArgumentException $exception) {
+            return $exception->getMessage();
+        }
+    };
+    check_bool('名前は要る・並び順は整数', $floorValidateError(' ', '1', '') !== '' && $floorValidateError('6F', '1.5', '') !== '' && $floorValidateError(str_repeat('あ', 33), '1', '') !== '' && $floorValidateError('6F', '6', '') === '');
+    check('建物の手がかりは「、」・空白・カンマで分ける', ['図書館', 'メディアセンター', 'Lib'], km_map_floor_keywords('図書館、メディアセンター, Lib 図書館'));
+    require_once __DIR__ . '/../lib/map-data.php';
+    check('「中へ」に出す建物の階: いま在る組み込み(DB の名前)と、足した建物の中', [['bldg_gym1', '体育館(改)'], ['bldg_new', '新棟']], array_map(
+        static fn (array $f): array => [$f['id'], $f['label']],
+        km_map_data_building_floors(
+            [['id' => '1', 'label' => '1F'], ['id' => 'bldg_gym1', 'label' => '体育館(改)'], ['id' => 'bldg_new', 'label' => '新棟'], ['id' => '6', 'label' => '6F']],
+            ['bldg_new' => ['kind' => 'building', 'keywords' => ['新棟']], '6' => ['kind' => 'campus', 'keywords' => []]]
+        )
+    ));
+    check('階の種類: 組み込みの建物・足した建物の中は building、それ以外は campus', ['building', 'building', 'campus', 'campus'], [
+        km_map_floor_kind('bldg_gym1', []), km_map_floor_kind('bldg_new', ['bldg_new' => ['kind' => 'building']]),
+        km_map_floor_kind('6', ['6' => ['kind' => 'campus']]), km_map_floor_kind('1', []),
+    ]);
+    $floorImageApi = (string) file_get_contents(__DIR__ . '/../api/floor-image.php');
+    check_bool('見取り図の口: 差し替えた画像も組み込みも km_map_floor_image_file で引く(錠の確かめの後)', str_contains($floorImageApi, '$path = km_map_floor_image_file((string) $svgPath);')
+        && strpos($floorImageApi, 'km_map_floor_image_file((string) $svgPath)') > strpos($floorImageApi, 'if (!$viewUnlocked) {'));
+    check_bool('地図データ: 階の無い地点と、その線を出さない', str_contains($mapDataLib = (string) file_get_contents(__DIR__ . '/../lib/map-data.php'), "if (!isset(\$floorIds[(string) \$node['floor']])) {")
+        && str_contains($mapDataLib, "isset(\$nodesById[(string) \$edge['source']], \$nodesById[(string) \$edge['target']])"));
+    check_bool('公開ページ: 右の階の並びは地図データの校舎の階から作る(無ければ組み込みの 6 つ)', str_contains($homeCode, "if ((\$railFloor['kind'] ?? 'campus') === 'campus') {")
+        && str_contains($homeCode, 'KM_MAP_CAMPUS_FLOORS') && !str_contains($homeCode, '<button class="floor-btn" data-floor="2"'));
+    $floorsPage = (string) file_get_contents(__DIR__ . '/../admin/map-floors.php');
+    check_bool('管理画面: 1F は消させない・地点のある階は印が無ければ消さない', str_contains((string) file_get_contents(__DIR__ . '/../lib/map-floors.php'), "if (\$floorId === KM_MAP_FLOOR_INITIAL) {")
+        && str_contains((string) file_get_contents(__DIR__ . '/../lib/map-floors.php'), "if (\$floor['nodeCount'] > 0 && !\$withNodes) {")
+        && str_contains($floorsPage, "km_map_floor_delete(\$pdo, \$floorId, isset(\$_POST['with_nodes']))"));
+    check_bool('zip の小さな画像の口: 置き場はセッションが決める(URL で選ばせない)', str_contains((string) file_get_contents(__DIR__ . '/../admin/api/floor-staging-image.php'), "\$staged = \$_SESSION['km_floor_zip'] ?? null;")
+        && str_contains($floorsPage, "const KM_FLOOR_ZIP_SESSION_KEY = 'km_floor_zip';"));
+    check_bool('監査ログ: 階の操作に文言がある', isset(KM_ADMIN_LOG_ACTION_LABELS['map.floor_image'], KM_ADMIN_LOG_ACTION_LABELS['map.floor_update'], KM_ADMIN_LOG_ACTION_LABELS['map.floor_add'], KM_ADMIN_LOG_ACTION_LABELS['map.floor_delete'], KM_ADMIN_LOG_ACTION_LABELS['map.floor_zip']));
 
     km_check_heading('test-mode: テスト用アカウント(展示の PC。2026-10-15)');
     $testLib = (string) file_get_contents(__DIR__ . '/../lib/test-mode.php');

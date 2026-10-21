@@ -641,12 +641,33 @@ if ($kmEvent !== null && $kmTestMode === null) {
                 aria-expanded="true"
             ><span class="floor-toggle-label" aria-hidden="true">&times;</span></button>
             <div class="floor-scroll" id="floor-scroll">
-                <button class="floor-btn" data-floor="outside" aria-label="外全体図" title="外全体図">外</button>
-                <button class="floor-btn active" data-floor="1" aria-label="1階" title="1階">1F</button>
-                <button class="floor-btn" data-floor="2" aria-label="2階" title="2階">2F</button>
-                <button class="floor-btn" data-floor="3" aria-label="3階" title="3階">3F</button>
-                <button class="floor-btn" data-floor="4" aria-label="4階" title="4階">4F</button>
-                <button class="floor-btn" data-floor="5" aria-label="5階" title="5階">5F</button>
+                <?php
+                /*
+                 * 並べるのは**校舎の階**(2026-10-21 から地図データの floors から作る。lib/map-floors.php)。
+                 * 管理画面で足した階もここに出る。建物の中(building)は屋外の建物の「中へ」から開くので並べない。
+                 * 組み込みの階は今までの文字(外・1F…)と読み上げの名前(外全体図・1階…)のまま。
+                 * 地図データが無いとき(錠・DB の不調)は組み込みの 6 つ。
+                 */
+                require_once __DIR__ . '/lib/map-floors.php';
+                $kmRailFloors = [];
+                foreach (($kmMapData['floors'] ?? []) as $railFloor) {
+                    if (($railFloor['kind'] ?? 'campus') === 'campus') {
+                        $kmRailFloors[] = ['id' => (string) $railFloor['id'], 'label' => (string) $railFloor['label']];
+                    }
+                }
+                if ($kmRailFloors === []) {
+                    $kmRailFloors = array_map(static fn (array $f): array => ['id' => $f['id'], 'label' => $f['label']], KM_MAP_CAMPUS_FLOORS);
+                }
+                $kmRailTitles = array_column(KM_MAP_CAMPUS_FLOORS, 'title', 'id');
+                $kmRailTexts = array_column(KM_MAP_CAMPUS_FLOORS, 'label', 'id');
+                ?>
+                <?php foreach ($kmRailFloors as $railFloor): ?>
+                    <?php
+                    $railText = $kmRailTexts[$railFloor['id']] ?? $railFloor['label'];
+                    $railTitle = $kmRailTitles[$railFloor['id']] ?? $railFloor['label'];
+                    ?>
+                    <button class="floor-btn<?= $railFloor['id'] === KM_MAP_FLOOR_INITIAL ? ' active' : '' ?>" data-floor="<?= km_home_e($railFloor['id']) ?>" aria-label="<?= km_home_e($railTitle) ?>" title="<?= km_home_e($railTitle) ?>"><?= km_home_e($railText) ?></button>
+                <?php endforeach; ?>
             </div>
         </nav>
 
