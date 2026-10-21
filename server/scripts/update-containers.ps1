@@ -207,13 +207,17 @@ function Get-RemoteDigests([string[]]$Refs) {
     Files[ファイル]   = ホストに置いてある Dockerfile の FROM / COPY --from= の行
     FileTime[ファイル] = その Dockerfile の更新時刻(epoch 秒)
   試し(-DryRun)では読めないので $null(手元だけで判断する)。
+
+  **止まっているコンテナも読む(`ps -a`。2026-10-22、利用者の指摘)。** 以前は動いているものだけを読んでいたので、
+  PHP の RCE で web などを止めていた間は、止めたサービスの本番の中身が分からず「変化なし」と出た。
+  止まっていても、次の up -d でその像のまま起きる —— 比べる相手は同じ。
 #>
 function Get-HostState {
     if ($DryRun) { return $null }
     Connect-Host
     $remoteScript = @'
 cd __REMOTE__ || exit 1
-for c in $(docker compose ps -q 2>/dev/null); do
+for c in $(docker compose ps -a -q 2>/dev/null); do
   line=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}|{{.Config.Image}}|{{.Image}}' "$c" 2>/dev/null) || continue
   img=${line##*|}
   created=$(docker image inspect -f '{{.Created}}' "$img" 2>/dev/null)
@@ -238,7 +242,7 @@ done
             $state.Files[$Matches[1]] += $Matches[2]
         }
     }
-    if ($state.Running.Count -eq 0) { throw '本番で動いているコンテナを読めませんでした(docker compose ps が空)。' }
+    if ($state.Running.Count -eq 0) { throw '本番のコンテナを読めませんでした(docker compose ps -a が空)。' }
     return $state
 }
 

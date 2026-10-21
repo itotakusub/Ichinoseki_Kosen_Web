@@ -3037,6 +3037,19 @@ function km_check_github_mirror(): void
         && strpos($upd, '$hostState = Get-HostState') < strpos($upd, '$current = ConvertTo-Version $currentText'));
     check_bool('修正版も本番と比べる(手元だけ新しいものを ☆ で出す)', str_contains($upd, "elseif (\$onHost.State -eq 'no') { 'pending' }"));
     check_bool('やめたときの既定は手元を戻す(Enter = 戻す)', substr_count($upd, '(Enter = 戻す / n = 残す)') === 3 && !str_contains($upd, 'Enter = 残す'));
+    /*
+     * 止めたコンテナがあると動かなかった(2026-10-22、利用者の指摘。PHP の RCE で nginx と certbot 以外を止めていた):
+     *   - 控え(host-backup.sh)が「mariadb が動いていません」で止まり、修正版を当てる道が塞がった
+     *   - 止めたサービスは比べられず「変化なし」と出た(check-updates.sh と Get-HostState が ps -q = 動いているものだけ)
+     */
+    $updCheck = $read('scripts/check-updates.sh');
+    $updBackup = $read('scripts/host-backup.sh');
+    check_bool('止まっているコンテナも比べる(ps -a)', str_contains($upd, 'for c in $(docker compose ps -a -q 2>/dev/null); do')
+        && str_contains($updCheck, 'for _cid in $(docker compose ps -a -q 2>/dev/null); do') && !preg_match('/docker compose ps -q 2>/dev/null\)/', $upd . $updCheck));
+    check_bool('控え: 止まっている DB は控えのあいだだけ起こし(start)、終わったら止め直す', str_contains($updBackup, 'if ! docker compose start "$_svc" >/dev/null 2>&1; then')
+        && str_contains($updBackup, 'STARTED_DBS="$STARTED_DBS $_svc"') && str_contains($updBackup, 'docker compose stop -t 60 $STARTED_DBS')
+        && strpos($updBackup, 'docker compose stop -t 60 $STARTED_DBS') < strpos($updBackup, 'rm -rf "$WORK"')
+        && !str_contains($updBackup, 'compose up -d "$_svc"') && !preg_match('/compose start (web|phpmyadmin)/', $updBackup));
 
     km_check_heading('github-mirror: 検査を外す道を作らない');
     check_bool('まとめて出すときに -Force を渡さない', !preg_match('/pushArgs \+= .*-Force/', $all));

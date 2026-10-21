@@ -439,6 +439,11 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
     **メンテナンス中の画面**(利用者の指示): `nginx/km/maintenance.conf` を 443 の本体と auth の server が読み込み、nginx 自身が出す 502(転送先が居ない)だけを
     `nginx/km/maintenance.html` の 503 にする(504・429・相手が返す 5xx では出さない)。外のものを読まない 1 枚の HTML(CSS は中・JS なし・CSP は default-src 'none')。
     管理用のホストでも公開側へ飛ばさない(`$km_leave_admin_host` の例外)。配備の荷に必ず入れる(`deploy-to-host.ps1` の mustContain)。check.php 2035 件。**この画面はつなぎを外した後も残す**
+  - **止めたままでは修正版を当てられなかった(2026-10-22、利用者の指摘)**: ①控え(`host-backup.sh`)が「mariadb が動いていません」で止まり、
+    `update-containers.ps1` の 2 が最初の控えで必ず終わった。②`check-updates.sh` と `update-containers.ps1` の Get-HostState が `docker compose ps -q`(動いているものだけ)で、
+    止めたサービスは比べられず「変化なし」と出た。→ ①止まっている DB(mariadb・postgres)は**控えのあいだだけ `docker compose start` で起こし、終わったら(失敗しても)止め直す**
+    (web などは起こさない)。②どちらも `ps -a`(止まっているものも)にし、一覧に「止まっています」を添える。docker の代わりの台本で、起こす → healthy を待つ → 取る → 止め直すを確かめた。check.php 2048 件。
+    **直した版はホストに送るまで効かない** —— 先に `.\deploy-to-host.ps1 -Yes`(控えなし)で送ってから `update-containers.ps1` を流す
   - **まだ**: 修正版の像が出たら `update-containers.ps1` の 2 で web と phpmyadmin を当てる → `php -v` → つなぎ(nginx の map と 2 つの if・check.php の php-rce-shield の節)を外す → 破られていないかを確かめる(利用者)。手元の `Downloaded/php-8.4.24…` も替える
 
 ### 診断(2026-10-05)の反映(2026-10-06、利用者の指示)
