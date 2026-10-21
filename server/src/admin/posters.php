@@ -6,6 +6,7 @@ define('KM_ADMIN', true);
 require __DIR__ . '/_inc/guard.php';
 require_once dirname(__DIR__) . '/lib/db.php';
 require_once dirname(__DIR__) . '/lib/posters.php';
+require_once dirname(__DIR__) . '/lib/poster-import.php';
 require_once dirname(__DIR__) . '/lib/map-events.php';
 require_once dirname(__DIR__) . '/lib/admin-log.php';
 
@@ -480,6 +481,46 @@ require __DIR__ . '/_inc/partials/page-header.php';
               </div>
             </div>
 
+            <div class="card mb-4" id="poster-import">
+              <div class="card-header"><h3 class="card-title">まとめて取り込む(模擬店のページから広告を作る)</h3></div>
+              <form class="card-body" data-km-poster-import>
+                <?= km_csrf_field() ?>
+                <p class="fs-7 text-body-secondary">
+                  番号の入ったページ(高専祭のサイトの模擬店など)を 1 つずつ読み、<strong>店の名前・コメント・ポスターの画像から広告(地点に置かないポスター)</strong>を作ります。リンクはそのページです。
+                  同じページの広告が既にあれば作り直さず、名前・コメント(と、変わっていれば画像)だけを直します(出し入れ・並び順・地点は今のまま)。
+                  無い番号(404)は飛ばします。<strong>番号 0 は使いません</strong>(1 から)。
+                </p>
+                <div class="row g-2 align-items-end mb-3">
+                  <div class="col-12 col-lg-6">
+                    <label class="form-label" for="km-import-template">ページの URL(<code>%N</code> に番号が入る)</label>
+                    <input class="form-control" type="url" id="km-import-template" name="template" maxlength="<?= KM_POSTER_URL_MAX ?>" value="<?= km_e(KM_POSTER_IMPORT_TEMPLATE_DEFAULT) ?>" required>
+                  </div>
+                  <div class="col-6 col-lg-2">
+                    <label class="form-label" for="km-import-first">最初の番号</label>
+                    <input class="form-control" type="number" id="km-import-first" name="first" min="<?= KM_POSTER_IMPORT_MIN ?>" max="<?= KM_POSTER_IMPORT_MAX ?>" value="<?= KM_POSTER_IMPORT_FIRST_DEFAULT ?>" required>
+                  </div>
+                  <div class="col-6 col-lg-2">
+                    <label class="form-label" for="km-import-last">最後の番号</label>
+                    <input class="form-control" type="number" id="km-import-last" name="last" min="<?= KM_POSTER_IMPORT_MIN ?>" max="<?= KM_POSTER_IMPORT_MAX ?>" value="<?= KM_POSTER_IMPORT_LAST_DEFAULT ?>" required>
+                  </div>
+                  <div class="col-12 col-lg-2">
+                    <div class="form-check mb-2">
+                      <input class="form-check-input" type="checkbox" id="km-import-enabled" name="enabled" value="1" checked>
+                      <label class="form-check-label" for="km-import-enabled">作った広告をすぐ出す</label>
+                    </div>
+                  </div>
+                </div>
+                <button type="submit" class="btn btn-primary" data-km-import-start>取り込む</button>
+                <button type="button" class="btn btn-outline-secondary" data-km-import-stop hidden>止める</button>
+                <div class="mt-3" data-km-import-progress hidden>
+                  <progress class="w-100" max="1" value="0" data-km-import-bar></progress>
+                  <div class="fs-7" data-km-import-summary></div>
+                  <ol class="fs-7 mt-2 mb-2 km-import-log" data-km-import-log></ol>
+                  <a class="btn btn-sm btn-outline-primary" href="./posters.php" data-km-import-reload hidden>一覧を読み直す</a>
+                </div>
+              </form>
+            </div>
+
             <div class="card mb-4" id="tutorial-end">
               <div class="card-header"><h3 class="card-title">チュートリアルの終わりの知らせ</h3></div>
               <form method="post" class="card-body">
@@ -574,4 +615,6 @@ require __DIR__ . '/_inc/partials/page-header.php';
         <!--end::App Content-->
         <?php /* プレビューと地点の絞り込み。地点の名前は選ぶ欄の文字から取る(別に渡さない) */ ?>
         <script src="<?= km_e(km_asset('./assets/js/posters.js')) ?>"></script>
+        <?php /* まとめて取り込む(番号を 1 つずつ admin/api/poster-import.php へ送る) */ ?>
+        <script src="<?= km_e(km_asset('./assets/js/poster-import.js')) ?>"></script>
 <?php require __DIR__ . '/_inc/partials/footer.php'; ?>

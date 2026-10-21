@@ -272,8 +272,9 @@ function km_poster_read_upload(array $file): string
  * - 名前を引いた結果を CURLOPT_RESOLVE で固定する —— 確かめたあとで名前が別のアドレスを指す(DNS の付け替え)道を塞ぐ
  * - リダイレクトは curl に任せず自分で辿る(辿った先も km_poster_ip_allowed を通す)
  * - 受け取りながら数え、上限を超えたら打ち切る(巨大なファイルを全部読まない)
+ * - $accept はページ(HTML)を読むときだけ変える(まとめての取り込み。lib/poster-import.php)
  */
-function km_poster_fetch_remote(string $url): string
+function km_poster_fetch_remote(string $url, string $accept = 'image/png, image/jpeg, image/gif, image/webp'): string
 {
     for ($hop = 0; $hop <= KM_POSTER_FETCH_REDIRECTS; $hop++) {
         if (!km_poster_url_valid($url)) {
@@ -310,7 +311,7 @@ function km_poster_fetch_remote(string $url): string
             CURLOPT_CONNECTTIMEOUT => 5,
             CURLOPT_TIMEOUT => KM_POSTER_FETCH_TIMEOUT,
             CURLOPT_USERAGENT => 'KosenMap-PosterFetch/1.0',
-            CURLOPT_HTTPHEADER => ['Accept: image/png, image/jpeg, image/gif, image/webp'],
+            CURLOPT_HTTPHEADER => ['Accept: ' . $accept],
             CURLOPT_HEADER => false,
             CURLOPT_WRITEFUNCTION => static function ($handle, string $chunk) use (&$body, &$tooLarge): int {
                 if (strlen($body) + strlen($chunk) > KM_POSTER_MAX_BYTES) {
@@ -339,7 +340,8 @@ function km_poster_fetch_remote(string $url): string
             continue;
         }
         if ($status !== 200) {
-            throw new InvalidArgumentException('画像を取りに行けませんでした(応答 ' . $status . ')。');
+            // 応答の番号を code に載せる(まとめての取り込みが 404 =「その番号の店は無い」を見分ける。lib/poster-import.php)
+            throw new InvalidArgumentException('画像を取りに行けませんでした(応答 ' . $status . ')。', $status);
         }
 
         return $body;

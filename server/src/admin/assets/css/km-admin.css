@@ -105,6 +105,8 @@
 .km-poster-preview-title { font-weight: 700; overflow-wrap: anywhere; }
 .km-poster-preview-desc { font-size: 0.875rem; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--bs-secondary-color); margin-top: 0.25rem; }
 .km-poster-preview-place { font-size: 0.8125rem; margin-top: 0.35rem; }
+/* まとめて取り込むの結果(58 件などが並ぶので、高さに上限を付けて中で流す) */
+.km-import-log { max-height: 18rem; overflow-y: auto; padding-left: 2.5rem; }
 .km-poster-preview-link { display: inline-block; margin-top: 0.5rem; padding: 0.2rem 0.65rem; border-radius: 999px; background: var(--bs-primary); color: #fff; font-size: 0.8125rem; }
 
 /* 階と平面図(admin/map-floors.php。2026-10-21)。一覧の小さな画像と、差し替えの前後の見比べ */

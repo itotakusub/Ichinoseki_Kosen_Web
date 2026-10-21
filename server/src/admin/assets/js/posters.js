@@ -205,7 +205,7 @@
     previewTitle.textContent = title.value.trim() || '(見出し)';
     previewDesc.textContent = description.value.trim();
     const option = nodeSelect && nodeSelect.selectedOptions[0];
-    previewPlace.textContent = option && option.value ? '📍 ' + option.textContent : '📢 広告(地点に置かない。チュートリアルの終わりに確率で出て、一覧のページにも出ます)';
+    previewPlace.textContent = option && option.value ? '📍 ' + option.textContent : '📢 広告(地点に置かない。チュートリアルの終わりに広告から 1 件を選んで出し、一覧のページにも出ます)';
     previewLink.hidden = link.value.trim() === '';
   }
 

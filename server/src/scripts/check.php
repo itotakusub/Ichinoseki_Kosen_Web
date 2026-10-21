@@ -7303,6 +7303,61 @@ function km_check_layout(): void
         $tutorialEndError('ok', 'http://example.com/'), $tutorialEndError('ok', 'javascript:alert(1)'),
     ]);
 
+    /*
+     * ## まとめて取り込む(2026-10-21、利用者の指示「模擬店のページ 1〜58 から自動で広告を作る」「今後も使うので機能に」)
+     * 見本の HTML は高専祭のサイトの形(Next.js が組み立てた article)を真似た**作り物**(本物の文は写さない)。
+     */
+    km_check_heading('poster-import: 番号のページから広告をまとめて作る(2026-10-21)');
+    require_once __DIR__ . '/../lib/poster-import.php';
+    $importUrlError = static function (string $template, int $number): string {
+        try {
+            return km_poster_import_url($template, $number);
+        } catch (InvalidArgumentException) {
+            return 'error';
+        }
+    };
+    check('URL: %N に番号・0 は使わない・%N はちょうど 1 つ・http(s) だけ',
+        ['https://example.test/shops/7/detail', 'error', 'error', 'error', 'error'],
+        [$importUrlError('https://example.test/shops/%N/detail', 7), $importUrlError('https://example.test/shops/%N/detail', 0),
+            $importUrlError('https://example.test/shops/detail', 1), $importUrlError('https://example.test/%N/%N', 1), $importUrlError('ftp://example.test/%N', 1)]);
+    check_bool('既定は高専祭の模擬店の 1〜58', KM_POSTER_IMPORT_TEMPLATE_DEFAULT === 'https://kosensai.ichinoseki.ac.jp/shops/%N/detail'
+        && KM_POSTER_IMPORT_FIRST_DEFAULT === 1 && KM_POSTER_IMPORT_LAST_DEFAULT === 58 && KM_POSTER_IMPORT_MIN === 1);
+    $importFixture = '<!DOCTYPE html><html><body><main><article><p class="x">No. <!-- -->07</p><h2 class="y">試しの 店</h2>'
+        . '<div><img alt="a" src="/_next/image?url=%2Fimg%2Fshops%2F07.webp&amp;w=3840&amp;q=75">'
+        . '<img alt="b" src="/_next/image?url=%2Fimg%2Fshops%2F07.webp&amp;w=640&amp;q=75"><img alt="c" src="//evil.test/x.png"></div>'
+        . '<section><div><h2>コメント</h2><p>一行目' . "\n" . '  二行目  </p></div></section>'
+        . '<section><div><h2>お知らせ</h2></div><p>なし</p></section></article></main></body></html>';
+    $importParsed = km_poster_import_parse($importFixture, 'https://example.test/shops/7/detail');
+    check('読み方: 番号・名前・コメント(改行は残す)・元の画像(縮小の口を外す・同じものは 1 つ・// は取らない)', [
+        'number' => 7, 'title' => '試しの 店', 'description' => "一行目\n二行目", 'images' => ['https://example.test/img/shops/07.webp'],
+    ], $importParsed);
+    $importNoArticle = 'ok';
+    try {
+        km_poster_import_parse('<html><body><h2>x</h2></body></html>', 'https://example.test/');
+    } catch (InvalidArgumentException) {
+        $importNoArticle = 'error';
+    }
+    check('読み方: 店の欄が無いページは断る', 'error', $importNoArticle);
+    check('長い名前は上限で切って … を付ける', [5, '…'], [mb_strlen(km_poster_import_clip('あいうえおかきく', 5)), mb_substr(km_poster_import_clip('あいうえおかきく', 5), -1)]);
+    $importLib = (string) file_get_contents(__DIR__ . '/../lib/poster-import.php');
+    check_bool('取り込み: 取りに行くのは km_poster_fetch_remote だけ(公開のアドレスだけ・リダイレクトの先も確かめる)', substr_count($importLib, 'km_poster_fetch_remote(') === 3
+        && !preg_match('/\bcurl_init\(|file_get_contents\(\s*\$/', $importLib));
+    check_bool('取り込み: 同じページは作り直さず直す(出し入れ・並び順・地点は今のまま)・404 は飛ばす', str_contains($importLib, "\$existing = km_poster_find_by_link(\$pdo, \$pageUrl);")
+        && str_contains($importLib, "'isEnabled' => \$existing['isEnabled'],") && str_contains($importLib, "if (\$exception->getCode() === 404) {")
+        && str_contains($importLib, "'nodeId' => '',"));
+    check_bool('取りに行く口は応答の番号を code に載せる(404 を見分ける)', str_contains((string) file_get_contents(__DIR__ . '/../lib/posters.php'), "'画像を取りに行けませんでした(応答 ' . \$status . ')。', \$status);"));
+    $importApi = (string) file_get_contents(__DIR__ . '/../admin/api/poster-import.php');
+    check_bool('口: 管理者だけ・POST・CSRF・1 回に 1 つの番号・セッションを先に閉じる・操作の記録', str_contains($importApi, "require dirname(__DIR__) . '/_inc/guard.php';")
+        && str_contains($importApi, "if (!km_csrf_verify()) {") && str_contains($importApi, "is_int(\$input['number'] ?? null)")
+        && str_contains($importApi, 'session_write_close();') && str_contains($importApi, "km_admin_log_record('content', 'poster.import'")
+        && isset(KM_ADMIN_LOG_ACTION_LABELS['poster.import']));
+    $importJs = (string) file_get_contents(__DIR__ . '/../admin/assets/js/poster-import.js');
+    $importPage = (string) file_get_contents(__DIR__ . '/../admin/posters.php');
+    check_bool('画面: 番号を 1 つずつ・間を空ける・止められる・番号は 1 から', str_contains($importJs, 'await importOne(template, number, enabled)')
+        && str_contains($importJs, 'const WAIT_MS = 400;') && str_contains($importJs, 'stopRequested')
+        && str_contains($importPage, 'min="<?= KM_POSTER_IMPORT_MIN ?>"') && str_contains($importPage, "assets/js/poster-import.js"));
+    check_bool('利用規約: 広告は収益化していない', str_contains($termsText, '広告は収益化していません。'));
+
     km_check_heading('table-api: テーブル管理の外部接続(2026-10-21)');
     require_once __DIR__ . '/../lib/table-api.php';
     $apiUser = 'kmx_' . str_repeat('a', 16);
