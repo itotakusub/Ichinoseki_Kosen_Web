@@ -5,9 +5,10 @@ declare(strict_types=1);
 /**
  * ポスターの一覧(誰でも見られる公開ページ。2026-10-21、利用者の指示。lib/posters.php)。
  *
- * ポスターの画像を並べる。**画像を押すと地図のその地点へ移り、詳細(画像・説明・URL)を開く**
- * (`/?room=<地点>&poster=<番号>`。部屋へ移る仕組みは QR と同じ。Main/app.js の focusRoomFromUrl)。
- * 地点に置いていないポスターは、画像を押すと URL を開く。
+ * ポスターの画像を並べる。**画像を押すと大きく見る幕を開き**(Main/posters-page.js。2026-10-22、利用者の指示
+ * 「押して飛ばすより、押して拡大してから飛ぶほうがいい」)、幕の中の「地図で見る」「くわしく見る」から進む。
+ * 地図へは `/?room=<地点>&poster=<番号>`(部屋へ移る仕組みは QR と同じ。Main/app.js の focusRoomFromUrl)。
+ * JS が動かないときは、これまでどおり画像のリンク(地図・URL)へそのまま進む。
  *
  * 出すのは管理画面の「出し方」(表示しない / イベント中のみ / 常に表示)が「出す」のときだけ。
  * 地点の名前は**地図が出しているものだけ**使う(km_map_data。錠が掛かっていれば名前も地図への移動も出さない)。
@@ -177,6 +178,27 @@ $placeOf = static function (array $poster) use ($nodes): ?string {
             color: var(--secondary);
             padding: 3rem 1rem;
         }
+
+        /* 大きく見る幕(Main/posters-page.js)。幕そのものは地図と同じ .km-poster-viewer(Main/styles.css) */
+        .km-poster-viewer-place {
+            margin: 0;
+            font-size: 0.9rem;
+            color: var(--primary-dark);
+        }
+
+        .km-poster-viewer-place[hidden],
+        .km-poster-viewer .km-poster-card-actions:empty {
+            display: none;
+        }
+
+        .km-poster-viewer .km-poster-card-actions {
+            padding-top: 0.5rem;
+        }
+
+        /* 幕を開いている間は、後ろの一覧を流さない */
+        html.km-poster-viewer-open {
+            overflow: hidden;
+        }
     </style>
 </head>
 
@@ -194,29 +216,25 @@ $placeOf = static function (array $poster) use ($nodes): ?string {
         <?php elseif ($posters === []): ?>
             <p class="km-poster-empty">いま掲示しているポスターはありません。</p>
         <?php else: ?>
-            <p class="km-poster-lead">画像を押すと、地図でその場所を開きます。</p>
+            <p class="km-poster-lead">画像を押すと大きく表示します。そこから地図でその場所を開いたり、くわしいページへ進んだりできます。</p>
             <ul class="km-poster-wall">
                 <?php foreach ($posters as $poster): ?>
                     <?php
                     $place = $placeOf($poster);
-                    // 地点が地図に出ていれば地図へ。無ければ URL へ(どちらも無ければ押せない画像)
                     $mapHref = $place !== null
                         ? '/?room=' . rawurlencode($poster['nodeId']) . '&poster=' . (int) $poster['id']
                         : null;
-                    $imageHref = $mapHref ?? ($poster['linkUrl'] !== '' ? $poster['linkUrl'] : null);
+                    // 画像のリンクは JS が動かないときの行き先(地図 → URL → このカード)。JS が動けば大きく見る幕を開く。
+                    // **画像のリンクには数える印(data-km-poster-link)を付けない** —— 押しても幕が開くだけで、リンク先へは進まない
+                    $imageHref = $mapHref ?? ($poster['linkUrl'] !== '' ? $poster['linkUrl'] : '#poster-' . (int) $poster['id']);
+                    $imageExternal = $mapHref === null && $poster['linkUrl'] !== '';
                     ?>
                     <li class="km-poster-card" id="poster-<?= (int) $poster['id'] ?>">
-                        <?php if ($imageHref !== null): ?>
-                            <a class="km-poster-card-image" href="<?= km_posters_e($imageHref) ?>"
-                                <?= $mapHref === null ? 'target="_blank" rel="noopener noreferrer" data-km-poster-link="' . (int) $poster['id'] . '"' : '' ?>
-                                aria-label="<?= km_posters_e($poster['title'] . ($mapHref !== null ? '(地図で見る)' : '(リンクを開く)')) ?>">
-                                <img src="<?= km_posters_e($poster['imageUrl']) ?>" alt="<?= km_posters_e($poster['title']) ?>" width="<?= (int) $poster['width'] ?>" height="<?= (int) $poster['height'] ?>" loading="lazy">
-                            </a>
-                        <?php else: ?>
-                            <div class="km-poster-card-image">
-                                <img src="<?= km_posters_e($poster['imageUrl']) ?>" alt="<?= km_posters_e($poster['title']) ?>" width="<?= (int) $poster['width'] ?>" height="<?= (int) $poster['height'] ?>" loading="lazy">
-                            </div>
-                        <?php endif; ?>
+                        <a class="km-poster-card-image" href="<?= km_posters_e($imageHref) ?>" data-km-poster-open
+                            <?= $imageExternal ? 'target="_blank" rel="noopener noreferrer"' : '' ?>
+                            aria-label="<?= km_posters_e($poster['title'] . '(大きく見る)') ?>">
+                            <img src="<?= km_posters_e($poster['imageUrl']) ?>" alt="<?= km_posters_e($poster['title']) ?>" width="<?= (int) $poster['width'] ?>" height="<?= (int) $poster['height'] ?>" loading="lazy">
+                        </a>
                         <div class="km-poster-card-body">
                             <h2 class="km-poster-card-title"><?= km_posters_e($poster['title']) ?></h2>
                             <?php if ($place !== null): ?>
@@ -242,6 +260,8 @@ $placeOf = static function (array $poster) use ($nodes): ?string {
     </main>
     <?php /* リンクを押した人数を数える(同じ端末は 1 人。数だけ) */ ?>
     <script defer src="<?= km_posters_e(km_public_asset('Main/poster-stats.js')) ?>"></script>
+    <?php /* 画像を押すと大きく見る幕(そこから地図・リンクへ) */ ?>
+    <script defer src="<?= km_posters_e(km_public_asset('Main/posters-page.js')) ?>"></script>
 </body>
 
 </html>

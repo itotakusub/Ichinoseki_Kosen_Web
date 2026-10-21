@@ -7249,6 +7249,12 @@ function km_check_layout(): void
     $wallPage = (string) file_get_contents(__DIR__ . '/../posters.php');
     check_bool('一覧のページ: 地図の錠が掛かっていれば地点を出さない・地図へは ?room= で移る', str_contains($wallPage, "km_posters_public(\$pdo, km_poster_event_active(\$pdo), [])")
         && str_contains($wallPage, "'/?room=' . rawurlencode(\$poster['nodeId']) . '&poster=' . (int) \$poster['id']") && str_contains($wallPage, 'km_map_guest_verify();'));
+    // 押したら大きく見る幕 → そこから地図・リンクへ(2026-10-22、利用者の指示「押して飛ばすより、押して拡大してから飛ぶ」)
+    $wallJs = (string) file_get_contents(__DIR__ . '/../Main/posters-page.js');
+    check_bool('一覧のページ: 画像を押すと大きく見る幕(画像のリンクは数えない・JS が無ければリンクへ)', str_contains($wallPage, 'data-km-poster-open')
+        && !preg_match('/data-km-poster-open[^>]*data-km-poster-link/s', $wallPage) && str_contains($wallPage, "km_public_asset('Main/posters-page.js')")
+        && str_contains($wallJs, 'event.preventDefault();') && str_contains($wallJs, 'event.ctrlKey || event.metaKey')
+        && str_contains($wallJs, "link.cloneNode(true)") && !preg_match('/innerHTML\s*=\s*[^\s\'"]/', $wallJs) && str_contains($wallJs, "if (event.key === 'Escape') close();"));
     $appJsForPosters = (string) file_get_contents(__DIR__ . '/../Main/app.js');
     check_bool('地図: ポスターと地点の URL は escapeHtml を通し、http(s) だけをリンクにする', str_contains($appJsForPosters, '${escapeHtml(poster.title)}')
         && str_contains($appJsForPosters, 'href="${escapeHtml(poster.linkUrl)}" target="_blank" rel="noopener noreferrer"')
@@ -7294,7 +7300,7 @@ function km_check_layout(): void
         && str_contains($statsJs, 'body: JSON.stringify({ poster: posterId, kind: kind }),') && str_contains($statsJs, "a[data-km-poster-link]"));
     check_bool('リンクに数える印(地図の詳細・大きく見る幕・広告・一覧のページ)', str_contains($appJsForPosters = (string) file_get_contents(__DIR__ . '/../Main/app.js'), 'data-km-poster-link="${Number(poster.id)}"')
         && str_contains($appJsForPosters, "link.setAttribute('data-km-poster-link', String(Number(poster.id)));") && str_contains($tutorialEndJs, "link.setAttribute('data-km-poster-link', String(poster.id));")
-        && substr_count((string) file_get_contents(__DIR__ . '/../posters.php'), 'data-km-poster-link=') === 2);
+        && substr_count((string) file_get_contents(__DIR__ . '/../posters.php'), 'data-km-poster-link=') === 1);
     check_bool('ポスターを消したら数も消す・管理画面に数を出す', str_contains($statsLib, "km_poster_stats_delete(\$pdo, \$id);") && str_contains((string) file_get_contents(__DIR__ . '/../admin/posters.php'), '$stats = km_poster_stats_totals($pdo);'));
     $tutorialEndError = static function (string $text, string $url): string {
         try {
