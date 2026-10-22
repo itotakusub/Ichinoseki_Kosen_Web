@@ -71,7 +71,8 @@ function km_learning_backup_save(PDO $pdo, string $kind, string $scope, ?string 
         'items' => $items,
     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR);
     $dir = km_learning_backup_dir();
-    if (!is_dir($dir) && !@mkdir($dir, 0750, true) && !is_dir($dir)) {
+    // 0755(2026-10-23)。0750 だとグループが www-data になり、控え(host-backup.sh。kmops)が開けずに落ちた。uploads/ 自体は 750 なので外からは入れない
+    if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) {
         throw new RuntimeException('控えの置き場を作れませんでした: ' . $dir);
     }
     $stored = bin2hex(random_bytes(16)) . '.json.gz';

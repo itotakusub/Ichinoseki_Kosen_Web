@@ -247,6 +247,15 @@ if [ -d "$SRC/uploads" ]; then
         did "uploads/ の中で読めなかった $unreadable 件をこの利用者のグループで読めるようにしました(控えのため)"
     else
         warn "uploads/ の中に、この利用者が読めないファイルが $unreadable 件あります(控えが失敗します。--fix で直します)"
+    fi    # **下のディレクトリも見る**(2026-10-23)。PHP が作ったディレクトリ(map-backups。0750・グループ www-data)を kmops が開けず、
+    # 控えが「uploads/map-backups: Cannot open: Permission denied」で落ちた。開けないディレクトリの中のファイルは find が数えないので、
+    # 上のファイルの確認は「読めないものは 0 件」と言っていた。グループをこの利用者にし、g+rx を付ける
+    unopenable="$(find "$SRC/uploads" -type d \( ! -readable -o ! -executable \) 2>/dev/null | wc -l)"
+    if [ "$unopenable" -eq 0 ]; then :; elif [ "$FIX" = "1" ]; then
+        as_root "chgrp -R $KEEP_GID /p/src/uploads && find /p/src/uploads -type d -exec chmod g+rx {} + && find /p/src/uploads -type f -exec chmod g+r {} +"
+        did "uploads/ の中で開けなかったディレクトリ $unopenable 件をこの利用者のグループで開けるようにしました(控えのため)"
+    else
+        warn "uploads/ の中に、この利用者が開けないディレクトリが $unopenable 件あります(控えが失敗します。--fix で直します)"
     fi
 else
     if [ "$FIX" = "1" ]; then

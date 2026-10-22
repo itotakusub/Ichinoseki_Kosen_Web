@@ -112,7 +112,8 @@ function km_panorama_add(PDO $pdo, string $nodeUuid, string $bytes, ?float $head
     }
 
     $dir = km_panorama_dir();
-    if (!is_dir($dir) && !@mkdir($dir, 0750, true) && !is_dir($dir)) {
+    // 0755(2026-10-23)。0750 だとグループが www-data になり、控え(host-backup.sh。kmops)が開けずに落ちた。uploads/ 自体は 750 なので外からは入れない
+    if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) {
         throw new RuntimeException('置き場を作れませんでした: ' . $dir);
     }
     $path = $dir . '/' . $sha . '.' . $info['ext'];

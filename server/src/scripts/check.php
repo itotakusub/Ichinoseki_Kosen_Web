@@ -7499,6 +7499,12 @@ function km_check_layout(): void
     check('地図の内訳: 地図でなければ null', null, km_map_backup_summary('{"x":1}'));
     check('学習の内訳: 階ごとの記録・地点の数・測った期間', ['floors' => ['1F' => 2, '2F' => 1], 'nodes' => 2, 'from' => 1760000000000, 'to' => 1760000500000],
         km_learning_backup_summary([['nodeUuid' => 'a', 'floor' => '2F', 'measuredAtMillis' => 1760000500000], ['nodeUuid' => 'a', 'floor' => '1F', 'measuredAtMillis' => 1760000000000], ['nodeUuid' => 'b', 'floor' => '1F']]));
+    // 2026-10-23: uploads/map-backups(0750・グループ www-data)を kmops が開けず、配備前の控えが落ちた
+    check_bool('uploads の下に作るディレクトリは 0755・host-setup は開けないディレクトリも見つけて直す', str_contains((string) file_get_contents(__DIR__ . '/../lib/map-backup.php'), '!@mkdir($dir, 0755, true)')
+        && str_contains((string) file_get_contents(__DIR__ . '/../lib/learning-backup.php'), '!@mkdir($dir, 0755, true)')
+        && str_contains((string) file_get_contents(__DIR__ . '/../lib/panorama.php'), '!@mkdir($dir, 0755, true)')
+        // host-setup.sh はリポジトリの scripts/ にある(ホストへ配った src だけのときは見ない)
+        && (($hostSetupRoot = km_check_repo_root()) === null || str_contains((string) file_get_contents($hostSetupRoot . '/scripts/host-setup.sh'), 'unopenable="$(find "$SRC/uploads" -type d \( ! -readable -o ! -executable \) 2>/dev/null | wc -l)"')));
     $learningLib = (string) file_get_contents(__DIR__ . '/../lib/learning-data.php');
     check_bool('学習データを消す前に控えを書く(書けなければ例外で何も消さない)', strpos($learningLib, 'km_learning_backup_save($pdo, $kind, $scope, $floor,') !== false
         && strpos($learningLib, 'km_learning_backup_save($pdo, $kind, $scope, $floor,') < strpos($learningLib, 'UPDATE {$table} SET deleted = 1'));

@@ -106,7 +106,8 @@ function km_map_backup_create(PDO $pdo, string $json, string $userSub, string $u
     }
 
     $dir = km_map_backup_dir();
-    if (!is_dir($dir) && !@mkdir($dir, 0750, true) && !is_dir($dir)) {
+    // 0755(2026-10-23)。0750 だとグループが www-data になり、控え(host-backup.sh。kmops)が開けずに落ちた。uploads/ 自体は 750 なので外からは入れない
+    if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) {
         throw new RuntimeException('置き場を作れませんでした: ' . $dir);
     }
     $stored = bin2hex(random_bytes(16)) . '.json.gz';

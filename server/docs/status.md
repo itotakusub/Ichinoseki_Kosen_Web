@@ -486,7 +486,10 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
   - 精度評価: 設定「精度評価を使う」(既定 OFF)。OFF のあいだは道具「精度評価」・「評価」の結果・評価の CSV を出さず、サーバーの評価も取りに行かない。今までの評価は残す。
   - 手元の試しの作りで、スケジュールの追加・一般に出す切り替え・地点の詳細の「この場所の予定」・「予定」の一覧・イベント中に企画の無い部屋が隠れること・番号のポスターを確かめた。
     Pixel はつながっていなかったので実機では未確認(単体試験 EventProjectsTest・BackupCryptoTest・LearnerRoleTest)。check.php 2160 件。
-  - 手元の PHP に `php.ini` を作った(`C:\Users\itota\Documents\php\php.ini`。curl fileinfo gd intl mbstring openssl pdo_sqlite)。update-containers.ps1 の自己検査が拡張の無さで exit 2 になっていた。- **段 D: 地図の履歴とブックマーク(2026-10-23、利用者の指示。版 20)**: ブックマーク・開いた場所・検索した言葉・経路・表示調整。ふだんは端末の中だけ、サインインしていれば `api/user-map-data.php`(表 `km_user_map_data`・退会で消える)で揃える。混ぜ方は項目ごとに新しい方(Kotlin・JS・PHP で同じ。check.php と UserMapDataTest)。
+  - **配備前の控えが落ちた**(2026-10-23): `tar: uploads/map-backups: Cannot open: Permission denied`。PHP が `uploads/map-backups` を 0750(グループ www-data)で作り、kmops が開けなかった。
+    host-setup.sh の確認はファイルだけを見ており、開けないディレクトリの中は数えないので「読めないもの 0 件」と言っていた。
+    → PHP が uploads の下に作るディレクトリ(map-backups・learning-backups・panoramas)を 0755 に。host-setup.sh が開けないディレクトリも見つけ、`--fix` でグループと g+rx を直す。
+    **配備の前に `.\host-setup.ps1 -Fix` を流す**(今あるディレクトリを直してから控えを取る)。  - 手元の PHP に `php.ini` を作った(`C:\Users\itota\Documents\php\php.ini`。curl fileinfo gd intl mbstring openssl pdo_sqlite)。update-containers.ps1 の自己検査が拡張の無さで exit 2 になっていた。- **段 D: 地図の履歴とブックマーク(2026-10-23、利用者の指示。版 20)**: ブックマーク・開いた場所・検索した言葉・経路・表示調整。ふだんは端末の中だけ、サインインしていれば `api/user-map-data.php`(表 `km_user_map_data`・退会で消える)で揃える。混ぜ方は項目ごとに新しい方(Kotlin・JS・PHP で同じ。check.php と UserMapDataTest)。
   経路の確かめ: 開いたとき「前回の経路」・サインイン時に経路があれば「アカウントに残すか / この端末だけ」・全部消すとき・ログアウトのとき。Web は `Main/user-history.js`(展示の PC では使わない)。利用規約 第4条・プライバシーポリシーに追記(教員室の決まりがアプリにも効くことも直した)。
   Pixel と手元の試しの作りで、☆・履歴の面・3 つの確かめ・前回の経路を確かめた。**同期は配備後に確かめる**。check.php 2137 件
 - **段 B・C: 色分けを手で決める・イベントで隠した地点の色分け・表示調整の既定を配る(2026-10-23、利用者の指示。版 19)**:
