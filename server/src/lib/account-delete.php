@@ -69,6 +69,8 @@ const KM_ACCOUNT_DELETE_TABLES = [
     'km_staff_node_edits',
     // 名前・備考を地図に出してよいかの許可(lib/staff-nodes.php の showNames。2026-10-22)
     'km_staff_node_consents',
+    // 地図の履歴とブックマークの同期(lib/user-map-data.php。2026-10-23)。開いた場所・検索の言葉・経路を持つ
+    'km_user_map_data',
 ];
 
 /**

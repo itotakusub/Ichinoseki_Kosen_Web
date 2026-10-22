@@ -7527,6 +7527,54 @@ function km_check_layout(): void
      * 区画の色分けを手で決める(2026-10-23。lib/map-node-area.php)。地点の指定と区画の印は別の表で持ち、配信でアプリへ戻す。
      * 区画の印は km_map_nodes に入れない(Web の地図・一覧に名前の無い地点を出さない)
      */
+    /*
+     * 地図の履歴とブックマーク(2026-10-23。lib/user-map-data.php・api/user-map-data.php・Main/user-history.js・アプリの UserMapData.kt)。
+     * 混ぜ方: 項目ごとに新しい方・消した印と全部消した時刻は新しい方(古いものが生き返らない)・上限で切る。どちらの順に混ぜても同じ
+     */
+    km_check_heading('user-map-data: 地図の履歴とブックマークの同期(2026-10-23)');
+    require_once __DIR__ . '/../lib/user-map-data.php';
+    $t0 = 1_760_000_000_000;
+    $deviceA = ['bookmarks' => [['uuid' => 'room1', 'at' => $t0 + 1]], 'places' => [['uuid' => 'room1', 'at' => $t0 + 5], ['uuid' => 'room2', 'at' => $t0 + 2]],
+        'routes' => [['from' => 'a', 'to' => 'b', 'at' => $t0 + 3]], 'searches' => [['q' => ' 図書館 ', 'at' => $t0 + 4]],
+        'settings' => ['android' => ['values' => ['map_color_areas' => true], 'at' => $t0 + 1]]];
+    $deviceB = ['bookmarks' => [['uuid' => 'room3', 'at' => $t0 + 2]], 'places' => [['uuid' => 'room1', 'at' => $t0 + 9]],
+        'removed' => ['bookmarks' => ['room1' => $t0 + 6]], 'cleared' => ['searches' => $t0 + 10],
+        'settings' => ['android' => ['values' => ['map_color_areas' => false], 'at' => $t0 + 8]]];
+    $mergedAB = km_user_map_merge(km_user_map_normalize($deviceA), km_user_map_normalize($deviceB));
+    $mergedBA = km_user_map_merge(km_user_map_normalize($deviceB), km_user_map_normalize($deviceA));
+    check('混ぜる: ブックマークは消した印より古いものを落とす・開いた場所は新しい方を残して新しい順・全部消した検索は残らない・設定は新しい方',
+        [['room3'], [['room1', $t0 + 9], ['room2', $t0 + 2]], [], ['a>b'], false],
+        [array_column($mergedAB['bookmarks'], 'uuid'), array_map(static fn ($p) => [$p['uuid'], $p['at']], $mergedAB['places']), $mergedAB['searches'],
+         array_map(static fn ($r) => $r['from'] . '>' . $r['to'], $mergedAB['routes']), (array) $mergedAB['settings']['android']['values'] === ['map_color_areas' => false] ? false : true]);
+    check_bool('混ぜる: どちらの順に混ぜても同じ', json_encode($mergedAB) === json_encode($mergedBA));
+    check_bool('混ぜる: 消したあとに付け直したブックマークは残る', array_column(km_user_map_merge($mergedAB, km_user_map_normalize(['bookmarks' => [['uuid' => 'room1', 'at' => $t0 + 20]]]))['bookmarks'], 'uuid') === ['room1', 'room3']);
+    $flood = km_user_map_normalize(['places' => array_map(static fn ($i) => ['uuid' => 'p' . $i, 'at' => $t0 + $i], range(1, 80)),
+        'routes' => [['from' => 'x', 'to' => 'x', 'at' => $t0], ['from' => "a'b", 'to' => 'c', 'at' => $t0]], 'searches' => [['q' => "a\nb", 'at' => $t0], ['q' => 'ok', 'at' => 5]]]);
+    check('形: 開いた場所は 50 件まで(新しい方)・同じ地点の経路・おかしな地点・制御文字・おかしな時刻は捨てる', [50, 'p80', [], []],
+        [count($flood['places']), $flood['places'][0]['uuid'], $flood['routes'], $flood['searches']]);
+    $userMapApi = (string) file_get_contents(__DIR__ . '/../api/user-map-data.php');
+    check_bool('口: 誰のものかはトークンかサインインのセッションの sub だけ・Web の書き込みは CSRF・サインインしていなければ 401', str_contains($userMapApi, '$principal = logto_require_principal();')
+        && str_contains($userMapApi, "\$subject = trim((string) (\$client->getIdTokenClaims()->sub ?? ''));") && str_contains($userMapApi, 'if (!km_csrf_verify()) {')
+        && !str_contains($userMapApi, "\$_GET['user") && !str_contains($userMapApi, "\$input['user") && str_contains($userMapApi, "respond(['success' => false, 'message' => 'サインインしていません"));
+    check_bool('退会で消える', in_array('km_user_map_data', KM_ACCOUNT_DELETE_TABLES, true));
+    $termsForHistory = (string) json_encode(km_legal_terms(), JSON_UNESCAPED_UNICODE);
+    $privacyForHistory = (string) json_encode(km_legal_privacy(), JSON_UNESCAPED_UNICODE);
+    check_bool('利用規約・プライバシーポリシー: 履歴とブックマーク(端末の中だけ・サインインで同期・経路は確かめる・消し方・退会)', str_contains($termsForHistory, 'ふだんは端末の中だけに残ります')
+        && str_contains($privacyForHistory, '地図の履歴とブックマーク(ブックマークした場所・開いた場所・検索した言葉・経路の出発地と目的地')
+        && str_contains($privacyForHistory, '地図の「履歴」から一覧ごと・全部を消せます') && str_contains($privacyForHistory, 'アプリの設定・地図の履歴とブックマーク・') && KM_LEGAL_UPDATED >= '2026-10-23');
+    check_bool('利用規約・プライバシーポリシー: 教員室・研究室の決まりは Android アプリにも効く(2026-10-23 から)', str_contains($termsForHistory, '本サービスの Web の地図と Android アプリでは、**教員室・研究室の場所は')
+        && !str_contains($privacyForHistory, 'Android アプリへの配信では'));
+    $historyJs = (string) file_get_contents(__DIR__ . '/../Main/user-history.js');
+    $homeForHistory = (string) file_get_contents(__DIR__ . '/../index.php');
+    $appJsForHistory = (string) file_get_contents(__DIR__ . '/../Main/app.js');
+    check_bool('Web: 展示の PC では使わない・app.js より先に読む・サインインしている人だけ印と CSRF を渡す', str_contains($historyJs, "if (meta('km-test-mode') === '1') return;")
+        && strpos($homeForHistory, "km_public_asset('Main/user-history.js')") < strpos($homeForHistory, "km_public_asset('Main/app.js')) ?>\"></script>")
+        && str_contains($homeForHistory, '$kmUserMapKey = ($loggedIn && $kmTestMode === null'));
+    check_bool('Web: 経路の確かめ 3 つ(サインイン後に置くか・前回の経路を出すか・消すとき)とログアウトのとき', str_contains($historyJs, "'この端末だけ'") && str_contains($historyJs, "'前回の経路'")
+        && str_contains($historyJs, "'経路は残す'") && str_contains($historyJs, "'この端末から消す'"));
+    check_bool('Web: 詳細を開いた・経路を引いたを知らせる・一覧から開ける', str_contains($appJsForHistory, "new CustomEvent('km:node-opened'") && str_contains($appJsForHistory, "new CustomEvent('km:route'")
+        && str_contains($appJsForHistory, 'window.kmOpenNode = function (id) {') && str_contains($appJsForHistory, 'data-km-bookmark="${escapeHtml(id)}"'));
+
     km_check_heading('display-defaults: アプリの表示調整の既定を配る(2026-10-23)');
     require_once __DIR__ . '/../lib/display-defaults.php';
     check('形だけ確かめて並べる(真偽・整数・短い文字列・文字列の並び)', ['map_color_areas' => true, 'map_label_size_percent' => 140, 'map_visible_node_types' => ['road', 'room']],

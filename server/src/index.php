@@ -262,6 +262,14 @@ if ($kmEvent !== null && $kmTestMode === null) {
         $kmEventCollect = null;
     }
 }
+
+/*
+ * 履歴とブックマークの同期(2026-10-23。Main/user-history.js・api/user-map-data.php)。サインインしている人だけ印を渡す。
+ * 展示の PC(テスト用アカウント)では使わない(来場者の間で履歴が見えないように)
+ */
+$kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (string) $claims->sub !== '')
+    ? substr(hash('sha256', 'km-user-map:' . (string) $claims->sub), 0, 16)
+    : null;
 ?>
 <!DOCTYPE html>
 <html lang="ja">
@@ -285,9 +293,14 @@ if ($kmEvent !== null && $kmTestMode === null) {
         <meta name="km-event-collect" content="<?= km_home_e($kmEventCollect['key']) ?>">
     <?php endif; ?>
     <?php $kmHasPosters = ($kmMapData['posters'] ?? []) !== []; ?>
-    <?php if ($kmTestMode !== null || $kmEventCollect !== null || $kmHasPosters): ?>
-        <?php /* 記録の送信に使うトークン(api/test-events.php と、ポスターの数を数える api/poster-event.php が X-KM-CSRF で見る) */ ?>
+    <?php if ($kmTestMode !== null || $kmEventCollect !== null || $kmHasPosters || $kmUserMapKey !== null): ?>
+        <?php /* 記録の送信に使うトークン(api/test-events.php・ポスターの数を数える api/poster-event.php・履歴の同期 api/user-map-data.php が X-KM-CSRF で見る) */ ?>
         <meta name="km-csrf" content="<?= km_home_e(km_csrf_token()) ?>">
+    <?php endif; ?>
+    <?php if ($kmUserMapKey !== null): ?>
+        <?php /* 履歴とブックマークの同期(Main/user-history.js)。値はアカウントごとの印(sub を鍵つきで縮めたもの。元の ID には戻せない)。
+                 経路の履歴をアカウントに置くかの答えを、アカウントごとに覚えるためだけに使う */ ?>
+        <meta name="km-user-key" content="<?= km_home_e($kmUserMapKey) ?>">
     <?php endif; ?>
     <title>高専マップ案内</title>
 
@@ -1019,6 +1032,10 @@ if ($kmEvent !== null && $kmTestMode === null) {
     <script defer src="<?= km_home_e(km_public_asset('Main/map-style.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/map-tuning.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/label-layout.js')) ?>"></script>
+    <?php if ($kmTestMode === null): ?>
+        <?php /* 履歴とブックマーク(2026-10-23)。**app.js より先に**読む(地点の詳細の ☆ を出すかを app.js が見る)。展示の PC では読まない */ ?>
+        <script defer src="<?= km_home_e(km_public_asset('Main/user-history.js')) ?>"></script>
+    <?php endif; ?>
     <?php if ($kmTestMode !== null || $kmEventCollect !== null): ?>
         <?php /* テスト用アカウントとイベント中だけ。**app.js より先に**読み、window.kmTestLog を用意しておく(app.js は在れば呼ぶ) */ ?>
         <script defer src="<?= km_home_e(km_public_asset('Main/test-mode.js')) ?>"></script>

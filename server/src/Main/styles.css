@@ -1938,6 +1938,107 @@ body.km-map-unavailable .km-route-bar {
 /* 右上の 🖼️(ポスターの一覧)。<a> なので下線を消す */
 a.icon-btn { text-decoration: none; color: inherit; }
 
+/* 履歴とブックマーク(2026-10-23。Main/user-history.js)。面は左下の操作の上に出す(検索パネルと同じ幅の決め方) */
+.km-history-panel {
+    position: fixed;
+    left: var(--km-edge);
+    bottom: calc(var(--km-bottom) + var(--km-touch) + 16px);
+    z-index: 1100;
+    width: min(380px, calc(100vw - 2 * var(--km-edge) - var(--km-floor-size) - 12px));
+    max-height: min(70vh, 560px);
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.75rem 0.9rem 0.9rem;
+    background: var(--glass-heavy);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+    color: var(--text);
+}
+.km-history-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.km-history-title { margin: 0; font-size: var(--text-title); }
+.km-history-note, .km-history-empty { margin: 0; color: var(--secondary); font-size: var(--text-label); }
+.km-history-tabs { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.km-history-tab {
+    min-height: 36px;
+    padding: 0.25rem 0.7rem;
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: var(--text-label);
+    cursor: pointer;
+}
+.km-history-tab.active { background: var(--primary-dark); border-color: var(--primary-dark); color: var(--on-primary); }
+.km-history-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 0.25rem; }
+.km-history-item { display: flex; align-items: stretch; gap: 0.25rem; }
+.km-history-open {
+    flex: 1;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.5rem;
+    min-height: var(--km-touch);
+    padding: 0.35rem 0.6rem;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.km-history-label { overflow-wrap: anywhere; }
+.km-history-sub { color: var(--secondary); white-space: nowrap; }
+.km-history-remove {
+    min-width: var(--km-touch);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--secondary);
+    font-size: 1.1rem;
+    cursor: pointer;
+}
+.km-history-clear { align-self: flex-start; }
+.km-bookmark-btn[aria-pressed="true"] { border-color: #B45309; color: #92400E; }
+/* 確かめる画面(経路の履歴)。ポスターの幕と同じ重ね順 */
+.km-history-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 1600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    background: rgba(15, 23, 42, 0.55);
+}
+.km-history-dialog {
+    max-width: min(420px, 100%);
+    padding: 1rem 1.1rem;
+    background: var(--glass-heavy);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+    color: var(--text);
+}
+.km-history-dialog-title { margin: 0 0 0.4rem; font-size: var(--text-title); }
+.km-history-dialog-text { margin: 0 0 0.8rem; overflow-wrap: anywhere; }
+.km-history-dialog-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: flex-end; }
+.km-history-toast {
+    position: fixed;
+    left: 50%;
+    bottom: calc(var(--km-bottom) + var(--km-touch) + 24px);
+    z-index: 1700;
+    transform: translateX(-50%);
+    max-width: calc(100vw - 32px);
+    padding: 0.5rem 0.9rem;
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.88);
+    color: #fff;
+    font-size: var(--text-label);
+}
+
 /* ポスターを大きく見る幕(Main/app.js の openPosterViewer)。テスト中の札(1200)より上、読み込み画面(2000)より下 */
 .km-poster-viewer {
     position: fixed;

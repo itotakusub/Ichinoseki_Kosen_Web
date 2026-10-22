@@ -1048,6 +1048,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                         data-km-node="${escapeHtml(link.nodeId)}">${escapeHtml(link.label || link.floor)}</button>`).join('')}
                </div>`;
 
+        // ブックマーク(2026-10-23。Main/user-history.js が押したときと開いたときの状態を受け持つ)
+        const bookmark = window.KmUserHistory && window.KmUserHistory.enabled
+            ? `<button type="button" class="popup-btn secondary km-bookmark-btn" data-km-bookmark="${escapeHtml(id)}" aria-pressed="false">☆ ブックマーク</button>`
+            : '';
+
         return `
             <div class="popup-content km-detail">
                 <span class="popup-title">${escapeHtml(title)}</span>
@@ -1059,6 +1064,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 ${posters}
                 ${enter}
                 ${actions}
+                ${bookmark}
             </div>
         `;
     }
@@ -1804,6 +1810,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     window.map.on('popupopen', (e) => {
         const source = e.popup && e.popup._source;
         if (source && source.kmNodeId) testLog('detail', { node: source.kmNodeId, floor: String(window.currentFloor) });
+        // 履歴の「開いた場所」とブックマークの ☆(2026-10-23。Main/user-history.js)
+        if (source && source.kmNodeId) window.dispatchEvent(new CustomEvent('km:node-opened', { detail: { id: source.kmNodeId } }));
     });
 
     window.map.on('zoomend', () => {
@@ -1959,6 +1967,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                 ].filter(Boolean).join(','),
             });
             if (path) {
+                // 履歴の「経路」と「検索した言葉」(2026-10-23。Main/user-history.js)
+                window.dispatchEvent(new CustomEvent('km:route', { detail: { from: startNode, to: endNode, fromText: startText, toText: endText } }));
                 currentRoutePath = path;
                 /*
                  * 好みを変えて引き直したときも、**最初の区間から**案内し直す ——
@@ -3120,6 +3130,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
         box.appendChild(list);
     }
+
+    // 履歴とブックマークの一覧から開く(2026-10-23。Main/user-history.js)
+    window.kmOpenNode = function (id) {
+        const node = graphData.nodes[id];
+        if (node) openNodeFromList(Object.assign({ id: id }, node));
+    };
 
     /** 一覧から選んだ地点へ寄せて、詳細を開く。 */
     function openNodeFromList(node) {
