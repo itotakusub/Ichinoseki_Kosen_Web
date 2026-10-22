@@ -240,6 +240,10 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
         if (!isset($floorIds[(string) $node['floor']])) {
             continue;
         }
+        // 区画の印(アプリの色分けだけで使う。2026-10-23)は Web の地図に出さない。ふつうは km_map_nodes に入らない(lib/map-node-area.php)
+        if ((string) ($node['type'] ?? '') === 'area') {
+            continue;
+        }
         if (!$forAdmin) {
             $restricted = km_map_node_is_restricted($node);
             $visibility = km_map_node_visibility($restricted, $member, isset($consented[(string) $node['id']]), $overlay['hideOccupantNames']);

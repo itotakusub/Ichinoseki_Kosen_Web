@@ -394,6 +394,17 @@ function km_app_map_sync_apply(
         error_log('km_app_map_sync_apply: 階段の向きの表を作れません: ' . $exception->getMessage());
         $stairsTable = false;
     }
+    // 区画の色の指定と区画の印の表(2026-10-23。lib/map-node-area.php)。同じく取引の前に作る
+    require_once __DIR__ . '/map-node-area.php';
+    $areaTable = isset($converted['area']);
+    try {
+        if ($areaTable) {
+            km_map_node_area_ensure_table($pdo);
+        }
+    } catch (Throwable $exception) {
+        error_log('km_app_map_sync_apply: 区画の表を作れません: ' . $exception->getMessage());
+        $areaTable = false;
+    }
     $pdo->beginTransaction();
     try {
         /*
@@ -472,6 +483,10 @@ function km_app_map_sync_apply(
         // 階段の上り口・下り口の向き(取り込んだ地図が正本。向きの無い階段は消す)
         if ($stairsTable) {
             km_map_node_stairs_sync($pdo, $converted['nodes']);
+        }
+        // 区画の色の指定と区画の印(取り込んだ地図が正本。表を丸ごと入れ替える)
+        if ($areaTable) {
+            km_map_node_area_sync($pdo, $converted['area']);
         }
 
         /*

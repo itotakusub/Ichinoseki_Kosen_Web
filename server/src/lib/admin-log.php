@@ -84,6 +84,8 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     'map.backup_download' => 'が管理画面で地図のバックアップをダウンロードしました',
     'learning.backup_download' => 'が管理画面で Wi-Fi 学習の控えをダウンロードしました',
     'learning.backup_restore' => 'が Wi-Fi 学習の控えをサーバーへ戻しました',
+    'display.defaults_publish' => 'がアプリの表示調整の既定を配りました',
+    'display.defaults_unpublish' => 'がアプリの表示調整の既定を配るのをやめました',
     // ストリートビューの写真(2026-10-06、lib/panorama.php)
     'map.panorama_add' => 'が地点にストリートビューの写真を足しました',
     'map.panorama_delete' => 'が地点のストリートビューの写真を外しました',

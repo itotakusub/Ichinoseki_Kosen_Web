@@ -4249,7 +4249,7 @@ function km_check_hardening(): void
     check_bool('proxy-web.conf に proxy_read_timeout を書かない(location で重複すると起動しない)', !str_contains((string) preg_replace('/^\s*#.*$/m', '', $file('nginx/km/proxy-web.conf')), 'proxy_read_timeout'));
     // 2 つ目は Soketi の WebSocket(/ws/app/。2026-10-19 に 6001 番から移した。1 本を長く張る)
     check('443 で 300s を許すのは downloads.php と /ws/app/ だけ', 2, substr_count($https, 'proxy_read_timeout 300s;'));
-    check_bool('未認証で重い口を km_api で絞る(メソッドを問わない)', str_contains($https, 'location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update|positioning-params|learning|poster-image|poster-event|table|node-extras)|logto_me)\.php$ {') && str_contains($https, 'limit_req zone=km_api burst=120 nodelay;'));
+    check_bool('未認証で重い口を km_api で絞る(メソッドを問わない)', str_contains($https, 'location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update|positioning-params|learning|poster-image|poster-event|table|node-extras|display-defaults|user-map-data)|logto_me)\.php$ {') && str_contains($https, 'limit_req zone=km_api burst=120 nodelay;'));
     check_bool('アプリの地図は km_appmap で絞る', preg_match('#location = /api/app-map\.php \{\s*limit_req zone=km_appmap burst=30 nodelay;#', $https) === 1);
     check_bool('callback.php は認可コードをログに残さない', preg_match('#location = /callback\.php \{\s*access_log [^;]+ km_no_query;#', $https) === 1);
     /*
@@ -7522,6 +7522,58 @@ function km_check_layout(): void
     $syncCode = (string) file_get_contents(__DIR__ . '/../lib/app-map-sync.php');
     check_bool('取り込み: 表は取引の前に作り、作れなくても止めない・ノードを入れたあとに向きを入れる', strpos($syncCode, 'km_map_node_stairs_ensure_table($pdo);') < strpos($syncCode, '$pdo->beginTransaction();')
         && strpos($syncCode, 'km_map_node_stairs_sync($pdo, $converted[\'nodes\']);') > strpos($syncCode, '$insertNode->execute($values);'));
+
+    /*
+     * 区画の色分けを手で決める(2026-10-23。lib/map-node-area.php)。地点の指定と区画の印は別の表で持ち、配信でアプリへ戻す。
+     * 区画の印は km_map_nodes に入れない(Web の地図・一覧に名前の無い地点を出さない)
+     */
+    km_check_heading('display-defaults: アプリの表示調整の既定を配る(2026-10-23)');
+    require_once __DIR__ . '/../lib/display-defaults.php';
+    check('形だけ確かめて並べる(真偽・整数・短い文字列・文字列の並び)', ['map_color_areas' => true, 'map_label_size_percent' => 140, 'map_visible_node_types' => ['road', 'room']],
+        km_display_defaults_normalize(['map_visible_node_types' => ['road', 'room'], 'map_label_size_percent' => 140, 'map_color_areas' => true]));
+    $displayRejects = 0;
+    foreach ([['Bad-Key' => 1], ['k' => 1.5], ['k' => str_repeat('a', 65)], ['k' => ["a\nb"]], ['k' => ['x' => 'y']], ['k' => 2_000_000], array_fill_keys(array_map(static fn ($i) => 'k' . $i, range(1, 201)), true)] as $bad) {
+        try {
+            km_display_defaults_normalize($bad);
+        } catch (InvalidArgumentException) {
+            $displayRejects++;
+        }
+    }
+    check('名前の形・小数・長い文字列・制御文字・連想配列・大きすぎる数・201 項目は断る', 7, $displayRejects);
+    $displayApi = (string) file_get_contents(__DIR__ . '/../api/display-defaults.php');
+    check_bool('口: 読むのは誰でも・配る/やめるは管理者のトークン・本文 32KB・記録に文言', str_contains($displayApi, "logto_assert_permissions(\$principal, LOGTO_ADMIN_PERMISSIONS);")
+        && strpos($displayApi, "=== 'GET'") < strpos($displayApi, 'logto_require_principal()') && str_contains($displayApi, 'km_api_json_body(32 * 1024)')
+        && isset(KM_ADMIN_LOG_ACTION_LABELS['display.defaults_publish'], KM_ADMIN_LOG_ACTION_LABELS['display.defaults_unpublish']));
+
+    km_check_heading('map-node-area: 区画の色分けの手の指定と区画の印(2026-10-23)');
+    check('種類は決まった語だけ・色は #RRGGBB(アプリの ARGB の数も読む)', ['room', null, '#CDE7F7', '#56B4E9', null, null],
+        [km_map_area_kind('room'), km_map_area_kind('kitchen'), km_map_area_color(0xFFCDE7F7), km_map_area_color('#56b4e9'), km_map_area_color('blue'), km_map_area_color(-1)]);
+    check('#RRGGBB → 不透明の ARGB', [0xFFCDE7F7, null], [km_map_area_color_argb('#CDE7F7'), km_map_area_color_argb(null)]);
+    $areaMap = json_decode('{"version":10,"nodes":[
+        {"uuid":"r1","x":10,"y":20,"useWifi":true,"title":"講義室","subtitle":"","type1":"room","type2":"","note":"","floor":"1F","areaKind":"corridor","areaColor":4291684343},
+        {"uuid":"r2","x":30,"y":40,"useWifi":true,"title":"倉庫","subtitle":"","type1":"room","type2":"","note":"","floor":"1F"},
+        {"uuid":"m1","x":55.5,"y":66.25,"useWifi":false,"title":"","subtitle":"","type1":"area","type2":"","note":"","floor":"2F","areaKind":"room"}
+    ],"lines":[]}');
+    $areaWeb = km_app_map_to_web($areaMap);
+    check('アプリ → Web: 区画の印は km_map_nodes に入れない(知らない種類にも数えない)・指定を取り出す', [['r1', 'r2'], [], ['r1' => ['kind' => 'corridor', 'color' => '#CDE7F7']], 1],
+        [array_column($areaWeb['nodes'], 'uuid'), $areaWeb['skipped']['unknownType'], $areaWeb['area']['overrides'], count($areaWeb['area']['markers'])]);
+    $areaBack = km_app_map_snapshot_from_rows(array_map(static fn (array $n): array => $n, $areaWeb['nodes']), [])['map'];
+    km_map_area_apply($areaBack, $areaWeb['area']);
+    check('Web → アプリ: 指定と区画の印が戻る・指定の無い地点には項目を足さない', ['corridor', 0xFFCDE7F7, false, 'area', '2F', 55.5, 66.25, 'room'],
+        [$areaBack->nodes[0]->areaKind ?? null, $areaBack->nodes[0]->areaColor ?? null, property_exists($areaBack->nodes[1], 'areaKind'),
+         $areaBack->nodes[2]->type1 ?? null, $areaBack->nodes[2]->floor ?? null, $areaBack->nodes[2]->x ?? null, $areaBack->nodes[2]->y ?? null, $areaBack->nodes[2]->areaKind ?? null]);
+    if (extension_loaded('pdo_sqlite')) {
+        $areaDb = new PDO('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
+        check('表が無ければ空(配信を止めない)', ['overrides' => [], 'markers' => []], km_map_node_area_all($areaDb));
+        $areaDb->exec('CREATE TABLE km_map_node_area (node_uuid TEXT PRIMARY KEY, area_kind TEXT NULL, area_color TEXT NULL, marker_floor TEXT NULL, marker_x REAL NULL, marker_y REAL NULL, updated_at TEXT NOT NULL)');
+        $areaDb->exec("INSERT INTO km_map_node_area VALUES ('old', 'room', NULL, NULL, NULL, NULL, '')");
+        check('取り込み: 表を丸ごと入れ替える(前の指定は残らない)・読み戻すと同じ', [2, $areaWeb['area']],
+            [km_map_node_area_sync($areaDb, $areaWeb['area']), km_map_node_area_all($areaDb)]);
+    }
+    check_bool('取り込み: 区画の表は取引の前に作り、ノードを入れたあとに入れ替える・配信で足す・Web の地図に区画の印を出さない', strpos($syncCode, 'km_map_node_area_ensure_table($pdo);') < strpos($syncCode, '$pdo->beginTransaction();')
+        && strpos($syncCode, "km_map_node_area_sync(\$pdo, \$converted['area']);") > strpos($syncCode, '$insertNode->execute($values);')
+        && str_contains((string) file_get_contents(__DIR__ . '/../lib/app-map-convert.php'), "km_map_area_apply(\$result['map'], km_map_node_area_all(\$pdo));")
+        && str_contains((string) file_get_contents(__DIR__ . '/../lib/map-data.php'), "if ((string) (\$node['type'] ?? '') === 'area') {"));
 
     km_check_heading('posters: 広告(重み 10%・必ず 1 件)・数・チュートリアルの終わりの知らせ(2026-10-21)');
     check('広告の重みは 10%(利用者の指示。全部同じ)', 10, KM_POSTER_AD_WEIGHT);

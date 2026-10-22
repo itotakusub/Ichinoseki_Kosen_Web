@@ -34,6 +34,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/app-map.php';
 require_once __DIR__ . '/map-node-stairs.php';
+require_once __DIR__ . '/map-node-area.php';
 
 /**
  * アプリの基準マップ画像の実寸(`res/drawable/f1_r.png` ほか、全階 1600×1200)。
@@ -251,6 +252,10 @@ function km_app_map_to_web(stdClass $map): array
         }
 
         $type1 = (string) ($node->type1 ?? '');
+        // 区画の印(2026-10-23。lib/map-node-area.php)は km_map_nodes に入れない。区画の表へ別に入る(戻りの 'area')
+        if ($type1 === KM_MAP_AREA_MARKER_TYPE) {
+            continue;
+        }
         if (!in_array($type1, KM_APP_MAP_NODE_TYPES, true)) {
             // **黙って通さない。** 知らない種類を入れると、描画もカテゴリ検索も外れる
             $unknownType[$type1] = ($unknownType[$type1] ?? 0) + 1;
@@ -374,6 +379,8 @@ function km_app_map_to_web(stdClass $map): array
     return [
         'nodes' => $nodes,
         'edges' => $edges,
+        // 区画の色の指定と区画の印(2026-10-23。取り込みで km_map_node_area を入れ替える)
+        'area' => km_map_area_from_app($map),
         'skipped' => [
             'unknownFloor' => array_values(array_unique($unknownFloor)),
             'unknownType' => $unknownType,
@@ -639,7 +646,11 @@ function km_app_map_from_web(PDO $pdo): array
            FROM km_map_overlays'
     );
 
-    return km_app_map_snapshot_from_rows($nodes, $edges, $fingerprints, $overlays);
+    $result = km_app_map_snapshot_from_rows($nodes, $edges, $fingerprints, $overlays);
+    // 区画の色の指定と区画の印(2026-10-23。別の表。無ければ足さない)
+    km_map_area_apply($result['map'], km_map_node_area_all($pdo));
+
+    return $result;
 }
 
 /**
