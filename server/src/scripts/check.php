@@ -434,6 +434,43 @@ function km_check_app_map(): string
         km_app_map_strip_staff_only($viaStaffOnly)->nodes[0]->occupantName === null
     );
 
+    /*
+     * 教員室・研究室を落とす(2026-10-22、Android 側の厳格化)。Web と同じ判定(種類 2・名前・番号のどれか)。
+     * 線・精度評価・イベントの名前の差し替えも一緒に落とす(アプリは線の両端が地図に在ることを確かめていて、無いと地図ごと読めない)
+     */
+    km_check_heading('app-map: 教員室・研究室の除去');
+    $withRestricted = km_app_map_decode_snapshot(json_encode([
+        'version' => 10,
+        'nodes' => [
+            ['uuid' => 'r1', 'title' => '教員室', 'subtitle' => '1-106', 'type1' => 'room', 'type2' => '', 'floor' => '1F', 'x' => 1, 'y' => 2, 'occupantName' => '架空 一郎 先生'],
+            ['uuid' => 'r2', 'title' => '1-201', 'subtitle' => '機械研究室', 'type1' => 'room', 'type2' => '', 'floor' => '2F', 'x' => 1, 'y' => 2],
+            ['uuid' => 'r3', 'title' => '1-301', 'subtitle' => '', 'type1' => 'room', 'type2' => '教員室', 'floor' => '3F', 'x' => 1, 'y' => 2],
+            ['uuid' => 'c1', 'title' => '通路', 'subtitle' => '', 'type1' => 'road', 'type2' => '', 'floor' => '1F', 'x' => 3, 'y' => 4],
+            ['uuid' => 'c2', 'title' => '教室', 'subtitle' => '1-107', 'type1' => 'room', 'type2' => '', 'floor' => '1F', 'x' => 5, 'y' => 6],
+        ],
+        'lines' => [
+            ['startNodeUuid' => 'c1', 'endNodeUuid' => 'r1'],
+            ['startNodeUuid' => 'c1', 'endNodeUuid' => 'c2'],
+        ],
+        'fingerprints' => [['nodeUuid' => 'r1', 'x' => 1, 'y' => 2, 'floor' => '1F', 'rssiByBssid' => ['aa' => -50]]],
+        'evaluations' => [['nodeUuid' => 'r1'], ['nodeUuid' => 'c2']],
+        'events' => [['uuid' => 'e', 'name' => '文化祭', 'nameOverrides' => ['r1' => '架空の控室', 'c2' => '模擬店'], 'hiddenNodeUuids' => ['r1', 'c2'], 'closedNodeUuids' => ['r2'], 'places' => []]],
+    ]));
+    $removedUuids = km_app_map_strip_restricted_nodes($withRestricted);
+    sort($removedUuids);
+    check('教員室・研究室(名前・番号・種類 2)を落とす', ['r1', 'r2', 'r3'], $removedUuids);
+    check('ほかの地点は残す', ['c1', 'c2'], array_map(static fn ($n) => $n->uuid, $withRestricted->nodes));
+    check('落とした地点の線を落とす', 1, count($withRestricted->lines));
+    check('落とした地点の精度評価を落とす', ['c2'], array_map(static fn ($e) => $e->nodeUuid, $withRestricted->evaluations));
+    check('Wi-Fi の学習は残す(名前を持たない)', 1, count($withRestricted->fingerprints));
+    $restrictedJson = (string) json_encode($withRestricted->events, JSON_UNESCAPED_UNICODE);
+    check_bool('イベントの名前の差し替え・隠す・通行止めからも消える', !str_contains((string) json_encode($withRestricted, JSON_UNESCAPED_UNICODE), '架空') && !str_contains($restrictedJson, '"r1"') && !str_contains($restrictedJson, '"r2"')
+        && str_contains($restrictedJson, '"c2":"模擬店"') && str_contains($restrictedJson, '"hiddenNodeUuids":["c2"]') && str_contains($restrictedJson, '"closedNodeUuids":[]'));
+    check('教員室が無ければ何もしない', [], km_app_map_strip_restricted_nodes(km_app_map_decode_snapshot('{"version":10,"nodes":[{"uuid":"a","title":"教室"}],"lines":[]}')));
+    $namedMap = km_app_map_decode_snapshot('{"version":10,"nodes":[{"uuid":"a","occupantName":"架空 一"},{"uuid":"b","occupantName":"架空 二"}],"lines":[]}');
+    km_app_map_keep_occupant_names_for($namedMap, ['b']);
+    check_bool('氏名は許可した地点だけ残す', $namedMap->nodes[0]->occupantName === null && $namedMap->nodes[1]->occupantName === '架空 二');
+
     $withEmptyObject = km_app_map_decode_snapshot('{"version":8,"nodes":[],"lines":[],"extra":{}}');
     check_bool(
         '{} が [] に化けない',
@@ -1923,7 +1960,9 @@ function km_check_staff_org_map(): void
     check_bool('公開ページ: 印の期限は ID トークンの期限まで(最長 1 時間)', str_contains($index, 'min((int) $fresh->exp, time() + 3600)'));
     check_bool('サインアウトで印を外す', str_contains($src('sign-out.php'), "unset(\$_SESSION['km_map_teacher_until']);"));
     $appMap = $src('api/app-map.php');
-    check_bool('アプリ: 教職員には閲覧不可の地点も配る', str_contains($appMap, '$privileged = $isStaff || $isTeacher;') && str_contains($appMap, 'if (!$privileged) {'));
+    // 2026-10-22 から段で分ける(イベント運営は教員室・研究室を見ない。km_app_map_content_level)
+    check_bool('アプリ: 教職員には閲覧不可の地点も配る', str_contains($appMap, '$isTeacher = is_array($principal) && ($principal[\'is_teacher\'] ?? false) === true;')
+        && km_app_map_content_level(false, true, true) === 'member' && km_app_map_content_level(false, false, true) === 'event');
     check_bool('アプリ: hidden の切り替えは教職員だけ(イベント運営は対象外)', str_contains($src('lib/app-map.php'), "return \$isTeacher && \$config['teacherSeesHidden'];"));
     check_bool('設定: hidden の切り替えの既定は見せない(厳密に true のときだけ)', str_contains($src('lib/map-access.php'), "'teacherSeesHidden' => (\$config['teacherSeesHidden'] ?? false) === true,"));
 
@@ -2303,17 +2342,27 @@ function km_check_review_0925(): void
     check_bool('古い ID トークンの organization_roles で教職員を決めない', !str_contains($account, 'isset($claims->organization_roles)'));
     km_check_heading('review-0925 W-52: 中身の段が変われば地図を送り直す');
     require_once $src . '/lib/app-map.php';
-    check('来場者', 'visitor', km_app_map_content_level(false, false));
-    check('スタッフ(氏名なし)', 'staff', km_app_map_content_level(true, false));
-    check('氏名入り', 'names', km_app_map_content_level(true, true));
-    check('来場者に氏名の段は付かない', 'visitor', km_app_map_content_level(false, true));
+    // 段は 2026-10-22 に作り直した(Android 側の厳格化。lib/node-visibility.php と同じ決まり)
+    check('ふつうの人', 'public', km_app_map_content_level(false, false, false));
+    check('イベント運営(教員室・名前なし)', 'event', km_app_map_content_level(false, false, true, true));
+    check('組織メンバー・許可なし', 'member', km_app_map_content_level(false, true, false, true, []));
+    check('組織メンバー・錠が閉じている', 'member', km_app_map_content_level(false, true, false, false, ['a']));
+    check_bool('組織メンバー・許可あり(許可の組の印が付く)', preg_match('/\Amember-[0-9a-f]{12}\z/', km_app_map_content_level(false, true, false, true, ['a'])) === 1);
+    check_bool('許可の組が変われば段も変わる', km_app_map_content_level(false, true, false, true, ['a']) !== km_app_map_content_level(false, true, false, true, ['a', 'b']));
+    check('管理者(錠が開いている)', 'editor-names', km_app_map_content_level(true, false, false, true));
+    check('管理者(錠が閉じている)', 'editor', km_app_map_content_level(true, false, true, false));
+    check('ふつうの人に氏名の段は付かない', 'public', km_app_map_content_level(false, false, false, true, ['a']));
     check('知らない段は unknown(必ず送り直す)', 'unknown', km_app_map_parse_have_level('everything'));
     check('送ってこない古いアプリは null', null, km_app_map_parse_have_level(null));
-    check_bool('同じ版・同じ段なら最新', km_app_map_is_up_to_date('kosen-main', 'kosen-main', 3, 3, 'names', 'names'));
-    check_bool('権限を失った(names → visitor)なら送り直す', !km_app_map_is_up_to_date('kosen-main', 'kosen-main', 3, 3, 'names', 'visitor'));
-    check_bool('教職員になった(visitor → names)なら送り直す', !km_app_map_is_up_to_date('kosen-main', 'kosen-main', 3, 3, 'visitor', 'names'));
-    check_bool('段の分からない端末(unknown)には送り直す', !km_app_map_is_up_to_date('kosen-main', 'kosen-main', 3, 3, 'unknown', 'visitor'));
-    check_bool('段を送らない古いアプリは今までどおり', km_app_map_is_up_to_date('kosen-main', 'kosen-main', 3, 3, null, 'visitor'));
+    check('以前の段の名前は古いアプリとして null(毎回まるごと送らない)', null, km_app_map_parse_have_level('visitor'));
+    check('新しい段はそのまま', 'member-0123456789ab', km_app_map_parse_have_level('member-0123456789ab'));
+    check('形の違う印は unknown', 'unknown', km_app_map_parse_have_level('member-xyz'));
+    check_bool('同じ版・同じ段なら最新', km_app_map_is_up_to_date('kosen-main', 'kosen-main', 3, 3, 'member', 'member'));
+    check_bool('権限を失った(member → public)なら送り直す', !km_app_map_is_up_to_date('kosen-main', 'kosen-main', 3, 3, 'member', 'public'));
+    check_bool('教職員になった(public → member)なら送り直す', !km_app_map_is_up_to_date('kosen-main', 'kosen-main', 3, 3, 'public', 'member'));
+    check_bool('先生が許可を取り下げた(member-… → member)なら送り直す', !km_app_map_is_up_to_date('kosen-main', 'kosen-main', 3, 3, 'member-0123456789ab', 'member'));
+    check_bool('段の分からない端末(unknown)には送り直す', !km_app_map_is_up_to_date('kosen-main', 'kosen-main', 3, 3, 'unknown', 'public'));
+    check_bool('段を送らない古いアプリは今までどおり', km_app_map_is_up_to_date('kosen-main', 'kosen-main', 3, 3, null, 'public'));
     $appMap = $code($read('api/app-map.php'));
     check_bool('段は「最新です」の判定より前に決める', strpos($appMap, '$contentLevel = km_app_map_content_level(') < strpos($appMap, 'km_app_map_is_up_to_date('));
     check_bool('「最新です」の応答にも段を載せる', str_contains($appMap, "'contentLevel' => \$contentLevel,"));
@@ -5023,28 +5072,40 @@ function km_check_hardening(): void
     $cacheTmp = sys_get_temp_dir() . '/km-appmap-check-' . bin2hex(random_bytes(4));
     @mkdir($cacheTmp);
     $cacheSrc = "{$cacheTmp}/src.json";
-    file_put_contents($cacheSrc, '{"version":9,"nodes":[{"uuid":"a","title":"日本語 <x>","occupantName":"架空 太郎"},{"uuid":"b","occupantName":null}],"lines":[],'
+    file_put_contents($cacheSrc, '{"version":9,"nodes":[{"uuid":"a","title":"日本語 <x>","occupantName":"架空 太郎"},{"uuid":"b","occupantName":"架空 次郎"},'
+        . '{"uuid":"t","title":"教員室","subtitle":"9-999","occupantName":"架空 三郎"}],"lines":[],'
         . '"events":[{"uuid":"e","places":[{"uuid":"p1","staffOnly":true},{"uuid":"p2","staffOnly":false}]}]}');
+    $cacheConsent = ['a'];
+    $cacheMember = km_app_map_content_level(false, true, false, true, $cacheConsent);
+    $cacheLevels = ['public', 'event', 'member', $cacheMember, 'editor', 'editor-names'];
     $cacheOkAll = true;
-    foreach (KM_APP_MAP_CONTENT_LEVELS as $cacheLevel) {
-        $cached = km_app_map_cache_get('kosen-main', $cacheSrc, $cacheLevel, "{$cacheTmp}/c");
-        $direct = km_app_map_build_package(km_app_map_for_level(km_app_map_decode_snapshot((string) file_get_contents($cacheSrc)), $cacheLevel), 'kosen-main', 3, 'T', 'E', null, true, null, $cacheLevel, null, ['a' => [['id' => 1]]]);
+    $cacheBodies = [];
+    foreach ($cacheLevels as $cacheLevel) {
+        $cached = km_app_map_cache_get('kosen-main', $cacheSrc, $cacheLevel, "{$cacheTmp}/c", $cacheConsent);
+        $direct = km_app_map_build_package(km_app_map_for_level(km_app_map_decode_snapshot((string) file_get_contents($cacheSrc)), $cacheLevel, $cacheConsent), 'kosen-main', 3, 'T', 'E', null, true, null, $cacheLevel, null, ['a' => [['id' => 1]]]);
         $parts = $cached === null ? null : km_app_map_package_envelope($cached['sha256'], 'kosen-main', 3, 'T', 'E', null, null, $cacheLevel, null, ['a' => [['id' => 1]]]);
         $cacheOkAll = $cacheOkAll && $parts !== null && $parts[0] . file_get_contents($cached['body']) . $parts[1] === $direct;
+        $cacheBodies[$cacheLevel === $cacheMember ? 'member-x' : $cacheLevel] = $cached === null ? '' : (string) file_get_contents($cached['body']);
     }
-    check_bool('作り置き: 3 つの段とも、その場で組み立てた応答と同じ文字列', $cacheOkAll);
-    $visitorBody = (string) file_get_contents(km_app_map_cache_get('kosen-main', $cacheSrc, 'visitor', "{$cacheTmp}/c")['body']);
-    $staffBody = (string) file_get_contents(km_app_map_cache_get('kosen-main', $cacheSrc, 'staff', "{$cacheTmp}/c")['body']);
-    $namesBody = (string) file_get_contents(km_app_map_cache_get('kosen-main', $cacheSrc, 'names', "{$cacheTmp}/c")['body']);
-    check_bool('作り置き: 来場者版は氏名と閲覧不可の地点を落とし、スタッフ版は氏名だけ落とす', !str_contains($visitorBody, '架空') && !str_contains($visitorBody, '"p1"')
-        && !str_contains($staffBody, '架空') && str_contains($staffBody, '"p1"') && str_contains($namesBody, '架空'));
-    $firstBody = km_app_map_cache_get('kosen-main', $cacheSrc, 'visitor', "{$cacheTmp}/c")['body'];
+    check_bool('作り置き: どの段も、その場で組み立てた応答と同じ文字列', $cacheOkAll);
+    check_bool('作り置き: ふつうの人は氏名・スタッフ限定・教員室を落とす', !str_contains($cacheBodies['public'], '架空') && !str_contains($cacheBodies['public'], '"p1"') && !str_contains($cacheBodies['public'], '"t"'));
+    check_bool('作り置き: イベント運営はスタッフ限定だけ残し、氏名と教員室は落とす', !str_contains($cacheBodies['event'], '架空') && str_contains($cacheBodies['event'], '"p1"') && !str_contains($cacheBodies['event'], '"t"'));
+    check_bool('作り置き: 組織メンバーは教員室を残し、氏名は許可した地点だけ', str_contains($cacheBodies['member'], '"t"') && !str_contains($cacheBodies['member'], '架空')
+        && str_contains($cacheBodies['member-x'], '架空 太郎') && !str_contains($cacheBodies['member-x'], '架空 次郎') && !str_contains($cacheBodies['member-x'], '架空 三郎'));
+    check_bool('作り置き: 管理者は全部(氏名は錠に従う)', str_contains($cacheBodies['editor'], '"t"') && !str_contains($cacheBodies['editor'], '架空')
+        && str_contains($cacheBodies['editor-names'], '架空 三郎') && str_contains($cacheBodies['editor-names'], '"p1"'));
+    check_bool('知らない段は一番狭い段と同じに落とす', !str_contains((string) json_encode(km_app_map_for_level(km_app_map_decode_snapshot((string) file_get_contents($cacheSrc)), 'everything')), '"t"'));
+    $firstBody = km_app_map_cache_get('kosen-main', $cacheSrc, 'public', "{$cacheTmp}/c")['body'];
+    $firstMember = km_app_map_cache_get('kosen-main', $cacheSrc, $cacheMember, "{$cacheTmp}/c", $cacheConsent)['body'];
+    km_app_map_cache_get('kosen-main', $cacheSrc, 'member', "{$cacheTmp}/c");
+    check_bool('作り置き: 許可の組が変われば、前の組の作り置きを片付ける', !is_file($firstMember));
     file_put_contents($cacheSrc, '{"version":9,"nodes":[{"uuid":"z"}],"lines":[]}');
     touch($cacheSrc, time() + 5);
-    $second = km_app_map_cache_get('kosen-main', $cacheSrc, 'visitor', "{$cacheTmp}/c");
+    $second = km_app_map_cache_get('kosen-main', $cacheSrc, 'public', "{$cacheTmp}/c");
     check_bool('作り置き: 元を差し替えたら作り直し、古いものは片付ける', $second !== null && $second['body'] !== $firstBody && !is_file($firstBody) && isset($second['uuids']['z']));
-    check_bool('作り置き: 知らない段・おかしな配信 ID は作らない', km_app_map_cache_get('kosen-main', $cacheSrc, 'unknown', "{$cacheTmp}/c") === null
-        && km_app_map_cache_get('../x', $cacheSrc, 'visitor', "{$cacheTmp}/c") === null);
+    check_bool('作り置き: 知らない段・以前の段・おかしな配信 ID は作らない', km_app_map_cache_get('kosen-main', $cacheSrc, 'unknown', "{$cacheTmp}/c") === null
+        && km_app_map_cache_get('kosen-main', $cacheSrc, 'visitor', "{$cacheTmp}/c") === null
+        && km_app_map_cache_get('../x', $cacheSrc, 'public', "{$cacheTmp}/c") === null);
     foreach (array_merge(glob("{$cacheTmp}/c/*") ?: [], [$cacheSrc]) as $cacheFile) {
         @unlink($cacheFile);
     }
@@ -5062,7 +5123,14 @@ function km_check_hardening(): void
         && str_contains($panoApi, "'map.panorama_add'") && str_contains($panoApi, "'map.panorama_delete'"));
     check_bool('nginx: クエリ(ハッシュ)をログに書かない・本文 11m・回数を数える', str_contains($nginx, "location = /api/panorama.php {\n        access_log /var/log/nginx/access.log km_no_query;\n        client_max_body_size 11m;\n        limit_req zone=km_api burst=120 nodelay;"));
     check_bool('配信: 来場者版は閲覧不可の地点を落とした地図から一覧を作る', str_contains($appMapApi, 'km_panorama_manifest($pdo, km_panorama_uuids_of_map($map))')
-        && preg_match('/\$loadDeliveredMap = static function \(\).*?km_app_map_strip_staff_only\(\$map\).*?return \$map;/s', $appMapApi) === 1);
+        && preg_match('/\$loadDeliveredMap = static function \(\).*?return km_app_map_for_level\(\$map, \$contentLevel, \$consentedUuids\);/s', $appMapApi) === 1);
+    // Android 側の厳格化(2026-10-22): 段は管理者・組織メンバー・イベント運営を分けて決め、組織メンバーには許可した地点を渡す
+    check_bool('配信: 段は管理者・組織メンバー・イベント運営を分けて決める(運営は教員室を見ない)', str_contains($appMapApi, '$contentLevel = km_app_map_content_level($isAdmin, $isTeacher, $isEventStaff, $namesAllowed, $consentedUuids);')
+        && str_contains($appMapApi, '$consentedUuids = km_staff_node_consented_uuids($pdo);')
+        && substr_count($appMapApi, 'km_app_map_cache_get($slug, $path, $contentLevel, null, $consentedUuids)') === 2);
+    $nodeExtrasApi = $file('src/api/node-extras.php');
+    check_bool('写真といいね: 教員室・研究室は出さない', str_contains($nodeExtrasApi, '$likeable = $node !== null && !$restricted;')
+        && str_contains($nodeExtrasApi, "\$likes = \$restricted ? ['count' => 0, 'liked' => false] :"));
     $baseCompose = $file('compose.yaml');
     check_bool('入口と地図の正本はスワップを使わず、最後まで守る', preg_match('/\n  mariadb:\n(?:(?!\n  [a-z0-9-]+:\n)[\s\S])*?memswap_limit: 512m\n    oom_score_adj: -500\n/', $baseCompose) === 1
         && preg_match('/\n  reverse-proxy:\n(?:(?!\n  [a-z0-9-]+:\n)[\s\S])*?memswap_limit: 128m\n    oom_score_adj: -500\n/', $baseCompose) === 1);

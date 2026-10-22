@@ -16,7 +16,8 @@ declare(strict_types=1);
  * - 先生の許可は**先生が申請し、管理者が承認したとき**だけ付く(lib/staff-nodes.php の showNames)。取り下げはすぐ効く
  * - 地点に割り当てた先生が**全員**許可しているときだけ「許可あり」(同じ部屋の別の先生の名前を、その人の許可なしに出さない)。
  *   割り当てが無い地点は許可なし
- * - **Website だけ**(利用者の判断。Android アプリへの配信は lib/app-map.php の今の規則のまま)
+ * - **Android アプリへの配信も同じ決まり**(2026-10-22、利用者の指示「Android 側にも厳格化」。lib/app-map.php の中身の段)。
+ *   アプリで全部が届くのは、地図を編集する管理者だけ(Web の地図編集と同じ扱い)
  *
  * 公開ページの経路から呼ぶので、**表を作らない**。読めなければ「許可なし」(閉じる側に倒す)。
  */
@@ -74,6 +75,36 @@ function km_staff_node_consented_ids(PDO $pdo): array
     }
 
     return $ids;
+}
+
+/**
+ * 先生の許可がある地点の **uuid**(アプリの地図は uuid で地点を指す)。並べて返す。
+ * 読めないときは空(誰の名前も出さない)。
+ *
+ * @return list<string>
+ */
+function km_staff_node_consented_uuids(PDO $pdo): array
+{
+    $ids = km_staff_node_consented_ids($pdo);
+    if ($ids === []) {
+        return [];
+    }
+    try {
+        $rows = $pdo->query('SELECT id, uuid FROM km_map_nodes')->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $exception) {
+        return [];
+    }
+    $uuids = [];
+    foreach ($rows as $row) {
+        $uuid = (string) ($row['uuid'] ?? '');
+        if ($uuid !== '' && isset($ids[(string) $row['id']])) {
+            $uuids[$uuid] = true;
+        }
+    }
+    $uuids = array_keys($uuids);
+    sort($uuids, SORT_STRING);
+
+    return array_map('strval', $uuids);
 }
 
 /**

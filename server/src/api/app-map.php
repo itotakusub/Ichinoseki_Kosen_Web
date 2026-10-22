@@ -212,12 +212,22 @@ km_visit_mark_viewer(is_array($principal) ? 'app' : 'anon', is_array($principal)
  * **イベント運営とは別の権限**だが、閲覧不可の地点(staffOnly)は教職員にも見せる。
  */
 $isTeacher = is_array($principal) && ($principal['is_teacher'] ?? false) === true;
-$isStaff = is_array($principal) && (
-    in_array(LOGTO_STAFF_PERMISSION, $permissions, true) || ($principal['is_admin'] ?? 0) === 1
-);
-$privileged = $isStaff || $isTeacher;
-$sendNames = $privileged && km_app_map_may_send_occupant_names($privileged, $isTeacher);
-$contentLevel = km_app_map_content_level($privileged, $sendNames);
+$isAdmin = is_array($principal) && ($principal['is_admin'] ?? 0) === 1;
+$isEventStaff = is_array($principal) && in_array(LOGTO_STAFF_PERMISSION, $permissions, true);
+/*
+ * **教員室・研究室と先生の名前は Web と同じ決まり**(2026-10-22、利用者の指示「Android 側にも厳格化」。lib/node-visibility.php)。
+ * 組織メンバー(教職員)でなければ地点ごと落とす。イベント運営・テスト用のアカウントも例外にしない。
+ * 名前は組織メンバーにだけ、先生が申請して管理者が承認した地点の分だけ。
+ * 全部が届くのは管理者だけ —— アプリで地図を直して上げる人で、Web の地図編集と同じ扱い(落とした地図を直して上げると、
+ * 「上げた地図に無い地点を消す」を選んだときに本物が消える)。
+ */
+$namesAllowed = ($isAdmin || $isTeacher) && km_app_map_may_send_occupant_names(true, $isTeacher);
+$consentedUuids = [];
+if ($isTeacher && !$isAdmin && $namesAllowed) {
+    require_once __DIR__ . '/../lib/node-visibility.php';
+    $consentedUuids = km_staff_node_consented_uuids($pdo);
+}
+$contentLevel = km_app_map_content_level($isAdmin, $isTeacher, $isEventStaff, $namesAllowed, $consentedUuids);
 
 /*
  * ストリートビューの写真の一覧(2026-10-06。lib/panorama.php)。**配る地図に入っている地点の分だけ**載せる ——
@@ -233,7 +243,7 @@ try {
 }
 
 $path = km_app_map_storage_path($config, (string) ($meta['file'] ?? ''));
-$loadDeliveredMap = static function () use ($path, $slug, $meta, $privileged, $sendNames): ?stdClass {
+$loadDeliveredMap = static function () use ($path, $slug, $meta, $contentLevel, $consentedUuids): ?stdClass {
     if ($path === null) {
         error_log("api/app-map.php: 実体が見つかりません: {$slug} (" . ($meta['file'] ?? '') . ')');
         return null;
@@ -243,20 +253,11 @@ $loadDeliveredMap = static function () use ($path, $slug, $meta, $privileged, $s
         error_log("api/app-map.php: 地図 JSON として読めません: {$slug}");
         return null;
     }
-    // 何を落とすかは上で決めた段($contentLevel)と同じ判定
-    if (!$privileged) {
-        $map = km_app_map_strip_staff_only($map);
-    } elseif (!$sendNames) {
-        /*
-         * **staff でも、氏名だけは別に判断する。**
-         *
-         * 「地図データ公開設定」が `hidden` のときは誰にも配らない —— Web で隠している
-         * ものを、アプリ経由で取れるようにしてしまうと、錠が2つある状態になる。
-         * 一時地点(staffOnly)は staff に見せてよいので、そちらは落とさない。
-         */
-        km_app_map_strip_occupant_names($map);
-    }
-    return $map;
+    /*
+     * 何を落とすかは上で決めた段($contentLevel)だけで決める(作り置きと同じ km_app_map_for_level)。
+     * 「地図データ公開設定」が `hidden` なら、教職員にも管理者にも氏名を配らない(錠は 1 つ。段に入っている)。
+     */
+    return km_app_map_for_level($map, $contentLevel, $consentedUuids);
 };
 $panoramasForUuids = static function (array $uuids) use ($pdo, $panoramasEnabled): ?array {
     if (!$panoramasEnabled) {
@@ -297,7 +298,7 @@ if (km_app_map_is_up_to_date($slug, $haveMapId, $haveRevision, $revision, $haveL
     // 地点の uuid は作り置きから取る(地図を読み解かない)。作り置きが無ければ今までどおり読む
     $panoramas = null;
     if ($panoramasEnabled) {
-        $cachedForUuids = $path !== null ? km_app_map_cache_get($slug, $path, $contentLevel) : null;
+        $cachedForUuids = $path !== null ? km_app_map_cache_get($slug, $path, $contentLevel, null, $consentedUuids) : null;
         $panoramas = $cachedForUuids !== null ? $panoramasForUuids($cachedForUuids['uuids']) : $panoramasFor($loadDeliveredMap());
     }
     if ($panoramas !== null && $panoramas !== []) {
@@ -312,7 +313,7 @@ if (km_app_map_is_up_to_date($slug, $haveMapId, $haveRevision, $revision, $haveL
  * 作り置きを使えないとき(置き場に書けない等)は、下で今までどおりその場で組み立てる。
  */
 $activeEventUuid = is_string($meta['activeEventUuid'] ?? null) ? $meta['activeEventUuid'] : null;
-$cached = $path !== null ? km_app_map_cache_get($slug, $path, $contentLevel) : null;
+$cached = $path !== null ? km_app_map_cache_get($slug, $path, $contentLevel, null, $consentedUuids) : null;
 if ($cached !== null) {
     $parts = km_app_map_package_envelope(
         ($meta['checksum'] ?? true) !== false ? $cached['sha256'] : null,

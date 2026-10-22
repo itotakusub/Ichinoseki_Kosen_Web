@@ -11,7 +11,7 @@ declare(strict_types=1);
  *
  * - **地図のアクセスコードが要る**(地図を持つ人だけ。照合は学習データと同じ km_learning_code_allowed)。コードは URL に載せない
  * - 端末の印は鍵つきの印にしてだけ持つ。IP は持たない(回数を絞る印だけ)
- * - いいねできるのは Web の地図にある地点だけ(イベントの臨時の地点は数えない)
+ * - いいねできるのは Web の地図にある地点だけ(イベントの臨時の地点は数えない)。教員室・研究室は写真もいいねも出さない
  * - 入口の回数は nginx の km_api で絞る
  */
 
@@ -58,7 +58,9 @@ try {
 
     km_node_likes_ensure_table($pdo);
     $voter = $device !== '' ? km_node_like_voter($pdo, $device) : null;
-    $likeable = $node !== null;
+    // 教員室・研究室は写真もいいねも出さない(2026-10-22、Android 側の厳格化。アクセスコードだけでは組織メンバーか分からない)
+    $restricted = $node !== null && km_map_node_is_restricted($node);
+    $likeable = $node !== null && !$restricted;
     if ($like !== null && $voter !== null) {
         if (!$likeable) {
             respond(['success' => false, 'message' => 'この地点にはいいねできません。'], 400);
@@ -67,7 +69,7 @@ try {
             respond(['success' => false, 'message' => 'いいねが多すぎます。しばらく待ってからやり直してください。'], 429);
         }
     }
-    $likes = km_node_like_state($pdo, $nodeUuid, $voter);
+    $likes = $restricted ? ['count' => 0, 'liked' => false] : km_node_like_state($pdo, $nodeUuid, $voter);
 } catch (Throwable $exception) {
     error_log('api/node-extras.php failed: ' . $exception->getMessage());
     respond(['success' => false, 'message' => '読めませんでした。'], 500);
