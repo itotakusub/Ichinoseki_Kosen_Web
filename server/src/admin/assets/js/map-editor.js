@@ -536,6 +536,37 @@
     setStatus('');
   });
 
+  /*
+   * 地点の札に出すもの(2026-10-23、利用者の指示「UUID と座標、先生の名前表示は ON-OFF で切り替え」)。
+   * 閲覧者の手元(localStorage)に覚え、app.js の札(window.kmAdminLabelPrefs)を描き直す。既定は今までどおり全部 ON。
+   * **読み込みは地図より先**(最初に描く札から効かせる)。壊れた値は既定に倒す
+   */
+  const LABEL_PREFS_KEY = 'km-editor-label-prefs';
+  const labelPrefs = { id: true, xy: true, names: true };
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(LABEL_PREFS_KEY) || '{}');
+    Object.keys(labelPrefs).forEach((key) => {
+      if (typeof saved[key] === 'boolean') labelPrefs[key] = saved[key];
+    });
+  } catch (_) {
+    // 読めなければ既定のまま
+  }
+  window.kmAdminLabelPrefs = labelPrefs;
+  document.querySelectorAll('.km-label-pref').forEach((input) => {
+    const key = input.dataset.kmLabelPref;
+    if (!(key in labelPrefs)) return;
+    input.checked = labelPrefs[key];
+    input.addEventListener('change', () => {
+      labelPrefs[key] = input.checked;
+      try {
+        window.localStorage.setItem(LABEL_PREFS_KEY, JSON.stringify(labelPrefs));
+      } catch (_) {
+        // 覚えられなくても、この画面の間は効く
+      }
+      redraw();
+    });
+  });
+
   // app.js は DOMContentLoaded で地図を組み立てるので、window.map が出てから繋ぐ。
   /*
    * **見張るのは 60 秒まで。** 地図データの取得に失敗すると window.graphData は

@@ -239,6 +239,22 @@ require __DIR__ . '/_inc/partials/page-header.php';
                       <strong id="km-node-count"><?= (int) $nodeCount ?></strong>
                     </div>
                     <div id="km-editor-status" class="mt-2 text-body-secondary"></div>
+                    <?php /* 地点の札に出すもの(2026-10-23、利用者の指示「UUID と座標、先生の名前表示は ON-OFF で切り替え」)。
+                             この画面の閲覧者の手元(localStorage)に覚える。map-editor.js が app.js の札を描き直す */ ?>
+                    <hr class="my-2">
+                    <div class="fs-7 text-body-secondary mb-1" data-i18n="page.mapEditor.labelGroup">地点の札に出すもの</div>
+                    <div class="form-check form-switch">
+                      <input class="form-check-input km-label-pref" type="checkbox" role="switch" id="km-label-pref-id" data-km-label-pref="id" checked>
+                      <label class="form-check-label" for="km-label-pref-id" data-i18n="page.mapEditor.labelId">ID(UUID)</label>
+                    </div>
+                    <div class="form-check form-switch">
+                      <input class="form-check-input km-label-pref" type="checkbox" role="switch" id="km-label-pref-xy" data-km-label-pref="xy" checked>
+                      <label class="form-check-label" for="km-label-pref-xy" data-i18n="page.mapEditor.labelXy">座標</label>
+                    </div>
+                    <div class="form-check form-switch">
+                      <input class="form-check-input km-label-pref" type="checkbox" role="switch" id="km-label-pref-names" data-km-label-pref="names" checked>
+                      <label class="form-check-label" for="km-label-pref-names" data-i18n="page.mapEditor.labelNames">先生の名前</label>
+                    </div>
                   </div>
                 </div>
               </div>

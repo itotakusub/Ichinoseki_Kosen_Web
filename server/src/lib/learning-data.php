@@ -277,11 +277,12 @@ function km_learning_changes(PDO $pdo, string $kind, int $since): array
 
 /**
  * 消す(管理者)。行は残して中身を空にし、通し番号を振り直す(アプリが「消えた」と知るため)。消した数を返す。
+ * **消す前に中身を控えに書く**(2026-10-23。lib/learning-backup.php。管理画面「バックアップ」で見る・戻す)。控えを書けなければ消さない(例外)。
  *
  * @param 'all'|'floor'|'nodes' $scope
  * @param list<string> $nodeUuids
  */
-function km_learning_delete(PDO $pdo, string $kind, string $scope, ?string $floor, array $nodeUuids): int
+function km_learning_delete(PDO $pdo, string $kind, string $scope, ?string $floor, array $nodeUuids, ?string $deletedBy = null): int
 {
     km_learning_ensure_tables($pdo);
     $table = $kind === 'samples' ? 'km_learning_samples' : 'km_learning_evaluations';
@@ -304,11 +305,33 @@ function km_learning_delete(PDO $pdo, string $kind, string $scope, ?string $floo
     } elseif ($scope !== 'all') {
         throw new InvalidArgumentException('消す範囲が違います。');
     }
-    $ids = $pdo->prepare("SELECT id FROM {$table} WHERE {$where}");
-    $ids->execute($params);
+    $columns = $kind === 'samples'
+        ? 'id, sample_uuid, node_uuid, floor_id, x, y, rssi_json, altitude_meters, sample_count, measured_at_millis'
+        : 'id, body';
+    $select = $pdo->prepare("SELECT {$columns} FROM {$table} WHERE {$where}");
+    $select->execute($params);
+    $rows = $select->fetchAll(PDO::FETCH_ASSOC);
+    // 控え(配信 km_learning_changes と同じ項目)。書けなければ例外で止まり、何も消さない
+    require_once __DIR__ . '/learning-backup.php';
+    km_learning_backup_save($pdo, $kind, $scope, $floor, array_map(static function (array $row) use ($kind): array {
+        if ($kind !== 'samples') {
+            return json_decode((string) $row['body'], true) ?: [];
+        }
+        return [
+            'sampleUuid' => (string) $row['sample_uuid'],
+            'nodeUuid' => (string) $row['node_uuid'],
+            'floor' => (string) $row['floor_id'],
+            'x' => (float) $row['x'],
+            'y' => (float) $row['y'],
+            'rssiByBssid' => json_decode((string) $row['rssi_json'], true) ?: (object) [],
+            'altitudeMeters' => $row['altitude_meters'] === null ? null : (float) $row['altitude_meters'],
+            'sampleCount' => (int) $row['sample_count'],
+            'measuredAtMillis' => (int) $row['measured_at_millis'],
+        ];
+    }, $rows), $deletedBy);
     $update = $pdo->prepare("UPDATE {$table} SET deleted = 1, seq = ?{$clear} WHERE id = ?");
     $count = 0;
-    foreach ($ids->fetchAll(PDO::FETCH_COLUMN) as $id) {
+    foreach (array_column($rows, 'id') as $id) {
         $update->execute([km_learning_next_seq($pdo), (int) $id]);
         $count++;
     }

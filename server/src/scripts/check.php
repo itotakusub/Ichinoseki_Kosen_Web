@@ -3257,6 +3257,13 @@ function km_check_staff_nodes(): void
     check_bool('押す前に確認を出す', str_contains($admin, 'window.confirm('));
     check_bool('サイドバーに教職員の地点がある', str_contains($src('admin/_inc/partials/sidebar.php'), './staff-nodes.php'));
     check_bool('地図編集に地点の ID を出す', str_contains($src('admin/map-editor.php'), 'id="km-node-uid"') && str_contains($src('admin/assets/js/map-editor.js'), "getElementById('km-node-uid')"));
+    // 2026-10-23(利用者の指示): 札の ID・座標・先生の名前を切り替える。既定は全部 ON・手元に覚える・app.js の札がそれに従う
+    $editorJs = $src('admin/assets/js/map-editor.js');
+    $appJsForLabels = $src('Main/app.js');
+    check_bool('地図編集: 札の ID・座標・先生の名前を切り替えられる', substr_count($src('admin/map-editor.php'), 'class="form-check-input km-label-pref"') === 3
+        && str_contains($editorJs, "const labelPrefs = { id: true, xy: true, names: true };") && str_contains($editorJs, 'window.kmAdminLabelPrefs = labelPrefs;')
+        && str_contains($appJsForLabels, 'const prefs = window.kmAdminLabelPrefs || { id: true, xy: true, names: true };')
+        && str_contains($appJsForLabels, 'const name = prefs.names ? displayNameFor(node) : (node.alias || node.name);'));
     $legal = $src('lib/legal.php');
     check_bool('プライバシーポリシーに担当の地点の編集がある', str_contains($legal, '**担当の地点の編集:**'));
     check_bool('プライバシーポリシー: 承認するまで反映しないと書いてある', str_contains($legal, '送った内容は**すぐには地図に反映されません。**'));
@@ -7460,6 +7467,30 @@ function km_check_layout(): void
         && str_contains($privacyForLikes, 'アプリの「いいね」(場所・端末ごとの印・送り元の印・日時') && str_contains($privacyForLikes, 'もう一度押して外した時点で削除されます'));
     check_bool('管理画面: ポスターの画面で地点ごとのいいねを見て 0 に戻せる・記録に文言', str_contains((string) file_get_contents(__DIR__ . '/../admin/posters.php'), "if (\$formAction === 'likes_reset') {")
         && isset(KM_ADMIN_LOG_ACTION_LABELS['node.likes_reset']));
+
+    /*
+     * バックアップ(2026-10-23、利用者の指示「サーバーでもバックアップデータを見れるように」)。
+     * 地図のバックアップを管理画面で見る・落とす・消す。Wi-Fi の学習データは**消す前に控えを取り、取れなければ消さない**。控えから戻せる
+     */
+    km_check_heading('backups: 地図のバックアップと Wi-Fi 学習の控え(2026-10-23)');
+    require_once __DIR__ . '/../lib/map-backup.php';
+    require_once __DIR__ . '/../lib/learning-backup.php';
+    check('地図の内訳: 階ごとの地点・線・イベント・氏名の入った地点', ['floors' => ['1F' => 2, 'OUTSIDE' => 1], 'nodes' => 3, 'lines' => 1, 'events' => 1, 'occupants' => 1],
+        km_map_backup_summary('{"format":"kosenmap-map","formatVersion":2,"map":{"version":10,"nodes":[{"uuid":"a","floor":"1F","occupantName":"架空"},{"uuid":"b","floor":"1F"},{"uuid":"c","floor":"OUTSIDE"}],"lines":[{"startNodeUuid":"a","endNodeUuid":"b"}],"events":[{"uuid":"e"}]}}'));
+    check('地図の内訳: 地図でなければ null', null, km_map_backup_summary('{"x":1}'));
+    check('学習の内訳: 階ごとの記録・地点の数・測った期間', ['floors' => ['1F' => 2, '2F' => 1], 'nodes' => 2, 'from' => 1760000000000, 'to' => 1760000500000],
+        km_learning_backup_summary([['nodeUuid' => 'a', 'floor' => '2F', 'measuredAtMillis' => 1760000500000], ['nodeUuid' => 'a', 'floor' => '1F', 'measuredAtMillis' => 1760000000000], ['nodeUuid' => 'b', 'floor' => '1F']]));
+    $learningLib = (string) file_get_contents(__DIR__ . '/../lib/learning-data.php');
+    check_bool('学習データを消す前に控えを書く(書けなければ例外で何も消さない)', strpos($learningLib, 'km_learning_backup_save($pdo, $kind, $scope, $floor,') !== false
+        && strpos($learningLib, 'km_learning_backup_save($pdo, $kind, $scope, $floor,') < strpos($learningLib, 'UPDATE {$table} SET deleted = 1'));
+    check_bool('控え: 保存名は表からだけ・壊れていれば読まない(SHA-256)', str_contains((string) file_get_contents(__DIR__ . '/../lib/learning-backup.php'), "preg_match('/\\A[0-9a-f]{32}\\.json\\.gz\\z/', \$name)")
+        && str_contains((string) file_get_contents(__DIR__ . '/../lib/learning-backup.php'), "hash_equals((string) \$row['sha256'], hash('sha256', \$json))"));
+    $backupsPage = (string) file_get_contents(__DIR__ . '/../admin/backups.php');
+    check_bool('管理画面: バックアップを見る・落とす・消す・控えを戻す(消す・戻すは書き込みの権限と CSRF)', str_contains($backupsPage, "require __DIR__ . '/_inc/guard.php';")
+        && str_contains($backupsPage, "if (\$formAction === 'map_delete') {") && str_contains($backupsPage, "if (\$formAction === 'learning_restore') {")
+        && str_contains($backupsPage, '!km_csrf_verify()') && substr_count($backupsPage, '<?php if ($KM_ADMIN_CAN_WRITE): ?>') === 2
+        && str_contains((string) file_get_contents(__DIR__ . '/../admin/_inc/partials/sidebar.php'), '<a href="./backups.php" class="<?= $link(\'backups\') ?>">'));
+    check_bool('監査ログ: 落とす・戻すに文言', isset(KM_ADMIN_LOG_ACTION_LABELS['map.backup_download'], KM_ADMIN_LOG_ACTION_LABELS['learning.backup_download'], KM_ADMIN_LOG_ACTION_LABELS['learning.backup_restore']));
 
     km_check_heading('map-node-stairs: 階段の上り口・下り口の向き(2026-10-22)');
     require_once __DIR__ . '/../lib/app-map-convert.php';

@@ -105,16 +105,25 @@ if ($action === 'delete') {
     $scope = (string) ($input['scope'] ?? '');
     $floor = isset($input['floor']) && is_string($input['floor']) ? $input['floor'] : null;
     $nodes = is_array($input['nodeUuids'] ?? null) ? $input['nodeUuids'] : [];
+    // 控え(lib/learning-backup.php)の「消した人」。アクセストークンには表示名が入らないので Logto から引く(api/map-backup.php と同じ)
+    $deletedBy = (string) ($principal['username'] ?? '');
     try {
-        $count = km_learning_delete($pdo, $kind, $scope, $floor, $nodes);
+        require_once __DIR__ . '/../lib/logto-management.php';
+        $deletedBy = km_logto_user_display_name((string) ($principal['subject'] ?? '')) ?? $deletedBy;
+    } catch (Throwable $exception) {
+        error_log('api/learning.php display name: ' . $exception->getMessage());
+    }
+    try {
+        $count = km_learning_delete($pdo, $kind, $scope, $floor, $nodes, $deletedBy);
     } catch (InvalidArgumentException $exception) {
         respond(['success' => false, 'message' => $exception->getMessage()], 400);
     } catch (Throwable $exception) {
+        // 控えを書けなかったときもここ(消していない)
         error_log('api/learning.php delete failed: ' . $exception->getMessage());
-        respond(['success' => false, 'message' => '消せませんでした。'], 500);
+        respond(['success' => false, 'message' => '消せませんでした(消す前の控えを取れなかったときは消しません)。'], 500);
     }
     km_admin_log_record('settings', 'learning.delete', ($kind === 'samples' ? '学習データ' : '評価') . ' ' . $count . ' 件(' . $scope . ($floor !== null ? ' ' . $floor : '') . ')');
-    respond(['success' => true, 'deleted' => $count, 'message' => ($kind === 'samples' ? '学習データ' : '評価') . "を {$count} 件消しました(全員の端末から、次の同期で消えます)。"]);
+    respond(['success' => true, 'deleted' => $count, 'message' => ($kind === 'samples' ? '学習データ' : '評価') . "を {$count} 件消しました(全員の端末から、次の同期で消えます。管理画面の「バックアップ」に控えがあります)。"]);
 }
 
 respond(['success' => false, 'message' => 'action が違います。'], 400);

@@ -814,11 +814,17 @@ document.addEventListener('DOMContentLoaded', async () => {
              * style 属性には nonce もハッシュも効かない(`lib/csp.php`)。
              * ここは以前インラインの style を持っており、**効かないまま気付かれていなかった。**
              */
-            tooltipContent = `<div class="km-admin-tip">
-                <span class="km-admin-tip-id">${escapeHtml(id)}</span><br>
-                ${escapeHtml(displayNameFor(node))}<br>
-                <span class="km-admin-tip-xy">(${node.x}, ${node.y})</span>
-            </div>`;
+            /*
+             * 出すもの(ID・座標・先生の名前)は地図編集の切り替えに従う(2026-10-23。admin/map-editor.php・map-editor.js)。
+             * 切り替えが無い画面では今までどおり全部出す
+             */
+            const prefs = window.kmAdminLabelPrefs || { id: true, xy: true, names: true };
+            const name = prefs.names ? displayNameFor(node) : (node.alias || node.name);
+            tooltipContent = '<div class="km-admin-tip">'
+                + (prefs.id ? `<span class="km-admin-tip-id">${escapeHtml(id)}</span><br>` : '')
+                + escapeHtml(name)
+                + (prefs.xy ? `<br><span class="km-admin-tip-xy">(${node.x}, ${node.y})</span>` : '')
+                + '</div>';
         }
 
         /*

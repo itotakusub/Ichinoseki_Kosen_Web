@@ -153,6 +153,56 @@ function km_map_backup_find(PDO $pdo, int $id): ?array
     return is_array($row) ? $row : null;
 }
 
+/**
+ * 中身(解凍した JSON)を読む。SHA-256 を確かめる(2026-10-23。管理画面「バックアップ」で見る・落とす)。
+ */
+function km_map_backup_read(array $row): string
+{
+    $path = km_map_backup_path($row);
+    $gz = is_file($path) ? (string) file_get_contents($path) : '';
+    $json = $gz === '' ? false : gzdecode($gz);
+    if (!is_string($json) || !hash_equals((string) $row['sha256'], hash('sha256', $json))) {
+        throw new RuntimeException('バックアップのファイルが見つからないか、壊れています。');
+    }
+    return $json;
+}
+
+/**
+ * 内訳(階ごとの地点の数・線・イベント・氏名の入った地点の数)。**純粋関数**(scripts/check.php が試す)。
+ * 読めなければ null。
+ *
+ * @return array{floors:array<string,int>, nodes:int, lines:int, events:int, occupants:int}|null
+ */
+function km_map_backup_summary(string $json): ?array
+{
+    require_once __DIR__ . '/app-map.php';
+    $map = km_app_map_decode_snapshot($json);
+    if ($map === null) {
+        return null;
+    }
+    $floors = [];
+    $occupants = 0;
+    foreach ((array) $map->nodes as $node) {
+        if (!($node instanceof stdClass)) {
+            continue;
+        }
+        $floor = (string) ($node->floor ?? '?');
+        $floors[$floor] = ($floors[$floor] ?? 0) + 1;
+        if (trim((string) ($node->occupantName ?? '')) !== '') {
+            $occupants++;
+        }
+    }
+    ksort($floors, SORT_NATURAL);
+
+    return [
+        'floors' => $floors,
+        'nodes' => array_sum($floors),
+        'lines' => count((array) $map->lines),
+        'events' => isset($map->events) && is_array($map->events) ? count($map->events) : 0,
+        'occupants' => $occupants,
+    ];
+}
+
 /** 中身のファイルのパス。**保存名は表からだけ取る**(利用者の入力をパスに使わない)。 */
 function km_map_backup_path(array $row): string
 {
