@@ -92,7 +92,12 @@ try {
     // 中身を見る(内訳)
     if (($viewId = $idParam('map_view')) > 0) {
         $row = km_map_backup_find($pdo, $viewId);
-        $mapView = $row === null ? null : ['id' => $viewId, 'summary' => km_map_backup_summary(km_map_backup_read($row))];
+        if ($row !== null) {
+            $json = km_map_backup_read($row);
+            // パスワード付き(2026-10-23)はサーバーで開けない
+            $locked = km_map_backup_is_locked($json);
+            $mapView = ['id' => $viewId, 'locked' => $locked, 'summary' => $locked ? null : km_map_backup_summary($json)];
+        }
     }
     if (($viewId = $idParam('learning_view')) > 0) {
         $row = km_learning_backup_find($pdo, $viewId);
@@ -155,22 +160,25 @@ require __DIR__ . '/_inc/partials/page-header.php';
 
             <div class="card mb-4" id="map-backups">
               <div class="card-header">
-                <h3 class="card-title">地図のバックアップ(新しい方から <?= (int) KM_MAP_BACKUP_KEEP ?> 件)</h3>
+                <h3 class="card-title">地図のバックアップ(置いた人ごとに新しい方から <?= (int) KM_MAP_BACKUP_KEEP ?> 件)</h3>
               </div>
               <div class="card-body">
                 <p class="text-body-secondary fs-7 mb-2">
-                  管理アプリの「サーバーにバックアップ」で置いたもの。地点・線・イベント(Wi-Fi の学習は含まない)。
-                  落とした JSON は管理アプリの「ノードのインポート」で読めます。中身に教職員の氏名が入ることがあります。
+                  管理アプリの「サーバーにバックアップ」で置いたもの。地点・線・イベントと、「学習あり」のものは Wi-Fi の学習も入っています。
+                  落とした JSON は管理アプリの「ノードのインポート」(学習ありは「地図のインポート」)で読めます。中身に教職員の氏名が入ることがあります。
+                  🔒 はパスワード付きで、サーバーでは中身を開けません(管理アプリでパスワードを入れて戻します)。学習の協力者が置いたものも並びます。
                 </p>
                 <?php if ($mapView !== null): ?>
                   <div class="alert alert-info">
                     <strong>#<?= (int) $mapView['id'] ?> の中身</strong>
-                    <?php if ($mapView['summary'] === null): ?>
+                    <?php if ($mapView['locked']): ?>
+                      : パスワード付きのため、サーバーでは中身を開けません。
+                    <?php elseif ($mapView['summary'] === null): ?>
                       : 地図として読めませんでした。
                     <?php else: ?>
                       : 地点 <?= (int) $mapView['summary']['nodes'] ?>(<?php
                         echo km_e(implode('・', array_map(static fn ($f, $n) => $floorName((string) $f) . ' ' . $n, array_keys($mapView['summary']['floors']), $mapView['summary']['floors'])));
-                      ?>)・線 <?= (int) $mapView['summary']['lines'] ?>・イベント <?= (int) $mapView['summary']['events'] ?>・氏名の入った地点 <?= (int) $mapView['summary']['occupants'] ?>
+                      ?>)・線 <?= (int) $mapView['summary']['lines'] ?>・イベント <?= (int) $mapView['summary']['events'] ?>・氏名の入った地点 <?= (int) $mapView['summary']['occupants'] ?>・学習地点 <?= (int) $mapView['summary']['fingerprints'] ?>
                     <?php endif; ?>
                   </div>
                 <?php endif; ?>
@@ -188,7 +196,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
                             <td><?= km_e($backup['by']) ?></td>
                             <td><?= $backup['nodeCount'] === null ? '—' : (int) $backup['nodeCount'] ?></td>
                             <td><?= km_e($size($backup['bytes'])) ?></td>
-                            <td><?= km_e($backup['note']) ?></td>
+                            <td><?= km_e($backup['note']) ?><?php if ($backup['withLearning']): ?> <span class="badge text-bg-info">学習あり</span><?php endif; ?><?php if ($backup['locked']): ?> <span class="badge text-bg-secondary" title="パスワード付き">🔒</span><?php endif; ?></td>
                             <td class="text-nowrap">
                               <a class="btn btn-outline-secondary btn-sm" href="./backups.php?map_view=<?= (int) $backup['id'] ?>#map-backups">中身</a>
                               <a class="btn btn-outline-primary btn-sm" href="./backups.php?map_download=<?= (int) $backup['id'] ?>">ダウンロード</a>

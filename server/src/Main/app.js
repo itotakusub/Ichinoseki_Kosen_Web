@@ -229,9 +229,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     const postersByNode = new Map();
     (graphData.posters || []).forEach(function (poster) {
         postersById.set(Number(poster.id), poster);
-        if (!poster.nodeId) return;
-        if (!postersByNode.has(poster.nodeId)) postersByNode.set(poster.nodeId, []);
-        postersByNode.get(poster.nodeId).push(poster);
+        // 企画の番号で置いたポスターは、その番号の地点全部に出す(2026-10-23。nodeIds。無い古い応答は nodeId だけ)
+        const nodeIds = Array.isArray(poster.nodeIds) && poster.nodeIds.length > 0 ? poster.nodeIds : (poster.nodeId ? [poster.nodeId] : []);
+        nodeIds.forEach(function (nodeId) {
+            if (!postersByNode.has(nodeId)) postersByNode.set(nodeId, []);
+            postersByNode.get(nodeId).push(poster);
+        });
+    });
+
+    /*
+     * ---- 企画のスケジュール(2026-10-23、lib/event-schedule.php) ----
+     * 一般に出す印の行だけが届く。場所は企画の番号から引いた地点(nodeIds)。地点の詳細に「この場所の予定」を出す。
+     * 一覧は Main/event-schedule.js が出す
+     */
+    const scheduleByNode = new Map();
+    (graphData.schedule || []).forEach(function (entry) {
+        (entry.nodeIds || []).forEach(function (nodeId) {
+            if (!scheduleByNode.has(nodeId)) scheduleByNode.set(nodeId, []);
+            scheduleByNode.get(nodeId).push(entry);
+        });
     });
     const focusPosterMeta = document.querySelector('meta[name="km-focus-poster"]');
     const focusPosterId = focusPosterMeta ? Number(focusPosterMeta.getAttribute('content')) : 0;
@@ -1020,7 +1036,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             rows += `<a class="km-detail-link" href="${escapeHtml(node.linkUrl)}" target="_blank" rel="noopener noreferrer">`
                 + `${escapeHtml(node.linkLabel || 'くわしく見る')} ↗</a>`;
         }
+        // 企画の番号(2026-10-23。管理アプリで振る)
+        if (Array.isArray(node.projects) && node.projects.length > 0) {
+            rows += `<div class="km-detail-row"><span>企画</span><b>${node.projects.map(escapeHtml).join('・')}</b></div>`;
+        }
         const posters = posterListHtml(id);
+        const schedule = scheduleListHtml(id);
 
         /*
          * **押せないボタンを出さない。** 目的地にできない地点で
@@ -1061,12 +1082,59 @@ document.addEventListener('DOMContentLoaded', async () => {
                     <span class="km-detail-floor">${escapeHtml(floorLabel)}</span>
                 </div>
                 ${rows}
+                ${schedule}
                 ${posters}
                 ${enter}
                 ${actions}
                 ${bookmark}
             </div>
         `;
+    }
+
+    /** スケジュールの日時を「11/3 10:00〜11:00」の形に(サーバーは Y-m-d H:i:s。端末の時刻帯に関係なく字のまま読む) */
+    function scheduleTimeLabel(entry) {
+        const parse = (value) => /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})/.exec(String(value || ''));
+        const start = parse(entry.startsAt);
+        if (!start) return '';
+        const end = parse(entry.endsAt);
+        const day = `${Number(start[2])}/${Number(start[3])}`;
+        let label = `${day} ${start[4]}:${start[5]}`;
+        if (end) {
+            label += end[1] === start[1] && end[2] === start[2] && end[3] === start[3]
+                ? `〜${end[4]}:${end[5]}`
+                : `〜${Number(end[2])}/${Number(end[3])} ${end[4]}:${end[5]}`;
+        }
+        return label;
+    }
+    window.kmScheduleTimeLabel = scheduleTimeLabel;
+
+    /** 予定が開催中か(始まり〜終わり。終わりが無ければ始まりから 1 時間)。字の日時を端末の時刻として比べる */
+    function scheduleIsNow(entry, now) {
+        const toDate = (value) => {
+            const m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})/.exec(String(value || ''));
+            return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5])) : null;
+        };
+        const start = toDate(entry.startsAt);
+        if (!start) return false;
+        const end = toDate(entry.endsAt) || new Date(start.getTime() + 3600000);
+        return start <= now && now < end;
+    }
+    window.kmScheduleIsNow = scheduleIsNow;
+
+    /** 地点の詳細に出す「この場所の予定」(2026-10-23)。開催中には印を付ける */
+    function scheduleListHtml(nodeId) {
+        const list = scheduleByNode.get(nodeId) || [];
+        if (list.length === 0) return '';
+        const now = new Date();
+        return `<div class="km-schedule-list" aria-label="この場所の予定"><div class="km-schedule-head">この場所の予定</div>${list.map(function (entry) {
+            const live = scheduleIsNow(entry, now);
+            return `<div class="km-schedule-item${live ? ' is-live' : ''}">
+                <span class="km-schedule-time">${escapeHtml(scheduleTimeLabel(entry))}${live ? ' <em>開催中</em>' : ''}</span>
+                <b class="km-schedule-title">${escapeHtml(entry.title)}</b>
+                ${entry.organizer ? `<span class="km-schedule-org">${escapeHtml(entry.organizer)}</span>` : ''}
+                ${entry.description ? `<span class="km-schedule-desc">${escapeHtml(entry.description)}</span>` : ''}
+            </div>`;
+        }).join('')}</div>`;
     }
 
     /**

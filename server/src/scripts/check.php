@@ -2559,8 +2559,19 @@ function km_check_learning_data(): void
     km_check_heading('learning-data: 口');
     $read = static fn (string $path): string => (string) @file_get_contents($src . '/' . $path);
     $api = $read('api/learning.php');
-    $assertAt = strpos($api, "logto_assert_permissions(\$principal, LOGTO_ADMIN_PERMISSIONS);\n\$uploadedBy");
-    check_bool('送る・消すは管理者のトークンだけ', $assertAt !== false && $assertAt < (int) strpos($api, 'km_learning_store(') && $assertAt < (int) strpos($api, 'km_learning_delete('));
+    // 2026-10-23 から学習の協力者(LOGTO_LEARNING_PERMISSION)も送れる。消せるのは自分が送った分だけ
+    $assertAt = strpos($api, "\$principal = \$requireLearner();\n\$isAdminWriter = (\$principal['is_admin'] ?? 0) === 1;\n\$uploadedBy");
+    check_bool('送る・消すは管理者か学習の協力者のトークンだけ', $assertAt !== false && $assertAt < (int) strpos($api, 'km_learning_store(') && $assertAt < (int) strpos($api, 'km_learning_delete(')
+        && str_contains($api, "if (!km_learning_principal_allowed(\$principal)) {\n        respond(['success' => false,"));
+    check('学習を扱えるのは管理者と学習の協力者だけ(組織の先生・運営・ログインだけは不可)', [true, true, false, false, false],
+        [km_learning_principal_allowed(['is_admin' => 1]), km_learning_principal_allowed(['is_admin' => 0, 'is_learner' => true]),
+         km_learning_principal_allowed(['is_admin' => 0, 'is_teacher' => true, 'permissions' => ['staff:event:access']]), km_learning_principal_allowed(['is_admin' => 0]), km_learning_principal_allowed(null)]);
+    check_bool('協力者が消すのは自分が送った分だけ(空の sub でも全員の分に倒さない)', str_contains($api, "\$isAdminWriter ? null : (\$uploadedBy ?? '')")
+        && str_contains($learningLibForDelete = (string) file_get_contents($src . '/lib/learning-data.php'), "if (\$onlyUploadedBy !== null) {")
+        && str_contains($learningLibForDelete, "\$where .= ' AND uploaded_by = ?';"));
+    check_bool('協力者の権限は組織トークンからは生まれない・logto_me が返す', str_contains($read('logto_guard.php'), "'is_learner' => in_array(LOGTO_LEARNING_PERMISSION, \$permissions, true),")
+        && strpos($read('logto_guard.php'), "\$permissions = \$org['permissions'];") < strpos($read('logto_guard.php'), "'is_learner' =>")
+        && str_contains($read('logto_me.php'), "'isLearner' => (\$principal['is_learner'] ?? false) === true,"));
     check_bool('学習データを読むのはアクセスコードか管理者', str_contains($api, "km_learning_code_allowed(\$pdo, (string) (\$input['code'] ?? ''))"));
     check_bool('評価を読むのは管理者だけ', strpos($api, "if (\$kind === 'evaluations') {") < strpos($api, 'km_learning_changes('));
     check_bool('コードは URL ではなく本文で受ける(POST だけ)', str_contains($api, "require_method('POST');") && !str_contains($api, '$_GET'));
@@ -4708,8 +4719,11 @@ function km_check_hardening(): void
      */
     km_check_heading('map-backup: 管理者だけ・形だけ確かめる・保存名は表から・20 件');
     $backupApi = $file('src/api/map-backup.php');
-    check_bool('管理者の権限を、どの方法でも最初に確かめる', preg_match('/\$principal = logto_require_principal\(\);\nlogto_assert_permissions\(\$principal, LOGTO_ADMIN_PERMISSIONS\);/', $backupApi) === 1
-        && strpos($backupApi, 'logto_assert_permissions') < strpos($backupApi, 'km_map_backup_list('));
+    // 2026-10-23 から学習の協力者も置ける。協力者が見る・戻す・消すのは自分が置いた分だけ
+    check_bool('管理者か学習の協力者の権限を、どの方法でも最初に確かめる', str_contains($backupApi, "\$principal = logto_require_principal();\n\$isAdmin = (\$principal['is_admin'] ?? 0) === 1;\nif (!\$isAdmin && (\$principal['is_learner'] ?? false) !== true) {")
+        && strpos($backupApi, "(\$principal['is_learner'] ?? false) !== true") < strpos($backupApi, 'km_map_backup_list('));
+    check_bool('協力者は自分の分だけ(一覧・中身・消す)', str_contains($backupApi, "km_map_backup_list(\$pdo, \$ownerFilter)")
+        && substr_count($backupApi, "\$ownerFilter !== null && !hash_equals(\$ownerFilter, (string) \$row['user_sub'])") === 2);
     check_bool('置いた・戻した・消したをタイムラインに残す', str_contains($backupApi, "'map.backup_create'") && str_contains($backupApi, "'map.backup_restore'") && str_contains($backupApi, "'map.backup_delete'"));
     check_bool('nginx: 専用の口で本文を 16m まで・回数を数える', str_contains($nginx, "location = /api/map-backup.php {\n        client_max_body_size 16m;\n        limit_req zone=km_api burst=120 nodelay;"));
     require_once __DIR__ . '/../lib/map-backup.php';
@@ -4737,7 +4751,10 @@ function km_check_hardening(): void
     };
     check_bool('保存名は 32 桁の 16 進 + .json.gz だけ(../ などを通さない)', $pathRejected('../../config/db.local.php') && $pathRejected('a.json.gz')
         && !$pathRejected(str_repeat('a', 32) . '.json.gz'));
-    check_bool('残すのは新しい方から 20 件', KM_MAP_BACKUP_KEEP === 20 && str_contains($file('src/lib/map-backup.php'), "foreach (array_slice(\$rows, \$keep) as \$row) {\n        km_map_backup_remove_row(\$pdo, \$row);"));
+    check_bool('残すのは置いた人ごとに新しい方から 20 件', KM_MAP_BACKUP_KEEP === 20 && str_contains($file('src/lib/map-backup.php'), "if (\$seen[\$owner] > \$keep) {\n            km_map_backup_remove_row(\$pdo, \$row);"));
+    check('パスワード付きの包みも受け、見分ける(中身は読まない)', [true, false, true],
+        [km_map_backup_is_locked('{"format":"kosenmap-encrypted","formatVersion":1,"inner":"kosenmap-map","data":"x"}'), km_map_backup_is_locked('{"format":"kosenmap-map","formatVersion":2}'),
+         $backupOk('{"format":"kosenmap-encrypted","formatVersion":1,"inner":"kosenmap-map","data":"x"}')]);
 
     /*
      * ## ストリートビューの写真(2026-10-06。lib/panorama.php・api/panorama.php)
@@ -5132,7 +5149,8 @@ function km_check_hardening(): void
     check_bool('配信: 来場者版は閲覧不可の地点を落とした地図から一覧を作る', str_contains($appMapApi, 'km_panorama_manifest($pdo, km_panorama_uuids_of_map($map))')
         && preg_match('/\$loadDeliveredMap = static function \(\).*?return km_app_map_for_level\(\$map, \$contentLevel, \$consentedUuids\);/s', $appMapApi) === 1);
     // Android 側の厳格化(2026-10-22): 段は管理者・組織メンバー・イベント運営を分けて決め、組織メンバーには許可した地点を渡す
-    check_bool('配信: 段は管理者・組織メンバー・イベント運営を分けて決める(運営は教員室を見ない)', str_contains($appMapApi, '$contentLevel = km_app_map_content_level($isAdmin, $isTeacher, $isEventStaff, $namesAllowed, $consentedUuids);')
+    check_bool('配信: 段は管理者・組織メンバー・イベント運営を分けて決める(運営は教員室を見ない)', str_contains($appMapApi, '$contentLevel = km_app_map_content_level($isAdmin, $isTeacher || $isLearner, $isEventStaff, $namesAllowed, $consentedUuids);')
+        && str_contains($appMapApi, "\$isLearner = is_array(\$principal) && (\$principal['is_learner'] ?? false) === true;")
         && str_contains($appMapApi, '$consentedUuids = km_staff_node_consented_uuids($pdo);')
         && substr_count($appMapApi, 'km_app_map_cache_get($slug, $path, $contentLevel, null, $consentedUuids)') === 2);
     $nodeExtrasApi = $file('src/api/node-extras.php');
@@ -7343,7 +7361,8 @@ function km_check_layout(): void
         && $posterValidateError(['title' => 'a', 'nodeId' => '../etc/passwd']) !== ''
         && $posterValidateError(['title' => 'a', 'sortOrder' => '1.5']) !== '');
     $validatedPoster = km_poster_validate(['title' => ' 模擬店 ', 'description' => "a\r\nb", 'linkUrl' => '', 'nodeId' => '', 'sortOrder' => '-2', 'isEnabled' => true]);
-    check('入力: 空の URL・地点は null、改行は \n にそろえる', ['模擬店', "a\nb", null, null, -2, true], array_values($validatedPoster));
+    check('入力: 空の URL・地点・企画の番号は null、改行は \n にそろえる', ['模擬店', "a\nb", null, null, null, -2, true], array_values($validatedPoster));
+    check('入力: 企画の番号はそろえる・形の違うものは断る', ['A-1', true], [km_poster_validate(['title' => 'a', 'projectNo' => ' a－１ '])['projectNo'], $posterValidateError(['title' => 'a', 'projectNo' => 'A/1']) !== '']);
     check_bool('保存名は自分で採番した形だけ(パスをはみ出させない・SVG を通さない)', km_poster_stored_name_valid('poster_' . str_repeat('a', 32) . '.webp')
         && !km_poster_stored_name_valid('poster_' . str_repeat('a', 32) . '.svg') && !km_poster_stored_name_valid('../poster_' . str_repeat('a', 32) . '.png')
         && !km_poster_stored_name_valid('avatar_' . str_repeat('a', 32) . '.png'));
@@ -7388,7 +7407,7 @@ function km_check_layout(): void
         && str_contains((string) file_get_contents(__DIR__ . '/../admin/api/poster-preview.php'), "require dirname(__DIR__) . '/_inc/guard.php';"));
     check_bool('URL のプレビュー: POST と CSRF を見てから取りに行く', preg_match('/!== \'POST\'.*?km_csrf_verify\(\).*?km_poster_fetch_remote/s', (string) file_get_contents(__DIR__ . '/../admin/api/poster-preview.php')) === 1);
     $mapDataLib = (string) file_get_contents(__DIR__ . '/../lib/map-data.php');
-    check_bool('地図データ: 錠の内側でだけポスターを載せ、地点に URL を付ける', str_contains($mapDataLib, "'posters' => km_posters_public(\$pdo, \$overlay['events'] !== [], \$nodesById),")
+    check_bool('地図データ: 錠の内側でだけポスターを載せ、地点に URL を付ける', str_contains($mapDataLib, "'posters' => km_posters_public(\$pdo, \$overlay['events'] !== [], \$nodesById, \$shownProjectNodes),")
         && strpos($mapDataLib, "'posters' => km_posters_public(") > strpos($mapDataLib, 'if (!$viewUnlocked) {') && str_contains($mapDataLib, "\$node['linkUrl'] = \$nodeLinks[\$id]['url'];"));
     check_bool('公開ページ: ?poster= は数字の形だけ確かめる・🖼️ は出しているポスターがあるときだけ', str_contains($homeCode, "preg_match('/^[1-9]\\d{0,9}\$/', \$posterParam) === 1")
         && str_contains($homeCode, '<?php if ($kmPosterCount > 0): ?>') && str_contains($homeCode, '<meta name="km-focus-poster" content="<?= km_home_e($kmFocusPoster) ?>">'));
@@ -7475,7 +7494,7 @@ function km_check_layout(): void
     km_check_heading('backups: 地図のバックアップと Wi-Fi 学習の控え(2026-10-23)');
     require_once __DIR__ . '/../lib/map-backup.php';
     require_once __DIR__ . '/../lib/learning-backup.php';
-    check('地図の内訳: 階ごとの地点・線・イベント・氏名の入った地点', ['floors' => ['1F' => 2, 'OUTSIDE' => 1], 'nodes' => 3, 'lines' => 1, 'events' => 1, 'occupants' => 1],
+    check('地図の内訳: 階ごとの地点・線・イベント・氏名の入った地点・学習地点', ['floors' => ['1F' => 2, 'OUTSIDE' => 1], 'nodes' => 3, 'lines' => 1, 'events' => 1, 'occupants' => 1, 'fingerprints' => 0],
         km_map_backup_summary('{"format":"kosenmap-map","formatVersion":2,"map":{"version":10,"nodes":[{"uuid":"a","floor":"1F","occupantName":"架空"},{"uuid":"b","floor":"1F"},{"uuid":"c","floor":"OUTSIDE"}],"lines":[{"startNodeUuid":"a","endNodeUuid":"b"}],"events":[{"uuid":"e"}]}}'));
     check('地図の内訳: 地図でなければ null', null, km_map_backup_summary('{"x":1}'));
     check('学習の内訳: 階ごとの記録・地点の数・測った期間', ['floors' => ['1F' => 2, '2F' => 1], 'nodes' => 2, 'from' => 1760000000000, 'to' => 1760000500000],
@@ -7623,6 +7642,80 @@ function km_check_layout(): void
         && str_contains((string) file_get_contents(__DIR__ . '/../lib/app-map-convert.php'), "km_map_area_apply(\$result['map'], km_map_node_area_all(\$pdo));")
         && str_contains((string) file_get_contents(__DIR__ . '/../lib/map-data.php'), "if ((string) (\$node['type'] ?? '') === 'area') {"));
 
+    /*
+     * 企画の番号・スケジュール・イベント中に出す地点(2026-10-23、利用者の指示)。番号はアプリで振り、Website は番号から
+     * ポスターの置き場・スケジュールの場所を決める。1 つの地点に番号がいくつも。イベント中は「イベントの地点」だけを出す
+     */
+    km_check_heading('map-node-projects・event-schedule: 企画の番号とスケジュール(2026-10-23)');
+    require_once __DIR__ . '/../lib/map-node-projects.php';
+    require_once __DIR__ . '/../lib/event-schedule.php';
+    check('番号はそろえる(全角→半角・大文字・ダッシュ)・形の違うものは null', ['A-1', 'B2', 'C-3', null, null, null],
+        [km_map_project_number(' a-1 '), km_map_project_number('Ｂ２'), km_map_project_number('c−3'), km_map_project_number('A/1'), km_map_project_number(str_repeat('A', 17)), km_map_project_number('')]);
+    check('一覧は重複を 1 つ・入れた順・10 個まで', [['A-1', 'B-2'], 10], [km_map_project_numbers(['a-1', 'B-2', 'A-1', 'x/y']), count(km_map_project_numbers(array_map(static fn ($n) => 'P' . $n, range(1, 15))))]);
+    $projectMap = json_decode('{"version":10,"nodes":[
+        {"uuid":"9d1cebb3-9aa6-4fca-8f08-9ca965237b9e","x":10,"y":20,"useWifi":true,"title":"講義室","subtitle":"","type1":"room","type2":"","note":"","floor":"1F","projectNumbers":["a-1","A-2"]},
+        {"uuid":"r2","x":30,"y":40,"useWifi":true,"title":"倉庫","subtitle":"","type1":"room","type2":"","note":"","floor":"1F"}
+    ],"lines":[]}');
+    $projectWeb = km_app_map_to_web($projectMap);
+    check('アプリ → Web: 地点ごとの番号を取り出す(番号の無い地点は入れない)', ['9d1cebb3-9aa6-4fca-8f08-9ca965237b9e' => ['A-1', 'A-2']], $projectWeb['projects']);
+    $projectBack = km_app_map_snapshot_from_rows(array_map(static fn (array $n): array => $n, $projectWeb['nodes']), [])['map'];
+    km_map_projects_apply($projectBack, $projectWeb['projects']);
+    check('Web → アプリ: 番号が戻る・番号の無い地点には項目を足さない', [['A-1', 'A-2'], false], [$projectBack->nodes[0]->projectNumbers ?? null, property_exists($projectBack->nodes[1], 'projectNumbers')]);
+    check('番号 → 地点: 出している地点だけ・番号の順', ['A-1' => ['n1', 'n2'], 'B-1' => ['n2']],
+        km_map_project_nodes(['n1' => ['A-1'], 'n2' => ['B-1', 'A-1'], 'n3' => ['A-1']], ['n1' => true, 'n2' => true]));
+    if (extension_loaded('pdo_sqlite')) {
+        $projectDb = new PDO('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
+        check('表が無ければ空(配信と公開の地図を止めない)', [[], []], [km_map_node_projects_all($projectDb), km_event_schedule_public($projectDb, [])]);
+        $projectDb->exec('CREATE TABLE km_map_node_projects (node_uuid TEXT, project_no TEXT, sort_order INT, PRIMARY KEY (node_uuid, project_no))');
+        $projectDb->exec("INSERT INTO km_map_node_projects VALUES ('old', 'Z-9', 0)");
+        check('取り込み: 表を丸ごと入れ替える・並びを保つ', [2, $projectWeb['projects']], [km_map_node_projects_sync($projectDb, $projectWeb['projects']), km_map_node_projects_all($projectDb)]);
+    }
+    $syncForProjects = (string) file_get_contents(__DIR__ . '/../lib/app-map-sync.php');
+    check_bool('取り込み: 番号の表は取引の前に作り、ノードを入れたあとに入れ替える・配信で足す', strpos($syncForProjects, 'km_map_node_projects_ensure_table($pdo);') < strpos($syncForProjects, '$pdo->beginTransaction();')
+        && strpos($syncForProjects, "km_map_node_projects_sync(\$pdo, \$converted['projects']);") > strpos($syncForProjects, '$insertNode->execute($values);')
+        && str_contains((string) file_get_contents(__DIR__ . '/../lib/app-map-convert.php'), "km_map_projects_apply(\$result['map'], km_map_node_projects_all(\$pdo));"));
+    $scheduleError = static function (array $input): string {
+        try {
+            km_event_schedule_validate($input);
+            return '';
+        } catch (InvalidArgumentException $exception) {
+            return $exception->getMessage();
+        }
+    };
+    check('スケジュールの入力: 番号と日時をそろえる・空は null', ['A-1', '展示', null, null, '2026-11-03 10:00:00', '2026-11-03 11:30:00', true],
+        array_values(km_event_schedule_validate(['projectNo' => 'a-1', 'title' => ' 展示 ', 'startsAt' => '2026-11-03T10:00', 'endsAt' => '2026-11-03 11:30', 'isPublic' => true])));
+    check_bool('スケジュールの入力: 名前・始まりは要る・終わりは始まりより後・番号と日付の形を見る', $scheduleError(['title' => '', 'startsAt' => '2026-11-03 10:00']) !== ''
+        && $scheduleError(['title' => 'a']) !== '' && $scheduleError(['title' => 'a', 'startsAt' => '2026-11-03 10:00', 'endsAt' => '2026-11-03 09:00']) !== ''
+        && $scheduleError(['title' => 'a', 'startsAt' => '2026-02-30 10:00']) !== '' && $scheduleError(['title' => 'a', 'projectNo' => 'A/1', 'startsAt' => '2026-11-03 10:00']) !== '');
+    check('公開: 一般に出す行だけ・場所は番号の地点(出している地点だけ)・印は外す', [[1, ['n1', 'n2']], [3, []]],
+        array_map(static fn (array $r): array => [$r['id'], $r['nodeIds']], km_event_schedule_public_rows([
+            ['id' => 1, 'projectNo' => 'A-1', 'title' => 'a', 'organizer' => '', 'description' => '', 'startsAt' => '2026-11-03 10:00:00', 'endsAt' => null, 'isPublic' => true],
+            ['id' => 2, 'projectNo' => 'A-1', 'title' => 'b', 'organizer' => '', 'description' => '', 'startsAt' => '2026-11-03 10:00:00', 'endsAt' => null, 'isPublic' => false],
+            ['id' => 3, 'projectNo' => 'Q-9', 'title' => 'c', 'organizer' => '', 'description' => '', 'startsAt' => '2026-11-03 10:00:00', 'endsAt' => null, 'isPublic' => true],
+        ], ['A-1' => ['n1', 'n2']])));
+    check('公開の行に「一般に出す」の印を残さない', false, array_key_exists('isPublic', km_event_schedule_public_rows([['id' => 1, 'projectNo' => null, 'title' => 'a', 'organizer' => '', 'description' => '', 'startsAt' => 'x', 'endsAt' => null, 'isPublic' => true]], [])[0]));
+    $mapDataForEvents = (string) file_get_contents(__DIR__ . '/../lib/map-data.php');
+    check('イベント中に出す地点: 番号・イベント中の名前・階段・出入口・トイレ・道は出す、ふつうの部屋は出さない', [true, true, true, true, true, true, false, false],
+        [km_map_event_node_visible(['type' => 'room', 'projects' => ['A-1']], false), km_map_event_node_visible(['type' => 'room'], true),
+         km_map_event_node_visible(['type' => 'stairs'], false), km_map_event_node_visible(['type' => 'entrance'], false),
+         km_map_event_node_visible(['type' => 'facility', 'name' => '男子トイレ'], false), km_map_event_node_visible(['type' => 'road'], false),
+         km_map_event_node_visible(['type' => 'room', 'name' => '講義室'], false), km_map_event_node_visible(['type' => 'facility', 'name' => '体育館'], false)]);
+    check_bool('地図データ: イベントの地点だけを出すのは有効なイベントがあり ON のとき・隠すのは印だけ(経路は通れる)・スケジュールとポスターは出している地点だけ', str_contains($mapDataForEvents, "if (\$overlay['events'] !== [] && (\$overlay['onlyEventNodes'] ?? false) && empty(\$node['hidden'])")
+        && str_contains($mapDataForEvents, "'schedule' => km_event_schedule_public(\$pdo, \$shownProjectNodes),")
+        && str_contains($mapDataForEvents, "km_map_project_nodes(\$projectsById, array_filter(\$nodesById, static fn (array \$n): bool => empty(\$n['hidden'])))")
+        && strpos($mapDataForEvents, "'schedule' =>") > strpos($mapDataForEvents, 'if (!$viewUnlocked) {'));
+    $eventsLib = (string) file_get_contents(__DIR__ . '/../lib/map-events.php');
+    check_bool('イベントの設定は別表・行が無ければ ON・子の表と一緒に消し、取り込みで入れ直す', str_contains($eventsLib, 'CREATE TABLE IF NOT EXISTS km_map_event_options (')
+        && in_array('km_map_event_options', KM_MAP_EVENT_CHILD_TABLES, true) && str_contains($eventsLib, "if (\$options[(int) \$eventId] ?? true) {")
+        && str_contains((string) file_get_contents(__DIR__ . '/../lib/map-event-import.php'), "'onlyEventNodes' => (\$event->onlyEventNodes ?? null) !== false,"));
+    $postersForProjects = (string) file_get_contents(__DIR__ . '/../lib/posters.php');
+    check_bool('ポスター: 企画の番号は別表・番号の地点全部に出す(地点の指定より先)・番号のあるものは広告にしない', str_contains($postersForProjects, 'CREATE TABLE IF NOT EXISTS km_poster_projects (')
+        && str_contains($postersForProjects, "\$nodeIds = \$projectNo !== '' ? (\$projectNodes[\$projectNo] ?? []) : (\$nodeId !== '' ? [\$nodeId] : []);")
+        && str_contains($postersForProjects, "'isAd' => (string) (\$row['nodeId'] ?? '') === '' && \$projectNo === '',"));
+    $schedulePage = (string) file_get_contents(__DIR__ . '/../admin/schedule.php');
+    check_bool('管理画面: スケジュールは guard の内側・CSRF・記録に文言・サイドバー', str_contains($schedulePage, "require __DIR__ . '/_inc/guard.php';") && str_contains($schedulePage, 'km_csrf_verify()')
+        && isset(KM_ADMIN_LOG_ACTION_LABELS['schedule.create'], KM_ADMIN_LOG_ACTION_LABELS['schedule.update'], KM_ADMIN_LOG_ACTION_LABELS['schedule.delete'], KM_ADMIN_LOG_ACTION_LABELS['schedule.public'])
+        && str_contains((string) file_get_contents(__DIR__ . '/../admin/_inc/partials/sidebar.php'), "./schedule.php"));
     km_check_heading('posters: 広告(重み 10%・必ず 1 件)・数・チュートリアルの終わりの知らせ(2026-10-21)');
     check('広告の重みは 10%(利用者の指示。全部同じ)', 10, KM_POSTER_AD_WEIGHT);
     check('広告が 1 件なら 100%・2 件なら 50%・10 件なら 10%・無ければ 0(表示しないわけではない)', [1.0, 0.5, 0.1, 0.0],

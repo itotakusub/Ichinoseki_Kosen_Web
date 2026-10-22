@@ -139,6 +139,18 @@ function km_map_events_ensure_tables(PDO $pdo): void
             UNIQUE KEY (app_uuid)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         SQL);
+
+    /*
+     * イベントの設定(2026-10-23)。**km_map_events に列を足さず、別表にする**(ALTER が無い)。
+     * only_event_nodes: イベント中は「イベントの地点」だけを出す(利用者の指示「イベント中ではイベントノードが設定されている場所のみ表示」)。
+     * **行が無ければ ON**(アプリの MapEvent.onlyEventNodes の null と同じ)。出す地点は lib/map-data.php の km_map_event_node_visible
+     */
+    $pdo->exec(<<<'SQL'
+        CREATE TABLE IF NOT EXISTS km_map_event_options (
+            event_id INT NOT NULL PRIMARY KEY,
+            only_event_nodes TINYINT(1) NOT NULL DEFAULT 1
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        SQL);
 }
 
 /** 重ね合わせの子の表。イベントを消すとき・取り込み直すときに、ここに並べたものを消す。 */
@@ -147,6 +159,7 @@ const KM_MAP_EVENT_CHILD_TABLES = [
     'km_map_event_pois',
     'km_map_event_aliases',
     'km_map_event_hidden',
+    'km_map_event_options',
 ];
 
 /**
@@ -217,7 +230,8 @@ function km_map_event_active(PDO $pdo): array
  *   closedNodes: array<string, string>,   // nodeId => 理由
  *   pois: array<int, array>,
  *   aliases: array<string, string>,       // nodeId => 別名
- *   hiddenNodes: array<string, bool>      // nodeId => true(イベント中は出さない)
+ *   hiddenNodes: array<string, bool>,     // nodeId => true(イベント中は出さない)
+ *   onlyEventNodes: bool                  // イベントの地点だけを出す(有効なイベントのどれかが ON。2026-10-23)
  * }
  */
 function km_map_event_overlay(PDO $pdo, ?int $previewEventId = null): array
@@ -230,6 +244,7 @@ function km_map_event_overlay(PDO $pdo, ?int $previewEventId = null): array
         'pois' => [],
         'aliases' => [],
         'hiddenNodes' => [],
+        'onlyEventNodes' => false,
     ];
 
     try {
@@ -327,6 +342,14 @@ function km_map_event_overlay(PDO $pdo, ?int $previewEventId = null): array
             error_log('km_map_event_overlay: km_map_event_hidden is not readable yet: ' . $exception->getMessage());
         }
 
+        // --- イベントの地点だけを出すか(2026-10-23)。行が無い・表がまだ無いイベントは ON ---
+        $options = km_map_event_options_read($pdo, $ids);
+        foreach ($ids as $eventId) {
+            if ($options[(int) $eventId] ?? true) {
+                $overlay['onlyEventNodes'] = true;
+            }
+        }
+
         return $overlay;
     } catch (Throwable $exception) {
         /*
@@ -341,6 +364,39 @@ function km_map_event_overlay(PDO $pdo, ?int $previewEventId = null): array
         );
         return $empty;
     }
+}
+
+/**
+ * イベントの「イベントの地点だけを出す」(event_id => bool)。**行が無いイベントは入れない**(呼ぶ側で ON とみなす)。
+ * 表がまだ無いときも空(管理画面を開くまで作られない。公開の地図を止めない)。
+ *
+ * @param list<int> $eventIds
+ * @return array<int, bool>
+ */
+function km_map_event_options_read(PDO $pdo, array $eventIds): array
+{
+    if ($eventIds === []) {
+        return [];
+    }
+    try {
+        $stmt = $pdo->prepare('SELECT event_id, only_event_nodes FROM km_map_event_options WHERE event_id IN (' . implode(',', array_fill(0, count($eventIds), '?')) . ')');
+        $stmt->execute(array_values($eventIds));
+        $options = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $options[(int) $row['event_id']] = (int) $row['only_event_nodes'] === 1;
+        }
+        return $options;
+    } catch (Throwable $exception) {
+        return [];
+    }
+}
+
+/** イベントの「イベントの地点だけを出す」を決める(行を入れ替える。ON でも行を書く) */
+function km_map_event_options_save(PDO $pdo, int $eventId, bool $onlyEventNodes): void
+{
+    km_map_events_ensure_tables($pdo);
+    $pdo->prepare('DELETE FROM km_map_event_options WHERE event_id = ?')->execute([$eventId]);
+    $pdo->prepare('INSERT INTO km_map_event_options (event_id, only_event_nodes) VALUES (?, ?)')->execute([$eventId, $onlyEventNodes ? 1 : 0]);
 }
 
 /** 通行止めの照合に使うキー。source/target の向きを含めて1本ぶん。 */
@@ -372,7 +428,9 @@ function km_map_events_all(PDO $pdo): array
          ORDER BY e.is_enabled DESC, e.id DESC'
     )->fetchAll();
 
+    $options = km_map_event_options_read($pdo, array_map('intval', array_column($rows, 'id')));
     foreach ($rows as &$row) {
+        $row['onlyEventNodes'] = $options[(int) $row['id']] ?? true;
         foreach (['id', 'closureCount', 'poiCount', 'aliasCount', 'hiddenCount'] as $intKey) {
             $row[$intKey] = (int) $row[$intKey];
         }
@@ -404,6 +462,7 @@ function km_map_event_find(PDO $pdo, int $id): ?array
     $row['id'] = (int) $row['id'];
     $row['isEnabled'] = (bool) $row['isEnabled'];
     $row['hideOccupantNames'] = (bool) $row['hideOccupantNames'];
+    $row['onlyEventNodes'] = km_map_event_options_read($pdo, [$id])[$id] ?? true;
 
     return $row;
 }
@@ -472,8 +531,12 @@ function km_map_event_save(PDO $pdo, ?int $id, array $fields): int
              VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())'
         );
         $stmt->execute($params);
+        $newId = (int) $pdo->lastInsertId();
+        if (array_key_exists('onlyEventNodes', $fields)) {
+            km_map_event_options_save($pdo, $newId, (bool) $fields['onlyEventNodes']);
+        }
 
-        return (int) $pdo->lastInsertId();
+        return $newId;
     }
 
     $params[] = $id;
@@ -484,6 +547,9 @@ function km_map_event_save(PDO $pdo, ?int $id, array $fields): int
          WHERE id = ?'
     );
     $stmt->execute($params);
+    if (array_key_exists('onlyEventNodes', $fields)) {
+        km_map_event_options_save($pdo, $id, (bool) $fields['onlyEventNodes']);
+    }
 
     return $id;
 }

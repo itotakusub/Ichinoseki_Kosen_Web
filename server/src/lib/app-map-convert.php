@@ -35,6 +35,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/app-map.php';
 require_once __DIR__ . '/map-node-stairs.php';
 require_once __DIR__ . '/map-node-area.php';
+require_once __DIR__ . '/map-node-projects.php';
 
 /**
  * アプリの基準マップ画像の実寸(`res/drawable/f1_r.png` ほか、全階 1600×1200)。
@@ -381,6 +382,8 @@ function km_app_map_to_web(stdClass $map): array
         'edges' => $edges,
         // 区画の色の指定と区画の印(2026-10-23。取り込みで km_map_node_area を入れ替える)
         'area' => km_map_area_from_app($map),
+        // 企画の番号(2026-10-23。取り込みで km_map_node_projects を入れ替える)
+        'projects' => km_map_projects_from_app($map),
         'skipped' => [
             'unknownFloor' => array_values(array_unique($unknownFloor)),
             'unknownType' => $unknownType,
@@ -649,6 +652,8 @@ function km_app_map_from_web(PDO $pdo): array
     $result = km_app_map_snapshot_from_rows($nodes, $edges, $fingerprints, $overlays);
     // 区画の色の指定と区画の印(2026-10-23。別の表。無ければ足さない)
     km_map_area_apply($result['map'], km_map_node_area_all($pdo));
+    // 企画の番号(2026-10-23。別の表。無ければ足さない)
+    km_map_projects_apply($result['map'], km_map_node_projects_all($pdo));
 
     return $result;
 }

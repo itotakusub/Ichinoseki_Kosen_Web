@@ -227,7 +227,12 @@ if ($isTeacher && !$isAdmin && $namesAllowed) {
     require_once __DIR__ . '/../lib/node-visibility.php';
     $consentedUuids = km_staff_node_consented_uuids($pdo);
 }
-$contentLevel = km_app_map_content_level($isAdmin, $isTeacher, $isEventStaff, $namesAllowed, $consentedUuids);
+/*
+ * Wi-Fi 学習の協力者(2026-10-23。logto_guard.php の LOGTO_LEARNING_PERMISSION)は、部屋で学習を取るので教員室・研究室の地点も配る(member の段)。
+ * **名前は配らない**($namesAllowed は管理者と教職員だけ。協力者が教職員でもあれば、その人の分の許可で名前が付く)
+ */
+$isLearner = is_array($principal) && ($principal['is_learner'] ?? false) === true;
+$contentLevel = km_app_map_content_level($isAdmin, $isTeacher || $isLearner, $isEventStaff, $namesAllowed, $consentedUuids);
 
 /*
  * ストリートビューの写真の一覧(2026-10-06。lib/panorama.php)。**配る地図に入っている地点の分だけ**載せる ——

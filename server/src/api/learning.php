@@ -6,9 +6,11 @@ declare(strict_types=1);
  * Wi-Fi の学習データと精度の評価(2026-10-06。中身は lib/learning-data.php)。**サーバーは保存するだけ。**
  *
  *   POST {"action":"pull","kind":"samples","since":N,"code":"…"}   変わった分を読む(地図のアクセスコード、または管理者のトークン)
- *   POST {"action":"pull","kind":"evaluations","since":N}          評価を読む … **管理者だけ**
- *   POST {"action":"push","samples":[…],"evaluations":[…]}         送る … **管理者だけ**
- *   POST {"action":"delete","kind":"samples","scope":"all|floor|nodes",…}  消す … **管理者だけ**
+ *   POST {"action":"pull","kind":"evaluations","since":N}          評価を読む … **管理者と学習の協力者**
+ *   POST {"action":"push","samples":[…],"evaluations":[…]}         送る … **管理者と学習の協力者**
+ *   POST {"action":"delete","kind":"samples","scope":"all|floor|nodes",…}  消す … **管理者と学習の協力者**
+ *
+ * 学習の協力者(2026-10-23。logto_guard.php の LOGTO_LEARNING_PERMISSION)が消せるのは、**自分が送った記録だけ**(uploaded_by で絞る)。
  *
  * アクセスコードは URL に載せない(ログに残る)ので、読むときも POST の本文で受ける。
  */
@@ -37,11 +39,17 @@ if (!in_array($kind, ['samples', 'evaluations'], true)) {
     respond(['success' => false, 'message' => 'kind が違います。'], 400);
 }
 
-/** 管理者のトークンが付いていれば、その利用者。付いていなければ null(断らない)。 */
+/** 管理者か学習の協力者のトークンが付いていれば、その利用者。付いていなければ null(断らない)。 */
 $admin = static function (): ?array {
     $principal = logto_optional_principal();
-    if ($principal === null || ($principal['is_admin'] ?? 0) !== 1) {
-        return null;
+    return km_learning_principal_allowed($principal) ? $principal : null;
+};
+
+/** 管理者か学習の協力者でなければ断る */
+$requireLearner = static function (): array {
+    $principal = logto_require_principal();
+    if (!km_learning_principal_allowed($principal)) {
+        respond(['success' => false, 'message' => 'この操作に必要なLogto権限がありません(管理者か学習の協力者)。'], 403);
     }
     return $principal;
 };
@@ -50,9 +58,8 @@ if ($action === 'pull') {
     $since = isset($input['since']) && is_int($input['since']) ? max(0, $input['since']) : 0;
     if ($kind === 'evaluations' || $admin() === null) {
         if ($kind === 'evaluations') {
-            // 評価は管理者だけ(一般のアプリには配らない)
-            $principal = logto_require_principal();
-            logto_assert_permissions($principal, LOGTO_ADMIN_PERMISSIONS);
+            // 評価は管理者と学習の協力者だけ(一般のアプリには配らない)
+            $requireLearner();
         } else {
             $allowed = km_learning_code_allowed($pdo, (string) ($input['code'] ?? ''));
             if (!$allowed['ok']) {
@@ -69,9 +76,9 @@ if ($action === 'pull') {
     respond(['success' => true, 'kind' => $kind] + $changes);
 }
 
-// ここから先は書き込み。**管理者だけ**
-$principal = logto_require_principal();
-logto_assert_permissions($principal, LOGTO_ADMIN_PERMISSIONS);
+// ここから先は書き込み。**管理者と学習の協力者だけ**
+$principal = $requireLearner();
+$isAdminWriter = ($principal['is_admin'] ?? 0) === 1;
 $uploadedBy = (string) ($principal['subject'] ?? '') ?: null;
 require_once __DIR__ . '/../lib/admin-log.php';
 $GLOBALS['KM_USER'] = [
@@ -114,7 +121,8 @@ if ($action === 'delete') {
         error_log('api/learning.php display name: ' . $exception->getMessage());
     }
     try {
-        $count = km_learning_delete($pdo, $kind, $scope, $floor, $nodes, $deletedBy);
+        // 協力者は自分が送った分だけ(管理者は全員の分)
+        $count = km_learning_delete($pdo, $kind, $scope, $floor, $nodes, $deletedBy, $isAdminWriter ? null : ($uploadedBy ?? ''));
     } catch (InvalidArgumentException $exception) {
         respond(['success' => false, 'message' => $exception->getMessage()], 400);
     } catch (Throwable $exception) {
@@ -123,7 +131,7 @@ if ($action === 'delete') {
         respond(['success' => false, 'message' => '消せませんでした(消す前の控えを取れなかったときは消しません)。'], 500);
     }
     km_admin_log_record('settings', 'learning.delete', ($kind === 'samples' ? '学習データ' : '評価') . ' ' . $count . ' 件(' . $scope . ($floor !== null ? ' ' . $floor : '') . ')');
-    respond(['success' => true, 'deleted' => $count, 'message' => ($kind === 'samples' ? '学習データ' : '評価') . "を {$count} 件消しました(全員の端末から、次の同期で消えます。管理画面の「バックアップ」に控えがあります)。"]);
+    respond(['success' => true, 'deleted' => $count, 'message' => ($kind === 'samples' ? '学習データ' : '評価') . "を {$count} 件消しました(" . ($isAdminWriter ? '' : 'あなたが送った分だけ。') . '全員の端末から、次の同期で消えます。管理画面の「バックアップ」に控えがあります)。']);
 }
 
 respond(['success' => false, 'message' => 'action が違います。'], 400);

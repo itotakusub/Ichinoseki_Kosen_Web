@@ -197,6 +197,7 @@ function km_map_event_import_datetime(mixed $millis): ?string
  *   pois: array<int, array{floor:string, name:string, category:string, x:int, y:int, anchorNodeId:?string, note:string}>,
  *   aliases: array<string, string>,
  *   hidden: array<int, string>,
+ *   onlyEventNodes: bool,
  *   skipped: array{unknownNode:int, unknownFloor:array<int, string>, staffOnly:int, badLineKey:int}
  * }
  */
@@ -333,6 +334,8 @@ function km_map_event_from_app(stdClass $event, array $knownNodes): array
         'pois' => $pois,
         'aliases' => $aliases,
         'hidden' => array_map('strval', array_keys($hidden)),
+        // イベントの地点だけを出す(2026-10-23。アプリの MapEvent.onlyEventNodes。無い・null は ON)
+        'onlyEventNodes' => ($event->onlyEventNodes ?? null) !== false,
         'skipped' => $skipped,
     ];
 }
@@ -483,6 +486,9 @@ function km_map_event_import_apply(PDO $pdo, stdClass $event): array
         foreach ($converted['hidden'] as $id) {
             $hidden->execute([$eventId, $id]);
         }
+        // 子の表と一緒に消したので、アプリの値で入れ直す
+        $pdo->prepare('INSERT INTO km_map_event_options (event_id, only_event_nodes) VALUES (?, ?)')
+            ->execute([$eventId, $converted['onlyEventNodes'] ? 1 : 0]);
 
         $pdo->commit();
     } catch (Throwable $exception) {

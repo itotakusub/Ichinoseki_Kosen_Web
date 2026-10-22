@@ -405,6 +405,17 @@ function km_app_map_sync_apply(
         error_log('km_app_map_sync_apply: 区画の表を作れません: ' . $exception->getMessage());
         $areaTable = false;
     }
+    // 企画の番号の表(2026-10-23。lib/map-node-projects.php)。同じく取引の前に作る
+    require_once __DIR__ . '/map-node-projects.php';
+    $projectsTable = isset($converted['projects']);
+    try {
+        if ($projectsTable) {
+            km_map_node_projects_ensure_table($pdo);
+        }
+    } catch (Throwable $exception) {
+        error_log('km_app_map_sync_apply: 企画の番号の表を作れません: ' . $exception->getMessage());
+        $projectsTable = false;
+    }
     $pdo->beginTransaction();
     try {
         /*
@@ -487,6 +498,10 @@ function km_app_map_sync_apply(
         // 区画の色の指定と区画の印(取り込んだ地図が正本。表を丸ごと入れ替える)
         if ($areaTable) {
             km_map_node_area_sync($pdo, $converted['area']);
+        }
+        // 企画の番号(取り込んだ地図が正本。表を丸ごと入れ替える)
+        if ($projectsTable) {
+            km_map_node_projects_sync($pdo, $converted['projects']);
         }
 
         /*

@@ -82,6 +82,15 @@ $isApp = ($KM_PAGE['layout'] ?? 'app') === 'app';
           event.preventDefault();
         }
       });
+      // 切り替えたらすぐ送る(2026-10-23。インラインの onchange は CSP で動かないので、ここでまとめて受ける)
+      document.addEventListener('change', (event) => {
+        const input = event.target;
+        if (input instanceof HTMLInputElement && input.dataset.kmAutosubmit !== undefined && input.form) {
+          // 押した操作が終わってから送る(押している最中に送ると、Chrome で送られないことがあった)
+          const form = input.form;
+          window.setTimeout(() => form.requestSubmit(), 0);
+        }
+      });
     </script>
     <!--end::KosenMap Admin(送信前の確認)-->
     <!--begin::KosenMap Admin(i18n)-->

@@ -19,6 +19,14 @@ const LOGTO_ADMIN_PERMISSIONS = [
  */
 const LOGTO_STAFF_PERMISSION = 'staff:event:access';
 
+/**
+ * Wi-Fi 学習の協力者(2026-10-23、利用者の指示「管理者権限より少し下の権限」)。Logto の管理画面で API リソースの権限として作り、
+ * ロールに付けて割り当てる。管理アプリで学習を取って送れ(api/learning.php)、教員室・研究室の地点も届く(api/app-map.php の member の段。名前は落とす)。
+ * 消せるのは自分が送った学習データだけ。クラウドバックアップは自分が置いた分だけ(api/map-backup.php)。
+ * **組織トークンからは生まれない**(km_staff_org_apply_token が教職員の権限だけを残す)。
+ */
+const LOGTO_LEARNING_PERMISSION = 'learning:wifi:write';
+
 function logto_authorization_header(): string
 {
     $header = trim((string) ($_SERVER['HTTP_AUTHORIZATION'] ?? ''));
@@ -336,6 +344,8 @@ function logto_principal(bool $required): ?array
             // ここまで来た = 停止されていない
             'status' => 'approved',
             'is_admin' => count(array_intersect(LOGTO_ADMIN_PERMISSIONS, $permissions)) === count(LOGTO_ADMIN_PERMISSIONS) ? 1 : 0,
+            // 学習の協力者(LOGTO_LEARNING_PERMISSION)。管理者は含まない(管理者かどうかは is_admin で見る)
+            'is_learner' => in_array(LOGTO_LEARNING_PERMISSION, $permissions, true),
             'auth_type' => 'logto',
             'permissions' => $permissions,
             // 教職員(組織トークンで、こちらの組織の教職員の権限を持つ)。イベント運営とは別

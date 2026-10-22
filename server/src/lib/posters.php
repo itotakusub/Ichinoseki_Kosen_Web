@@ -121,8 +121,35 @@ function km_posters_ensure_tables(PDO $pdo): void
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         SQL);
 
+    /*
+     * ポスターの企画の番号(2026-10-23、利用者の指示「番号でポスターなどを決める」。lib/map-node-projects.php)。
+     * **km_posters に列を足さず、別表にする**(ALTER が無い)。番号があれば、その番号を振った地点に出す(地点の指定より先)
+     */
+    $pdo->exec(<<<'SQL'
+        CREATE TABLE IF NOT EXISTS km_poster_projects (
+            poster_id INT NOT NULL PRIMARY KEY,
+            project_no VARCHAR(16) NOT NULL,
+            INDEX (project_no)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        SQL);
+
     // **成功した後に立てる**(lib/settings.php の km_settings_ensure_table と同じ理由)
     $done = true;
+}
+
+/** ポスターの企画の番号(poster_id => 番号)。表が無ければ空(公開の経路は表を作らない) */
+function km_poster_projects_map(PDO $pdo): array
+{
+    try {
+        $rows = $pdo->query('SELECT poster_id, project_no FROM km_poster_projects')->fetchAll();
+    } catch (Throwable $exception) {
+        return [];
+    }
+    $map = [];
+    foreach ($rows as $row) {
+        $map[(int) $row['poster_id']] = (string) $row['project_no'];
+    }
+    return $map;
 }
 
 // ---------------------------------------------------------------- 出し方(3 段階)
@@ -401,8 +428,9 @@ function km_posters_all(PDO $pdo): array
                 UNIX_TIMESTAMP(updated_at) AS updatedEpoch
          FROM km_posters ORDER BY sort_order, id'
     )->fetchAll();
+    $projects = km_poster_projects_map($pdo);
 
-    return array_map('km_poster_normalize_row', $rows);
+    return array_map(static fn (array $row): array => km_poster_normalize_row($row + ['projectNo' => $projects[(int) $row['id']] ?? '']), $rows);
 }
 
 function km_poster_find(PDO $pdo, int $id): ?array
@@ -419,8 +447,11 @@ function km_poster_find(PDO $pdo, int $id): ?array
     );
     $statement->execute([$id]);
     $row = $statement->fetch();
+    if ($row === false) {
+        return null;
+    }
 
-    return $row === false ? null : km_poster_normalize_row($row);
+    return km_poster_normalize_row($row + ['projectNo' => km_poster_projects_map($pdo)[$id] ?? '']);
 }
 
 function km_poster_normalize_row(array $row): array
@@ -435,6 +466,7 @@ function km_poster_normalize_row(array $row): array
     $row['linkUrl'] = (string) ($row['linkUrl'] ?? '');
     $row['nodeId'] = (string) ($row['nodeId'] ?? '');
     $row['sourceUrl'] = (string) ($row['sourceUrl'] ?? '');
+    $row['projectNo'] = (string) ($row['projectNo'] ?? '');
 
     return $row;
 }
@@ -442,8 +474,8 @@ function km_poster_normalize_row(array $row): array
 /**
  * 画面の入力を確かめて整える。**DB を使わない**(scripts/check.php が試す)。
  *
- * @param array{title?:string, description?:string, linkUrl?:string, nodeId?:string, sortOrder?:string|int, isEnabled?:bool} $input
- * @return array{title:string, description:?string, linkUrl:?string, nodeId:?string, sortOrder:int, isEnabled:bool}
+ * @param array{title?:string, description?:string, linkUrl?:string, nodeId?:string, projectNo?:string, sortOrder?:string|int, isEnabled?:bool} $input
+ * @return array{title:string, description:?string, linkUrl:?string, nodeId:?string, projectNo:?string, sortOrder:int, isEnabled:bool}
  */
 function km_poster_validate(array $input): array
 {
@@ -469,6 +501,13 @@ function km_poster_validate(array $input): array
     if ($nodeId !== '' && preg_match('/^[0-9A-Za-z_-]{1,32}$/', $nodeId) !== 1) {
         throw new InvalidArgumentException('地点の指定が正しくありません。');
     }
+    // 企画の番号(2026-10-23)。あれば、その番号を振った地点に出す(地点の指定より先)
+    require_once __DIR__ . '/map-node-projects.php';
+    $rawProject = trim((string) ($input['projectNo'] ?? ''));
+    $projectNo = $rawProject === '' ? null : km_map_project_number($rawProject);
+    if ($rawProject !== '' && $projectNo === null) {
+        throw new InvalidArgumentException('企画の番号は英数字と - _ の ' . KM_MAP_PROJECT_NUMBER_MAX_LENGTH . ' 字までにしてください(例: A-1)。');
+    }
     if (preg_match('/^-?\d{1,6}$/', $sortOrder) !== 1) {
         throw new InvalidArgumentException('並び順は整数にしてください(小さいほど前)。');
     }
@@ -478,6 +517,7 @@ function km_poster_validate(array $input): array
         'description' => $description === '' ? null : $description,
         'linkUrl' => $linkUrl === '' ? null : $linkUrl,
         'nodeId' => $nodeId === '' ? null : $nodeId,
+        'projectNo' => $projectNo,
         'sortOrder' => (int) $sortOrder,
         'isEnabled' => (bool) ($input['isEnabled'] ?? false),
     ];
@@ -533,7 +573,10 @@ function km_poster_save(PDO $pdo, ?int $id, array $fields, ?array $image): int
                 $fields['sortOrder'], $fields['isEnabled'] ? 1 : 0,
             ]);
 
-            return (int) $pdo->lastInsertId();
+            $newId = (int) $pdo->lastInsertId();
+            km_poster_project_save($pdo, $newId, $fields['projectNo'] ?? null);
+
+            return $newId;
         }
 
         $pdo->prepare(
@@ -550,6 +593,7 @@ function km_poster_save(PDO $pdo, ?int $id, array $fields, ?array $image): int
             $checked['height'] ?? $current['height'],
             $id,
         ]);
+        km_poster_project_save($pdo, $id, $fields['projectNo'] ?? null);
     } catch (Throwable $exception) {
         // DB に書けなかったら、置いたばかりの画像も残さない(どこからも指されない孤児を作らない)
         if ($newStored !== null) {
@@ -566,6 +610,15 @@ function km_poster_save(PDO $pdo, ?int $id, array $fields, ?array $image): int
     return $id;
 }
 
+/** ポスターの企画の番号を決める(null は外す) */
+function km_poster_project_save(PDO $pdo, int $posterId, ?string $projectNo): void
+{
+    $pdo->prepare('DELETE FROM km_poster_projects WHERE poster_id = ?')->execute([$posterId]);
+    if ($projectNo !== null) {
+        $pdo->prepare('INSERT INTO km_poster_projects (poster_id, project_no) VALUES (?, ?)')->execute([$posterId, $projectNo]);
+    }
+}
+
 function km_poster_delete(PDO $pdo, int $id): string
 {
     $poster = km_poster_find($pdo, $id);
@@ -573,6 +626,7 @@ function km_poster_delete(PDO $pdo, int $id): string
         throw new InvalidArgumentException('ポスターが見つかりません(もう消されたかもしれません)。');
     }
     $pdo->prepare('DELETE FROM km_posters WHERE id = ?')->execute([$id]);
+    km_poster_project_save($pdo, $id, null);
     km_poster_stats_delete($pdo, $id);
     km_poster_remove_image((string) $poster['storedName']);
 
@@ -598,9 +652,11 @@ function km_poster_public_image_url(array $poster): string
  *
  * @param array<string, array> $nodes 地図の地点(km_map_data の nodes)。ここに無い・出さない(hidden)地点は外して
  *        nodeId を空にする —— 錠・イベントで見せていない地点の名前と場所を、ポスターから漏らさない
- * @return array<int, array{id:int, title:string, description:string, linkUrl:string, nodeId:string, imageUrl:string, width:int, height:int}>
+ * @param array<string, list<string>> $projectNodes 企画の番号 => 出している地点の id(2026-10-23。km_map_project_nodes)。
+ *        番号を付けたポスターは、その番号を振った地点**全部**に出す(nodeIds)。番号の地点が無ければどこにも置かない(広告にもしない)
+ * @return array<int, array{id:int, title:string, description:string, linkUrl:string, nodeId:string, nodeIds:list<string>, projectNo:string, imageUrl:string, width:int, height:int}>
  */
-function km_posters_public(PDO $pdo, bool $eventActive, array $nodes): array
+function km_posters_public(PDO $pdo, bool $eventActive, array $nodes, array $projectNodes = []): array
 {
     if (!km_poster_mode_shows(km_poster_mode($pdo), $eventActive)) {
         return [];
@@ -616,11 +672,18 @@ function km_posters_public(PDO $pdo, bool $eventActive, array $nodes): array
         return [];
     }
 
+    $projects = km_poster_projects_map($pdo);
     $posters = [];
     foreach ($rows as $row) {
+        $projectNo = $projects[(int) $row['id']] ?? '';
         $nodeId = (string) ($row['nodeId'] ?? '');
         if ($nodeId !== '' && (!isset($nodes[$nodeId]) || !empty($nodes[$nodeId]['hidden']))) {
             $nodeId = '';
+        }
+        // 企画の番号があれば、番号の地点が置き場(地点の指定より先)。$projectNodes は出している地点だけ
+        $nodeIds = $projectNo !== '' ? ($projectNodes[$projectNo] ?? []) : ($nodeId !== '' ? [$nodeId] : []);
+        if ($projectNo !== '') {
+            $nodeId = $nodeIds[0] ?? '';
         }
         $poster = [
             'id' => (int) $row['id'],
@@ -628,11 +691,13 @@ function km_posters_public(PDO $pdo, bool $eventActive, array $nodes): array
             'description' => (string) ($row['description'] ?? ''),
             'linkUrl' => (string) ($row['linkUrl'] ?? ''),
             'nodeId' => $nodeId,
+            'nodeIds' => $nodeIds,
+            'projectNo' => $projectNo,
             /*
              * 広告か(**管理画面で地点に置いていない**もの)。上で外した地点(イベントで出さない・地図に無い)の
              * ポスターは広告にしない —— 地点を指したつもりのものが、確率で幕に出てくるのはおかしい。
              */
-            'isAd' => (string) ($row['nodeId'] ?? '') === '',
+            'isAd' => (string) ($row['nodeId'] ?? '') === '' && $projectNo === '',
             'width' => (int) $row['width'],
             'height' => (int) $row['height'],
             'updatedEpoch' => (int) $row['updatedEpoch'],

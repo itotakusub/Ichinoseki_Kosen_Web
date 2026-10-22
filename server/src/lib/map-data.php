@@ -229,6 +229,9 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
     // 地点の URL(2026-10-21、lib/posters.php)。表が無ければ空
     require_once __DIR__ . '/posters.php';
     $nodeLinks = km_node_links_for_map($pdo);
+    // 企画の番号(2026-10-23。lib/map-node-projects.php。管理アプリで振る)。表が無ければ空
+    require_once __DIR__ . '/map-node-projects.php';
+    $projectsById = km_map_projects_by_node_id($pdo);
     $nodesById = [];
     $nodeTypes = [];
     foreach ($nodeStmt->fetchAll() as $node) {
@@ -285,6 +288,17 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
         if (isset($nodeLinks[$id])) {
             $node['linkUrl'] = $nodeLinks[$id]['url'];
             $node['linkLabel'] = $nodeLinks[$id]['label'];
+        }
+        if (isset($projectsById[$id])) {
+            $node['projects'] = $projectsById[$id];
+        }
+        /*
+         * イベント中は「イベントの地点」だけを出す(2026-10-23、利用者の指示。有効なイベントのどれかが ON のとき)。
+         * 出さない地点にも印(hidden)を付けるだけ —— 経路は通れる。出し入れは Main/app.js が決める
+         */
+        if ($overlay['events'] !== [] && ($overlay['onlyEventNodes'] ?? false) && empty($node['hidden'])
+            && !km_map_event_node_visible($node, isset($overlay['aliases'][$id]))) {
+            $node['hidden'] = true;
         }
         $nodesById[$id] = $node;
     }
@@ -355,6 +369,10 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
      * ことに意味がある —— 印にすると「管理画面を一度開いた人」が公開ページでも
      * 素通りしてしまい、設定した本人が錠を確かめられなくなる(実際そうなっていた)。
      */
+    // 企画の番号 → 出している地点(ポスターとスケジュールの場所。隠した地点は入れない)
+    require_once __DIR__ . '/event-schedule.php';
+    $shownProjectNodes = km_map_project_nodes($projectsById, array_filter($nodesById, static fn (array $n): bool => empty($n['hidden'])));
+
     $viewUnlocked = $forAdmin || km_map_view_unlocked($config);
     if (!$viewUnlocked) {
         return [
@@ -385,7 +403,12 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
          * 出さないときは空。地点は上の一覧に在って出しているものだけ指す(錠・イベントで隠した地点を漏らさない)。
          * 錠が掛かっているときは上で返しているので、ここへは来ない。
          */
-        'posters' => km_posters_public($pdo, $overlay['events'] !== [], $nodesById),
+        'posters' => km_posters_public($pdo, $overlay['events'] !== [], $nodesById, $shownProjectNodes),
+        /*
+         * 企画のスケジュール(2026-10-23。lib/event-schedule.php)。一般に出す印の行だけ。場所は企画の番号から引き、
+         * 出している地点だけを指す(錠・イベントで隠した地点の場所を漏らさない)
+         */
+        'schedule' => km_event_schedule_public($pdo, $shownProjectNodes),
         'buildings' => km_map_building_overlays($pdo),
         /*
          * 建物の階(2026-09-24。lib/building-floors.php)。**平面図 1 枚が 1 つの階。**
@@ -405,6 +428,31 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
             return $stored === null ? null : km_route_weights_for_web($stored);
         })(),
     ];
+}
+
+/**
+ * イベント中に出す地点か(2026-10-23、利用者の決定。アプリの MapEvent.kt の isEventVisibleNode と同じ)。**純粋関数**
+ *
+ * 名前を出す種類(部屋・施設・階段・出入口)のうち、企画の番号がある・イベント中の名前を付けた・階段・出入口・トイレ だけを出す。
+ * 道・壁・ルーターなどは変えない。臨時の地点は別の一覧(eventPois)で、いつも出す
+ *
+ * @param array<string, mixed> $node km_map_data の地点
+ */
+function km_map_event_node_visible(array $node, bool $hasAlias): bool
+{
+    $type = (string) ($node['type'] ?? '');
+    if (!in_array($type, ['room', 'facility', 'stairs', 'entrance'], true) || $type === 'stairs' || $type === 'entrance') {
+        return true;
+    }
+    if (!empty($node['projects']) || $hasAlias) {
+        return true;
+    }
+    foreach (['name', 'title', 'subtitle', 'type2'] as $key) {
+        if (preg_match('/WC|トイレ|便所|お手洗い/iu', (string) ($node[$key] ?? '')) === 1) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /**

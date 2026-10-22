@@ -2905,3 +2905,59 @@ a.icon-btn { text-decoration: none; color: inherit; }
 :root[data-km-theme="dark"] .km-tour-count { color: #FCD34D; }
 /* 操作方法の札から、画面の案内(Main/tutorial.js)を出し直すボタン */
 .km-test-tour { width: 100%; }
+
+/* ---- 企画のスケジュール(2026-10-23。Main/app.js の地点の詳細・Main/event-schedule.js の一覧) ---- */
+.km-schedule-list {
+    margin: 8px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.km-schedule-head,
+.km-schedule-day {
+    font-size: var(--text-label);
+    font-weight: 700;
+    color: var(--secondary);
+    margin: 4px 0 0;
+}
+.km-schedule-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px 8px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    list-style: none;
+}
+.km-schedule-item.is-live {
+    border-color: var(--success);
+    box-shadow: inset 3px 0 0 var(--success);
+}
+.km-schedule-time {
+    font-size: var(--text-label);
+    color: var(--secondary);
+}
+.km-schedule-time em {
+    font-style: normal;
+    font-weight: 700;
+    color: var(--success);
+}
+.km-schedule-title {
+    font-size: var(--text-body);
+}
+.km-schedule-org,
+.km-schedule-desc {
+    font-size: var(--text-label);
+    overflow-wrap: anywhere;
+}
+.km-schedule-go {
+    align-self: flex-start;
+    margin-top: 4px;
+}
+.km-schedule-panel .km-history-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 0;
+    margin: 4px 0 8px;
+}

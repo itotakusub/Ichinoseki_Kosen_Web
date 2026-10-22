@@ -74,6 +74,12 @@ function km_learning_ensure_tables(PDO $pdo): void
     $ensured = true;
 }
 
+/** 学習を扱ってよいか(管理者か学習の協力者)。**純粋関数**(scripts/check.php が試す。api/learning.php が使う) */
+function km_learning_principal_allowed(?array $principal): bool
+{
+    return is_array($principal) && (($principal['is_admin'] ?? 0) === 1 || ($principal['is_learner'] ?? false) === true);
+}
+
 /** 次の通し番号。学習データと評価で共通(どちらが変わっても単調に増える)。 */
 function km_learning_next_seq(PDO $pdo): int
 {
@@ -281,8 +287,9 @@ function km_learning_changes(PDO $pdo, string $kind, int $since): array
  *
  * @param 'all'|'floor'|'nodes' $scope
  * @param list<string> $nodeUuids
+ * @param ?string $onlyUploadedBy 学習の協力者(2026-10-23)が消すとき、その人の sub。**その人が送った記録だけ**消す。null は管理者(全員の分)
  */
-function km_learning_delete(PDO $pdo, string $kind, string $scope, ?string $floor, array $nodeUuids, ?string $deletedBy = null): int
+function km_learning_delete(PDO $pdo, string $kind, string $scope, ?string $floor, array $nodeUuids, ?string $deletedBy = null, ?string $onlyUploadedBy = null): int
 {
     km_learning_ensure_tables($pdo);
     $table = $kind === 'samples' ? 'km_learning_samples' : 'km_learning_evaluations';
@@ -304,6 +311,11 @@ function km_learning_delete(PDO $pdo, string $kind, string $scope, ?string $floo
         $params = $nodes;
     } elseif ($scope !== 'all') {
         throw new InvalidArgumentException('消す範囲が違います。');
+    }
+    if ($onlyUploadedBy !== null) {
+        // 空の sub は誰の記録にも当たらない(uploaded_by が空の行は無い)。全員の分に倒さない
+        $where .= ' AND uploaded_by = ?';
+        $params[] = $onlyUploadedBy;
     }
     $columns = $kind === 'samples'
         ? 'id, sample_uuid, node_uuid, floor_id, x, y, rssi_json, altitude_meters, sample_count, measured_at_millis'

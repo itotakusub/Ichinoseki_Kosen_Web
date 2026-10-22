@@ -70,6 +70,7 @@ try {
                 'description' => (string) ($_POST['description'] ?? ''),
                 'linkUrl' => (string) ($_POST['link_url'] ?? ''),
                 'nodeId' => (string) ($_POST['node_id'] ?? ''),
+                'projectNo' => (string) ($_POST['project_no'] ?? ''),
                 'sortOrder' => (string) ($_POST['sort_order'] ?? '0'),
                 'isEnabled' => isset($_POST['is_enabled']),
                 'imageSource' => $source,
@@ -168,6 +169,9 @@ try {
     $posters = km_posters_all($pdo);
     $links = km_node_links_all($pdo);
     $nodeOptions = km_poster_node_options($pdo);
+    // 企画の番号 → 地点(2026-10-23。管理アプリで振った番号。lib/map-node-projects.php)
+    require_once __DIR__ . '/../lib/map-node-projects.php';
+    $projectNodes = km_map_project_nodes(km_map_projects_by_node_id($pdo));
     $tutorialEnd = km_tutorial_end_config($pdo);
     $stats = km_poster_stats_totals($pdo);
     km_node_likes_ensure_table($pdo);
@@ -181,12 +185,13 @@ try {
     $posters = [];
     $links = [];
     $nodeOptions = [];
+    $projectNodes = [];
     $tutorialEnd = ['text' => KM_TUTORIAL_END_TEXT_DEFAULT, 'ownSurveyUrl' => '', 'surveyUrl' => '', 'phoneQr' => true];
     $stats = [];
     $likeTotals = [];
 }
 // 広告(地点なし・出しているもの)の数と、1 件が選ばれる割合(全部同じ重みなので 1 / 件数。lib/posters.php)
-$adCount = count(array_filter($posters, static fn (array $p): bool => $p['nodeId'] === '' && $p['isEnabled']));
+$adCount = count(array_filter($posters, static fn (array $p): bool => $p['nodeId'] === '' && $p['projectNo'] === '' && $p['isEnabled']));
 $adShare = (int) round(km_poster_ad_share($adCount) * 100);
 
 $nodeNames = [];
@@ -342,7 +347,9 @@ require __DIR__ . '/_inc/partials/page-header.php';
                                 </td>
                                 <td>
                                   <div class="fw-bold"><?= km_e($poster['title']) ?></div>
-                                  <?php if ($poster['nodeId'] === ''): ?>
+                                  <?php if ($poster['projectNo'] !== ''): ?>
+                                    <div class="fs-7"><span class="badge text-bg-info">企画 <?= km_e($poster['projectNo']) ?></span> <?= km_e(implode('、', array_map($nodeLabel, $projectNodes[$poster['projectNo']] ?? []))) ?: '<span class="text-danger">この番号の地点が地図にありません(管理アプリで番号を振って取り込んでください)</span>' ?></div>
+                                  <?php elseif ($poster['nodeId'] === ''): ?>
                                     <div class="fs-7"><span class="badge text-bg-warning">広告</span> チュートリアルの終わりに<?= $poster['isEnabled'] && $adShare > 0 ? ' ' . $adShare . '%' : '' ?></div>
                                   <?php else: ?>
                                     <div class="fs-7"><i class="bi bi-geo-alt"></i> <?= km_e($nodeLabel($poster['nodeId'])) ?></div>
@@ -354,13 +361,13 @@ require __DIR__ . '/_inc/partials/page-header.php';
                                 </td>
                                 <td class="fs-7 text-nowrap">
                                   <?php $stat = $stats[$poster['id']] ?? ['impressions' => 0, 'clicks' => 0, 'impressions7' => 0, 'clicks7' => 0]; ?>
-                                  <?php if ($poster['nodeId'] === ''): ?>
+                                  <?php if ($poster['nodeId'] === '' && $poster['projectNo'] === ''): ?>
                                     <div title="広告として出した回数">表示 <?= (int) $stat['impressions'] ?> 回 / <?= (int) $stat['impressions7'] ?></div>
                                   <?php endif; ?>
                                   <?php if ($poster['linkUrl'] !== ''): ?>
                                     <div title="リンクを押した人数(同じ端末は 1 人)">リンク <?= (int) $stat['clicks'] ?> 人 / <?= (int) $stat['clicks7'] ?></div>
                                   <?php endif; ?>
-                                  <?php if ($poster['nodeId'] !== '' && $poster['linkUrl'] === ''): ?>—<?php endif; ?>
+                                  <?php if (($poster['nodeId'] !== '' || $poster['projectNo'] !== '') && $poster['linkUrl'] === ''): ?>—<?php endif; ?>
                                 </td>
                                 <td><?= (int) $poster['sortOrder'] ?></td>                                <td>
                                   <form method="post" class="m-0">
@@ -458,6 +465,12 @@ require __DIR__ . '/_inc/partials/page-header.php';
                       <label class="form-label" for="km-poster-node">地点(任意)</label>
                       <?php $nodeSelect('node_id', 'km-poster-node', (string) $value('nodeId'), true); ?>
                       <div class="form-text">この地点の詳細にポスターが出ます。一覧のページで画像を押すと、ここへ移ります。<strong>地点に置かないと「広告」</strong>になり、チュートリアルの終わりに出ます(広告どうしは同じ重みで選びます)。</div>
+                    </div>
+                    <div class="mb-3">
+                      <label class="form-label" for="km-poster-project">企画の番号(任意)</label>
+                      <input class="form-control" type="text" id="km-poster-project" name="project_no" maxlength="<?= KM_MAP_PROJECT_NUMBER_MAX_LENGTH ?>" placeholder="例: A-1" value="<?= km_e((string) $value('projectNo')) ?>" list="km-project-numbers">
+                      <datalist id="km-project-numbers"><?php foreach (array_keys($projectNodes) as $number): ?><option value="<?= km_e((string) $number) ?>"><?php endforeach; ?></datalist>
+                      <div class="form-text">管理アプリで地点に振った番号です。入れると、<strong>その番号の地点(いくつあっても全部)</strong>にポスターが出ます(上の「地点」より先)。</div>
                     </div>
                     <div class="row g-2 mb-3 align-items-end">
                       <div class="col-5">

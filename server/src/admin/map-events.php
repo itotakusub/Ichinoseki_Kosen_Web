@@ -129,6 +129,8 @@ try {
                     'endsAt' => (string) ($_POST['ends_at'] ?? ''),
                     'isEnabled' => isset($_POST['is_enabled']),
                     'hideOccupantNames' => isset($_POST['hide_occupant_names']),
+                    // イベントの地点だけを出す(2026-10-23。lib/map-events.php の km_map_event_options)
+                    'onlyEventNodes' => isset($_POST['only_event_nodes']),
                     'bannerText' => (string) ($_POST['banner_text'] ?? ''),
                     'bannerUrl' => (string) ($_POST['banner_url'] ?? ''),
                 ]);
@@ -471,6 +473,9 @@ $fmt = static fn (?string $value): string => $value === null || $value === ''
                               <?php if ($event['hideOccupantNames']): ?>
                                 <span class="badge text-bg-secondary fs-8" data-i18n="page.mapEvents.namesHidden">氏名を隠す</span>
                               <?php endif; ?>
+                              <?php if ($event['onlyEventNodes'] ?? true): ?>
+                                <span class="badge text-bg-info fs-8" title="期間中はイベントの地点だけを出す">イベントの地点だけ</span>
+                              <?php endif; ?>
                               <?php if (($event['appUuid'] ?? null) !== null): ?>
                                 <span class="badge text-bg-primary fs-8" title="中身は管理アプリで直して取り込み直します">アプリから(<?= km_e($fmt($event['importedAt'] ?? null)) ?>)</span>
                               <?php endif; ?>
@@ -588,6 +593,18 @@ $fmt = static fn (?string $value): string => $value === null || $value === ''
                           <strong data-i18n="page.mapEvents.fieldHideNames">期間中は教職員氏名を隠す</strong>
                           <div class="text-body-secondary fs-7" data-i18n="page.mapEvents.hideNamesHint">
                             外部の来場者が地図を見るため、解除パスワードを知っている人にも表示しません。
+                          </div>
+                        </label>
+                      </div>
+
+                      <div class="form-check mb-2">
+                        <input class="form-check-input" type="checkbox" id="km-event-only-nodes" name="only_event_nodes"
+                               <?= ($editing === null || ($editing['onlyEventNodes'] ?? true)) ? 'checked' : '' ?>>
+                        <label class="form-check-label" for="km-event-only-nodes">
+                          <strong>期間中はイベントの地点だけを出す</strong>
+                          <div class="text-body-secondary fs-7">
+                            企画の番号がある地点・イベント中の名前を付けた地点・臨時の地点・トイレ・階段・出入口だけを地図に出します(経路は通れます)。
+                            工事の通行止めのように部屋を隠したくないときは外してください。
                           </div>
                         </label>
                       </div>

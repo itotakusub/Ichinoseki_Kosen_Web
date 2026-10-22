@@ -19,5 +19,7 @@ respond([
     'isAdmin' => (int) $principal['is_admin'] === 1,
     // 教職員(docs/15)。組織付きのトークンで問い合わせたときだけ true になりうる(logto_guard.php)
     'isTeacher' => ($principal['is_teacher'] ?? false) === true,
+    // Wi-Fi 学習の協力者(2026-10-23。logto_guard.php の LOGTO_LEARNING_PERMISSION)。アプリは permissions でも見分ける
+    'isLearner' => ($principal['is_learner'] ?? false) === true,
     'permissions' => $principal['permissions'],
 ]);

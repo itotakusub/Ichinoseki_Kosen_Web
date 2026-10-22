@@ -1041,6 +1041,8 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
         <script defer src="<?= km_home_e(km_public_asset('Main/test-mode.js')) ?>"></script>
     <?php endif; ?>
     <script defer src="<?= km_home_e(km_public_asset('Main/app.js')) ?>"></script>
+    <?php /* 企画のスケジュールの一覧(2026-10-23。lib/event-schedule.php)。一般に出す行があるときだけ「予定」を出す */ ?>
+    <script defer src="<?= km_home_e(km_public_asset('Main/event-schedule.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/panel.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/welcome.js')) ?>"></script>
     <?php /* 初回の操作案内(2026-10-15)。「はじめに」を閉じてから・地図が出てから始める */ ?>
