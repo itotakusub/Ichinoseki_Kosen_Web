@@ -4193,7 +4193,7 @@ function km_check_hardening(): void
     check_bool('proxy-web.conf に proxy_read_timeout を書かない(location で重複すると起動しない)', !str_contains((string) preg_replace('/^\s*#.*$/m', '', $file('nginx/km/proxy-web.conf')), 'proxy_read_timeout'));
     // 2 つ目は Soketi の WebSocket(/ws/app/。2026-10-19 に 6001 番から移した。1 本を長く張る)
     check('443 で 300s を許すのは downloads.php と /ws/app/ だけ', 2, substr_count($https, 'proxy_read_timeout 300s;'));
-    check_bool('未認証で重い口を km_api で絞る(メソッドを問わない)', str_contains($https, 'location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update|positioning-params|learning|poster-image|poster-event|table)|logto_me)\.php$ {') && str_contains($https, 'limit_req zone=km_api burst=120 nodelay;'));
+    check_bool('未認証で重い口を km_api で絞る(メソッドを問わない)', str_contains($https, 'location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update|positioning-params|learning|poster-image|poster-event|table|node-extras)|logto_me)\.php$ {') && str_contains($https, 'limit_req zone=km_api burst=120 nodelay;'));
     check_bool('アプリの地図は km_appmap で絞る', preg_match('#location = /api/app-map\.php \{\s*limit_req zone=km_appmap burst=30 nodelay;#', $https) === 1);
     check_bool('callback.php は認可コードをログに残さない', preg_match('#location = /callback\.php \{\s*access_log [^;]+ km_no_query;#', $https) === 1);
     /*
@@ -7332,6 +7332,97 @@ function km_check_layout(): void
         && str_contains($appJsForPosters, "if (node.linkUrl && /^https?:\\/\\//i.test(node.linkUrl)) {"));
     check_bool('監査ログ: ポスターと地点の URL の操作に文言がある', isset(KM_ADMIN_LOG_ACTION_LABELS['poster.mode'], KM_ADMIN_LOG_ACTION_LABELS['poster.create'], KM_ADMIN_LOG_ACTION_LABELS['poster.update'], KM_ADMIN_LOG_ACTION_LABELS['poster.delete'], KM_ADMIN_LOG_ACTION_LABELS['map.node_link']));
     check_bool('管理画面: サイドバーから開ける', str_contains((string) file_get_contents(__DIR__ . '/../admin/_inc/partials/sidebar.php'), '<a href="./posters.php" class="<?= $link(\'posters\') ?>">'));
+
+    km_check_heading('node-extras: アプリの部屋の写真(ポスター)といいね(2026-10-22)');
+    require_once __DIR__ . '/../lib/node-extras.php';
+    check('地点の uuid の形', [true, true, false, false], [km_node_uuid_valid('9d1cebb3-9aa6-4fca-8f08-9ca965237b9e'), km_node_uuid_valid('n_new_10'), km_node_uuid_valid(''), km_node_uuid_valid("a'b")]);
+    check('端末の印は 32 桁の 16 進だけ', [true, false, false], [km_node_like_device_valid(str_repeat('a1', 16)), km_node_like_device_valid(str_repeat('A1', 16)), km_node_like_device_valid('abc')]);
+    if (extension_loaded('pdo_sqlite')) {
+        $extrasDb = new PDO('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
+        $extrasDb->sqliteCreateFunction('UNIX_TIMESTAMP', static fn ($value): int => (int) strtotime((string) $value), 1);
+        $extrasDb->exec('CREATE TABLE km_settings (name TEXT PRIMARY KEY, value TEXT, updated_at TEXT)');
+        $extrasDb->exec('CREATE TABLE km_posters (id INTEGER PRIMARY KEY, title TEXT, description TEXT, link_url TEXT, node_id TEXT, stored_name TEXT, source_url TEXT, image_width INT, image_height INT, sort_order INT, is_enabled INT, created_at TEXT, updated_at TEXT)');
+        $extrasDb->exec("INSERT INTO km_posters VALUES (1, '展示', '説明', 'https://example.com/', 'room1', 'p.png', NULL, 10, 20, 0, 1, '', '2026-10-22 10:00:00'),
+            (2, '止めた', NULL, NULL, 'room1', 'q.png', NULL, 10, 20, 1, 0, '', '2026-10-22 10:00:00'),
+            (3, '教員室', NULL, NULL, 'staff1', 'r.png', NULL, 10, 20, 0, 1, '', '2026-10-22 10:00:00'),
+            (4, '広告', NULL, NULL, NULL, 's.png', NULL, 10, 20, 0, 1, '', '2026-10-22 10:00:00')");
+        $extrasDb->exec('CREATE TABLE km_map_nodes (id TEXT PRIMARY KEY, uuid TEXT, name TEXT, type2 TEXT)');
+        $extrasDb->exec("INSERT INTO km_map_nodes VALUES ('room1', 'uuid-room-1', '機械実習工場', '実習室'), ('staff1', 'uuid-staff-1', '管-115', '教員室')");
+        $room = km_node_extras_find_node($extrasDb, 'uuid-room-1');
+        check('写真: 地点は uuid で引く・無ければ null', ['room1', null], [$room['id'] ?? null, km_node_extras_find_node($extrasDb, 'nope')]);
+        check('写真: 出し方が「表示しない」の間は出さない', [], km_node_extras_posters($extrasDb, $room, true));
+        $extrasDb->exec("INSERT INTO km_settings VALUES ('poster_display_mode', 'always', '')");
+        $roomPosters = km_node_extras_posters($extrasDb, $room, false);
+        check('写真: その地点の出しているものだけ(広告・止めたものは出さない)・nodeId と isAd は返さない', [[1], false, '/api/poster-image.php?id=1&v='],
+            [array_column($roomPosters, 'id'), isset($roomPosters[0]['nodeId']) || isset($roomPosters[0]['isAd']), substr((string) ($roomPosters[0]['imageUrl'] ?? ''), 0, 29)]);
+        check('写真: 教員室・研究室の地点の写真は出さない(Web の一般向けと同じ)・Web の地図に無い地点も出さない', [[], []],
+            [km_node_extras_posters($extrasDb, km_node_extras_find_node($extrasDb, 'uuid-staff-1'), true), km_node_extras_posters($extrasDb, null, true)]);
+
+        $extrasDb->exec('CREATE TABLE km_node_likes (node_uuid TEXT NOT NULL, voter_hash TEXT NOT NULL, source_hash TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (node_uuid, voter_hash))');
+        $voterA = km_app_keyed_hash(str_repeat('k', 32), 'node-like-voter', str_repeat('a', 32));
+        $voterB = km_app_keyed_hash(str_repeat('k', 32), 'node-like-voter', str_repeat('b', 32));
+        $sourceX = km_app_keyed_hash(str_repeat('k', 32), 'node-like-source', '203.0.113.1');
+        $likeNow = strtotime('2026-10-22 12:00:00');
+        check('いいね: 端末の印は元の値を含まない', false, str_contains($voterA, str_repeat('a', 32)));
+        check('いいね: 付ける → 1・自分は付けている', ['ok', ['count' => 1, 'liked' => true]],
+            [km_node_like_set($extrasDb, 'uuid-room-1', $voterA, $sourceX, true, $likeNow), km_node_like_state($extrasDb, 'uuid-room-1', $voterA)]);
+        check('いいね: 同じ端末が 2 回付けても 1・ほかの端末からは「付けていない」', [['count' => 1, 'liked' => false]],
+            [km_node_like_set($extrasDb, 'uuid-room-1', $voterA, $sourceX, true, $likeNow) === 'ok' ? km_node_like_state($extrasDb, 'uuid-room-1', $voterB) : null]);
+        km_node_like_set($extrasDb, 'uuid-room-1', $voterB, $sourceX, true, $likeNow);
+        km_node_like_set($extrasDb, 'uuid-room-1', $voterA, $sourceX, false, $likeNow);
+        check('いいね: 外すと消える(ほかの端末の分は残る)・端末の印が無ければ liked は false', ['count' => 1, 'liked' => false], km_node_like_state($extrasDb, 'uuid-room-1', null));
+        for ($i = 0; $i < KM_NODE_LIKE_SOURCE_LIMIT; $i++) {
+            km_node_like_set($extrasDb, 'flood-' . $i, $voterA, $sourceX, true, $likeNow);
+        }
+        check('いいね: 同じ送り元から 1 時間に ' . KM_NODE_LIKE_SOURCE_LIMIT . ' を超えたら断る・1 時間たてば付けられる', ['limited', 'ok'],
+            [km_node_like_set($extrasDb, 'uuid-room-1', $voterA, $sourceX, true, $likeNow + 60), km_node_like_set($extrasDb, 'uuid-room-1', $voterA, $sourceX, true, $likeNow + 3601)]);
+        check('いいね: 管理画面の 0 に戻す', [2, ['count' => 0, 'liked' => false]],
+            [km_node_likes_reset($extrasDb, 'uuid-room-1'), km_node_like_state($extrasDb, 'uuid-room-1', $voterA)]);
+    } else {
+        check_bool('node-extras の DB の試し(pdo_sqlite が無いので飛ばした)', true);
+    }
+    $extrasApi = (string) file_get_contents(__DIR__ . '/../api/node-extras.php');
+    check_bool('口: POST だけ・本文は 4KB まで・アクセスコードを確かめてから読む・付けるには端末の印が要る', str_contains($extrasApi, "require_method('POST');")
+        && str_contains($extrasApi, 'km_api_json_body(4 * 1024)') && strpos($extrasApi, 'km_learning_code_allowed(') < strpos($extrasApi, 'km_node_extras_find_node(')
+        && str_contains($extrasApi, "if (\$like !== null && \$device === '') {") && str_contains($extrasApi, "=== 'limited'"));
+    check_bool('いいね: IP・端末の印そのものは持たない(鍵つきの印だけ)', str_contains((string) file_get_contents(__DIR__ . '/../lib/node-extras.php'), "km_app_keyed_hash(km_app_secret(\$pdo, KM_NODE_LIKE_KEY_NAME), 'node-like-voter', \$device)")
+        && str_contains((string) file_get_contents(__DIR__ . '/../lib/node-extras.php'), "'node-like-source', km_map_rate_limit_key(\$ip)"));
+    $privacyForLikes = (string) json_encode(km_legal_privacy(), JSON_UNESCAPED_UNICODE);
+    check_bool('利用規約・プライバシーポリシー: いいね(誰が付けたかは記録しない・外すと消える)を書いた', str_contains((string) json_encode(km_legal_terms(), JSON_UNESCAPED_UNICODE), 'いいねは誰が付けたかを記録せず、数だけを表示します')
+        && str_contains($privacyForLikes, 'アプリの「いいね」(場所・端末ごとの印・送り元の印・日時') && str_contains($privacyForLikes, 'もう一度押して外した時点で削除されます'));
+    check_bool('管理画面: ポスターの画面で地点ごとのいいねを見て 0 に戻せる・記録に文言', str_contains((string) file_get_contents(__DIR__ . '/../admin/posters.php'), "if (\$formAction === 'likes_reset') {")
+        && isset(KM_ADMIN_LOG_ACTION_LABELS['node.likes_reset']));
+
+    km_check_heading('map-node-stairs: 階段の上り口・下り口の向き(2026-10-22)');
+    require_once __DIR__ . '/../lib/app-map-convert.php';
+    check('向きは 0〜359 の整数・数でなければ null', [0, 90, 315, 0, null, null], [km_map_heading(0), km_map_heading('90'), km_map_heading(-45), km_map_heading(360), km_map_heading(null), km_map_heading('右')]);
+    $stairMap = json_decode('{"version":10,"nodes":[
+        {"uuid":"11111111-1111-1111-1111-111111111111","x":10,"y":20,"useWifi":true,"title":"A階段","subtitle":"","type1":"stairs","type2":"","note":"","floor":"1F","transferGroupId":"A","stairUpHeading":90,"stairDownHeading":270.4},
+        {"uuid":"22222222-2222-2222-2222-222222222222","x":30,"y":40,"useWifi":true,"title":"講義室","subtitle":"","type1":"room","type2":"","note":"","floor":"1F","stairUpHeading":45}
+    ],"lines":[]}');
+    $stairWeb = km_app_map_to_web($stairMap);
+    check('アプリ → Web: 階段の向きを持ち回る(列の並びには無いので km_map_nodes には書かない)', [90, 270, false],
+        [$stairWeb['nodes'][0]['stair_up_heading'], $stairWeb['nodes'][0]['stair_down_heading'], in_array('stair_up_heading', KM_APP_MAP_COMPARED_COLUMNS, true)]);
+    $stairRows = array_map(static fn (array $n): array => $n + ['id' => $n['id']], $stairWeb['nodes']);
+    $stairBack = km_app_map_snapshot_from_rows($stairRows, [])['map'];
+    check('Web → アプリ: 階段の向きが戻る・階段でない地点には載せない・無ければ項目ごと無い', [90, 270, false, false],
+        [$stairBack->nodes[0]->stairUpHeading ?? null, $stairBack->nodes[0]->stairDownHeading ?? null, property_exists($stairBack->nodes[1], 'stairUpHeading'),
+         property_exists(km_app_map_snapshot_from_rows([['stair_up_heading' => null] + $stairRows[0]], [])['map']->nodes[0], 'stairUpHeading')]);
+    if (extension_loaded('pdo_sqlite')) {
+        $stairDb = new PDO('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
+        check('表が無ければ空(配信を止めない)', [], km_map_node_stairs_all($stairDb));
+        $stairDb->exec('CREATE TABLE km_map_node_stairs (node_uuid TEXT PRIMARY KEY, up_heading INTEGER NULL, down_heading INTEGER NULL, updated_at TEXT NOT NULL)');
+        $stairDb->exec("INSERT INTO km_map_node_stairs VALUES ('22222222-2222-2222-2222-222222222222', 10, NULL, '')");
+        check('取り込み: 階段の向きを入れ、階段でない地点の向きは消す', [1, ['11111111-1111-1111-1111-111111111111' => ['up' => 90, 'down' => 270]]],
+            [km_map_node_stairs_sync($stairDb, $stairWeb['nodes']), km_map_node_stairs_all($stairDb)]);
+        $cleared = $stairWeb['nodes'];
+        $cleared[0]['stair_up_heading'] = null;
+        $cleared[0]['stair_down_heading'] = null;
+        check('取り込み: 向きを外した階段は消える', [0, []], [km_map_node_stairs_sync($stairDb, $cleared), km_map_node_stairs_all($stairDb)]);
+    }
+    $syncCode = (string) file_get_contents(__DIR__ . '/../lib/app-map-sync.php');
+    check_bool('取り込み: 表は取引の前に作り、作れなくても止めない・ノードを入れたあとに向きを入れる', strpos($syncCode, 'km_map_node_stairs_ensure_table($pdo);') < strpos($syncCode, '$pdo->beginTransaction();')
+        && strpos($syncCode, 'km_map_node_stairs_sync($pdo, $converted[\'nodes\']);') > strpos($syncCode, '$insertNode->execute($values);'));
 
     km_check_heading('posters: 広告(重み 10%・必ず 1 件)・数・チュートリアルの終わりの知らせ(2026-10-21)');
     check('広告の重みは 10%(利用者の指示。全部同じ)', 10, KM_POSTER_AD_WEIGHT);

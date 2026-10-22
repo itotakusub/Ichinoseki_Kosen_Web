@@ -33,6 +33,7 @@ declare(strict_types=1);
  */
 
 require_once __DIR__ . '/app-map.php';
+require_once __DIR__ . '/map-node-stairs.php';
 
 /**
  * アプリの基準マップ画像の実寸(`res/drawable/f1_r.png` ほか、全階 1600×1200)。
@@ -305,6 +306,12 @@ function km_app_map_to_web(stdClass $map): array
             'path_loss_exponent' => km_app_map_nullable_float($node->pathLossExponent ?? null),
             'transfer_group_id' => $transfer === '' ? null : $transfer,
             /*
+             * 階段の上り口・下り口の向き(2026-10-22。lib/map-node-stairs.php)。km_map_nodes の列ではなく
+             * 別の表へ入れる(取り込みの最後に km_map_node_stairs_sync)。列の並びに無いので km_map_nodes には書かれない
+             */
+            'stair_up_heading' => km_map_heading($node->stairUpHeading ?? null),
+            'stair_down_heading' => km_map_heading($node->stairDownHeading ?? null),
+            /*
              * **倍率は掛けない。** 見取り図をアプリの画像へ揃える前提なので、
              * x はそのまま。y だけ Leaflet の向きに合わせて反転する。
              *
@@ -462,6 +469,15 @@ function km_app_map_snapshot_from_rows(
         $node->txPowerAtOneMeter = km_app_map_nullable_int($row['tx_power_at_one_meter'] ?? null);
         $node->pathLossExponent = km_app_map_nullable_float($row['path_loss_exponent'] ?? null);
         $node->occupantName = $occupant === '' ? null : $occupant;
+        // 階段の上り口・下り口の向き(2026-10-22。別の表から km_app_map_from_web が足す)。**在るときだけ載せる**(形を変えない)
+        $upHeading = km_map_heading($row['stair_up_heading'] ?? null);
+        $downHeading = km_map_heading($row['stair_down_heading'] ?? null);
+        if ($type === 'stairs' && $upHeading !== null) {
+            $node->stairUpHeading = $upHeading;
+        }
+        if ($type === 'stairs' && $downHeading !== null) {
+            $node->stairDownHeading = $downHeading;
+        }
 
         $nodes[] = $node;
         $byId[(string) ($row['id'] ?? '')] = $node;
@@ -589,6 +605,18 @@ function km_app_map_from_web(PDO $pdo): array
                 transfer_group_id, x, y, z
            FROM km_map_nodes'
     )->fetchAll(PDO::FETCH_ASSOC);
+    // 階段の上り口・下り口の向き(2026-10-22。別の表。無ければ足さない)
+    $stairs = km_map_node_stairs_all($pdo);
+    if ($stairs !== []) {
+        foreach ($nodes as &$row) {
+            $heading = $stairs[(string) ($row['uuid'] ?? '')] ?? null;
+            if ($heading !== null) {
+                $row['stair_up_heading'] = $heading['up'];
+                $row['stair_down_heading'] = $heading['down'];
+            }
+        }
+        unset($row);
+    }
 
     $edges = $pdo->query(
         'SELECT from_node_id, to_node_id FROM km_map_edges'

@@ -211,6 +211,7 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     'poster.update' => 'がポスターを変更しました',
     'poster.delete' => 'がポスターを消しました',
     'poster.import' => 'がポスターをまとめて取り込みました',
+    'node.likes_reset' => 'が部屋のいいねを 0 に戻しました',
     // テーブル管理の外部接続(2026-10-21、lib/table-api.php)。書き込みは外のプログラムからで、実行者は無く IP だけ残る
     'table.api_create' => 'がテーブルの外部接続を作りました',
     'table.api_revoke' => 'がテーブルの外部接続を取り消しました',

@@ -385,6 +385,15 @@ function km_app_map_sync_apply(
 ): array {
     // BSSID の列を広げる。**取引の前に**(ALTER は取引を勝手に確定させる)
     $bssidWidth = km_map_nodes_ensure_bssid_width($pdo);
+    // 階段の上り口・下り口の向きの表(2026-10-22。lib/map-node-stairs.php)。CREATE も取引の前に。作れなくても取り込みは止めない
+    require_once __DIR__ . '/map-node-stairs.php';
+    $stairsTable = true;
+    try {
+        km_map_node_stairs_ensure_table($pdo);
+    } catch (Throwable $exception) {
+        error_log('km_app_map_sync_apply: 階段の向きの表を作れません: ' . $exception->getMessage());
+        $stairsTable = false;
+    }
     $pdo->beginTransaction();
     try {
         /*
@@ -459,6 +468,10 @@ function km_app_map_sync_apply(
             } else {
                 $added++;
             }
+        }
+        // 階段の上り口・下り口の向き(取り込んだ地図が正本。向きの無い階段は消す)
+        if ($stairsTable) {
+            km_map_node_stairs_sync($pdo, $converted['nodes']);
         }
 
         /*

@@ -9,6 +9,7 @@ require_once dirname(__DIR__) . '/lib/posters.php';
 require_once dirname(__DIR__) . '/lib/poster-import.php';
 require_once dirname(__DIR__) . '/lib/map-events.php';
 require_once dirname(__DIR__) . '/lib/admin-log.php';
+require_once dirname(__DIR__) . '/lib/node-extras.php';
 
 /**
  * ポスター・広告と、地点の URL(2026-10-21、利用者の指示。lib/posters.php)。
@@ -124,6 +125,18 @@ try {
             }
         }
 
+        // 部屋のいいねを 0 に戻す(2026-10-22。lib/node-extras.php)
+        if ($formAction === 'likes_reset') {
+            $likeNode = (string) ($_POST['node_uuid'] ?? '');
+            if (km_node_uuid_valid($likeNode)) {
+                km_node_likes_ensure_table($pdo);
+                $removed = km_node_likes_reset($pdo, $likeNode);
+                km_admin_log_record('content', 'node.likes_reset', $likeNode . '(' . $removed . ' 件)');
+            }
+            header('Location: ./posters.php?saved=likes_reset#node-likes', true, 303);
+            exit;
+        }
+
         if ($formAction === 'link_delete') {
             $nodeId = (string) ($_POST['node_id'] ?? '');
             km_node_link_delete($pdo, $nodeId);
@@ -142,6 +155,7 @@ try {
         'link' => '地点の URL を保存しました。',
         'link_removed' => '地点の URL を外しました。',
         'tutorial_end' => 'チュートリアルの終わりの知らせを保存しました。',
+        'likes_reset' => 'いいねを 0 に戻しました。',
     ][(string) ($_GET['saved'] ?? '')] ?? null;
 
     $mode = km_poster_mode($pdo);
@@ -156,6 +170,8 @@ try {
     $nodeOptions = km_poster_node_options($pdo);
     $tutorialEnd = km_tutorial_end_config($pdo);
     $stats = km_poster_stats_totals($pdo);
+    km_node_likes_ensure_table($pdo);
+    $likeTotals = km_node_likes_totals($pdo);
 } catch (Throwable $exception) {
     error_log('posters.php: ' . $exception->getMessage());
     $dbError = km_admin_error_message($exception, '詳しくはサーバーのログを照合してください。');
@@ -167,6 +183,7 @@ try {
     $nodeOptions = [];
     $tutorialEnd = ['text' => KM_TUTORIAL_END_TEXT_DEFAULT, 'ownSurveyUrl' => '', 'surveyUrl' => '', 'phoneQr' => true];
     $stats = [];
+    $likeTotals = [];
 }
 // 広告(地点なし・出しているもの)の数と、1 件が選ばれる割合(全部同じ重みなので 1 / 件数。lib/posters.php)
 $adCount = count(array_filter($posters, static fn (array $p): bool => $p['nodeId'] === '' && $p['isEnabled']));
@@ -608,6 +625,42 @@ require __DIR__ . '/_inc/partials/page-header.php';
                     </form>
                   </div>
                 </div>
+              </div>
+            </div>
+
+            <div class="card mb-4" id="node-likes">
+              <div class="card-header"><h3 class="card-title">部屋のいいね(<?= count($likeTotals) ?> 地点)</h3></div>
+              <div class="card-body">
+                <p class="fs-7 text-body-secondary">
+                  Android アプリの部屋の詳細で付けられる「いいね」の数です(2026-10-22)。<strong>だれが付けたかは持っていません</strong>
+                  (端末ごとの印を鍵つきの印にしてだけ持ち、1 端末 1 地点 1 つ。同じ送り元から 1 時間に <?= KM_NODE_LIKE_SOURCE_LIMIT ?> まで)。
+                  部屋の詳細には、この画面で地点に置いたポスターが写真として出ます。
+                </p>
+                <?php if ($likeTotals === []): ?>
+                  <p class="text-body-secondary fs-7">まだありません。</p>
+                <?php else: ?>
+                  <div class="table-responsive">
+                    <table class="table table-sm align-middle">
+                      <thead><tr><th scope="col">地点</th><th scope="col" class="text-end">いいね</th><th scope="col"></th></tr></thead>
+                      <tbody>
+                        <?php foreach ($likeTotals as $likeRow): ?>
+                          <tr>
+                            <td><?= km_e($likeRow['name'] !== '' ? $likeRow['name'] : $likeRow['uuid'] . '(地図に無い)') ?></td>
+                            <td class="text-end"><?= (int) $likeRow['count'] ?></td>
+                            <td>
+                              <form method="post" class="m-0" data-km-confirm="この地点のいいねを 0 に戻します。よろしいですか?">
+                                <?= km_csrf_field() ?>
+                                <input type="hidden" name="form_action" value="likes_reset">
+                                <input type="hidden" name="node_uuid" value="<?= km_e($likeRow['uuid']) ?>">
+                                <button type="submit" class="btn btn-sm btn-outline-danger">0 に戻す</button>
+                              </form>
+                            </td>
+                          </tr>
+                        <?php endforeach; ?>
+                      </tbody>
+                    </table>
+                  </div>
+                <?php endif; ?>
               </div>
             </div>
           </div>
