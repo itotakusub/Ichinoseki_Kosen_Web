@@ -26,8 +26,9 @@ $events = [];
 $isolation = null;
 $cleanupMode = 'manual';
 $expiredForCleanup = [];
-$importPending = ['events' => [], 'uploadedAt' => null, 'error' => null];
+$importPending = ['events' => [], 'projects' => null, 'uploadedAt' => null, 'error' => null];
 $importPreview = [];
+$importProjects = null;
 
 try {
     $pdo = km_db();
@@ -71,6 +72,11 @@ try {
                     }
                     $result = km_map_event_import_apply($pdo, $pendingEvent);
                     $applied[] = $result['converted']['name'] . ($result['created'] ? '(新規・無効)' : '(入れ替え)');
+                }
+                // 教室などに振った企画の番号(2026-10-23。同じファイルの地図から。それまでここでは入らなかった)
+                if ($pending['projects'] !== null && ($_POST['import_projects'] ?? '') === '1') {
+                    km_map_event_import_apply_projects($pdo, $pending['projects']);
+                    $applied[] = '企画の番号 ' . count($pending['projects']) . ' 地点';
                 }
                 if ($applied === []) {
                     throw new InvalidArgumentException('取り込むイベントを選んでください。');
@@ -181,6 +187,11 @@ try {
     $importPending = km_map_event_import_load();
     if ($importPending['events'] !== []) {
         $importPreview = km_map_event_import_preview($pdo, $importPending['events']);
+    }
+    if ($importPending['projects'] !== null) {
+        $importProjects = km_map_event_import_projects_summary(
+            $importPending['projects'], km_map_event_import_known_nodes($pdo), km_map_node_projects_all($pdo)
+        );
     }
 
     // いま重ねている内容で、到達できなくなる場所がどれだけあるか
@@ -434,6 +445,21 @@ $fmt = static fn (?string $value): string => $value === null || $value === ''
                         </tbody>
                       </table>
                     </div>
+                    <?php if ($importProjects !== null): ?>
+                      <?php // 教室などに振った企画の番号(2026-10-23。一時地点とは別に、部屋の地点ごとに持つ) ?>
+                      <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" name="import_projects" value="1" id="km-import-projects" checked>
+                        <label class="form-check-label" for="km-import-projects">
+                          企画の番号も入れ替える(番号のある地点 <strong><?= (int) $importProjects['nodes'] ?></strong>・番号 <?= (int) $importProjects['numbers'] ?> 個。いま Website: <?= (int) $importProjects['current'] ?> 地点)
+                        </label>
+                        <div class="form-text">
+                          教室などの地点に管理アプリで振った番号です。一時地点の数(上の表)とは別に数えます。番号でポスターとスケジュールの場所が決まり、「イベントの地点だけ」のときも出る地点になります。
+                          <?php if ($importProjects['unknown'] > 0): ?>
+                            <span class="text-danger">Website に無い地点が <?= (int) $importProjects['unknown'] ?> あります(先に「アプリの地図を取り込む」を)。</span>
+                          <?php endif; ?>
+                        </div>
+                      </div>
+                    <?php endif; ?>
                     <button type="submit" class="btn btn-primary">選んだイベントを取り込む</button>
                   </form>
                   <form method="post" class="mt-2">
@@ -494,7 +520,7 @@ $fmt = static fn (?string $value): string => $value === null || $value === ''
                             </td>
                             <td class="text-end fs-7">
                               通行止め <?= $event['closureCount'] ?><br>
-                              地点 <?= $event['poiCount'] ?> / 名前 <?= $event['aliasCount'] ?>
+                              一時地点 <?= $event['poiCount'] ?> / 名前 <?= $event['aliasCount'] ?>
                               <?php if ($event['hiddenCount'] > 0): ?>
                                 <br>表示しない <?= $event['hiddenCount'] ?>
                               <?php endif; ?>

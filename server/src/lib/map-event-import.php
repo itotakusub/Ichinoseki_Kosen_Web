@@ -92,9 +92,13 @@ function km_map_event_import_store(string $tmpPath, int $size): ?string
     if ($path === null) {
         return '置き場所の設定を読めませんでした。';
     }
-    // 置くのはイベントだけ(地図の本体は要らない。氏名も置き場に残さない)
+    /*
+     * 置くのはイベントと、地点に振った企画の番号だけ(地図の本体は要らない。氏名も置き場に残さない)。
+     * 番号(2026-10-23、利用者の報告「教室に企画番号を設定したが表示されない・取り込むと地点が 35 で少ない」)は
+     * それまで「アプリの地図を取り込む」でしか入らず、ここでは捨てていた。地点の無い書き出しなら null(表を触らない)
+     */
     $payload = json_encode(
-        ['uploadedAt' => date('Y-m-d H:i:s'), 'events' => $events],
+        ['uploadedAt' => date('Y-m-d H:i:s'), 'events' => $events, 'projects' => km_map_event_import_projects_of_map($map)],
         JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
     );
     if ($payload === false || @file_put_contents($path, $payload) === false) {
@@ -126,26 +130,100 @@ function km_map_event_import_events_of(stdClass $map): array
 }
 
 /**
- * 取り込み待ち。無ければ events が空。
+ * 書き出しの地図の地点に振った企画の番号(uuid => 番号)。地点が 1 つも無い書き出しなら null。**純粋関数**
  *
- * @return array{events: array<int, stdClass>, uploadedAt: ?string, error: ?string}
+ * @return array<string, list<string>>|null
+ */
+function km_map_event_import_projects_of_map(stdClass $map): ?array
+{
+    if (!isset($map->nodes) || !is_array($map->nodes) || $map->nodes === []) {
+        return null;
+    }
+    return km_map_projects_from_app($map);
+}
+
+/**
+ * 置き場に入れた番号を読み戻す(JSON の {} / [] / null のどれでも)。**純粋関数**
+ *
+ * @return array<string, list<string>>|null
+ */
+function km_map_event_import_projects_of(mixed $stored): ?array
+{
+    if ($stored === null || (!is_array($stored) && !($stored instanceof stdClass))) {
+        return null;
+    }
+    $projects = [];
+    foreach ((array) $stored as $uuid => $numbers) {
+        $uuid = trim((string) $uuid);
+        $numbers = km_map_project_numbers($numbers);
+        if ($uuid !== '' && strlen($uuid) <= 64 && $numbers !== []) {
+            $projects[$uuid] = $numbers;
+        }
+    }
+    return $projects;
+}
+
+/**
+ * 取り込み待ち。無ければ events が空。projects は地点に振った企画の番号(地点の無い書き出し・前の版で置いたものは null)
+ *
+ * @return array{events: array<int, stdClass>, projects: ?array<string, list<string>>, uploadedAt: ?string, error: ?string}
  */
 function km_map_event_import_load(): array
 {
     $path = km_map_event_import_path();
     if ($path === null || !is_readable($path)) {
-        return ['events' => [], 'uploadedAt' => null, 'error' => null];
+        return ['events' => [], 'projects' => null, 'uploadedAt' => null, 'error' => null];
     }
     $decoded = json_decode((string) file_get_contents($path));
     if (!($decoded instanceof stdClass) || !is_array($decoded->events ?? null)) {
-        return ['events' => [], 'uploadedAt' => null, 'error' => '取り込み待ちのファイルを読み取れません。捨ててから上げ直してください。'];
+        return ['events' => [], 'projects' => null, 'uploadedAt' => null, 'error' => '取り込み待ちのファイルを読み取れません。捨ててから上げ直してください。'];
     }
 
     return [
         'events' => km_map_event_import_events_of($decoded),
+        'projects' => km_map_event_import_projects_of($decoded->projects ?? null),
         'uploadedAt' => is_string($decoded->uploadedAt ?? null) ? $decoded->uploadedAt : null,
         'error' => null,
     ];
+}
+
+/**
+ * 企画の番号の見せ物: 番号のある地点の数・そのうち Website に無い地点・番号の数・いま Website にある番号の地点の数。**純粋関数**
+ *
+ * @param array<string, list<string>> $projects uuid => 番号
+ * @param array<string, mixed> $knownNodes id => …(km_map_event_import_known_nodes)
+ * @param array<string, list<string>> $current いまの表(uuid => 番号)
+ * @return array{nodes:int, unknown:int, numbers:int, current:int}
+ */
+function km_map_event_import_projects_summary(array $projects, array $knownNodes, array $current): array
+{
+    $unknown = 0;
+    $numbers = [];
+    foreach ($projects as $uuid => $list) {
+        if (!isset($knownNodes[km_app_map_node_id((string) $uuid)])) {
+            $unknown++;
+        }
+        foreach ($list as $number) {
+            $numbers[$number] = true;
+        }
+    }
+    return ['nodes' => count($projects), 'unknown' => $unknown, 'numbers' => count($numbers), 'current' => count($current)];
+}
+
+/** 企画の番号の表を、取り込んだファイルの番号で丸ごと入れ替える(地図の取り込みと同じ)。入れた行の数 */
+function km_map_event_import_apply_projects(PDO $pdo, array $projects): int
+{
+    // CREATE は取引を確定させるので、取引の前に
+    km_map_node_projects_ensure_table($pdo);
+    $pdo->beginTransaction();
+    try {
+        $saved = km_map_node_projects_sync($pdo, $projects);
+        $pdo->commit();
+    } catch (Throwable $exception) {
+        $pdo->rollBack();
+        throw $exception;
+    }
+    return $saved;
 }
 
 /** 取り込み待ちを捨てる。無ければ何もしない。 */

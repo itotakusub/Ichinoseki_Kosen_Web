@@ -7774,6 +7774,20 @@ function km_check_layout(): void
     check('取り込み: 版 22 の a / b の接続を読む・つないでいない地点は部屋より道を先に選ぶ', ['cccccccccccccccccccccccccccccccc', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'],
         array_column($importConverted['pois'], 'anchorNodeId'));
     check_bool('取り込み: Website で作って渡したイベント(web-event-<番号>)は、その番号のイベントを更新する', str_contains((string) file_get_contents(__DIR__ . '/../lib/map-event-import.php'), "if (\$found === false && \$webEventId !== null) {"));
+    // イベントの取り込みでも教室の企画の番号を入れる(2026-10-23、利用者の報告「取り込むと地点が 35 で少ない」。それまで番号は捨てていた)
+    $importProjectsMap = json_decode('{"nodes":[{"uuid":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","projectNumbers":["22"]},{"uuid":"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb","projectNumbers":["33","３４"]},{"uuid":"cccccccc-cccc-cccc-cccc-cccccccccccc"},{"uuid":"dddddddd-dddd-dddd-dddd-dddddddddddd","projectNumbers":["22"]}],"events":[]}');
+    $importProjects = km_map_event_import_projects_of_map($importProjectsMap);
+    check('取り込み: 書き出しの地点の企画の番号を置き場に入れ、読み戻しても同じ・地点の無い書き出しは null(表を触らない)',
+        [3, $importProjects, null, [], null],
+        [count($importProjects), km_map_event_import_projects_of(json_decode((string) json_encode(['p' => $importProjects]))->p),
+            km_map_event_import_projects_of_map(json_decode('{"events":[]}')), km_map_event_import_projects_of(json_decode('[]')), km_map_event_import_projects_of(null)]);
+    check('取り込み: 番号の見せ物(地点の数・Website に無い地点・番号の数・いまの数)', ['nodes' => 3, 'unknown' => 1, 'numbers' => 3, 'current' => 0],
+        km_map_event_import_projects_summary($importProjects, ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' => [], 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' => []], []));
+    $mapEventsAdmin = (string) file_get_contents(__DIR__ . '/../admin/map-events.php');
+    check_bool('取り込みの画面: 企画の番号も入れ替える(既定で印)・一時地点の数と分けて出す', str_contains($mapEventsAdmin, "if (\$pending['projects'] !== null && (\$_POST['import_projects'] ?? '') === '1') {")
+        && str_contains($mapEventsAdmin, 'name="import_projects" value="1" id="km-import-projects" checked')
+        && str_contains($mapEventsAdmin, '一時地点 <?= $event[\'poiCount\'] ?>')
+        && str_contains((string) file_get_contents(__DIR__ . '/../lib/map-event-import.php'), "'projects' => km_map_event_import_projects_of_map(\$map)]"));
     check('一時地点の名前が番号なら企画の番号(名前全体のときだけ)', ['21', 'A-3', null, null, null],
         [km_map_project_number_from_name(' 21 '), km_map_project_number_from_name('a-3'), km_map_project_number_from_name('受付'), km_map_project_number_from_name('21 たこ焼き'), km_map_project_number_from_name('')]);
     check('番号ごとの臨時の地点', ['21' => [7, 9], 'A-3' => [8]], km_map_project_pois([['id' => 7, 'name' => '21'], ['id' => 8, 'name' => 'A-3'], ['id' => 9, 'name' => '２１'], ['id' => 10, 'name' => 'ゴミ箱']]));
