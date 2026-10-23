@@ -44,6 +44,8 @@ $openMenus = [
     'faq' => 'content',
     // QR のリンク集(2026-10-24、lib/qr-links.php)
     'qrLinks' => 'content',
+    // お知らせ(2026-10-24、lib/notices.php)
+    'notices' => 'content',
     // 規約とポリシーへ足す章。本文はコードのまま(admin/legal.php の説明を参照)
     'legal' => 'content',
     'calendar' => 'extra',
@@ -293,6 +295,13 @@ $parentLink = static fn(string $id): string => 'nav-link' . ($openMenu === $id ?
                     <a href="./faq.php" class="<?= $link('faq') ?>">
                       <i class="nav-icon bi bi-question-circle"></i>
                       <p data-i18n="side.faq">FAQ</p>
+                    </a>
+                  </li>
+                  <?php // お知らせ(2026-10-24。地図の最初の画面と /notice.php) ?>
+                  <li class="nav-item">
+                    <a href="./notices.php" class="<?= $link('notices') ?>">
+                      <i class="nav-icon bi bi-megaphone"></i>
+                      <p data-i18n="side.notices">お知らせ</p>
                     </a>
                   </li>
                   <?php // QR のリンク集(2026-10-24。公開ページ /qr.php に並べるリンク) ?>

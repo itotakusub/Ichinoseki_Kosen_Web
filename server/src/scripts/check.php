@@ -7931,24 +7931,63 @@ function km_check_layout(): void
         && strpos($qrAdmin, 'km_csrf_verify()') < strpos($qrAdmin, 'km_qr_link_save(') && str_contains($qrAdmin, "'qr_link.create'")
         && str_contains((string) file_get_contents(__DIR__ . '/../admin/_inc/partials/sidebar.php'), 'href="./qr-links.php"'));
 
-    km_check_heading('お知らせ: 最初の画面に PHP の脆弱性の報告(2026-10-24)');
+    km_check_heading('お知らせ: 管理画面で書く・最初の画面と詳しいページ・プレビュー(2026-10-24)');
     require_once __DIR__ . '/../lib/notices.php';
-    $phpNotice = km_notice_find('php-rce-2026-10');
-    check_bool('PHP の脆弱性のお知らせがある(CVE の番号・修正版・跡は見つからなかった・操作は要らない)', $phpNotice !== null
-        && str_contains(json_encode($phpNotice, JSON_UNESCAPED_UNICODE), 'CVE-2026-109618') && str_contains(json_encode($phpNotice, JSON_UNESCAPED_UNICODE), '8.4.27')
-        && str_contains($phpNotice['summary'], '不正に使われた跡は見つかっていません') && str_contains($phpNotice['summary'], '行っていただく操作はありません'));
-    $noticeSample = [['id' => 'a', 'date' => '2026-10-01', 'until' => '2026-10-31'], ['id' => 'b', 'date' => '2026-10-20', 'until' => '2026-11-30'], ['id' => 'c', 'date' => '2026-12-01', 'until' => '2026-12-31']];
-    check('お知らせ: 最初の画面には載せる期間の中のものだけ・新しい順', [['b', 'a'], ['b'], []],
+    check('本文: 「## 」の行が見出し・空行で段落・見出しより前の段落も残す', [
+        ['heading' => null, 'paragraphs' => ['はじめの段落']],
+        ['heading' => '何があったか', 'paragraphs' => ["一行目\n二行目", '次の段落']],
+        ['heading' => '空の節', 'paragraphs' => []],
+    ], km_notice_parse_body("はじめの段落\n\n## 何があったか\n一行目\n二行目\n\n\n次の段落\n## 空の節\n"));
+    check('入力: 整える・最後の日は空なら null', ['title' => '題', 'summary' => '短い', 'body' => '', 'publishedOn' => '2026-10-24', 'showOnWelcome' => true, 'showUntil' => null, 'isPublished' => false],
+        km_notice_validate(['title' => ' 題 ', 'summary' => ' 短い ', 'body' => '', 'publishedOn' => '2026-10-24', 'showOnWelcome' => true, 'showUntil' => '']));
+    $noticeRefused = [];
+    foreach ([['title' => '', 'summary' => 'x', 'publishedOn' => '2026-10-24'], ['title' => 'x', 'summary' => '', 'publishedOn' => '2026-10-24'],
+        ['title' => 'x', 'summary' => 'x', 'publishedOn' => '2026-02-30'], ['title' => 'x', 'summary' => 'x', 'publishedOn' => '2026-10-24', 'showUntil' => '2026-10-01']] as $bad) {
+        try {
+            km_notice_validate($bad);
+            $noticeRefused[] = false;
+        } catch (InvalidArgumentException $exception) {
+            $noticeRefused[] = true;
+        }
+    }
+    check('入力: 題・短い文が空・無い日付・最後の日が日付より前を断る', [true, true, true, true], $noticeRefused);
+    $noticeSample = [
+        ['id' => 1, 'date' => '2026-10-01', 'until' => '2026-10-31', 'showOnWelcome' => true],
+        ['id' => 2, 'date' => '2026-10-20', 'until' => null, 'showOnWelcome' => true],
+        ['id' => 3, 'date' => '2026-10-20', 'until' => null, 'showOnWelcome' => false],
+        ['id' => 4, 'date' => '2026-12-01', 'until' => '2026-12-31', 'showOnWelcome' => true],
+    ];
+    check('最初の画面: 「最初の画面に出す」が付いていて、出す期間の中のものだけ(最後の日が空なら終わりなし)', [[1, 2], [2], []],
         [array_column(km_notices_current('2026-10-24', $noticeSample), 'id'), array_column(km_notices_current('2026-11-05', $noticeSample), 'id'), array_column(km_notices_current('2026-09-01', $noticeSample), 'id')]);
-    check('お知らせ: id の形・日付の書き方', [true, false, false, '2026年10月24日'], [km_notice_id_valid('php-rce-2026-10'), km_notice_id_valid('../x'), km_notice_id_valid(''), km_notice_date_label('2026-10-24')]);
+    check('id は数字だけ・日付の書き方', [true, false, false, '2026年10月24日'], [km_notice_id_valid('12'), km_notice_id_valid('../x'), km_notice_id_valid('0'), km_notice_date_label('2026-10-24')]);
+    $noticeHtml = km_notice_detail_html(['date' => '2026-10-24', 'summary' => '<b>x</b>', 'sections' => [['heading' => '<script>', 'paragraphs' => ['a & b']]]]);
+    check_bool('くわしいページの中身は全部エスケープする(HTML は書かせない)', str_contains($noticeHtml, '&lt;b&gt;x&lt;/b&gt;') && str_contains($noticeHtml, '<h2>&lt;script&gt;</h2>') && str_contains($noticeHtml, 'a &amp; b'));
+    if (extension_loaded('pdo_sqlite')) {
+        $noticeDb = new PDO('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+        check('公開: 表が無ければ空(公開ページからは作らない)', [], km_notices_public($noticeDb, '2026-10-24'));
+        $noticeDb->exec('CREATE TABLE km_notices (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, summary TEXT, body TEXT, published_on TEXT, show_on_welcome INT, show_until TEXT, is_published INT, created_at TEXT, updated_at TEXT)');
+        $noticeDb->exec("INSERT INTO km_notices (title, summary, body, published_on, show_on_welcome, show_until, is_published) VALUES
+            ('公開', 's', '## 見出し\n本文', '2026-10-24', 1, NULL, 1), ('下書き', 's', '', '2026-10-24', 1, NULL, 0), ('先の日付', 's', '', '2026-12-01', 1, NULL, 1)");
+        $noticePublic = km_notices_public($noticeDb, '2026-10-24');
+        check('公開: 公開の印があり日付が来たものだけ(下書き・先の日付は出さない)・本文を節に分ける', [['公開'], '見出し'],
+            [array_column($noticePublic, 'title'), $noticePublic[0]['sections'][0]['heading'] ?? null]);
+    }
+    $noticeLib = (string) file_get_contents(__DIR__ . '/../lib/notices.php');
+    check_bool('1 件目は PHP の脆弱性の報告(表を作ったときだけ。CVE・修正版・跡は見つからなかった・操作は要らない)', str_contains($noticeLib, 'if ($created) {')
+        && str_contains($noticeLib, 'CVE-2026-109618') && str_contains($noticeLib, '8.4.27') && str_contains($noticeLib, '不正に使われた跡は見つかっていません') && str_contains($noticeLib, '行っていただく操作はありません'));
     $noticeIndex = (string) file_get_contents(__DIR__ . '/../index.php');
     $noticeWelcome = (string) file_get_contents(__DIR__ . '/../Main/welcome.js');
-    check_bool('「はじめに」の先頭にお知らせ・読んでいないお知らせがあれば読んだ人にも出す・設定から一覧へ', str_contains($noticeIndex, "\$kmNotices = km_notices_current((new DateTimeImmutable('now', new DateTimeZone('Asia/Tokyo')))->format('Y-m-d'));")
+    check_bool('「はじめに」の先頭にお知らせ(読めなければ出さない)・読んでいないお知らせがあれば読んだ人にも出す・設定から一覧へ', str_contains($noticeIndex, '$kmNotices = km_notices_current(km_notice_today(), km_notices_public(km_db(), km_notice_today()));')
         && str_contains($noticeIndex, 'data-notices="<?= km_home_e(implode(\',\', array_column($kmNotices, \'id\'))) ?>"') && str_contains($noticeIndex, '<a href="/notice.php" class="secondary-btn">お知らせ</a>')
         && str_contains($noticeWelcome, 'if ((!seen() || unreadNotices().length > 0) && !fromRoomQr) open();'));
-    check_bool('くわしいページは id の形を確かめてから探す・知らなければ 404 と一覧', str_contains((string) file_get_contents(__DIR__ . '/../notice.php'), '$notice = km_notice_id_valid($id) ? km_notice_find($id) : null;')
-        && str_contains((string) file_get_contents(__DIR__ . '/../notice.php'), 'http_response_code(404);'));
-
+    $noticePage = (string) file_get_contents(__DIR__ . '/../notice.php');
+    check_bool('くわしいページ: 公開しているものだけ・知らなければ 404 と一覧・DB が止まっても出す・中身はプレビューと同じ組み立て', str_contains($noticePage, '$all = km_notices_public(km_db(), km_notice_today());')
+        && str_contains($noticePage, 'http_response_code(404);') && str_contains($noticePage, "error_log('notice.php (public) failed (fail open): '") && str_contains($noticePage, '<?= km_notice_detail_html($notice) ?>'));
+    $noticeAdmin = (string) file_get_contents(__DIR__ . '/../admin/notices.php');
+    check_bool('管理画面: guard の内側・CSRF を見てから書く・プレビューは保存しない(公開ページと同じ組み立て)・記録に残す・左の一覧にある', str_contains($noticeAdmin, "require __DIR__ . '/_inc/guard.php';")
+        && strpos($noticeAdmin, 'km_csrf_verify()') < strpos($noticeAdmin, 'km_notice_save(') && str_contains($noticeAdmin, "if (\$formAction === 'preview') {")
+        && str_contains($noticeAdmin, '<?= km_notice_detail_html($preview) ?>') && str_contains($noticeAdmin, "'notice.create'")
+        && str_contains((string) file_get_contents(__DIR__ . '/../admin/_inc/partials/sidebar.php'), 'href="./notices.php"'));
     km_check_heading('posters: 広告(重み 10%・必ず 1 件)・数・チュートリアルの終わりの知らせ(2026-10-21)');
     check('広告の重みは 10%(利用者の指示。全部同じ)', 10, KM_POSTER_AD_WEIGHT);
     check('広告が 1 件なら 100%・2 件なら 50%・10 件なら 10%・無ければ 0(表示しないわけではない)', [1.0, 0.5, 0.1, 0.0],

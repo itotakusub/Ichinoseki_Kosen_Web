@@ -922,8 +922,13 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
      * **「はじめに」を読んだことのある人にも、まだ読んでいないお知らせがあれば 1 回だけ出す**
      */
     require_once __DIR__ . '/lib/notices.php';
-    // 日付は日本時間で比べる(サーバーの時刻帯の設定に左右されない)
-    $kmNotices = km_notices_current((new DateTimeImmutable('now', new DateTimeZone('Asia/Tokyo')))->format('Y-m-d'));
+    // 中身は管理画面「お知らせ」(admin/notices.php)。日付は日本時間で比べる。読めなければ出さない(地図は出す)
+    try {
+        $kmNotices = km_notices_current(km_notice_today(), km_notices_public(km_db(), km_notice_today()));
+    } catch (Throwable $exception) {
+        error_log('KosenMap home: notices: ' . $exception->getMessage());
+        $kmNotices = [];
+    }
     $kmMailFrom = getenv('MAIL_FROM');
     $kmMailFrom = is_string($kmMailFrom) && str_contains($kmMailFrom, '@') ? $kmMailFrom : null;
     ?>
@@ -935,7 +940,7 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
                     <p class="km-welcome-notice-head">📢 お知らせ(<?= km_home_e(km_notice_date_label($kmNotice['date'])) ?>)</p>
                     <b class="km-welcome-notice-title"><?= km_home_e($kmNotice['title']) ?></b>
                     <p class="km-welcome-notice-text"><?= km_home_e($kmNotice['summary']) ?></p>
-                    <a class="km-welcome-notice-link" href="/notice.php?id=<?= km_home_e(rawurlencode($kmNotice['id'])) ?>" target="_blank" rel="noopener">くわしく読む ↗</a>
+                    <a class="km-welcome-notice-link" href="/notice.php?id=<?= (int) $kmNotice['id'] ?>" target="_blank" rel="noopener">くわしく読む ↗</a>
                 </section>
             <?php endforeach; ?>
             <h2 id="km-welcome-title" class="km-welcome-title">📍 高専マップ案内へようこそ</h2>
