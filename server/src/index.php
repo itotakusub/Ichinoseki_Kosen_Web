@@ -892,6 +892,8 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
                         初めて開いたときに出した案内(利用規約・メールについて)を、もう一度読めます。
                     </p>
                     <button type="button" class="secondary-btn" data-km-welcome-open>はじめにを読む</button>
+                    <?php /* お知らせの一覧(lib/notices.php。2026-10-24) */ ?>
+                    <a href="/notice.php" class="secondary-btn">お知らせ</a>
                     <?php /* 初回に出す操作の案内(Main/tutorial.js)をもう一度 */ ?>
                     <button type="button" class="secondary-btn" data-km-tutorial-open>操作の案内を見る</button>
                 </div>
@@ -914,11 +916,28 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
      * 開け閉ては Main/welcome.js。「ダウンロード・設定」からいつでも読み直せる。
      */
     $kmWelcomeVersion = '2026-09-25';
+    /*
+     * お知らせ(2026-10-24、利用者の指示「最初の画面で PHP 脆弱性についての報告文」。lib/notices.php)。
+     * 載せる期間の中のものを「はじめに」の先頭に出す。読んだかは Main/welcome.js が手元に覚え、
+     * **「はじめに」を読んだことのある人にも、まだ読んでいないお知らせがあれば 1 回だけ出す**
+     */
+    require_once __DIR__ . '/lib/notices.php';
+    // 日付は日本時間で比べる(サーバーの時刻帯の設定に左右されない)
+    $kmNotices = km_notices_current((new DateTimeImmutable('now', new DateTimeZone('Asia/Tokyo')))->format('Y-m-d'));
     $kmMailFrom = getenv('MAIL_FROM');
     $kmMailFrom = is_string($kmMailFrom) && str_contains($kmMailFrom, '@') ? $kmMailFrom : null;
     ?>
-    <div id="km-welcome" class="km-welcome" data-version="<?= km_home_e($kmWelcomeVersion) ?>" hidden>
+    <div id="km-welcome" class="km-welcome" data-version="<?= km_home_e($kmWelcomeVersion) ?>" data-notices="<?= km_home_e(implode(',', array_column($kmNotices, 'id'))) ?>" hidden>
         <div class="km-welcome-card" role="dialog" aria-modal="true" aria-labelledby="km-welcome-title">
+            <?php foreach ($kmNotices as $kmNotice): ?>
+                <?php /* お知らせ(lib/notices.php)。くわしくは notice.php */ ?>
+                <section class="km-welcome-notice" aria-label="お知らせ">
+                    <p class="km-welcome-notice-head">📢 お知らせ(<?= km_home_e(km_notice_date_label($kmNotice['date'])) ?>)</p>
+                    <b class="km-welcome-notice-title"><?= km_home_e($kmNotice['title']) ?></b>
+                    <p class="km-welcome-notice-text"><?= km_home_e($kmNotice['summary']) ?></p>
+                    <a class="km-welcome-notice-link" href="/notice.php?id=<?= km_home_e(rawurlencode($kmNotice['id'])) ?>" target="_blank" rel="noopener">くわしく読む ↗</a>
+                </section>
+            <?php endforeach; ?>
             <h2 id="km-welcome-title" class="km-welcome-title">📍 高専マップ案内へようこそ</h2>
             <p class="km-welcome-lead">
                 校内の建物・部屋を探して、経路を案内する地図です。ログインしなくても使えます。

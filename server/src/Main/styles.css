@@ -3339,3 +3339,16 @@ body.km-route-panel-open .km-searchbox-route { background: var(--primary); color
     .km-sheet,
     .km-sheet.is-open { transition: none; }
 }
+
+/* ======== お知らせ(「はじめに」の先頭。2026-10-24、lib/notices.php) ======== */
+.km-welcome-notice {
+    margin: 0 0 1rem;
+    padding: 0.85rem 1rem;
+    border-left: 4px solid var(--primary);
+    border-radius: var(--radius-md);
+    background: rgba(37, 99, 235, 0.08);
+}
+.km-welcome-notice-head { margin: 0 0 0.25rem; font-size: var(--text-label); font-weight: 700; color: var(--primary-dark); }
+.km-welcome-notice-title { display: block; margin-bottom: 0.35rem; font-size: 1rem; }
+.km-welcome-notice-text { margin: 0 0 0.5rem; font-size: 0.9rem; line-height: 1.7; }
+.km-welcome-notice-link { font-size: 0.9rem; font-weight: 700; }

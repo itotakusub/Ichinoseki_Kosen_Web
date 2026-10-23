@@ -7277,7 +7277,7 @@ function km_check_layout(): void
     check_bool('保存の失敗で止まらない', substr_count($welcomeJs, 'try {') >= 2);
     check_bool('設定から読み直せる', str_contains($index, 'data-km-welcome-open'));
     // QR(/?room=)から来た人には出さない(2026-10-14)。出すと開いた部屋の詳細が幕の下に隠れる
-    check_bool('QR から来た人には出さない', str_contains($welcomeJs, 'meta[name="km-focus-room"]') && str_contains($welcomeJs, 'if (!seen() && !fromRoomQr) open();'));
+    check_bool('QR から来た人には出さない', str_contains($welcomeJs, 'meta[name="km-focus-room"]') && str_contains($welcomeJs, 'if ((!seen() || unreadNotices().length > 0) && !fromRoomQr) open();'));
 
     km_check_heading('tutorial: 初回の操作案内(2026-10-15)');
     $tutorialJs = (string) file_get_contents(__DIR__ . '/../Main/tutorial.js');
@@ -7898,6 +7898,24 @@ function km_check_layout(): void
         && str_contains((string) json_encode(km_legal_privacy(), JSON_UNESCAPED_UNICODE), 'ポスターの ♡'));
     check_bool('ポスターから結びつけた場所へ(地図の引き出し・一覧のページ)', str_contains($gmApp, "head.textContent = poster.projectNo ? `企画 \${poster.projectNo} の場所` : '場所';")
         && str_contains((string) file_get_contents(__DIR__ . '/../posters.php'), "foreach (\$poster['poiIds'] ?? [] as \$poiId) {"));
+
+    km_check_heading('お知らせ: 最初の画面に PHP の脆弱性の報告(2026-10-24)');
+    require_once __DIR__ . '/../lib/notices.php';
+    $phpNotice = km_notice_find('php-rce-2026-10');
+    check_bool('PHP の脆弱性のお知らせがある(CVE の番号・修正版・跡は見つからなかった・操作は要らない)', $phpNotice !== null
+        && str_contains(json_encode($phpNotice, JSON_UNESCAPED_UNICODE), 'CVE-2026-109618') && str_contains(json_encode($phpNotice, JSON_UNESCAPED_UNICODE), '8.4.27')
+        && str_contains($phpNotice['summary'], '不正に使われた跡は見つかっていません') && str_contains($phpNotice['summary'], '行っていただく操作はありません'));
+    $noticeSample = [['id' => 'a', 'date' => '2026-10-01', 'until' => '2026-10-31'], ['id' => 'b', 'date' => '2026-10-20', 'until' => '2026-11-30'], ['id' => 'c', 'date' => '2026-12-01', 'until' => '2026-12-31']];
+    check('お知らせ: 最初の画面には載せる期間の中のものだけ・新しい順', [['b', 'a'], ['b'], []],
+        [array_column(km_notices_current('2026-10-24', $noticeSample), 'id'), array_column(km_notices_current('2026-11-05', $noticeSample), 'id'), array_column(km_notices_current('2026-09-01', $noticeSample), 'id')]);
+    check('お知らせ: id の形・日付の書き方', [true, false, false, '2026年10月24日'], [km_notice_id_valid('php-rce-2026-10'), km_notice_id_valid('../x'), km_notice_id_valid(''), km_notice_date_label('2026-10-24')]);
+    $noticeIndex = (string) file_get_contents(__DIR__ . '/../index.php');
+    $noticeWelcome = (string) file_get_contents(__DIR__ . '/../Main/welcome.js');
+    check_bool('「はじめに」の先頭にお知らせ・読んでいないお知らせがあれば読んだ人にも出す・設定から一覧へ', str_contains($noticeIndex, "\$kmNotices = km_notices_current((new DateTimeImmutable('now', new DateTimeZone('Asia/Tokyo')))->format('Y-m-d'));")
+        && str_contains($noticeIndex, 'data-notices="<?= km_home_e(implode(\',\', array_column($kmNotices, \'id\'))) ?>"') && str_contains($noticeIndex, '<a href="/notice.php" class="secondary-btn">お知らせ</a>')
+        && str_contains($noticeWelcome, 'if ((!seen() || unreadNotices().length > 0) && !fromRoomQr) open();'));
+    check_bool('くわしいページは id の形を確かめてから探す・知らなければ 404 と一覧', str_contains((string) file_get_contents(__DIR__ . '/../notice.php'), '$notice = km_notice_id_valid($id) ? km_notice_find($id) : null;')
+        && str_contains((string) file_get_contents(__DIR__ . '/../notice.php'), 'http_response_code(404);'));
 
     km_check_heading('posters: 広告(重み 10%・必ず 1 件)・数・チュートリアルの終わりの知らせ(2026-10-21)');
     check('広告の重みは 10%(利用者の指示。全部同じ)', 10, KM_POSTER_AD_WEIGHT);

@@ -12,6 +12,8 @@
     'use strict';
 
     const KEY = 'km-welcome-seen';
+    // 読んだお知らせの id(2026-10-24。index.php の data-notices・lib/notices.php)。「,」でつなぐ
+    const NOTICES_KEY = 'km-notices-read';
 
     function start() {
         const dialog = document.getElementById('km-welcome');
@@ -30,6 +32,23 @@
             }
         }
 
+        /*
+         * まだ読んでいないお知らせ(2026-10-24)。**「はじめに」を読んだことのある人にも、新しいお知らせがあれば出す。**
+         * 覚えられない環境では「読んでいない」とみなす(その画面を閉じるまでは出し直さない。下の close)
+         */
+        const notices = (dialog.dataset.notices || '').split(',').filter(Boolean);
+        function readNotices() {
+            try {
+                return (window.localStorage.getItem(NOTICES_KEY) || '').split(',').filter(Boolean);
+            } catch (e) {
+                return [];
+            }
+        }
+        function unreadNotices() {
+            const read = readNotices();
+            return notices.filter(function (id) { return read.indexOf(id) < 0; });
+        }
+
         function open() {
             lastFocus = document.activeElement;
             dialog.hidden = false;
@@ -43,6 +62,9 @@
             document.body.classList.remove('km-welcome-open');
             try {
                 window.localStorage.setItem(KEY, version);
+                // 出したお知らせは読んだことにする(古い id は、もう出さないので覚えておく数を増やさない)
+                const keep = readNotices().filter(function (id) { return notices.indexOf(id) >= 0; });
+                window.localStorage.setItem(NOTICES_KEY, keep.concat(unreadNotices()).join(','));
             } catch (e) {
                 // 覚えられなくても閉じる。次に開いたときにまた出るだけ
             }
@@ -91,7 +113,7 @@
          * あとで普通に開いたときには出る。印は index.php の <meta name="km-focus-room">。
          */
         const fromRoomQr = document.querySelector('meta[name="km-focus-room"]') !== null;
-        if (!seen() && !fromRoomQr) open();
+        if ((!seen() || unreadNotices().length > 0) && !fromRoomQr) open();
     }
 
     if (document.readyState === 'loading') {
