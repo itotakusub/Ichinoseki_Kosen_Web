@@ -3205,7 +3205,23 @@ body.km-route-panel-open .km-searchbox-route { background: var(--primary); color
 
 /* 種類でまとめた結果 */
 .km-category-count { margin: 0 0 0.5rem; font-size: 0.85rem; color: var(--secondary); }
-.km-category-sheet .km-category-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+/*
+ * 引き出しの中の一覧は**引き出しの高さを全部使う**(2026-10-24、利用者の指摘「PC で見るとリストが小さい」)。
+ * 前の検索の欄の .km-category-list(高さ 30vh で頭打ち)と .km-category-item(左右へ振り分け = 名前が右に寄る)を、ここで打ち消す。
+ * 送りは引き出しの本体(.km-sheet-body)が受け持つ
+ */
+.km-category-sheet .km-category-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: none;
+    overflow: visible;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.km-category-sheet .km-category-item { justify-content: flex-start; }
+.km-result-text { flex: 1 1 auto; align-items: flex-start; text-align: left; }
 
 /* ポスターの拡大(引き出しの中) */
 .km-poster-sheet-image {
