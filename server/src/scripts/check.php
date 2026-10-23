@@ -5099,7 +5099,8 @@ function km_check_hardening(): void
     check_bool('出さない地点の表が無くても重ね合わせ(通行止め)は続ける', (bool) preg_match('/try \{\s*\$stmt = \$pdo->prepare\("SELECT node_id AS nodeId FROM km_map_event_hidden/', $eventsLib));
     $indexPage = $file('src/index.php');
     $appJs = $file('src/Main/app.js');
-    check_bool('公開ページ: 案内の文が無ければ「イベントモード中…」・?room= は字の形だけ確かめて DB には渡さない', str_contains($indexPage, "'イベントモード中…('")
+    // 地図の上の案内の帯は 2026-10-23 に外した(利用者の指示)。案内はダウンロード・設定の中(#km-event-section)
+    check_bool('公開ページ: イベントの案内の帯は出さず設定の中に・?room= は字の形だけ確かめて DB には渡さない', !str_contains($indexPage, 'class="km-event-banner"') && str_contains($indexPage, 'id="km-event-section"')
         && str_contains($indexPage, "preg_match('/^[0-9A-Fa-f-]{32,36}\$/', \$roomParam) === 1")
         && str_contains($indexPage, '<meta name="km-focus-room" content="<?= km_home_e($kmFocusRoom) ?>">')
         && !preg_match('/km_db\(\)[^;]*\$room/', $indexPage));

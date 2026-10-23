@@ -89,7 +89,8 @@
      * 窓の高さ(52px)を変えたら一緒に直すこと
      */
     --km-searchbox-height: 52px;
-    --km-top-offset: calc(var(--km-edge) + var(--km-searchbox-height) + 8px + 40px + 8px);   /* 窓 + 種類のチップの行 */
+    /* PC は種類のチップを窓の右隣に並べる(2026-10-23、利用者の指示)ので、窓の下端だけ。スマホはチップが窓の下に来るぶん足す(下のメディアクエリ) */
+    --km-top-offset: calc(var(--km-edge) + var(--km-searchbox-height) + 12px);
     /* 左の引き出し(Main/km-sheet.js)の幅。PC で左下の操作と案内の帯がこのぶん右へ逃げる */
     --km-sheet-width: min(400px, 90vw);
 }
@@ -3030,12 +3031,17 @@ body.km-route-panel-open .km-searchbox-route { background: var(--primary); color
 .km-result-sub { font-size: 0.75rem; color: var(--secondary); }
 .km-result-empty { padding: 10px; font-size: 0.85rem; color: var(--secondary); }
 
-/* 種類のチップ。入りきらなければ横に送る(折り返して地図を隠さない) */
+/*
+ * 種類のチップ。**PC は検索の窓の右隣に並べる**(2026-10-23、利用者の指摘「見切れている」——窓の幅の下に入れていて、
+ * 5 つ目が切れていた)。右は画面の端まで使い、入りきらなければ横に送る(折り返して地図を隠さない)。スマホは窓の下(下のメディアクエリ)
+ */
 .km-chips {
     position: absolute;
-    top: calc(var(--km-edge) + var(--km-searchbox-height) + 8px);
-    left: var(--km-edge);
-    width: min(400px, calc(100vw - var(--km-edge) * 2));
+    top: var(--km-edge);
+    left: calc(var(--km-edge) + min(400px, calc(100vw - var(--km-edge) * 2)) + 8px);
+    right: var(--km-edge);
+    height: var(--km-searchbox-height);
+    align-items: center;
     z-index: 1250;
     display: flex;
     gap: 6px;
@@ -3157,8 +3163,6 @@ body.km-route-panel-open .km-searchbox-route { background: var(--primary); color
     -webkit-overflow-scrolling: touch;
     padding: 0.75rem 1rem 1.25rem;
 }
-/* 引き出しが開いている間、チップは隠す(引き出しの中身と重なる) */
-body.km-sheet-open .km-chips { display: none; }
 /* 中の面(表示調整・履歴・予定)は、浮いていたときの位置と枠を外す */
 .km-sheet .km-tuning,
 .km-sheet .km-history-content,
@@ -3247,7 +3251,8 @@ body.km-sheet-open .km-chips { display: none; }
 /* 展示の PC のログアウト(ダウンロード・設定が無いので右上の小さな欄) */
 .km-test-auth {
     position: absolute;
-    top: var(--km-edge);
+    /* 種類のチップが窓の右隣に並ぶので、その下 */
+    top: var(--km-top-offset);
     right: var(--km-edge);
     z-index: 1100;
     padding: 0.4rem 0.6rem;
@@ -3259,9 +3264,18 @@ body.km-sheet-open .km-chips { display: none; }
         right: var(--km-edge);
         width: auto;
     }
+    /*
+     * スマホは窓が画面の幅いっぱいなので、チップは窓の下。**見切れないように折り返す**(2026-10-23、利用者の指摘。
+     * 横に送る形だと 4 つ目から切れて見えた)。2 行ぶん(36px × 2 + 隙間)を下の部品の位置に足す
+     */
+    :root { --km-top-offset: calc(var(--km-edge) + var(--km-searchbox-height) + 8px + 78px + 8px); }
     .km-chips {
+        top: calc(var(--km-edge) + var(--km-searchbox-height) + 8px);
+        left: var(--km-edge);
         right: var(--km-edge);
-        width: auto;
+        height: auto;
+        flex-wrap: wrap;
+        overflow: visible;
     }
     /* 下から出るシート。上のつまみで高さを広げる */
     .km-sheet {

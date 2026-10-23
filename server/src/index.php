@@ -534,33 +534,13 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
                 <button type="button" class="km-chip" data-km-category="event">🎪 イベント</button>
             <?php endif; ?>
         </div>
-        <?php if ($kmEvent !== null): ?>
-        <!--
-            イベントモードの案内。
-            バナー文言が未設定でも、**イベント中であること自体は伝える** ——
-            通行止めや臨時の名称が出ている理由が分からないと、地図が壊れて見える。
-        -->
-        <div class="km-event-banner" role="status">
-            <span class="km-event-banner-icon" aria-hidden="true">🎪</span>
-            <span class="km-event-banner-text">
-                <?php
-                /*
-                 * 案内の文が無ければ「イベントモード中…(イベント名)」(2026-10-14、利用者の指示)。
-                 * 部屋の名前が置き換わり、出ない地点や通行止めがあることを、開いた時点で伝える。
-                 */
-                ?>
-                <?= km_home_e($kmEvent['bannerText'] ?? ('イベントモード中…(' . implode(' / ', $kmEvent['names']) . ')')) ?>
-            </span>
-            <?php if (!empty($kmEvent['bannerUrl'])): ?>
-                <?php /* リンク先は lib/map-events.php がサイト内の絶対パスだけに検証済み */ ?>
-                <a class="km-event-banner-link" href="<?= km_home_e($kmEvent['bannerUrl']) ?>">くわしく</a>
-            <?php endif; ?>
-            <?php if ($kmEventCollect !== null): ?>
-                <?php /* 許可をあとから変えられるように(Main/test-mode.js が下の #km-collect-bar を開き直す) */ ?>
-                <button type="button" class="km-event-banner-link km-collect-open" data-km-collect-open>記録の設定</button>
-            <?php endif; ?>
-        </div>
-        <?php endif; ?>
+        <?php
+        /*
+         * イベントモードの案内の帯(.km-event-banner)は**出さない**(2026-10-23、利用者の指示「変な場所に配置されているので表示されないように」)。
+         * 検索の窓・種類のチップと重なっていた。イベント中であることは種類のチップの「🎪 イベント」で分かる。
+         * 帯にあった「記録の設定」は「ダウンロード・設定」の中へ移した(下の #km-event-section)
+         */
+        ?>
 
         <!-- 検索パネル (浮遊カード) -->
             <div id="search-panel" class="search-panel glass-panel">
@@ -891,7 +871,21 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
                     <a href="/terms.php" class="secondary-btn">利用規約</a>
                     <a href="/privacy.php" class="secondary-btn">プライバシーポリシー</a>
                 </div>
-                <div id="km-unlock-section"></div>
+                <?php if ($kmEvent !== null): ?>
+                    <?php /* イベント中の案内(2026-10-23。地図の上の帯をやめたので、案内の文・くわしく・記録の設定はここ) */ ?>
+                    <div class="info-section" id="km-event-section">
+                        <h4>🎪 <?= km_home_e(implode(' / ', $kmEvent['names'])) ?></h4>
+                        <p class="info-text"><?= km_home_e($kmEvent['bannerText'] ?? 'イベント中です。部屋の名前が変わっていたり、通れない道や出していない場所があります。') ?></p>
+                        <?php if (!empty($kmEvent['bannerUrl'])): ?>
+                            <?php /* リンク先は lib/map-events.php がサイト内の絶対パスだけに検証済み */ ?>
+                            <a class="secondary-btn" href="<?= km_home_e($kmEvent['bannerUrl']) ?>">くわしく</a>
+                        <?php endif; ?>
+                        <?php if ($kmEventCollect !== null): ?>
+                            <?php /* 許可をあとから変えられるように(Main/test-mode.js が #km-collect-bar を開き直す) */ ?>
+                            <button type="button" class="secondary-btn km-collect-open" data-km-collect-open>記録の設定</button>
+                        <?php endif; ?>
+                    </div>
+                <?php endif; ?>                <div id="km-unlock-section"></div>
                 <div class="info-section">
                     <h4>はじめに</h4>
                     <p class="info-text">

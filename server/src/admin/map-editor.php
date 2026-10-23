@@ -269,11 +269,18 @@ require __DIR__ . '/_inc/partials/page-header.php';
                 <div class="card">
                   <div class="card-header d-flex flex-wrap align-items-center gap-2">
                     <h3 class="card-title mb-0" data-i18n="page.mapEditor.mapTitle">地図</h3>
-                    <div class="card-tools ms-auto btn-group btn-group-sm" id="km-floor-buttons">
+                    <?php
+                    /*
+                     * 階のボタン。**折り返す**(2026-10-23、利用者の指摘「見切れている」)。
+                     * 建物の階を足して数が増え、つなげたボタンの帯(btn-group)のままだと右へはみ出して押せなかった。
+                     * mw-100 で見出しの幅を超えないようにし、入りきらなければ次の行へ
+                     */
+                    ?>
+                    <div class="card-tools ms-auto d-flex flex-wrap justify-content-end gap-1 mw-100" id="km-floor-buttons">
                       <?php foreach ($floors as $i => $floor): ?>
                         <button
                           type="button"
-                          class="btn btn-outline-secondary floor-btn<?= (string) $floor['id'] === '1' ? ' active' : '' ?>"
+                          class="btn btn-sm btn-outline-secondary floor-btn<?= (string) $floor['id'] === '1' ? ' active' : '' ?>"
                           data-floor="<?= km_e((string) $floor['id']) ?>"
                         ><?= km_e((string) $floor['label']) ?></button>
                       <?php endforeach; ?>
