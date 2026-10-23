@@ -83,6 +83,15 @@
      * ずれるとシートの右端がレールの下に潜り、押すと階が切り替わる。
      */
     --km-rail-width: calc(var(--km-floor-size) + 14px);
+    /*
+     * 上の検索の窓(#km-searchbox)の下端。上のバーを外した(2026-10-23、利用者の指示)ので、
+     * 窓の下に置くもの(経路の欄・階のレール・建物の切り替え・イベントの帯)はここから下げる。
+     * 窓の高さ(52px)を変えたら一緒に直すこと
+     */
+    --km-searchbox-height: 52px;
+    --km-top-offset: calc(var(--km-edge) + var(--km-searchbox-height) + 8px + 40px + 8px);   /* 窓 + 種類のチップの行 */
+    /* 左の引き出し(Main/km-sheet.js)の幅。PC で左下の操作と案内の帯がこのぶん右へ逃げる */
+    --km-sheet-width: min(400px, 90vw);
 }
 
 @media (max-width: 768px) {
@@ -633,68 +642,7 @@ body {
     line-height: 1;
 }
 
-/* ======== Top Bar ======== */
-/*
- * **一段の細いバーにする**(2026-09-05)。
- * それまでは題字の下にログインの2つが縦に積まれ、スマホでは高さ 140px 前後を
- * 占めていた —— 地図の一番見たい上側が、押す用事の少ないボタンで埋まっていた。
- *
- * スマホではログインの2つを「ダウンロード・設定」パネルへ移す(`Main/panel.js`)。
- * **同じ要素を動かす**(複製しない) —— 2つ置くと、片方だけ直したときに食い違う。
- */
-.top-bar {
-    position: absolute;
-    top: var(--km-edge);
-    left: var(--km-edge);
-    right: var(--km-edge);
-    padding: 0.6rem 1rem;
-    display: flex;
-    align-items: center;
-    background: var(--glass);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-lg);
-}
-
-.brand-area {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.75rem;
-    width: 100%;
-    min-width: 0;   /* flex の子は既定で縮まない。無いと題字が右のボタンを押し出す */
-}
-
-.app-title {
-    display: flex;
-    align-items: center;
-    gap: 0.35rem;
-    font-size: var(--text-headline);
-    font-weight: 800;
-    white-space: nowrap;
-    background: linear-gradient(135deg, var(--primary), var(--accent));
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-}
-
-/* 絵文字は塗り潰しの対象外にする(透明にすると消えてしまう) */
-.app-title .logo-icon {
-    -webkit-text-fill-color: initial;
-}
-
-.top-actions {
-    display: flex;
-    flex-direction: row;
-    gap: 0.5rem;
-    align-items: center;
-    /* 入りきらないときは右側から折る。切り落とさない */
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    min-width: 0;   /* 無いと中身の幅のまま押し出し、画面の右からはみ出す */
-}
+/* 上のバー(.top-bar)は外した(2026-10-23、利用者の指示)。題字は検索の窓(#km-searchbox)の左に、ログインは「ダウンロード・設定」の中へ */
 
 /* **横並び。** 以前は縦積みで、バーが2段にも3段にもなっていた */
 .action-group-left,
@@ -797,7 +745,7 @@ body {
  */
 .search-panel {
     position: absolute;
-    top: calc(var(--km-edge) + 60px + 12px);   /* トップバーの下 */
+    top: var(--km-top-offset);   /* 検索の窓の下 */
     left: var(--km-edge);
     width: 340px;
     padding: 1.25rem;
@@ -1216,7 +1164,6 @@ input[type="text"] {
  * ここで変えるのは、指で押すための大きさと、下から出すか横に置くかだけ。
  */
 @media (max-width: 768px) {
-    .app-title { font-size: var(--text-title); }
 
     /*
      * 検索は**下から出るシート**にする。左下の操作ピルより上に置き、
@@ -1315,7 +1262,7 @@ input[type="text"] {
      * 上から積めば、下に何を置いても当たらない。
      */
     .floor-nav {
-        top: calc(var(--km-edge) + 60px + 12px);
+        top: var(--km-top-offset);
         transform: none;
         border-radius: var(--radius-xl);
     }
@@ -2188,7 +2135,7 @@ a.icon-btn { text-decoration: none; color: inherit; }
 .km-building-switcher {
     position: absolute;
     /* トップバー(一段)の下。バーの高さを変えたら検索パネルと一緒に直すこと */
-    top: calc(var(--km-edge) + 60px + 12px);
+    top: var(--km-top-offset);
     left: 50%;
     transform: translateX(-50%);
     z-index: 900;
@@ -2520,7 +2467,7 @@ a.icon-btn { text-decoration: none; color: inherit; }
  */
 .km-event-banner {
     position: absolute;
-    top: calc(var(--km-edge) + 60px + 12px);
+    top: var(--km-top-offset);
     left: calc(var(--km-edge) + 340px + 12px);
     right: calc(var(--km-edge) + 72px);
     display: flex;
@@ -2678,7 +2625,7 @@ a.icon-btn { text-decoration: none; color: inherit; }
  */
 .km-test-stack {
     position: fixed;
-    top: 84px;
+    top: calc(var(--km-top-offset) + 8px);
     right: 88px;
     z-index: 1200;
     display: flex;
@@ -2968,3 +2915,397 @@ a.icon-btn { text-decoration: none; color: inherit; }
 /* 臨時の地点(一時地点)の札と吹き出しの種類(2026-10-23。部屋と同じ形。色は Android の一時地点と同じ桃色) */
 .km-label-poi { border-color: #EC4899 !important; --km-lead-color: #EC4899; }
 .km-chip-poi { background: #EC4899; }
+
+/* ======== 場所の検索・左の引き出し・共有・♡ ========(2026-10-23、利用者の指示「Google マップのように」)
+ *
+ * 上のバー(.top-bar)の代わりに、左上に検索の窓(#km-searchbox)と種類のチップ(#km-category-chips)。
+ * 場所の詳細・表示調整・履歴・予定・ポスターの拡大は、左から出る引き出し(#km-sheet。Main/km-sheet.js)。
+ * スマホ(≤768px)は窓が上いっぱい、引き出しは下から出るシート。
+ */
+.km-searchbox {
+    position: absolute;
+    top: var(--km-edge);
+    left: var(--km-edge);
+    width: min(400px, calc(100vw - var(--km-edge) * 2));
+    height: var(--km-searchbox-height);
+    z-index: 1300;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 6px 0 14px;
+    border-radius: 999px;
+    box-shadow: var(--shadow-lg);
+    background: var(--glass-heavy);
+}
+.km-searchbox-logo { font-size: 1.2rem; flex: 0 0 auto; }
+.km-searchbox-input {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 100%;
+    border: none;
+    background: transparent;
+    color: var(--text);
+    font-size: 1rem;
+    outline: none;
+}
+.km-searchbox-input::-webkit-search-cancel-button { display: none; }
+.km-searchbox-btn {
+    flex: 0 0 auto;
+    width: var(--km-touch);
+    height: var(--km-touch);
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--secondary);
+    font-size: 1.25rem;
+    line-height: 1;
+    cursor: pointer;
+}
+.km-searchbox-btn:hover { background: rgba(148, 163, 184, 0.18); }
+.km-searchbox-btn[hidden] { display: none; }
+.km-searchbox-route { color: var(--primary); }
+body.km-route-panel-open .km-searchbox-route { background: var(--primary); color: var(--on-primary); }
+
+/* 候補(一致率順。Main/app.js の attachSearch)。窓・出発地・目的地で同じ見た目 */
+.km-search-results {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    right: 0;
+    z-index: 1400;
+    margin: 0;
+    padding: 6px;
+    list-style: none;
+    max-height: min(60vh, 440px);
+    overflow-y: auto;
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border);
+    background: var(--glass-heavy);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    box-shadow: var(--shadow-lg);
+}
+.km-search-results[hidden] { display: none; }
+.km-result {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: var(--km-touch);
+    padding: 6px 8px;
+    border: none;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--text);
+    text-align: left;
+    cursor: pointer;
+}
+.km-result:hover,
+.km-result[aria-selected="true"] { background: rgba(37, 99, 235, 0.1); }
+.km-result-icon {
+    flex: 0 0 auto;
+    width: 40px;
+    height: 40px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    background: rgba(148, 163, 184, 0.15);
+    overflow: hidden;
+}
+/* ポスターがある場所は、そのポスターをアイコンに(利用者の指示) */
+.km-result-icon.has-poster img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+.km-result-text { display: flex; flex-direction: column; min-width: 0; }
+.km-result-name {
+    font-size: 0.95rem;
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.km-result-sub { font-size: 0.75rem; color: var(--secondary); }
+.km-result-empty { padding: 10px; font-size: 0.85rem; color: var(--secondary); }
+
+/* 種類のチップ。入りきらなければ横に送る(折り返して地図を隠さない) */
+.km-chips {
+    position: absolute;
+    top: calc(var(--km-edge) + var(--km-searchbox-height) + 8px);
+    left: var(--km-edge);
+    width: min(400px, calc(100vw - var(--km-edge) * 2));
+    z-index: 1250;
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    pointer-events: auto;
+}
+.km-chips::-webkit-scrollbar { display: none; }
+.km-chip {
+    flex: 0 0 auto;
+    min-height: 36px;
+    padding: 0 0.9rem;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--glass-heavy);
+    box-shadow: var(--shadow-sm);
+    color: var(--text);
+    font-size: var(--text-label);
+    font-weight: 700;
+    white-space: nowrap;
+    cursor: pointer;
+}
+.km-chip:hover { background: var(--glass); }
+
+/* 経路の欄(#search-panel)は窓とチップの下。出発地・目的地にも候補が出るので、はみ出しを隠さない */
+.search-panel { overflow: visible; }
+.km-route-inputs { position: relative; padding-right: 44px; }
+.km-route-field { position: relative; }
+.km-route-field input { width: 100%; }
+.km-route-swap {
+    position: absolute;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 36px;
+    height: 36px;
+    border: 1px solid var(--border-strong);
+    border-radius: 50%;
+    background: var(--glass-heavy);
+    color: var(--text);
+    font-size: 1.1rem;
+    cursor: pointer;
+}
+.km-route-hint {
+    flex: 1 0 100%;
+    margin: 0;
+    padding: 0.5rem 0.75rem;
+    border-radius: var(--radius-sm);
+    background: rgba(37, 99, 235, 0.1);
+    color: var(--primary-dark);
+    font-size: 0.85rem;
+    font-weight: 700;
+}
+.km-route-hint[hidden] { display: none; }
+
+/* ---- 左の引き出し ---- */
+.km-sheet {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: var(--km-sheet-width);
+    z-index: 1200;
+    display: flex;
+    flex-direction: column;
+    /* 窓(z 1300)が上に重なる。中身は窓の下から */
+    padding-top: calc(var(--km-edge) + var(--km-searchbox-height) + 8px);
+    background: var(--glass-heavy);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border-right: 1px solid var(--border);
+    border-radius: 0 var(--radius-xl) var(--radius-xl) 0;
+    box-shadow: var(--shadow-lg);
+    color: var(--text);
+    transform: translateX(-105%);
+    visibility: hidden;
+    transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s linear 0.3s;
+    pointer-events: auto;
+}
+.km-sheet.is-open {
+    transform: none;
+    visibility: visible;
+    transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s;
+}
+.km-sheet-grip { display: none; }
+.km-sheet-head {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.5rem 0.75rem 0.5rem 1rem;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.25);
+}
+.km-sheet-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+    font-size: 1.2rem;
+    font-weight: 800;
+    overflow-wrap: anywhere;
+}
+.km-sheet-back,
+.km-sheet-close {
+    flex: 0 0 auto;
+    width: var(--km-touch);
+    height: var(--km-touch);
+    border: none;
+    border-radius: 50%;
+    background: rgba(148, 163, 184, 0.18);
+    color: var(--secondary);
+    font-size: 1.3rem;
+    line-height: 1;
+    cursor: pointer;
+}
+.km-sheet-back[hidden] { display: none; }
+.km-sheet-close:hover { background: var(--danger); color: #fff; }
+.km-sheet-body {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 0.75rem 1rem 1.25rem;
+}
+/* 引き出しが開いている間、チップは隠す(引き出しの中身と重なる) */
+body.km-sheet-open .km-chips { display: none; }
+/* 中の面(表示調整・履歴・予定)は、浮いていたときの位置と枠を外す */
+.km-sheet .km-tuning,
+.km-sheet .km-history-content,
+.km-sheet .km-schedule-content {
+    position: static;
+    width: auto;
+    max-height: none;
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    overflow: visible;
+}
+/* 場所の詳細。名前は引き出しの見出しに出すので、中の見出しは出さない */
+.km-place .popup-content { padding: 0; }
+.km-place .popup-title { display: none; }
+.km-detail-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 0.75rem 0 0.5rem;
+}
+.km-detail-actions .popup-btn {
+    flex: 1 1 auto;
+    width: auto;
+    margin: 0;
+    border-radius: 999px;
+}
+.km-detail-route { font-weight: 800; }
+.km-place .km-bookmark-btn { width: 100%; border-radius: 999px; }
+
+/* PC: 引き出しが開いている間、左下の操作と案内の帯は引き出しの右へ逃げる */
+@media (min-width: 769px) {
+    body.km-sheet-open .km-action-bar,
+    body.km-sheet-open .km-route-dock { left: calc(var(--km-sheet-width) + var(--km-edge)); }
+}
+
+/* 種類でまとめた結果 */
+.km-category-count { margin: 0 0 0.5rem; font-size: 0.85rem; color: var(--secondary); }
+.km-category-sheet .km-category-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+
+/* ポスターの拡大(引き出しの中) */
+.km-poster-sheet-image {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-sm);
+}
+.km-poster-sheet-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 0.75rem 0; }
+.km-poster-sheet-desc { margin: 0 0 0.75rem; white-space: pre-wrap; line-height: 1.6; }
+.km-poster-sheet-head { margin: 0.75rem 0 0.4rem; font-weight: 800; }
+.km-poster-go { display: block; width: 100%; margin-bottom: 6px; text-align: left; }
+
+/* ♡(ポスターのいいね) */
+.km-like-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 36px;
+    padding: 0 0.9rem;
+    border-radius: 999px;
+    font-weight: 800;
+}
+.km-like-btn.is-liked { color: #e11d48; border-color: rgba(225, 29, 72, 0.4); background: rgba(225, 29, 72, 0.08); }
+.km-poster-caption .km-like-btn { align-self: flex-start; margin-top: 4px; }
+
+/* 経路の共有(案内の帯) */
+.km-route-share {
+    flex: 0 0 auto;
+    width: var(--km-touch);
+    height: var(--km-touch);
+    border: none;
+    border-radius: 50%;
+    background: rgba(37, 99, 235, 0.12);
+    color: var(--primary);
+    font-size: 1.2rem;
+    font-weight: 800;
+    cursor: pointer;
+}
+.km-toast { z-index: 3500; }
+
+/* 展示の PC のログアウト(ダウンロード・設定が無いので右上の小さな欄) */
+.km-test-auth {
+    position: absolute;
+    top: var(--km-edge);
+    right: var(--km-edge);
+    z-index: 1100;
+    padding: 0.4rem 0.6rem;
+    border-radius: var(--radius-lg);
+}
+
+@media (max-width: 768px) {
+    .km-searchbox {
+        right: var(--km-edge);
+        width: auto;
+    }
+    .km-chips {
+        right: var(--km-edge);
+        width: auto;
+    }
+    /* 下から出るシート。上のつまみで高さを広げる */
+    .km-sheet {
+        top: auto;
+        right: 0;
+        width: auto;
+        height: 52vh;
+        padding-top: 0;
+        border-right: none;
+        border-top: 1px solid var(--border);
+        border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+        transform: translateY(105%);
+        transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), height 0.25s ease, visibility 0s linear 0.3s;
+    }
+    .km-sheet.is-open { transform: none; transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), height 0.25s ease, visibility 0s; }
+    .km-sheet.is-expanded { height: calc(100vh - var(--km-edge) - var(--km-searchbox-height) - 16px); }
+    .km-sheet-grip {
+        display: block;
+        flex: 0 0 auto;
+        width: 100%;
+        height: 22px;
+        border: none;
+        background: transparent;
+        cursor: pointer;
+        position: relative;
+    }
+    .km-sheet-grip::before {
+        content: '';
+        position: absolute;
+        left: 50%;
+        top: 8px;
+        width: 40px;
+        height: 5px;
+        margin-left: -20px;
+        border-radius: 999px;
+        background: rgba(100, 116, 139, 0.45);
+    }
+    /* シートが出ている間、左下の操作は隠す(シートの下に潜る) */
+    body.km-sheet-open .km-action-bar,
+    body.km-sheet-open .km-route-dock { visibility: hidden; }
+    .km-test-auth { top: auto; bottom: calc(var(--km-bottom) + var(--km-touch) + 8px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .km-sheet,
+    .km-sheet.is-open { transition: none; }
+}

@@ -673,6 +673,9 @@ function km_posters_public(PDO $pdo, bool $eventActive, array $nodes, array $pro
     }
 
     $projects = km_poster_projects_map($pdo);
+    // ♡ の数(2026-10-23。lib/poster-likes.php)。押したかは端末ごとなので、ここでは載せない(api/poster-like.php の GET)
+    require_once __DIR__ . '/poster-likes.php';
+    $likes = km_poster_like_counts($pdo);
     $posters = [];
     foreach ($rows as $row) {
         $projectNo = $projects[(int) $row['id']] ?? '';
@@ -703,6 +706,7 @@ function km_posters_public(PDO $pdo, bool $eventActive, array $nodes, array $pro
             'width' => (int) $row['width'],
             'height' => (int) $row['height'],
             'updatedEpoch' => (int) $row['updatedEpoch'],
+            'likes' => $likes[(int) $row['id']] ?? 0,
         ];
         $poster['imageUrl'] = km_poster_public_image_url($poster);
         unset($poster['updatedEpoch']);

@@ -77,7 +77,8 @@ try {
     }
 
     $rows = km_event_schedule_all($pdo);
-    $projectNodes = km_map_project_nodes(km_map_projects_by_node_id($pdo));
+    // イベント中の名前が番号の地点も入れる(2026-10-23。公開の地図と同じ)
+    $projectNodes = km_map_project_nodes(km_map_projects_for_admin($pdo));
     // 名前が番号の一時地点(臨時の地点。2026-10-23)。全部のイベントの分
     $projectPois = km_map_project_pois_all($pdo);
     foreach (km_poster_node_options($pdo) as $option) {

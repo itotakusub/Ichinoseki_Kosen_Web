@@ -26,6 +26,8 @@ km_csp_send('public');
 
 $posters = [];
 $nodes = [];
+// 臨時の地点(番号 => 地点)。ポスターを名前が番号の一時地点に結びつけたとき、地図で開く先(2026-10-23)
+$eventPois = [];
 $unavailable = false;
 try {
     // 地図の錠・教職員の印はセッションで決まる(lib/map-access.php)。index.php と同じ判定にする
@@ -42,6 +44,9 @@ try {
     } else {
         $posters = $mapData['posters'] ?? [];
         $nodes = $mapData['nodes'] ?? [];
+        foreach ($mapData['eventPois'] ?? [] as $poi) {
+            $eventPois[(int) $poi['id']] = $poi;
+        }
     }
 } catch (Throwable $exception) {
     error_log('posters.php (public) failed (fail open): ' . $exception->getMessage());
@@ -53,15 +58,38 @@ function km_posters_e(?string $value): string
     return htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 }
 
-/** 地点の名前(イベント中の名前があればそちら。地図の詳細と同じ) */
-$placeOf = static function (array $poster) use ($nodes): ?string {
-    $node = $poster['nodeId'] !== '' ? ($nodes[$poster['nodeId']] ?? null) : null;
-    if ($node === null) {
-        return null;
+/**
+ * ポスターを結びつけた場所の一覧(2026-10-23、利用者の指示「企画の番号と結びつけたノードに移動」)。
+ * 以前は地点(nodeId)の 1 つだけで、企画の番号の 2 つ目以降の地点と一時地点(臨時の地点)には地図への道が無かった。
+ * 名前はイベント中の名前があればそちら(地図の詳細と同じ)。一時地点は ?poi=<番号> で開く
+ *
+ * @return list<array{label:string, href:string}>
+ */
+$placesOf = static function (array $poster) use ($nodes, $eventPois): array {
+    $places = [];
+    $nodeIds = ($poster['nodeIds'] ?? []) !== [] ? $poster['nodeIds'] : ($poster['nodeId'] !== '' ? [$poster['nodeId']] : []);
+    foreach ($nodeIds as $nodeId) {
+        $node = $nodes[$nodeId] ?? null;
+        if ($node === null || !empty($node['hidden'])) {
+            continue;
+        }
+        $name = (string) (($node['alias'] ?? '') !== '' ? $node['alias'] : $node['name']);
+        $places[] = [
+            'label' => $name . '(' . km_poster_floor_label((string) $node['floor']) . ')',
+            'href' => '/?room=' . rawurlencode((string) $nodeId) . '&poster=' . (int) $poster['id'],
+        ];
     }
-    $name = (string) (($node['alias'] ?? '') !== '' ? $node['alias'] : $node['name']);
-
-    return $name . '(' . km_poster_floor_label((string) $node['floor']) . ')';
+    foreach ($poster['poiIds'] ?? [] as $poiId) {
+        $poi = $eventPois[(int) $poiId] ?? null;
+        if ($poi === null) {
+            continue;
+        }
+        $places[] = [
+            'label' => (string) $poi['name'] . '(' . km_poster_floor_label((string) $poi['floor']) . ')',
+            'href' => '/?poi=' . (int) $poiId,
+        ];
+    }
+    return $places;
 };
 ?>
 <!DOCTYPE html>
@@ -220,10 +248,8 @@ $placeOf = static function (array $poster) use ($nodes): ?string {
             <ul class="km-poster-wall">
                 <?php foreach ($posters as $poster): ?>
                     <?php
-                    $place = $placeOf($poster);
-                    $mapHref = $place !== null
-                        ? '/?room=' . rawurlencode($poster['nodeId']) . '&poster=' . (int) $poster['id']
-                        : null;
+                    $places = $placesOf($poster);
+                    $mapHref = $places !== [] ? $places[0]['href'] : null;
                     // 画像のリンクは JS が動かないときの行き先(地図 → URL → このカード)。JS が動けば大きく見る幕を開く。
                     // **画像のリンクには数える印(data-km-poster-link)を付けない** —— 押しても幕が開くだけで、リンク先へは進まない
                     $imageHref = $mapHref ?? ($poster['linkUrl'] !== '' ? $poster['linkUrl'] : '#poster-' . (int) $poster['id']);
@@ -237,16 +263,19 @@ $placeOf = static function (array $poster) use ($nodes): ?string {
                         </a>
                         <div class="km-poster-card-body">
                             <h2 class="km-poster-card-title"><?= km_posters_e($poster['title']) ?></h2>
-                            <?php if ($place !== null): ?>
-                                <p class="km-poster-card-place">📍 <?= km_posters_e($place) ?></p>
+                            <?php if ($places !== []): ?>
+                                <p class="km-poster-card-place">📍 <?= km_posters_e(implode('、', array_column($places, 'label'))) ?><?= ($poster['projectNo'] ?? '') !== '' ? '(企画 ' . km_posters_e($poster['projectNo']) . ')' : '' ?></p>
                             <?php endif; ?>
                             <?php if ($poster['description'] !== ''): ?>
                                 <p class="km-poster-card-desc"><?= km_posters_e($poster['description']) ?></p>
                             <?php endif; ?>
                             <div class="km-poster-card-actions">
-                                <?php if ($mapHref !== null): ?>
-                                    <a class="km-doc-button" href="<?= km_posters_e($mapHref) ?>">地図で見る</a>
-                                <?php endif; ?>
+                                <?php foreach ($places as $place): ?>
+                                    <?php /* 結びつけた場所が 2 つ以上なら、どこへ行くかが分かるように名前を添える */ ?>
+                                    <a class="km-doc-button" href="<?= km_posters_e($place['href']) ?>"><?= count($places) > 1 ? '地図で見る: ' . km_posters_e($place['label']) : '地図で見る' ?></a>
+                                <?php endforeach; ?>
+                                <?php /* ♡(2026-10-23。Main/posters-page.js → api/poster-like.php) */ ?>
+                                <button type="button" class="km-doc-link km-like-btn" data-km-poster-like="<?= (int) $poster['id'] ?>" aria-pressed="false">♡ <?= (int) ($poster['likes'] ?? 0) ?></button>
                                 <?php if ($poster['linkUrl'] !== ''): ?>
                                     <?php /* URL は lib/posters.php が http / https だけに確かめてある */ ?>
                                     <a class="km-doc-link" href="<?= km_posters_e($poster['linkUrl']) ?>" target="_blank" rel="noopener noreferrer" data-km-poster-link="<?= (int) $poster['id'] ?>">くわしく見る ↗</a>

@@ -36,6 +36,9 @@
      * 閉じたのにボタンだけ塗られたまま、という食い違いが必ず出る。
      */
     let toggleButton = null;
+    // いまの面(「既定に戻す」で作り直すので、その都度ここを書き換える)。左の引き出し(Main/km-sheet.js)に入れて出す(2026-10-23)
+    let activePanel = null;
+    const sheet = window.KmSheet || null;
 
     function syncToggle(hidden) {
         if (!toggleButton) return;
@@ -231,8 +234,9 @@
             applyTheme(tuning);
             notify();
             const rebuilt = build(tuning);
-            panel.replaceWith(rebuilt);
             rebuilt.hidden = false;
+            activePanel = rebuilt;
+            if (!sheet || !sheet.replace('tuning', rebuilt)) panel.replaceWith(rebuilt);
         });
         panel.appendChild(reset);
 
@@ -241,6 +245,7 @@
         close.className = 'km-tuning-close';
         close.textContent = '閉じる';
         close.addEventListener('click', function () {
+            if (sheet && sheet.isOpen('tuning')) { sheet.close('tuning'); return; }
             panel.hidden = true;
             syncToggle(true);
         });
@@ -260,8 +265,9 @@
             listeners.push(onChange);
             applyTheme(tuning);
 
-            let panel = build(tuning);
-            document.body.appendChild(panel);
+            activePanel = build(tuning);
+            // 引き出しが無いページ(地図編集)だけ、今までどおり左下に浮かせる
+            if (!sheet) document.body.appendChild(activePanel);
 
             /*
              * 開くボタンは**左下の操作バーの中**に入れる(2026-09-05)。
@@ -301,11 +307,20 @@
             syncToggle(true);
 
             button.addEventListener('click', function () {
-                // 作り直されている可能性があるので、その都度いまの要素を掴む
-                panel = document.querySelector('.km-tuning');
+                /*
+                 * 公開の地図は左の引き出しに出す(2026-10-23、利用者の指示「ダウンロード・設定のように引き出しで」)。
+                 * 開いていることはボタンの側にも出す(押した結果がどこに出たか結び付ける)
+                 */
+                if (sheet) {
+                    if (sheet.isOpen('tuning')) { sheet.close('tuning'); return; }
+                    activePanel.hidden = false;
+                    sheet.open({ key: 'tuning', title: '表示調整', content: activePanel, onClose: function () { syncToggle(true); } });
+                    syncToggle(false);
+                    return;
+                }
+                const panel = activePanel;
                 if (!panel) return;
                 panel.hidden = !panel.hidden;
-                // 開いていることをボタンの側にも出す(押した結果がどこに出たか結び付ける)
                 syncToggle(panel.hidden);
             });
 

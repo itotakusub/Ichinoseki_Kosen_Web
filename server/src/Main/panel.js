@@ -10,42 +10,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const unlockSection = document.getElementById('km-unlock-section');
 
     /*
-     * ---- ログインの2つを、画面幅で置き換える ----
-     *
-     * スマホでは、トップバーの #km-auth-links を「ダウンロード・設定」パネルの
-     * #km-auth-slot へ移す(2026-09-05、利用者の指示)。
-     *
-     * **同じ要素を動かす。複製しない。** ログイン中と未ログインで中身が変わるので、
-     * 2つ置くと出し分けの枝が2箇所になり、片方だけ直したときに必ず食い違う。
-     *
-     * 幅は styles.css の `@media (max-width: 768px)` と同じ値にすること ——
-     * ずれると「バーからは消えたが、パネルにも出ていない」幅が生まれる。
+     * ログインの欄は、PC でもスマホでもこの引き出しの中(#km-auth-slot)。index.php が初めからそこに書く
+     * (2026-10-23、利用者の指示「上のバーをなくして、ログインは設定項目に」)。以前は画面幅で上のバーと行き来させていた
      */
-    const authLinks = document.getElementById('km-auth-links');
-    const authSlot = document.getElementById('km-auth-slot');
-    const authSection = document.getElementById('km-auth-section');
-    const topActions = document.querySelector('.top-actions');
-    const narrowScreen = window.matchMedia('(max-width: 768px)');
-
-    function placeAuthLinks() {
-        // テスト用アカウント(展示の PC)では引き出しごと書かない(index.php)。受け皿が無ければバーに残す
-        if (!authLinks || !authSlot || !topActions) return;
-
-        if (narrowScreen.matches) {
-            if (authLinks.parentNode !== authSlot) authSlot.appendChild(authLinks);
-            if (authSection) authSection.hidden = false;
-        } else {
-            // トップバーでは ⚙️ より左。並び順まで元に戻す
-            if (authLinks.parentNode !== topActions) topActions.insertBefore(authLinks, topActions.firstChild);
-            if (authSection) authSection.hidden = true;
-        }
-
-        // バーの高さが変わるので、地図の収まりを取り直す(app.js が公開している)
-        if (typeof window.kmRefitMap === 'function') window.kmRefitMap();
-    }
-
-    placeAuthLinks();
-    narrowScreen.addEventListener('change', placeAuthLinks);
 
     if (!toggleBtn || !panel || !unlockSection) return;
 

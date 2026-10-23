@@ -17,8 +17,11 @@
     }
 
     let panel = null;
+    // 左の引き出し(Main/km-sheet.js)に出す(2026-10-23)。無ければ今までどおり左下に浮かせる
+    const sheet = window.KmSheet || null;
 
     function closePanel() {
+        if (sheet && sheet.isOpen('schedule')) { sheet.close('schedule'); return; }
         if (panel) panel.remove();
         panel = null;
     }
@@ -32,16 +35,20 @@
 
     function openPanel(entries) {
         if (panel) { closePanel(); return; }
-        panel = el('section', 'km-history-panel km-schedule-panel glass-panel');
-        panel.setAttribute('aria-label', 'スケジュール');
-        const head = el('div', 'km-history-head');
-        head.appendChild(el('h2', 'km-history-title', 'スケジュール'));
-        const close = el('button', 'icon-btn', '×');
-        close.type = 'button';
-        close.setAttribute('aria-label', '閉じる');
-        close.addEventListener('click', closePanel);
-        head.appendChild(close);
-        panel.appendChild(head);
+        if (sheet) {
+            panel = el('div', 'km-schedule-content');
+        } else {
+            panel = el('section', 'km-history-panel km-schedule-panel glass-panel');
+            panel.setAttribute('aria-label', 'スケジュール');
+            const head = el('div', 'km-history-head');
+            head.appendChild(el('h2', 'km-history-title', 'スケジュール'));
+            const close = el('button', 'icon-btn', '×');
+            close.type = 'button';
+            close.setAttribute('aria-label', '閉じる');
+            close.addEventListener('click', closePanel);
+            head.appendChild(close);
+            panel.appendChild(head);
+        }
 
         const now = new Date();
         const timeLabel = window.kmScheduleTimeLabel || function () { return ''; };
@@ -92,7 +99,11 @@
             });
             list.appendChild(item);
         });
-        document.body.appendChild(panel);
+        if (sheet) {
+            sheet.open({ key: 'schedule', title: 'スケジュール', content: panel, onClose: function () { panel = null; } });
+        } else {
+            document.body.appendChild(panel);
+        }
     }
 
     function start() {

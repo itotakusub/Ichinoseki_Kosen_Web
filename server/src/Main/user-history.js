@@ -289,14 +289,26 @@
     let tab = 'bookmarks';
     const TABS = [['bookmarks', 'ブックマーク'], ['places', '開いた場所'], ['routes', '経路'], ['searches', '検索した言葉']];
 
+    /*
+     * 面は左の引き出し(Main/km-sheet.js)に出す(2026-10-23、利用者の指示「ダウンロード・設定のように引き出しで」)。
+     * 引き出しが無ければ今までどおり左下に浮かせる
+     */
+    const sheet = window.KmSheet || null;
     function openPanel() {
         if (panel) { closePanel(); return; }
+        if (sheet) {
+            panel = el('div', 'km-history-content');
+            renderPanel();
+            sheet.open({ key: 'history', title: '履歴とブックマーク', content: panel, onClose: function () { panel = null; } });
+            return;
+        }
         panel = el('section', 'km-history-panel glass-panel');
         panel.setAttribute('aria-label', '履歴とブックマーク');
         document.body.appendChild(panel);
         renderPanel();
     }
     function closePanel() {
+        if (sheet && sheet.isOpen('history')) { sheet.close('history'); return; }
         if (panel) panel.remove();
         panel = null;
     }
@@ -304,10 +316,12 @@
     function renderPanel() {
         if (!panel) return;
         panel.innerHTML = '';
-        const head = el('div', 'km-history-head');
-        head.appendChild(el('h2', 'km-history-title', '履歴とブックマーク'));
-        head.appendChild(button('×', 'icon-btn', closePanel));
-        panel.appendChild(head);
+        if (!sheet) {
+            const head = el('div', 'km-history-head');
+            head.appendChild(el('h2', 'km-history-title', '履歴とブックマーク'));
+            head.appendChild(button('×', 'icon-btn', closePanel));
+            panel.appendChild(head);
+        }
         panel.appendChild(el('p', 'km-history-note', signedIn
             ? (routeChoice() === 'local' ? 'アカウントで揃えています(経路はこの端末だけ)。' : 'アカウントで同じアカウントの端末と揃えています。')
             : 'この端末の中だけに残ります(サインインすると端末どうしで揃えられます)。'));
@@ -332,9 +346,10 @@
             } else if (tab === 'searches') {
                 label = item.q;
                 onOpen = function () {
-                    const input = document.getElementById('end-input');
-                    if (input) { input.value = item.q; input.focus(); }
+                    // 上の検索の窓に入れて候補を出す(2026-10-23。以前は目的地の欄)
+                    const input = document.getElementById('km-place-input') || document.getElementById('end-input');
                     closePanel();
+                    if (input) { input.value = item.q; input.focus(); input.dispatchEvent(new Event('input')); }
                 };
             } else {
                 // 地図に無い地点(消えた・見てよくない地点)は出さない
@@ -406,6 +421,13 @@
         if (!isId(id)) return;
         if (isBookmarked(id)) removeItem('bookmarks', id); else add('bookmarks', { uuid: id });
         syncBookmarkButtons();
+    });
+
+    // 上の検索の窓で場所を選んだ → 検索した言葉に残す(2026-10-23。Main/app.js の km:search)
+    window.addEventListener('km:search', function (event) {
+        const text = event.detail && event.detail.text;
+        if (typeof text !== 'string' || text.trim() === '') return;
+        add('searches', { q: text.trim().slice(0, 64) });
     });
 
     // 経路を引いた → 経路と、入れた言葉を残す

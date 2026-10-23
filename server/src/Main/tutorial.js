@@ -60,7 +60,7 @@
      * 押す所が見えないときの代わり。**検索の欄の中にある所**(出発地・目的地・案内開始・カテゴリー検索)は、
      * スマホでは欄が閉じていると見えないので、「検索」のボタンを指して開いてもらう。開けば毎フレームの見直しで元の手順に戻る。
      */
-    const OPEN_SEARCH_TEXT = '「検索」を押して、道順を調べる欄を開いてください。';
+    const OPEN_SEARCH_TEXT = '「経路」を押して、道順を調べる欄を開いてください。';
     function resolveTarget(step) {
         const el = step.target ? step.target() : null;
         if (el && visible(el)) return { el: el, text: step.text };
@@ -71,50 +71,42 @@
         return { el: null, text: step.text };
     }
 
-    function searchCollapsed() {
-        const panel = byId('search-panel');
-        return !panel || panel.classList.contains('collapsed');
-    }
-
     /*
      * 手順。target は押す所(無ければ画面の真ん中に吹き出しだけ)。
      * when は「出す条件」、advance は「これが起きたら次へ」(要素と出来事の名前)。
      */
+    /*
+     * 2026-10-23 から Google マップ風の流れ(場所を検索 → 左の引き出しに詳細 → 「経路」で出発地を選ぶ)。
+     * 場所を選ぶと Main/app.js が検索の窓に km-place-chosen を出す
+     */
     const STEPS = [
         {
-            target: function () { return byId('mobile-search-toggle'); },
-            when: searchCollapsed,
-            text: 'まず「検索」を押して、道順を調べる欄を開きます。',
-            advance: function () { return [byId('mobile-search-toggle'), 'click']; },
+            target: function () { return byId('km-place-input'); },
+            text: 'ここに行きたい場所の名前を打つと、近い順に候補が出ます。候補を選ぶと、その場所が開きます。',
+            advance: function () { return [byId('km-place-input'), 'km-place-chosen']; },
+        },
+        {
+            target: function () { return document.querySelector('#km-sheet .km-detail-route'); },
+            text: '「経路」を押すと、ここまでの道順を調べられます。',
+            fallbackText: '地図の上の点(部屋)を押しても、その場所の詳しい情報が出ます。',
+            advance: function () { return [document.querySelector('#km-sheet .km-detail-route'), 'click']; },
         },
         {
             target: function () { return byId('start-input'); },
-            text: 'ここを押して、出発地を決めてください。いまいる場所の名前を打つと候補が出ます。',
+            text: 'いまいる場所(出発地)を打って選ぶと、地図に道順が出ます。',
             advance: function () { return [byId('start-input'), 'change']; },
         },
         {
-            target: function () { return byId('end-input'); },
-            text: '次に、ここで行きたい場所(目的地)を選びます。',
-            advance: function () { return [byId('end-input'), 'change']; },
-        },
-        {
-            target: function () { return byId('search-btn'); },
-            text: '「案内開始」を押すと、地図に道順が出ます。',
-            advance: function () { return [byId('search-btn'), 'click']; },
-        },
-        {
             target: function () { return byId('floor-nav'); },
-            text: '階はここで切り替えます。「外」は校舎の外の地図です。',
+            text: '階はここで切り替えます。「外」は校舎の外の地図です。道順を出したままでも、拡大したまま移れます。',
         },
         {
-            target: function () { return byId('category-select'); },
-            text: 'トイレや階段は「カテゴリー検索」でまとめて探せます。',
-            // スマホで検索の欄が閉じているとき(案内開始のあとは閉じる)
-            fallbackText: 'トイレや階段は、「検索」を開いた中の「カテゴリー検索」でまとめて探せます。',
+            target: function () { return byId('km-category-chips'); },
+            text: 'トイレや階段は、ここのボタンでまとめて探せます。',
         },
         {
             target: null,
-            text: '地図の上の点(部屋)を押すと、詳しい情報が出ます。「ここを目的地にする」でも道順を出せます。',
+            text: '場所の詳細の「共有」で、その場所や道順のリンクを送れます。',
             last: true,
         },
     ];

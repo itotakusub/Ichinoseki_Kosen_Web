@@ -138,6 +138,18 @@ try {
             exit;
         }
 
+        // ポスターの ♡ を 0 に戻す(2026-10-23。lib/poster-likes.php)
+        if ($formAction === 'poster_likes_reset') {
+            $likePoster = (int) ($_POST['id'] ?? 0);
+            if ($likePoster > 0) {
+                km_poster_likes_ensure_table($pdo);
+                $removed = km_poster_likes_reset($pdo, $likePoster);
+                km_admin_log_record('content', 'poster.likes_reset', '#' . $likePoster . '(' . $removed . ' 件)');
+            }
+            header('Location: ./posters.php?saved=likes_reset#posters', true, 303);
+            exit;
+        }
+
         if ($formAction === 'link_delete') {
             $nodeId = (string) ($_POST['node_id'] ?? '');
             km_node_link_delete($pdo, $nodeId);
@@ -171,13 +183,17 @@ try {
     $nodeOptions = km_poster_node_options($pdo);
     // 企画の番号 → 地点(2026-10-23。管理アプリで振った番号。lib/map-node-projects.php)
     require_once __DIR__ . '/../lib/map-node-projects.php';
-    $projectNodes = km_map_project_nodes(km_map_projects_by_node_id($pdo));
+    // イベント中の名前が番号の地点も入れる(2026-10-23。公開の地図と同じ)
+    $projectNodes = km_map_project_nodes(km_map_projects_for_admin($pdo));
     // 名前が番号の一時地点(2026-10-23)
     $projectPois = km_map_project_pois_all($pdo);
     $tutorialEnd = km_tutorial_end_config($pdo);
     $stats = km_poster_stats_totals($pdo);
     km_node_likes_ensure_table($pdo);
     $likeTotals = km_node_likes_totals($pdo);
+    // ポスターの ♡ の数(2026-10-23)
+    require_once __DIR__ . '/../lib/poster-likes.php';
+    $posterLikes = km_poster_like_counts($pdo);
 } catch (Throwable $exception) {
     error_log('posters.php: ' . $exception->getMessage());
     $dbError = km_admin_error_message($exception, '詳しくはサーバーのログを照合してください。');
@@ -192,6 +208,7 @@ try {
     $tutorialEnd = ['text' => KM_TUTORIAL_END_TEXT_DEFAULT, 'ownSurveyUrl' => '', 'surveyUrl' => '', 'phoneQr' => true];
     $stats = [];
     $likeTotals = [];
+    $posterLikes = [];
 }
 // 広告(地点なし・出しているもの)の数と、1 件が選ばれる割合(全部同じ重みなので 1 / 件数。lib/posters.php)
 $adCount = count(array_filter($posters, static fn (array $p): bool => $p['nodeId'] === '' && $p['projectNo'] === '' && $p['isEnabled']));
@@ -370,7 +387,17 @@ require __DIR__ . '/_inc/partials/page-header.php';
                                   <?php if ($poster['linkUrl'] !== ''): ?>
                                     <div title="リンクを押した人数(同じ端末は 1 人)">リンク <?= (int) $stat['clicks'] ?> 人 / <?= (int) $stat['clicks7'] ?></div>
                                   <?php endif; ?>
-                                  <?php if (($poster['nodeId'] !== '' || $poster['projectNo'] !== '') && $poster['linkUrl'] === ''): ?>—<?php endif; ?>
+                                  <?php if (($poster['nodeId'] !== '' || $poster['projectNo'] !== '') && $poster['linkUrl'] === '' && ($posterLikes[(int) $poster['id']] ?? 0) === 0): ?>—<?php endif; ?>
+                                  <?php if (($posterLikes[(int) $poster['id']] ?? 0) > 0): ?>
+                                    <?php // ♡(2026-10-23。lib/poster-likes.php)。0 に戻せる ?>
+                                    <form method="post" class="m-0 d-flex align-items-center gap-1" data-km-confirm="「<?= km_e($poster['title']) ?>」の ♡ を 0 に戻します。よろしいですか?">
+                                      <?= km_csrf_field() ?>
+                                      <input type="hidden" name="form_action" value="poster_likes_reset">
+                                      <input type="hidden" name="id" value="<?= (int) $poster['id'] ?>">
+                                      <span title="♡ を付けた端末の数">♡ <?= (int) $posterLikes[(int) $poster['id']] ?></span>
+                                      <button type="submit" class="btn btn-sm btn-link p-0">0 に戻す</button>
+                                    </form>
+                                  <?php endif; ?>
                                 </td>
                                 <td><?= (int) $poster['sortOrder'] ?></td>                                <td>
                                   <form method="post" class="m-0">

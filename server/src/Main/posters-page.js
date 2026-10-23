@@ -76,7 +76,7 @@
 
         const actions = viewer.querySelector('.km-poster-card-actions');
         actions.replaceChildren();
-        card.querySelectorAll('.km-poster-card-actions a').forEach(function (link) {
+        card.querySelectorAll('.km-poster-card-actions a, .km-poster-card-actions [data-km-poster-like]').forEach(function (link) {
             actions.appendChild(link.cloneNode(true));
         });
 
@@ -94,5 +94,78 @@
         if (!card) return;
         event.preventDefault();
         open(card, link);
+    });
+
+    /*
+     * ♡(2026-10-23、利用者の指示「ポスターに ♡ を付けられるように」。api/poster-like.php)。
+     * 地図のページ(Main/app.js)と同じ決まり: 端末の印は ♡ を押すときだけ作り(localStorage)、URL には載せない。
+     * 同じポスターの ♡ はカードと大きく見る幕の両方にあるので、押したらどちらも塗り直す
+     */
+    const likeState = new Map();
+    function deviceId(create) {
+        try {
+            let id = window.localStorage.getItem('km-device-id');
+            if (!/^[0-9a-f]{32}$/.test(id || '')) {
+                if (!create) return null;
+                const bytes = new Uint8Array(16);
+                window.crypto.getRandomValues(bytes);
+                id = Array.from(bytes, function (b) { return b.toString(16).padStart(2, '0'); }).join('');
+                window.localStorage.setItem('km-device-id', id);
+            }
+            return id;
+        } catch (e) {
+            return null;
+        }
+    }
+    function paint() {
+        document.querySelectorAll('[data-km-poster-like]').forEach(function (button) {
+            const state = likeState.get(Number(button.dataset.kmPosterLike));
+            if (!state) return;
+            button.textContent = (state.liked ? '♥ ' : '♡ ') + state.count;
+            button.classList.toggle('is-liked', state.liked);
+            button.setAttribute('aria-pressed', String(state.liked));
+        });
+    }
+    const ids = Array.from(new Set(Array.from(wall.querySelectorAll('[data-km-poster-like]'), function (b) { return Number(b.dataset.kmPosterLike); })));
+    const device = deviceId(false);
+    // 一度に尋ねられるのは 50 枚まで(lib/poster-likes.php の KM_POSTER_LIKE_QUERY_MAX)
+    for (let i = 0; i < ids.length; i += 50) {
+        fetch('/api/poster-like.php?ids=' + ids.slice(i, i + 50).join(','), { credentials: 'same-origin', headers: device ? { 'X-KM-Device': device } : {} })
+            .then(function (response) { return response.ok ? response.json() : null; })
+            .then(function (data) {
+                if (!data) return;
+                (data.likes || []).forEach(function (entry) { likeState.set(Number(entry.id), { count: Number(entry.count) || 0, liked: Boolean(entry.liked) }); });
+                paint();
+            })
+            .catch(function () { /* 数が読めなくても見る分には困らない */ });
+    }
+    document.addEventListener('click', function (event) {
+        const button = event.target.closest('[data-km-poster-like]');
+        if (!button) return;
+        const id = Number(button.dataset.kmPosterLike);
+        const mine = deviceId(true);
+        const meta = document.querySelector('meta[name="km-csrf"]');
+        if (!mine || !meta) return;
+        const before = likeState.get(id) || { count: Number((button.textContent.match(/\d+/) || ['0'])[0]), liked: false };
+        const like = !before.liked;
+        likeState.set(id, { count: Math.max(0, before.count + (like ? 1 : -1)), liked: like });
+        paint();
+        fetch('/api/poster-like.php', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', 'X-KM-CSRF': meta.getAttribute('content') },
+            body: JSON.stringify({ poster: id, device: mine, like: like }),
+        })
+            .then(function (response) { return response.json().then(function (data) { return { ok: response.ok, data: data }; }); })
+            .then(function (result) {
+                if (!result.ok || !result.data.success) throw new Error(result.data.message || '');
+                likeState.set(id, { count: Number(result.data.count) || 0, liked: Boolean(result.data.liked) });
+                paint();
+            })
+            .catch(function (error) {
+                likeState.set(id, before);
+                paint();
+                window.alert(error && error.message ? error.message : '♡ を送れませんでした。時間をおいてもう一度試してください。');
+            });
     });
 }());

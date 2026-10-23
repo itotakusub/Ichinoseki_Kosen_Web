@@ -203,6 +203,33 @@ $posterParam = $_GET['poster'] ?? '';
 if (is_string($posterParam) && preg_match('/^[1-9]\d{0,9}$/', $posterParam) === 1) {
     $kmFocusPoster = $posterParam;
 }
+/*
+ * 共有のリンク(2026-10-23、利用者の指示「ルート設定時にシェアするなど」)。
+ *   /?poi=<臨時の地点の番号>        … 一時地点を開く(地点の id を持たないので room とは別)
+ *   /?from=<地点の id>&to=<地点の id> … その経路を出す(端が一時地点なら fromPoi= / toPoi= に番号)
+ * room と同じく**字の形だけ確かめて <meta> で渡す**(探すのは Main/app.js。地図に無ければ知らせるだけ)
+ */
+$kmNodeIdParam = static function (string $name): ?string {
+    $value = $_GET[$name] ?? '';
+    if (!is_string($value) || preg_match('/^[0-9A-Fa-f-]{32,36}$/', $value) !== 1) {
+        return null;
+    }
+    $id = strtolower(str_replace('-', '', $value));
+    return strlen($id) === 32 ? $id : null;
+};
+$kmFocusFrom = $kmNodeIdParam('from');
+$kmFocusTo = $kmNodeIdParam('to');
+$kmPoiParam = static function (string $name): ?string {
+    $value = $_GET[$name] ?? '';
+    return is_string($value) && preg_match('/^[1-9]\d{0,9}$/', $value) === 1 ? $value : null;
+};
+$kmFocusPoi = null;
+$poiParam = $_GET['poi'] ?? '';
+if (is_string($poiParam) && preg_match('/^[1-9]\d{0,9}$/', $poiParam) === 1) {
+    $kmFocusPoi = $poiParam;
+}
+$kmFocusFromPoi = $kmFocusFrom === null ? $kmPoiParam('fromPoi') : null;
+$kmFocusToPoi = $kmFocusTo === null ? $kmPoiParam('toPoi') : null;
 
 $inlineMapData = null;
 $kmEvent = null;             // イベントモードの案内(バナー)。無ければ null
@@ -301,6 +328,14 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
         <?php if ($kmFocusPoster !== null): ?>
             <meta name="km-focus-poster" content="<?= km_home_e($kmFocusPoster) ?>">
         <?php endif; ?>
+    <?php endif; ?>
+    <?php /* 共有のリンク(上の $kmFocusFrom など。32 字の 16 進か数字だけ)。Main/app.js の focusFromUrl が読む */ ?>
+    <?php if (($kmFocusFrom !== null || $kmFocusFromPoi !== null) && ($kmFocusTo !== null || $kmFocusToPoi !== null)): ?>
+        <?php if ($kmFocusFrom !== null): ?><meta name="km-focus-from" content="<?= km_home_e($kmFocusFrom) ?>"><?php else: ?><meta name="km-focus-from-poi" content="<?= km_home_e((string) $kmFocusFromPoi) ?>"><?php endif; ?>
+        <?php if ($kmFocusTo !== null): ?><meta name="km-focus-to" content="<?= km_home_e($kmFocusTo) ?>"><?php else: ?><meta name="km-focus-to-poi" content="<?= km_home_e((string) $kmFocusToPoi) ?>"><?php endif; ?>
+    <?php endif; ?>
+    <?php if ($kmFocusPoi !== null): ?>
+        <meta name="km-focus-poi" content="<?= km_home_e($kmFocusPoi) ?>">
     <?php endif; ?>
     <?php if ($kmTestMode !== null): ?>
         <?php /* テスト用アカウントの印と、自動で「始めから」にするまでの分(Main/test-mode.js が読む。一般の人には出さない) */ ?>
@@ -413,24 +448,13 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
 
         <?php
         /*
-         * トップバー。**一段に収める**(2026-09-05、利用者の指示)。
-         *
-         * それまでは題字の下にログインの2つが縦に積まれ、スマホでは高さ 140px 前後を
-         * 占めていた —— 地図の一番見たい上側が、押す用事の少ないボタンで埋まっていた。
-         *
-         * スマホでは、この中の #km-auth-links を「ダウンロード・設定」パネルの
-         * #km-auth-slot へ **同じ要素のまま移す**(Main/panel.js)。
-         * 2つ書いて片方を隠す形にはしない —— 片方だけ直したときに食い違う。
+         * ログイン・ログアウトの欄(2026-10-23、利用者の指示「上のバーをなくして、ログインは設定項目に入れて」)。
+         * **1 回だけ組み立てて 1 か所に出す** —— ふだんは「ダウンロード・設定」の中(#km-auth-slot)、
+         * 展示の PC(テストモード)は引き出しが無いので、左下の操作の横の小さな欄(.km-test-auth)。
+         * 2 つ書いて片方を隠す形にはしない(片方だけ直したときに食い違う)。
          */
+        ob_start();
         ?>
-        <header class="top-bar">
-            <div class="brand-area">
-                <h1 class="app-title">
-                    <span class="logo-icon">📍</span>
-                    <span>KosenMap</span>
-                </h1>
-
-                <div class="top-actions">
                     <div class="action-group-left" id="km-auth-links">
                         <?php if ($guestViewing && $guestUntil !== null): ?>
                             <?php // お試しの閲覧中であることと期限を隠さない(期限が来たら黙って氏名が消えるだけにしない) ?>
@@ -479,31 +503,37 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
                             </a>
                         <?php endif; ?>
                     </div>
+        <?php
+        $kmAuthLinksHtml = (string) ob_get_clean();
+        // ポスターの一覧(2026-10-21、lib/posters.php)。**いま出しているポスターがあるときだけ**左下に出す
+        $kmPosterCount = count($kmMapData['posters'] ?? []);
+        ?>
 
-                    <?php
-                    // **テスト用アカウントでは「ダウンロード・設定」を出さない**(2026-10-19、利用者の指示)。
-                    // 展示の PC で来場者が APK・アカウント設定・お問い合わせへ迷い込まないように。引き出しごと書かない(下)。
-                    // ログアウトの欄はスマホでも上のバーに残る(受け皿が無ければ panel.js は動かさない)
-                    ?>
-                    <?php
-                    // ポスターの一覧(2026-10-21、lib/posters.php)。**いま出しているポスターがあるときだけ**出す
-                    // (出し方が「表示しない」・イベントの外の「イベント中のみ」では、km_map_data が空で返す)。展示の PC でも出す
-                    $kmPosterCount = count($kmMapData['posters'] ?? []);
-                    ?>
-                    <?php if ($kmTestMode === null || $kmPosterCount > 0): ?>
-                    <div class="action-group-right">
-                        <?php if ($kmPosterCount > 0): ?>
-                            <a href="/posters.php" class="icon-btn km-poster-btn" title="ポスター(<?= $kmPosterCount ?> 枚)" aria-label="ポスターの一覧(<?= $kmPosterCount ?> 枚)">🖼️</a>
-                        <?php endif; ?>
-                        <?php if ($kmTestMode === null): ?>
-                            <button id="info-panel-toggle" class="icon-btn" title="ダウンロード・設定" aria-label="ダウンロード・設定">⚙️</button>
-                        <?php endif; ?>
-                    </div>
-                    <?php endif; ?>
-                </div>
-            </div>
-        </header>
-
+        <?php
+        /*
+         * 場所の検索(2026-10-23、利用者の指示「Google マップのように、場所を検索から始めて次にルート案内。一致率順に」)。
+         * 上のバー(題字・ログイン・⚙️)の代わりに、左上に検索の窓を 1 つ置く。打つと一致率の順に候補が出て
+         * (Main/search-rank.js)、選ぶとその場所へ寄せて、左の引き出しに詳細を出す(Main/km-sheet.js)。
+         * 候補の組み立てと選んだあとは Main/app.js。下のチップは種類ごとにまとめて探す(以前のカテゴリー検索)
+         */
+        ?>
+        <div id="km-searchbox" class="km-searchbox glass-panel" role="search">
+            <span class="km-searchbox-logo" aria-hidden="true" title="KosenMap">📍</span>
+            <input id="km-place-input" class="km-searchbox-input" type="search" placeholder="場所を検索" autocomplete="off" spellcheck="false"
+                   aria-label="場所を検索" role="combobox" aria-expanded="false" aria-controls="km-place-results" aria-autocomplete="list">
+            <button id="km-place-clear" type="button" class="km-searchbox-btn" title="消す" aria-label="検索の言葉を消す" hidden>&times;</button>
+            <button id="km-route-open" type="button" class="km-searchbox-btn km-searchbox-route" title="経路を調べる" aria-label="経路を調べる" aria-controls="search-panel">🧭</button>
+            <ul id="km-place-results" class="km-search-results" role="listbox" aria-label="検索の候補" hidden></ul>
+        </div>
+        <div id="km-category-chips" class="km-chips" role="toolbar" aria-label="種類でまとめて探す">
+            <button type="button" class="km-chip" data-km-category="WC">🚻 トイレ</button>
+            <button type="button" class="km-chip" data-km-category="stairs">🏃 階段・EV</button>
+            <button type="button" class="km-chip" data-km-category="room">📖 教室</button>
+            <button type="button" class="km-chip" data-km-category="facility">🏢 建物</button>
+            <?php if ($kmEvent !== null): ?>
+                <button type="button" class="km-chip" data-km-category="event">🎪 イベント</button>
+            <?php endif; ?>
+        </div>
         <?php if ($kmEvent !== null): ?>
         <!--
             イベントモードの案内。
@@ -556,9 +586,25 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
                 </div>
                 <div search-container>
                     <div class="search-inner">
-                        <div class="input-group ">
-                            <input type="text" id="start-input" list="node-options" placeholder="出発地から...">
-                            <input type="text" id="end-input" list="node-options" placeholder="目的地まで...">
+                        <?php
+                        /*
+                         * 出発地・目的地(2026-10-23 から一致率順の候補。Main/app.js の attachSearch)。
+                         * 以前のブラウザの候補(datalist)は、打った文字の並び順でしか出せなかった。
+                         * ⇅ は入れ替え
+                         */
+                        ?>
+                        <div class="input-group km-route-inputs">
+                            <div class="km-route-field">
+                                <input type="text" id="start-input" placeholder="出発地(いまいる場所)" autocomplete="off" spellcheck="false" aria-label="出発地"
+                                       role="combobox" aria-expanded="false" aria-controls="km-start-results" aria-autocomplete="list">
+                                <ul id="km-start-results" class="km-search-results" role="listbox" aria-label="出発地の候補" hidden></ul>
+                            </div>
+                            <div class="km-route-field">
+                                <input type="text" id="end-input" placeholder="目的地" autocomplete="off" spellcheck="false" aria-label="目的地"
+                                       role="combobox" aria-expanded="false" aria-controls="km-end-results" aria-autocomplete="list">
+                                <ul id="km-end-results" class="km-search-results" role="listbox" aria-label="目的地の候補" hidden></ul>
+                            </div>
+                            <button type="button" id="km-route-swap" class="km-route-swap" title="出発地と目的地を入れ替える" aria-label="出発地と目的地を入れ替える">⇅</button>
                         </div>
                         <?php
                         /*
@@ -592,22 +638,7 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
                         </div>
                     </div>
                 </div>
-                    <datalist id="node-options"></datalist>
-                    <select id="category-select" class="category-dropdown">
-                        <option value="">🔍 カテゴリー検索...</option>
-                        <option value="WC">🚻 トイレ</option>
-                        <option value="stairs">🏃 階段/EV</option>
-                        <option value="room">📖 教室</option>
-                        <option value="facility">🏢 建物</option>
-                    </select>
-                    <?php
-                    /*
-                     * カテゴリー検索の結果。**検索パネルの中に出す**(2026-09-25)。
-                     * 以前はルート案内のシートを借りて出していたが、そのシートは廃止した。
-                     * 探した場所のすぐ下に並ぶ方が、どの操作の結果なのかも分かる。
-                     */
-                    ?>
-                    <div id="category-results" class="km-category-results" aria-live="polite" hidden></div>
+                    <?php /* カテゴリー検索は検索の窓の下のチップへ移した(2026-10-23)。結果は左の引き出しに出す */ ?>
             </div>
         <script<?= km_csp_nonce_attr() ?>>
         window.onerror = function(msg, url, line, col, error) {
@@ -635,6 +666,24 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
          */
         ?>
         <div class="km-action-bar" id="km-action-bar">
+            <?php
+            /*
+             * ⚙️ ダウンロード・設定と 🖼️ ポスターも、上のバーからここへ移した(2026-10-23、利用者の指示)。
+             * 「経路」は出発地・目的地の欄(#search-panel)を開け閉てする(場所の検索は上の窓)
+             */
+            ?>
+            <?php if ($kmTestMode === null): ?>
+                <button id="info-panel-toggle" type="button" class="km-action-btn" title="ダウンロード・設定" aria-label="ダウンロード・設定">
+                    <span class="km-action-icon" aria-hidden="true">⚙️</span>
+                    <span class="km-action-label">設定</span>
+                </button>
+            <?php endif; ?>
+            <?php if ($kmPosterCount > 0): ?>
+                <a href="/posters.php" class="km-action-btn km-poster-btn" title="ポスター(<?= $kmPosterCount ?> 枚)" aria-label="ポスターの一覧(<?= $kmPosterCount ?> 枚)">
+                    <span class="km-action-icon" aria-hidden="true">🖼️</span>
+                    <span class="km-action-label">ポスター</span>
+                </a>
+            <?php endif; ?>
             <button
                 id="mobile-search-toggle"
                 type="button"
@@ -643,10 +692,14 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
                 aria-controls="search-panel"
                 aria-expanded="true"
             >
-                <span class="km-action-icon" aria-hidden="true">🔍</span>
-                <span class="km-action-label">検索</span>
+                <span class="km-action-icon" aria-hidden="true">🧭</span>
+                <span class="km-action-label">経路</span>
             </button>
         </div>
+        <?php if ($kmTestMode !== null): ?>
+            <?php /* 展示の PC はダウンロード・設定が無いので、係の人のログアウトはここ(左下の操作の上) */ ?>
+            <div class="km-test-auth glass-panel"><?= $kmAuthLinksHtml ?></div>
+        <?php endif; ?>
 
         <?php
         /*
@@ -727,6 +780,8 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
                 <span id="km-route-text" class="km-route-text"></span>
                 <span id="km-route-sub" class="km-route-sub"></span>
             </button>
+            <?php /* 経路の共有(2026-10-23、利用者の指示)。/?from=&to= のリンク(Main/app.js の shareRoute) */ ?>
+            <button id="km-route-share" type="button" class="km-route-share" title="この経路を共有" aria-label="この経路を共有">↗</button>
             <button id="km-route-next" type="button" class="km-route-next">位置の更新</button>
         </div>
         </div>
@@ -766,16 +821,12 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
                 ?>
                 <?php
                 /*
-                 * ログインの受け皿。**スマホのときだけ中身が入る。**
-                 *
-                 * Main/panel.js が、トップバーの #km-auth-links を画面幅に応じて
-                 * ここへ移す(戻すときも同じ要素)。中身を PHP で二度書かないこと ——
-                 * ログイン中と未ログインで出し分ける枝が2箇所になり、必ず食い違う。
+                 * ログイン(2026-10-23 から PC でもここ。上のバーを外した)。中身は上で 1 回だけ組み立てた $kmAuthLinksHtml
                  */
                 ?>
-                <div class="info-section" id="km-auth-section" hidden>
-                    <h4>ログイン状態</h4>
-                    <div id="km-auth-slot"></div>
+                <div class="info-section" id="km-auth-section">
+                    <h4>ログイン</h4>
+                    <div id="km-auth-slot"><?= $kmAuthLinksHtml ?></div>
                 </div>
                 <div class="info-section">
                     <h4>Android アプリ</h4>
@@ -1052,6 +1103,9 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
      * `defer` は書いた順に実行されるので、この並びで足りる。
      */
     ?>
+    <?php /* 左の引き出しと、検索の一致率(2026-10-23)。どちらも app.js・map-tuning.js より先に読む */ ?>
+    <script defer src="<?= km_home_e(km_public_asset('Main/km-sheet.js')) ?>"></script>
+    <script defer src="<?= km_home_e(km_public_asset('Main/search-rank.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/map-style.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/map-tuning.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/label-layout.js')) ?>"></script>

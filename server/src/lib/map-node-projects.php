@@ -212,6 +212,32 @@ function km_map_projects_with_aliases(array $projectsById, array $aliases): arra
 }
 
 /**
+ * 管理画面(ポスター・スケジュール)で使う、地点ごとの番号(id => 番号)。表の番号に、**全部のイベント**のイベント中の名前が番号のものを足す
+ * (2026-10-23、利用者の報告「企画 32 がしっかり設定されているのにエラー」—— 2E はイベント中の名前「32」だけで番号が付いており、
+ * 管理画面は表の番号しか見ていなかったので「この番号の地点が地図にありません」と出た)。期間前のイベントも入れる(準備のときに見るため)。
+ * 表が無ければ空として続ける
+ *
+ * @return array<string, list<string>>
+ */
+function km_map_projects_for_admin(PDO $pdo): array
+{
+    $aliases = [];
+    try {
+        foreach ($pdo->query('SELECT node_id, alias FROM km_map_event_aliases ORDER BY event_id')->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $aliases[] = [(string) $row['node_id'] => (string) $row['alias']];
+        }
+    } catch (Throwable $exception) {
+        // イベントの表がまだ無い
+    }
+    $projects = km_map_projects_by_node_id($pdo);
+    // 同じ地点に別のイベントで別の番号の名前が付いていても、どれも入れる
+    foreach ($aliases as $alias) {
+        $projects = km_map_projects_with_aliases($projects, $alias);
+    }
+    return $projects;
+}
+
+/**
  * 臨時の地点(km_map_event_overlay の pois)を、番号ごとにまとめる。**純粋関数**
  *
  * @param list<array<string, mixed>> $pois

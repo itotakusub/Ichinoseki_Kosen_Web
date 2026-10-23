@@ -4260,7 +4260,7 @@ function km_check_hardening(): void
     check_bool('proxy-web.conf に proxy_read_timeout を書かない(location で重複すると起動しない)', !str_contains((string) preg_replace('/^\s*#.*$/m', '', $file('nginx/km/proxy-web.conf')), 'proxy_read_timeout'));
     // 2 つ目は Soketi の WebSocket(/ws/app/。2026-10-19 に 6001 番から移した。1 本を長く張る)
     check('443 で 300s を許すのは downloads.php と /ws/app/ だけ', 2, substr_count($https, 'proxy_read_timeout 300s;'));
-    check_bool('未認証で重い口を km_api で絞る(メソッドを問わない)', str_contains($https, 'location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update|positioning-params|learning|poster-image|poster-event|table|node-extras|display-defaults|user-map-data|map-events)|logto_me)\.php$ {') && str_contains($https, 'limit_req zone=km_api burst=120 nodelay;'));
+    check_bool('未認証で重い口を km_api で絞る(メソッドを問わない)', str_contains($https, 'location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update|positioning-params|learning|poster-image|poster-event|table|node-extras|display-defaults|user-map-data|map-events|poster-like)|logto_me)\.php$ {') && str_contains($https, 'limit_req zone=km_api burst=120 nodelay;'));
     check_bool('アプリの地図は km_appmap で絞る', preg_match('#location = /api/app-map\.php \{\s*limit_req zone=km_appmap burst=30 nodelay;#', $https) === 1);
     check_bool('callback.php は認可コードをログに残さない', preg_match('#location = /callback\.php \{\s*access_log [^;]+ km_no_query;#', $https) === 1);
     /*
@@ -7041,8 +7041,9 @@ function km_check_layout(): void
     km_check_heading('layout: 折り返し幅は1つ');
     // 3箇所にある。**同じ値であること**だけを見る(値そのものは CSS が正本)
     check_bool('styles.css が 768px で折り返す', $mobileBreak !== false);
-    check_bool('app.js も同じ幅で判断する', str_contains($appJs, "matchMedia('(max-width: 768px)')"));
-    check_bool('panel.js も同じ幅で判断する', str_contains($panelJs, "matchMedia('(max-width: 768px)')"));
+    check_bool('app.js も同じ幅で判断する', str_contains($appJs, 'if (width > 768) {') && str_contains($appJs, 'window.innerWidth <= 768'));
+    // panel.js は画面幅で何も入れ替えなくなった(2026-10-23。ログインはいつも引き出しの中)。左の引き出しは CSS の同じ幅で下から出る
+    check_bool('左の引き出しも同じ幅で下から出る', preg_match('/@media \(max-width: 768px\) \{[^@]*\.km-sheet \{[^}]*transform: translateY\(105%\)/s', $css) === 1);
 
     km_check_heading('layout: 階のレールは右');
     check_bool(
@@ -7070,7 +7071,9 @@ function km_check_layout(): void
     $headerEnd = strpos($index, '</header>');
     check_bool('操作バーがある', $bar !== false);
     check_bool('検索の開閉は操作バーの中', $bar !== false && $toggle !== false && $toggle > $bar);
-    check_bool('トップバーには置かない', $headerEnd !== false && $toggle !== false && $toggle > $headerEnd);
+    // 上のバーは外した(2026-10-23、利用者の指示)。⚙️ ダウンロード・設定と 🖼️ ポスターも左下の操作バーへ
+    check_bool('上のバー(.top-bar)は無い', $headerEnd === false && !str_contains($index, 'class="top-bar"'));
+    check_bool('⚙️ と 🖼️ も左下の操作バーの中', ($infoToggle = strpos($index, 'id="info-panel-toggle"')) !== false && $infoToggle > $bar && strpos($index, 'km-poster-btn') > $bar);
     check_bool('表示調整も同じ操作バーへ入る', str_contains($tuningJs, "getElementById('km-action-bar')"));
     // 操作バーの無いページ(admin/map-editor.php)でも出ること。**消えては困る**
     check_bool(
@@ -7090,9 +7093,11 @@ function km_check_layout(): void
      * PHP で2つ書くと、ログイン中と未ログインの出し分けが2箇所になって食い違う。
      */
     check('入口は2つだけ', 2, substr_count($index, 'sign-in.php?mode=signIn'));
-    check_bool('受け皿は空で置く', str_contains($index, '<div id="km-auth-slot"></div>'));
-    check_bool('動かす側がある', str_contains($index, 'id="km-auth-links"'));
-    check_bool('panel.js が入れ替える', str_contains($panelJs, "getElementById('km-auth-links')"));
+    // 2026-10-23 から: 1 回だけ組み立てて(ob_start)、ふだんは「ダウンロード・設定」の中、展示の PC は左下の小さな欄に出す
+    check_bool('ログインの欄は 1 回だけ組み立てる', substr_count($index, 'id="km-auth-links"') === 1 && str_contains($index, '$kmAuthLinksHtml = (string) ob_get_clean();'));
+    check_bool('ふだんはダウンロード・設定の中', str_contains($index, '<div id="km-auth-slot"><?= $kmAuthLinksHtml ?></div>'));
+    check_bool('展示の PC は左下の小さな欄', str_contains($index, '<div class="km-test-auth glass-panel"><?= $kmAuthLinksHtml ?></div>'));
+    check_bool('panel.js は画面幅で入れ替えない', !str_contains($panelJs, 'placeAuthLinks'));
 
     km_check_heading('layout: ズームボタン');
     // 左下は操作ピルが使う。ぶつからない側へ
@@ -7287,7 +7292,7 @@ function km_check_layout(): void
     check_bool('「はじめに」を閉じてから始める', str_contains($welcomeJs, "new CustomEvent('km-welcome-closed')") && str_contains($tutorialJs, "'km-welcome-closed'"));
     check_bool('地図が出てから始める', str_contains($appJs, "new CustomEvent('km-map-ready')") && str_contains($tutorialJs, "'km-map-ready'"));
     check_bool('QR から来た人と錠のときは出さない', str_contains($tutorialJs, 'meta[name="km-focus-room"]') && str_contains($tutorialJs, "classList.contains('km-map-unavailable')"));
-    check_bool('最初の手順は出発地(検索が閉じていれば「検索」から)', str_contains($tutorialJs, 'ここを押して、出発地を決めてください。') && str_contains($tutorialJs, 'when: searchCollapsed'));
+    check_bool('最初の手順は場所の検索(2026-10-23 から Google マップ風。選ぶと次へ)', str_contains($tutorialJs, "return [byId('km-place-input'), 'km-place-chosen'];") && str_contains($appJs, "placeInput.dispatchEvent(new CustomEvent('km-place-chosen'));"));
     check_bool('幕は見た目だけ(案内の上からも押せる)', preg_match('/\.km-tour \{[^}]*pointer-events: none/', $css) === 1);
     check_bool('テスト用アカウントは来場者ごとに出す', str_contains($tutorialJs, "SEEN_KEY + ':visit:'"));
     check_bool('設定からもう一度見られる', str_contains($index, 'data-km-tutorial-open'));
@@ -7331,7 +7336,7 @@ function km_check_layout(): void
     // 2026-10-19(同日、利用者の指示): テスト用アカウントでは「ダウンロード・設定」を開けない。⚙️ も引き出しも書かない
     check_bool('テスト用アカウントでは「ダウンロード・設定」の ⚙️ を出さない', preg_match('/<\?php if \(\$kmTestMode === null\): \?>\s*<button id="info-panel-toggle"/', $homeCode) === 1);
     check_bool('テスト用アカウントでは引き出しごと書かない(APK・アカウント設定への導線をページに残さない)', preg_match('/<\?php if \(\$kmTestMode === null\): \?>\s*<div id="km-drawer-scrim".*?<\/aside>\s*<\?php endif; \?>/s', $homeCode) === 1);
-    check_bool('引き出しが無ければログインの欄はバーに残す(panel.js は受け皿が無いと動かさない)', str_contains((string) file_get_contents(__DIR__ . '/../Main/panel.js'), "if (!authLinks || !authSlot || !topActions) return;"));
+    check_bool('引き出しが無ければ(展示の PC)ログインの欄は左下の小さな欄に出す', preg_match('/<\?php if \(\$kmTestMode !== null\): \?>\s*<\?php \/\*[^*]*\*\/ \?>\s*<div class="km-test-auth glass-panel">/', $homeCode) === 1);
     if (preg_match('/^\.action-group-left \{(.*?)^\}/ms', (string) file_get_contents(__DIR__ . '/../Main/styles.css'), $leftCss) === 1) {
         check_bool('バーに残ったログインの欄はスマホで折り返す(画面の右へはみ出さない)', str_contains($leftCss[1], 'flex-wrap: wrap;') && str_contains($leftCss[1], 'min-width: 0;'));
     } else {
@@ -7437,7 +7442,7 @@ function km_check_layout(): void
         && str_contains($homeCode, '<?php if ($kmPosterCount > 0): ?>') && str_contains($homeCode, '<meta name="km-focus-poster" content="<?= km_home_e($kmFocusPoster) ?>">'));
     $wallPage = (string) file_get_contents(__DIR__ . '/../posters.php');
     check_bool('一覧のページ: 地図の錠が掛かっていれば地点を出さない・地図へは ?room= で移る', str_contains($wallPage, "km_posters_public(\$pdo, km_poster_event_active(\$pdo), [])")
-        && str_contains($wallPage, "'/?room=' . rawurlencode(\$poster['nodeId']) . '&poster=' . (int) \$poster['id']") && str_contains($wallPage, 'km_map_guest_verify();'));
+        && str_contains($wallPage, "'href' => '/?room=' . rawurlencode((string) \$nodeId) . '&poster=' . (int) \$poster['id'],") && str_contains($wallPage, "'href' => '/?poi=' . (int) \$poiId,") && str_contains($wallPage, 'km_map_guest_verify();'));
     // 押したら大きく見る幕 → そこから地図・リンクへ(2026-10-22、利用者の指示「押して飛ばすより、押して拡大してから飛ぶ」)
     $wallJs = (string) file_get_contents(__DIR__ . '/../Main/posters-page.js');
     check_bool('一覧のページ: 画像を押すと大きく見る幕(画像のリンクは数えない・JS が無ければリンクへ)', str_contains($wallPage, 'data-km-poster-open')
@@ -7798,14 +7803,28 @@ function km_check_layout(): void
         && str_contains($appJsForPoi, "note: poster && poster.description ? poster.description : String(poi.note || ''),"));
     check('教室のイベント中の名前が番号なら、その番号も付ける(二重にしない・番号でない名前は足さない)', ['n1' => ['22', '32'], 'n2' => ['33']],
         km_map_projects_with_aliases(['n1' => ['22'], 'n2' => ['33']], ['n1' => '32', 'n2' => '33', 'n3' => 'たこ焼き']));
+    if (extension_loaded('pdo_sqlite')) {
+        // 管理画面(ポスター・スケジュール)でも、イベント中の名前が番号の地点を数える(2026-10-23、企画 32 の報告)
+        $adminProjectsDb = new PDO('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+        $adminProjectsDb->exec('CREATE TABLE km_map_node_projects (node_uuid TEXT, project_no TEXT, sort_order INT)');
+        $adminProjectsDb->exec("INSERT INTO km_map_node_projects VALUES ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '22', 0)");
+        check('管理画面の番号: イベントの表が無くても表の番号は出る', ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' => ['22']], km_map_projects_for_admin($adminProjectsDb));
+        $adminProjectsDb->exec('CREATE TABLE km_map_event_aliases (event_id INT, node_id TEXT, alias TEXT)');
+        $adminProjectsDb->exec("INSERT INTO km_map_event_aliases VALUES (7, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', '32'), (8, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', '33'), (7, 'cccccccccccccccccccccccccccccccc', '救護室')");
+        check('管理画面の番号: イベント中の名前「32」の地点が番号 32 に入る(全部のイベント・番号でない名前は入れない)',
+            ['22' => ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'], '32' => ['bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'], '33' => ['bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb']],
+            km_map_project_nodes(km_map_projects_for_admin($adminProjectsDb)));
+    }
+    check_bool('管理画面のポスターとスケジュールは、イベント中の名前の番号も数える', str_contains((string) file_get_contents(__DIR__ . '/../admin/posters.php'), '$projectNodes = km_map_project_nodes(km_map_projects_for_admin($pdo));')
+        && str_contains((string) file_get_contents(__DIR__ . '/../admin/schedule.php'), '$projectNodes = km_map_project_nodes(km_map_projects_for_admin($pdo));'));
     check_bool('公開の地図: 番号で置いたポスターとスケジュールの場所に、イベント中の名前の番号も入る', str_contains((string) file_get_contents(__DIR__ . '/../lib/map-data.php'), "\$projectsById = km_map_projects_with_aliases(km_map_projects_by_node_id(\$pdo), \$overlay['aliases']);"));
     check_bool('公開の地図: 企画の教室はイベント中、札と吹き出しの名前がポスターの見出し(札は縮める)・備考がポスターの説明・ポスターが無ければ番号を前に付ける',
         str_contains($appJsForPoi, 'escapeHtml(project ? (project.fromPoster ? shortPoiName(project.name) : project.name) : displayNameFor(node));')
         && str_contains($appJsForPoi, 'const title = project ? project.name : (node.alias || node.name);')
         && str_contains($appJsForPoi, "if (!graphData.event || numbers.length === 0) return null;")
         && str_contains($appJsForPoi, "return { name: prefix ? `\${prefix} \${base}` : base, note: '', fromPoster: false };"));
-    check_bool('公開の地図: 一時地点は部屋の地点と同じに描く(外は建物)・同じ種類の束に入れて出し入れと札の間引きも同じ・編集画面は今までの印',
-        str_contains($appJsForPoi, "return String(poi.floor) === 'outside' ? 'facility' : 'room';")
+    check_bool('公開の地図: 一時地点は部屋の地点と同じに描く(外も部屋。2026-10-23 に建物から戻した)・同じ種類の束に入れて出し入れと札の間引きも同じ・編集画面は今までの印',
+        preg_match("/function poiNodeType\(poi\) \{[^}]*return 'room';\s*\}/", $appJsForPoi) === 1
         && str_contains($appJsForPoi, 'const marker = createPoiMarker(poi, type);')
         && str_contains($appJsForPoi, "className: 'km-node km-node-' + type + (hasPoster ? ' km-node-has-poster' : ''),")
         && str_contains($appJsForPoi, 'poiMarkers.forEach(fn);')
@@ -7823,6 +7842,62 @@ function km_check_layout(): void
     check_bool('公開ページ: 配った表示調整の既定を置き、map-style.js がそれを既定にする(「既定に戻す」も)', str_contains((string) file_get_contents(__DIR__ . '/../index.php'), '<script type="application/json" id="km-display-defaults"<?= km_csp_nonce_attr() ?>>')
         && str_contains((string) file_get_contents(__DIR__ . '/../Main/map-style.js'), "document.getElementById('km-display-defaults')")
         && str_contains((string) file_get_contents(__DIR__ . '/../Main/map-tuning.js'), 'style.defaultTypes()'));
+    km_check_heading('Google マップ風: 検索 → 場所 → 経路・共有・♡・左の引き出し(2026-10-23)');
+    $gmApp = (string) file_get_contents(__DIR__ . '/../Main/app.js');
+    $gmIndex = (string) file_get_contents(__DIR__ . '/../index.php');
+    $gmCss = (string) file_get_contents(__DIR__ . '/../Main/styles.css');
+    check_bool('出発地・目的地は地点の id で持つ・一時地点はつなぎ先(道でも)で断らない', str_contains($gmApp, 'const startNode = routeStartId || resolveNodeByLabel(startText);')
+        && str_contains($gmApp, "if (poi ? String(poi.anchorNodeId) !== String(nodeId) : !isRoutableNode(node)) return;")
+        && str_contains($gmApp, 'data-km-poi="${Number(poi.id)}"'));
+    check_bool('片方だけ選んだら経路の欄を開いて、もう片方を尋ねる', str_contains($gmApp, "openRoutePanel(type === 'start' ? 'end' : 'start');") && str_contains($gmApp, "openRoutePanel(startNode ? 'end' : 'start');"));
+    check_bool('出発・到着の印は札より前の層・経路の線は点より前', str_contains($gmApp, "window.map.createPane('kmRoutePins').style.zIndex = '680';")
+        && str_contains($gmApp, "window.map.createPane('kmRouteLine').style.zIndex = '610';") && str_contains($gmApp, "pane: 'kmRoutePins',"));
+    check_bool('経路の途中で階を移っても拡大率を戻さない(寄せるのは引いた直後の 1 回だけ)', str_contains($gmApp, 'if (currentRoutePath && !routeFitPending) {')
+        && str_contains($gmApp, 'if (routeFitPending && pathBoundsGroup.getLayers().length > 0) {') && str_contains($gmApp, 'window.map.setView(firstOnFloor, window.map.getZoom());'));
+    check_bool('検索の窓・種類のチップ・左の引き出し・一致率を読む(app.js より前)', str_contains($gmIndex, 'id="km-place-input"') && str_contains($gmIndex, 'id="km-category-chips"')
+        && strpos($gmIndex, "Main/km-sheet.js')") < strpos($gmIndex, "<script defer src=\"<?= km_home_e(km_public_asset('Main/app.js'))") && strpos($gmIndex, "Main/search-rank.js')") < strpos($gmIndex, "<script defer src=\"<?= km_home_e(km_public_asset('Main/app.js'))"));
+    check_bool('左の引き出しは左から(PC)・地図を覆わない', preg_match('/\.km-sheet \{[^}]*left: 0;[^}]*transform: translateX\(-105%\);/s', $gmCss) === 1 && !str_contains((string) file_get_contents(__DIR__ . '/../Main/km-sheet.js'), 'scrim'));
+    check_bool('候補のアイコンはその場所のポスター(無ければ種類の形)', str_contains($gmApp, "box.classList.add('has-poster');") && str_contains($gmApp, "box.innerHTML = nodeIconHtml({ name: item.name }, item.type);"));
+    check_bool('共有: 場所・一時地点・経路の URL。navigator.share が無ければ写す', str_contains($gmApp, "shareUrl('/?poi=' + Number(button.dataset.kmPoi)")
+        && str_contains($gmApp, "shareUrl('/?' + fromPart + '&' + toPart, label") && str_contains($gmApp, "'fromPoi=' + routeStartPoi") && str_contains($gmApp, 'await navigator.clipboard.writeText(url);'));
+    check_bool('共有のリンクは字の形だけ確かめて meta で渡す(from/to は 32 字の 16 進・poi は数字)', str_contains($gmIndex, "preg_match('/^[0-9A-Fa-f-]{32,36}\$/', \$value) !== 1")
+        && str_contains($gmIndex, "preg_match('/^[1-9]\\d{0,9}\$/', \$poiParam) === 1") && str_contains($gmIndex, '<meta name="km-focus-from" content="<?= km_home_e($kmFocusFrom) ?>">') && str_contains($gmIndex, '$kmFocusFromPoi = $kmFocusFrom === null ? $kmPoiParam(\'fromPoi\') : null;'));
+    check_bool('表示調整・履歴・予定も左の引き出しに出す', str_contains((string) file_get_contents(__DIR__ . '/../Main/map-tuning.js'), "sheet.open({ key: 'tuning', title: '表示調整'")
+        && str_contains((string) file_get_contents(__DIR__ . '/../Main/user-history.js'), "sheet.open({ key: 'history', title: '履歴とブックマーク'")
+        && str_contains((string) file_get_contents(__DIR__ . '/../Main/event-schedule.js'), "sheet.open({ key: 'schedule', title: 'スケジュール'"));
+    check_bool('♡ の端末の印は押すときだけ作り、URL に載せない', str_contains($gmApp, 'const device = deviceId(true);') && str_contains($gmApp, "headers: device ? { 'X-KM-Device': device } : {}")
+        && str_contains((string) file_get_contents(__DIR__ . '/../api/poster-like.php'), "\$_SERVER['HTTP_X_KM_DEVICE']"));
+    require_once __DIR__ . '/../lib/poster-likes.php';
+    check('♡: 尋ねる番号をそろえる(重複・形の違うものを外す)', [3, 1, 20], km_poster_like_ids('3,1,3,x,0,-2,20'));
+    if (extension_loaded('pdo_sqlite')) {
+        $likeDb = new PDO('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
+        check('♡: 表が無ければ 0(地図のデータは止めない)', [[], [['id' => 5, 'count' => 0, 'liked' => false]]], [km_poster_like_counts($likeDb), km_poster_like_state($likeDb, [5], 'v')]);
+        $likeDb->exec('CREATE TABLE km_poster_likes (poster_id INT NOT NULL, voter_hash TEXT NOT NULL, source_hash TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (poster_id, voter_hash))');
+        $likeNow = strtotime('2026-10-23 12:00:00');
+        km_poster_like_set($likeDb, 5, 'voterA', 'src', true, $likeNow);
+        km_poster_like_set($likeDb, 5, 'voterA', 'src', true, $likeNow);
+        km_poster_like_set($likeDb, 5, 'voterB', 'src', true, $likeNow);
+        check('♡: 1 端末 1 つ・数と自分が押したか', [['id' => 5, 'count' => 2, 'liked' => true], ['id' => 5, 'count' => 2, 'liked' => false]],
+            [km_poster_like_state($likeDb, [5], 'voterA')[0], km_poster_like_state($likeDb, [5], 'voterC')[0]]);
+        km_poster_like_set($likeDb, 5, 'voterA', 'src', false, $likeNow);
+        check('♡: 外すと消える・地図のデータの数', [5 => 1], km_poster_like_counts($likeDb));
+        for ($i = 0; $i < KM_POSTER_LIKE_SOURCE_LIMIT; $i++) {
+            km_poster_like_set($likeDb, 100 + $i, 'flood', 'src2', true, $likeNow);
+        }
+        check('♡: 同じ送り元から 1 時間に ' . KM_POSTER_LIKE_SOURCE_LIMIT . ' を超えたら断る・1 時間たてば付けられる', ['limited', 'ok'],
+            [km_poster_like_set($likeDb, 999, 'flood', 'src2', true, $likeNow + 60), km_poster_like_set($likeDb, 999, 'flood', 'src2', true, $likeNow + 3601)]);
+        check('♡: 管理画面の 0 に戻す', [1, []], [km_poster_likes_reset($likeDb, 5), km_poster_like_state($likeDb, [5], null) === [['id' => 5, 'count' => 0, 'liked' => false]] ? [] : ['残った']]);
+    }
+    $likeApi = (string) file_get_contents(__DIR__ . '/../api/poster-like.php');
+    check_bool('♡ の口: 付け外しは CSRF を見てから・いま出しているポスターだけ・鍵つきの印だけ持つ', str_contains($likeApi, "if (!km_csrf_verify()) {")
+        && strpos($likeApi, 'km_csrf_verify()') < strpos($likeApi, 'km_poster_like_set(') && str_contains($likeApi, "\$shown = array_column(km_posters_public(\$pdo, km_poster_event_active(\$pdo), []), 'id');")
+        && str_contains((string) file_get_contents(__DIR__ . '/../lib/poster-likes.php'), "km_app_keyed_hash(km_app_secret(\$pdo, KM_POSTER_LIKE_KEY_NAME), 'poster-like-voter', \$device)"));
+    check_bool('♡: 地図のデータに数を載せる・管理画面で 0 に戻せる・プライバシーポリシーに書いた', str_contains((string) file_get_contents(__DIR__ . '/../lib/posters.php'), "'likes' => \$likes[(int) \$row['id']] ?? 0,")
+        && str_contains((string) file_get_contents(__DIR__ . '/../admin/posters.php'), "if (\$formAction === 'poster_likes_reset') {")
+        && str_contains((string) json_encode(km_legal_privacy(), JSON_UNESCAPED_UNICODE), 'ポスターの ♡'));
+    check_bool('ポスターから結びつけた場所へ(地図の引き出し・一覧のページ)', str_contains($gmApp, "head.textContent = poster.projectNo ? `企画 \${poster.projectNo} の場所` : '場所';")
+        && str_contains((string) file_get_contents(__DIR__ . '/../posters.php'), "foreach (\$poster['poiIds'] ?? [] as \$poiId) {"));
+
     km_check_heading('posters: 広告(重み 10%・必ず 1 件)・数・チュートリアルの終わりの知らせ(2026-10-21)');
     check('広告の重みは 10%(利用者の指示。全部同じ)', 10, KM_POSTER_AD_WEIGHT);
     check('広告が 1 件なら 100%・2 件なら 50%・10 件なら 10%・無ければ 0(表示しないわけではない)', [1.0, 0.5, 0.1, 0.0],
