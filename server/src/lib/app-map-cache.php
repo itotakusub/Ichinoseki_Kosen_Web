@@ -21,8 +21,8 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/app-map.php';
 
-/** 落とし方(km_app_map_strip_*)や JSON の書き方を変えたら上げる。古い作り置きが使われなくなる */
-const KM_APP_MAP_CACHE_FORMAT = 1;
+/** 落とし方(km_app_map_strip_*)や JSON の書き方を変えたら上げる。古い作り置きが使われなくなる(2: 2026-10-22 段を作り直した) */
+const KM_APP_MAP_CACHE_FORMAT = 2;
 
 function km_app_map_cache_dir(): string
 {
@@ -30,28 +30,47 @@ function km_app_map_cache_dir(): string
 }
 
 /**
- * 段に合わせて落とした地図。**引数の $map を書き換える**(呼ぶ側で受け直す)。
- * api/app-map.php の判定と同じ: 来場者は閲覧不可の地点と氏名を落とす、スタッフは氏名だけ落とす、氏名入りは何も落とさない。
+ * 段に合わせて落とした地図。**引数の $map を書き換える**(呼ぶ側で受け直す)。段の表は lib/app-map.php の KM_APP_MAP_CONTENT_LEVELS。
+ * **知らない段は一番狭い public と同じに落とす**(閉じる側に倒す)。
+ *
+ * @param list<string> $consentedUuids 先生が許可した地点。member-<12 桁> の段で、氏名を残す地点
  */
-function km_app_map_for_level(stdClass $map, string $level): stdClass
+function km_app_map_for_level(stdClass $map, string $level, array $consentedUuids = []): stdClass
 {
-    if ($level === 'visitor') {
-        return km_app_map_strip_staff_only($map);
+    switch (km_app_map_content_level_base($level)) {
+        case 'editor':
+            if ($level !== 'editor-names') {
+                km_app_map_strip_occupant_names($map);
+            }
+            return $map;
+        case 'member':
+            if ($level === 'member') {
+                km_app_map_strip_occupant_names($map);
+            } else {
+                km_app_map_keep_occupant_names_for($map, $consentedUuids);
+            }
+            return $map;
+        case 'event':
+            km_app_map_strip_occupant_names($map);
+            km_app_map_strip_restricted_nodes($map);
+            return $map;
+        default:
+            $map = km_app_map_strip_staff_only($map);
+            km_app_map_strip_restricted_nodes($map);
+            return $map;
     }
-    if ($level === 'staff') {
-        km_app_map_strip_occupant_names($map);
-    }
-    return $map;
 }
 
 /**
  * 作り置きを返す(無ければ作る)。作れなければ null(呼ぶ側はその場で組み立てる)。
  *
+ * @param list<string> $consentedUuids km_app_map_for_level に渡す(段の名前に許可の組の印が入っているので、組が変われば別の作り置きになる)
  * @return array{body:string, sha256:string, uuids:array<string,true>}|null body は本体のファイルのパス
  */
-function km_app_map_cache_get(string $slug, string $sourcePath, string $level, ?string $dir = null): ?array
+function km_app_map_cache_get(string $slug, string $sourcePath, string $level, ?string $dir = null, array $consentedUuids = []): ?array
 {
-    if (!in_array($level, KM_APP_MAP_CONTENT_LEVELS, true) || preg_match('/\A[a-z0-9_-]{1,64}\z/', $slug) !== 1) {
+    $levelBase = km_app_map_content_level_base($level);
+    if ($levelBase === null || preg_match('/\A[a-z0-9_-]{1,64}\z/', $slug) !== 1) {
         return null;
     }
     clearstatcache(true, $sourcePath);
@@ -74,7 +93,7 @@ function km_app_map_cache_get(string $slug, string $sourcePath, string $level, ?
     if ($map === null) {
         return null;
     }
-    $map = km_app_map_for_level($map, $level);
+    $map = km_app_map_for_level($map, $level, $consentedUuids);
     $json = json_encode($map, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     if (!is_string($json)) {
         return null;
@@ -102,8 +121,8 @@ function km_app_map_cache_get(string $slug, string $sourcePath, string $level, ?
         return null;
     }
 
-    // 同じ配信・同じ段の古い作り置きを片付ける(元が差し替わった分)
-    foreach (glob("{$dir}/{$slug}-{$level}-*") ?: [] as $old) {
+    // 同じ配信・同じ区分の段の古い作り置きを片付ける(元が差し替わった分と、許可の組が変わる前の分)
+    foreach (glob("{$dir}/{$slug}-{$levelBase}-*") ?: [] as $old) {
         if (!str_starts_with($old, $base . '.')) {
             @unlink($old);
         }

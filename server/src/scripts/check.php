@@ -434,6 +434,43 @@ function km_check_app_map(): string
         km_app_map_strip_staff_only($viaStaffOnly)->nodes[0]->occupantName === null
     );
 
+    /*
+     * 教員室・研究室を落とす(2026-10-22、Android 側の厳格化)。Web と同じ判定(種類 2・名前・番号のどれか)。
+     * 線・精度評価・イベントの名前の差し替えも一緒に落とす(アプリは線の両端が地図に在ることを確かめていて、無いと地図ごと読めない)
+     */
+    km_check_heading('app-map: 教員室・研究室の除去');
+    $withRestricted = km_app_map_decode_snapshot(json_encode([
+        'version' => 10,
+        'nodes' => [
+            ['uuid' => 'r1', 'title' => '教員室', 'subtitle' => '1-106', 'type1' => 'room', 'type2' => '', 'floor' => '1F', 'x' => 1, 'y' => 2, 'occupantName' => '架空 一郎 先生'],
+            ['uuid' => 'r2', 'title' => '1-201', 'subtitle' => '機械研究室', 'type1' => 'room', 'type2' => '', 'floor' => '2F', 'x' => 1, 'y' => 2],
+            ['uuid' => 'r3', 'title' => '1-301', 'subtitle' => '', 'type1' => 'room', 'type2' => '教員室', 'floor' => '3F', 'x' => 1, 'y' => 2],
+            ['uuid' => 'c1', 'title' => '通路', 'subtitle' => '', 'type1' => 'road', 'type2' => '', 'floor' => '1F', 'x' => 3, 'y' => 4],
+            ['uuid' => 'c2', 'title' => '教室', 'subtitle' => '1-107', 'type1' => 'room', 'type2' => '', 'floor' => '1F', 'x' => 5, 'y' => 6],
+        ],
+        'lines' => [
+            ['startNodeUuid' => 'c1', 'endNodeUuid' => 'r1'],
+            ['startNodeUuid' => 'c1', 'endNodeUuid' => 'c2'],
+        ],
+        'fingerprints' => [['nodeUuid' => 'r1', 'x' => 1, 'y' => 2, 'floor' => '1F', 'rssiByBssid' => ['aa' => -50]]],
+        'evaluations' => [['nodeUuid' => 'r1'], ['nodeUuid' => 'c2']],
+        'events' => [['uuid' => 'e', 'name' => '文化祭', 'nameOverrides' => ['r1' => '架空の控室', 'c2' => '模擬店'], 'hiddenNodeUuids' => ['r1', 'c2'], 'closedNodeUuids' => ['r2'], 'places' => []]],
+    ]));
+    $removedUuids = km_app_map_strip_restricted_nodes($withRestricted);
+    sort($removedUuids);
+    check('教員室・研究室(名前・番号・種類 2)を落とす', ['r1', 'r2', 'r3'], $removedUuids);
+    check('ほかの地点は残す', ['c1', 'c2'], array_map(static fn ($n) => $n->uuid, $withRestricted->nodes));
+    check('落とした地点の線を落とす', 1, count($withRestricted->lines));
+    check('落とした地点の精度評価を落とす', ['c2'], array_map(static fn ($e) => $e->nodeUuid, $withRestricted->evaluations));
+    check('Wi-Fi の学習は残す(名前を持たない)', 1, count($withRestricted->fingerprints));
+    $restrictedJson = (string) json_encode($withRestricted->events, JSON_UNESCAPED_UNICODE);
+    check_bool('イベントの名前の差し替え・隠す・通行止めからも消える', !str_contains((string) json_encode($withRestricted, JSON_UNESCAPED_UNICODE), '架空') && !str_contains($restrictedJson, '"r1"') && !str_contains($restrictedJson, '"r2"')
+        && str_contains($restrictedJson, '"c2":"模擬店"') && str_contains($restrictedJson, '"hiddenNodeUuids":["c2"]') && str_contains($restrictedJson, '"closedNodeUuids":[]'));
+    check('教員室が無ければ何もしない', [], km_app_map_strip_restricted_nodes(km_app_map_decode_snapshot('{"version":10,"nodes":[{"uuid":"a","title":"教室"}],"lines":[]}')));
+    $namedMap = km_app_map_decode_snapshot('{"version":10,"nodes":[{"uuid":"a","occupantName":"架空 一"},{"uuid":"b","occupantName":"架空 二"}],"lines":[]}');
+    km_app_map_keep_occupant_names_for($namedMap, ['b']);
+    check_bool('氏名は許可した地点だけ残す', $namedMap->nodes[0]->occupantName === null && $namedMap->nodes[1]->occupantName === '架空 二');
+
     $withEmptyObject = km_app_map_decode_snapshot('{"version":8,"nodes":[],"lines":[],"extra":{}}');
     check_bool(
         '{} が [] に化けない',
@@ -928,7 +965,8 @@ function km_check_map_access(): void
     // **どちらか一方でも要求していれば出す。** 片方しか見ないと、
     // 地図だけ錠を掛けたときに入力欄が出ず、利用者に開ける手段が無くなる。
     check('地図だけ password でも出す', true, km_map_password_requested($config('hidden', 'password')));
-    check('氏名だけ password でも出す', true, km_map_password_requested($config('password', 'public')));
+    // 2026-10-22 から Web の氏名はパスワードで開かない(組織メンバー + 先生の許可だけ。lib/node-visibility.php)。入れても何も変わらない欄は出さない
+    check('氏名だけ password では出さない(Web の氏名はパスワードで開かない)', false, km_map_password_requested($config('password', 'public')));
     check('どちらも要らなければ出さない', false, km_map_password_requested($config('hidden', 'public')));
     check('public / public でも出さない', false, km_map_password_requested($config('public', 'public')));
 
@@ -1045,7 +1083,8 @@ function km_check_map_access(): void
     // 上書きされて氏名が1件ずつ消える(map-editor.js は読んだ値をそのまま送り返す)
     check_bool(
         '氏名も forAdmin で素通りする',
-        str_contains($mapDataBody, '$unlocked = $forAdmin || (km_map_names_unlocked($config)')
+        str_contains($mapDataBody, "\$unlocked = \$forAdmin || (\$member && !\$overlay['hideOccupantNames']);")
+            && str_contains($mapDataBody, 'if (!$forAdmin) {')
     );
 
     $guard = file_get_contents(__DIR__ . '/../admin/_inc/guard.php');
@@ -1921,9 +1960,80 @@ function km_check_staff_org_map(): void
     check_bool('公開ページ: 印の期限は ID トークンの期限まで(最長 1 時間)', str_contains($index, 'min((int) $fresh->exp, time() + 3600)'));
     check_bool('サインアウトで印を外す', str_contains($src('sign-out.php'), "unset(\$_SESSION['km_map_teacher_until']);"));
     $appMap = $src('api/app-map.php');
-    check_bool('アプリ: 教職員には閲覧不可の地点も配る', str_contains($appMap, '$privileged = $isStaff || $isTeacher;') && str_contains($appMap, 'if (!$privileged) {'));
+    // 2026-10-22 から段で分ける(イベント運営は教員室・研究室を見ない。km_app_map_content_level)
+    check_bool('アプリ: 教職員には閲覧不可の地点も配る', str_contains($appMap, '$isTeacher = is_array($principal) && ($principal[\'is_teacher\'] ?? false) === true;')
+        && km_app_map_content_level(false, true, true) === 'member' && km_app_map_content_level(false, false, true) === 'event');
     check_bool('アプリ: hidden の切り替えは教職員だけ(イベント運営は対象外)', str_contains($src('lib/app-map.php'), "return \$isTeacher && \$config['teacherSeesHidden'];"));
     check_bool('設定: hidden の切り替えの既定は見せない(厳密に true のときだけ)', str_contains($src('lib/map-access.php'), "'teacherSeesHidden' => (\$config['teacherSeesHidden'] ?? false) === true,"));
+
+    /*
+     * ## 教員室・研究室と先生の名前・備考(2026-10-22、利用者の指示「権限チェックを厳格化。例外なし」「先生が申請し管理者が承認」)
+     * lib/node-visibility.php・lib/staff-nodes.php の showNames。**Website だけ**(アプリへの配信は今のまま)。
+     */
+    km_check_heading('node-visibility: 教員室・研究室は組織メンバーだけ・氏名とメモは先生の許可だけ(2026-10-22)');
+    require_once __DIR__ . '/../lib/node-visibility.php';
+    check('見分け方: 種類 2・名前・見出しのどれかに「教員室」「研究室」', [true, true, true, false, false], [
+        km_map_node_is_restricted(['type2' => '教員室', 'name' => '管-115']),
+        km_map_node_is_restricted(['type2' => '実験室', 'name' => '物理化学研究室']),
+        km_map_node_is_restricted(['title' => '第一研究室']),
+        km_map_node_is_restricted(['type2' => '会議室', 'name' => '会議室']),
+        km_map_node_is_restricted([]),
+    ]);
+    check('出し方の表(教員室か・組織メンバーか・許可・イベント中)', [
+        ['show' => false, 'names' => false], ['show' => false, 'names' => false],
+        ['show' => true, 'names' => false], ['show' => true, 'names' => true], ['show' => true, 'names' => false],
+        ['show' => true, 'names' => false], ['show' => true, 'names' => true],
+    ], [
+        km_map_node_visibility(true, false, false, false), km_map_node_visibility(true, false, true, false),
+        km_map_node_visibility(true, true, false, false), km_map_node_visibility(true, true, true, false), km_map_node_visibility(true, true, true, true),
+        km_map_node_visibility(false, false, true, false), km_map_node_visibility(false, true, true, false),
+    ]);
+    // 許可の数え方: 割り当てた先生が全員許可した地点だけ。割り当ての無い許可・表が無いときは数えない
+    $consentDb = new PDO('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+    check('許可: 表が無ければ誰の名前も出さない', [], km_staff_node_consented_ids($consentDb));
+    $consentDb->exec('CREATE TABLE km_staff_node_assignments (node_id TEXT, user_id TEXT)');
+    $consentDb->exec('CREATE TABLE km_staff_node_consents (node_id TEXT, user_id TEXT)');
+    $consentDb->exec("INSERT INTO km_staff_node_assignments VALUES ('a', 'u1'), ('b', 'u1'), ('b', 'u2'), ('d', 'u3')");
+    $consentDb->exec("INSERT INTO km_staff_node_consents VALUES ('a', 'u1'), ('b', 'u1'), ('c', 'u9')");
+    check('許可: 全員が許可した地点だけ(b は 1 人足りない・c は割り当てが無い・d は許可が無い)', ['a' => true], km_staff_node_consented_ids($consentDb));
+
+    $mapDataSrc = $src('lib/map-data.php');
+    check_bool('地図データ: 組織メンバーかは教職員の印だけ(お試し・パスワード・管理者の印を混ぜない)', str_contains($mapDataSrc, '$member = km_map_teacher_session();')
+        && !str_contains($mapDataSrc, 'km_map_teacher_like_session') && !str_contains($mapDataSrc, 'km_map_names_unlocked(') && !str_contains($mapDataSrc, 'km_map_admin_session'));
+    check_bool('地図データ: 教員室・研究室は地点ごと外し、許可が無ければ担当と教員室のメモを消す(編集画面は全部)', str_contains($mapDataSrc, "if (!\$visibility['show']) {\n                continue;")
+        && str_contains($mapDataSrc, "\$node['occupantName'] = null;") && str_contains($mapDataSrc, "if (\$restricted && array_key_exists('note', \$node)) {")
+        && strpos($mapDataSrc, 'if (!$forAdmin) {') < strpos($mapDataSrc, "\$visibility = km_map_node_visibility("));
+    check_bool('パスワードの欄: 地図の錠のときだけ(氏名はパスワードで開かない)', str_contains($src('lib/map-access.php'), "return \$config['mapMode'] === 'password';")
+        && !str_contains($src('Main/panel.js'), "heading: '教職員氏名の表示'"));
+
+    require_once __DIR__ . '/../lib/staff-nodes.php';
+    $consentCurrent = ['title' => '教員室', 'subtitle' => '', 'occupantName' => '', KM_STAFF_NODE_SHOW_NAMES => '0'];
+    check('提案: 表示の許可は 0 / 1 の差だけを持つ', [KM_STAFF_NODE_SHOW_NAMES => ['from' => '0', 'to' => '1']],
+        km_staff_node_diff($consentCurrent, [KM_STAFF_NODE_SHOW_NAMES => '1']));
+    $badConsent = 'ok';
+    try {
+        km_staff_node_diff($consentCurrent, [KM_STAFF_NODE_SHOW_NAMES => 'yes']);
+    } catch (InvalidArgumentException) {
+        $badConsent = 'error';
+    }
+    check('提案: 0 / 1 以外は断る', 'error', $badConsent);
+    check('提案: いまの値に無ければ(管理画面の一覧など)許可の項目は見ない', [], km_staff_node_diff(['title' => '教員室'], [KM_STAFF_NODE_SHOW_NAMES => '1']));
+    $staffNodesSrc = $src('lib/staff-nodes.php');
+    require_once __DIR__ . '/../lib/account-delete.php';
+    check_bool('許可: 取り下げは承認を待たずにすぐ(差を取る前に消す)・承認で送った先生の分だけ付ける', strpos($staffNodesSrc, 'km_staff_node_consent_withdraw($pdo, $nodeId, $userId);') < strpos($staffNodesSrc, '$changes = km_staff_node_diff(km_staff_node_current_fields($pdo, $node, $userId), $input);')
+        && str_contains($staffNodesSrc, 'INSERT IGNORE INTO km_staff_node_consents (node_id, user_id, granted_at, granted_by) VALUES (?, ?, NOW(), ?)')
+        && str_contains($staffNodesSrc, 'km_staff_node_apply($pdo, $nodeId, is_array($changes) ? $changes : [], $userId, $decidedBy);'));
+    check_bool('許可: 割り当てを外す・権限を取り消す・退会で消える', preg_match('/function km_staff_node_unassign.*?km_staff_node_consent_withdraw\(\$pdo, \$nodeId, \$userId\);/s', $staffNodesSrc) === 1
+        && str_contains($src('lib/staff-org.php'), "DELETE FROM km_staff_node_consents WHERE user_id = ?") && in_array('km_staff_node_consents', KM_ACCOUNT_DELETE_TABLES, true));
+    $accountSrc = $src('account.php');
+    check_bool('先生の画面: 外したときも 0 が届く(隠し欄)・今の状態を出す・取り下げを記録する', str_contains($accountSrc, '<input type="hidden" name="node_<?= km_legal_e(KM_STAFF_NODE_SHOW_NAMES) ?>" value="0">')
+        && str_contains($accountSrc, "\$fields[KM_STAFF_NODE_SHOW_NAMES] = (\$_POST['node_' . KM_STAFF_NODE_SHOW_NAMES] ?? '0') === '1' ? '1' : '0';")
+        && str_contains($accountSrc, "km_admin_log_record('content', 'staffnode.consent_withdrawn', \$nodeId);"));
+    require_once __DIR__ . '/../lib/legal.php';
+    $termsForNodes = (string) json_encode(km_legal_terms(), JSON_UNESCAPED_UNICODE);
+    check_bool('利用規約: 第 8 条に教員室・研究室と教職員氏名(例外なし・申請と承認・すぐ取り下げ)', str_contains($termsForNodes, '第8条(教員室・研究室と教職員氏名の表示)')
+        && str_contains($termsForNodes, '例外なく表示しません') && str_contains($termsForNodes, '運営者の承認を待たずにすぐ反映されます') && KM_LEGAL_UPDATED >= '2026-10-22');
+    check_bool('プライバシーポリシー: 表示の承認を取得する情報に書いた', str_contains((string) json_encode(km_legal_privacy(), JSON_UNESCAPED_UNICODE), '担当の地点で教職員氏名とメモを表示してよいかの承認'));
 }
 /**
  * 教職員とアプリ(docs/15 段 E)。アプリは組織付きのトークンで logto_me.php に聞き直して教職員かを決める。
@@ -1979,7 +2089,7 @@ function km_check_building_floors(): void
     check('建物の階はアプリ側の値でも引ける', KM_BUILDING_FLOOR_SIZE, km_app_map_floor_height('BLDG_LIBRARY_1F'));
     check('ふつうの階は 1200 のまま', KM_APP_MAP_IMAGE_HEIGHT, km_app_map_floor_height('1'));
     $sync = (string) file_get_contents(__DIR__ . '/../lib/app-map-sync.php');
-    check_bool('取り込みで建物の階の座標系を壊さない', str_contains($sync, 'if (km_building_floor_is($floorId)) {'));
+    check_bool('取り込みで建物の階・管理画面で足した階の座標系を壊さない', str_contains($sync, 'if (km_building_floor_is($floorId) || isset($customFloors[$floorId])) {'));
 
     km_check_heading('building-floors: 施設との結び付き');
     check('メディアセンター(図書館)から 2 つ', ['bldg_library_1f', 'bldg_library_2f'],
@@ -2232,17 +2342,27 @@ function km_check_review_0925(): void
     check_bool('古い ID トークンの organization_roles で教職員を決めない', !str_contains($account, 'isset($claims->organization_roles)'));
     km_check_heading('review-0925 W-52: 中身の段が変われば地図を送り直す');
     require_once $src . '/lib/app-map.php';
-    check('来場者', 'visitor', km_app_map_content_level(false, false));
-    check('スタッフ(氏名なし)', 'staff', km_app_map_content_level(true, false));
-    check('氏名入り', 'names', km_app_map_content_level(true, true));
-    check('来場者に氏名の段は付かない', 'visitor', km_app_map_content_level(false, true));
+    // 段は 2026-10-22 に作り直した(Android 側の厳格化。lib/node-visibility.php と同じ決まり)
+    check('ふつうの人', 'public', km_app_map_content_level(false, false, false));
+    check('イベント運営(教員室・名前なし)', 'event', km_app_map_content_level(false, false, true, true));
+    check('組織メンバー・許可なし', 'member', km_app_map_content_level(false, true, false, true, []));
+    check('組織メンバー・錠が閉じている', 'member', km_app_map_content_level(false, true, false, false, ['a']));
+    check_bool('組織メンバー・許可あり(許可の組の印が付く)', preg_match('/\Amember-[0-9a-f]{12}\z/', km_app_map_content_level(false, true, false, true, ['a'])) === 1);
+    check_bool('許可の組が変われば段も変わる', km_app_map_content_level(false, true, false, true, ['a']) !== km_app_map_content_level(false, true, false, true, ['a', 'b']));
+    check('管理者(錠が開いている)', 'editor-names', km_app_map_content_level(true, false, false, true));
+    check('管理者(錠が閉じている)', 'editor', km_app_map_content_level(true, false, true, false));
+    check('ふつうの人に氏名の段は付かない', 'public', km_app_map_content_level(false, false, false, true, ['a']));
     check('知らない段は unknown(必ず送り直す)', 'unknown', km_app_map_parse_have_level('everything'));
     check('送ってこない古いアプリは null', null, km_app_map_parse_have_level(null));
-    check_bool('同じ版・同じ段なら最新', km_app_map_is_up_to_date('kosen-main', 'kosen-main', 3, 3, 'names', 'names'));
-    check_bool('権限を失った(names → visitor)なら送り直す', !km_app_map_is_up_to_date('kosen-main', 'kosen-main', 3, 3, 'names', 'visitor'));
-    check_bool('教職員になった(visitor → names)なら送り直す', !km_app_map_is_up_to_date('kosen-main', 'kosen-main', 3, 3, 'visitor', 'names'));
-    check_bool('段の分からない端末(unknown)には送り直す', !km_app_map_is_up_to_date('kosen-main', 'kosen-main', 3, 3, 'unknown', 'visitor'));
-    check_bool('段を送らない古いアプリは今までどおり', km_app_map_is_up_to_date('kosen-main', 'kosen-main', 3, 3, null, 'visitor'));
+    check('以前の段の名前は古いアプリとして null(毎回まるごと送らない)', null, km_app_map_parse_have_level('visitor'));
+    check('新しい段はそのまま', 'member-0123456789ab', km_app_map_parse_have_level('member-0123456789ab'));
+    check('形の違う印は unknown', 'unknown', km_app_map_parse_have_level('member-xyz'));
+    check_bool('同じ版・同じ段なら最新', km_app_map_is_up_to_date('kosen-main', 'kosen-main', 3, 3, 'member', 'member'));
+    check_bool('権限を失った(member → public)なら送り直す', !km_app_map_is_up_to_date('kosen-main', 'kosen-main', 3, 3, 'member', 'public'));
+    check_bool('教職員になった(public → member)なら送り直す', !km_app_map_is_up_to_date('kosen-main', 'kosen-main', 3, 3, 'public', 'member'));
+    check_bool('先生が許可を取り下げた(member-… → member)なら送り直す', !km_app_map_is_up_to_date('kosen-main', 'kosen-main', 3, 3, 'member-0123456789ab', 'member'));
+    check_bool('段の分からない端末(unknown)には送り直す', !km_app_map_is_up_to_date('kosen-main', 'kosen-main', 3, 3, 'unknown', 'public'));
+    check_bool('段を送らない古いアプリは今までどおり', km_app_map_is_up_to_date('kosen-main', 'kosen-main', 3, 3, null, 'public'));
     $appMap = $code($read('api/app-map.php'));
     check_bool('段は「最新です」の判定より前に決める', strpos($appMap, '$contentLevel = km_app_map_content_level(') < strpos($appMap, 'km_app_map_is_up_to_date('));
     check_bool('「最新です」の応答にも段を載せる', str_contains($appMap, "'contentLevel' => \$contentLevel,"));
@@ -2439,8 +2559,19 @@ function km_check_learning_data(): void
     km_check_heading('learning-data: 口');
     $read = static fn (string $path): string => (string) @file_get_contents($src . '/' . $path);
     $api = $read('api/learning.php');
-    $assertAt = strpos($api, "logto_assert_permissions(\$principal, LOGTO_ADMIN_PERMISSIONS);\n\$uploadedBy");
-    check_bool('送る・消すは管理者のトークンだけ', $assertAt !== false && $assertAt < (int) strpos($api, 'km_learning_store(') && $assertAt < (int) strpos($api, 'km_learning_delete('));
+    // 2026-10-23 から学習の協力者(LOGTO_LEARNING_PERMISSION)も送れる。消せるのは自分が送った分だけ
+    $assertAt = strpos($api, "\$principal = \$requireLearner();\n\$isAdminWriter = (\$principal['is_admin'] ?? 0) === 1;\n\$uploadedBy");
+    check_bool('送る・消すは管理者か学習の協力者のトークンだけ', $assertAt !== false && $assertAt < (int) strpos($api, 'km_learning_store(') && $assertAt < (int) strpos($api, 'km_learning_delete(')
+        && str_contains($api, "if (!km_learning_principal_allowed(\$principal)) {\n        respond(['success' => false,"));
+    check('学習を扱えるのは管理者と学習の協力者だけ(組織の先生・運営・ログインだけは不可)', [true, true, false, false, false],
+        [km_learning_principal_allowed(['is_admin' => 1]), km_learning_principal_allowed(['is_admin' => 0, 'is_learner' => true]),
+         km_learning_principal_allowed(['is_admin' => 0, 'is_teacher' => true, 'permissions' => ['staff:event:access']]), km_learning_principal_allowed(['is_admin' => 0]), km_learning_principal_allowed(null)]);
+    check_bool('協力者が消すのは自分が送った分だけ(空の sub でも全員の分に倒さない)', str_contains($api, "\$isAdminWriter ? null : (\$uploadedBy ?? '')")
+        && str_contains($learningLibForDelete = (string) file_get_contents($src . '/lib/learning-data.php'), "if (\$onlyUploadedBy !== null) {")
+        && str_contains($learningLibForDelete, "\$where .= ' AND uploaded_by = ?';"));
+    check_bool('協力者の権限は組織トークンからは生まれない・logto_me が返す', str_contains($read('logto_guard.php'), "'is_learner' => in_array(LOGTO_LEARNING_PERMISSION, \$permissions, true),")
+        && strpos($read('logto_guard.php'), "\$permissions = \$org['permissions'];") < strpos($read('logto_guard.php'), "'is_learner' =>")
+        && str_contains($read('logto_me.php'), "'isLearner' => (\$principal['is_learner'] ?? false) === true,"));
     check_bool('学習データを読むのはアクセスコードか管理者', str_contains($api, "km_learning_code_allowed(\$pdo, (string) (\$input['code'] ?? ''))"));
     check_bool('評価を読むのは管理者だけ', strpos($api, "if (\$kind === 'evaluations') {") < strpos($api, 'km_learning_changes('));
     check_bool('コードは URL ではなく本文で受ける(POST だけ)', str_contains($api, "require_method('POST');") && !str_contains($api, '$_GET'));
@@ -3037,6 +3168,19 @@ function km_check_github_mirror(): void
         && strpos($upd, '$hostState = Get-HostState') < strpos($upd, '$current = ConvertTo-Version $currentText'));
     check_bool('修正版も本番と比べる(手元だけ新しいものを ☆ で出す)', str_contains($upd, "elseif (\$onHost.State -eq 'no') { 'pending' }"));
     check_bool('やめたときの既定は手元を戻す(Enter = 戻す)', substr_count($upd, '(Enter = 戻す / n = 残す)') === 3 && !str_contains($upd, 'Enter = 残す'));
+    /*
+     * 止めたコンテナがあると動かなかった(2026-10-22、利用者の指摘。PHP の RCE で nginx と certbot 以外を止めていた):
+     *   - 控え(host-backup.sh)が「mariadb が動いていません」で止まり、修正版を当てる道が塞がった
+     *   - 止めたサービスは比べられず「変化なし」と出た(check-updates.sh と Get-HostState が ps -q = 動いているものだけ)
+     */
+    $updCheck = $read('scripts/check-updates.sh');
+    $updBackup = $read('scripts/host-backup.sh');
+    check_bool('止まっているコンテナも比べる(ps -a)', str_contains($upd, 'for c in $(docker compose ps -a -q 2>/dev/null); do')
+        && str_contains($updCheck, 'for _cid in $(docker compose ps -a -q 2>/dev/null); do') && !preg_match('#docker compose ps -q 2>/dev/null\)#', $upd . $updCheck));
+    check_bool('控え: 止まっている DB は控えのあいだだけ起こし(start)、終わったら止め直す', str_contains($updBackup, 'if ! docker compose start "$_svc" >/dev/null 2>&1; then')
+        && str_contains($updBackup, 'STARTED_DBS="$STARTED_DBS $_svc"') && str_contains($updBackup, 'docker compose stop -t 60 $STARTED_DBS')
+        && strpos($updBackup, 'docker compose stop -t 60 $STARTED_DBS') < strpos($updBackup, 'rm -rf "$WORK"')
+        && !str_contains($updBackup, 'compose up -d "$_svc"') && !preg_match('/compose start (web|phpmyadmin)/', $updBackup));
 
     km_check_heading('github-mirror: 検査を外す道を作らない');
     check_bool('まとめて出すときに -Force を渡さない', !preg_match('/pushArgs \+= .*-Force/', $all));
@@ -3124,10 +3268,17 @@ function km_check_staff_nodes(): void
     check_bool('押す前に確認を出す', str_contains($admin, 'window.confirm('));
     check_bool('サイドバーに教職員の地点がある', str_contains($src('admin/_inc/partials/sidebar.php'), './staff-nodes.php'));
     check_bool('地図編集に地点の ID を出す', str_contains($src('admin/map-editor.php'), 'id="km-node-uid"') && str_contains($src('admin/assets/js/map-editor.js'), "getElementById('km-node-uid')"));
+    // 2026-10-23(利用者の指示): 札の ID・座標・先生の名前を切り替える。既定は全部 ON・手元に覚える・app.js の札がそれに従う
+    $editorJs = $src('admin/assets/js/map-editor.js');
+    $appJsForLabels = $src('Main/app.js');
+    check_bool('地図編集: 札の ID・座標・先生の名前を切り替えられる', substr_count($src('admin/map-editor.php'), 'class="form-check-input km-label-pref"') === 3
+        && str_contains($editorJs, "const labelPrefs = { id: true, xy: true, names: true };") && str_contains($editorJs, 'window.kmAdminLabelPrefs = labelPrefs;')
+        && str_contains($appJsForLabels, 'const prefs = window.kmAdminLabelPrefs || { id: true, xy: true, names: true };')
+        && str_contains($appJsForLabels, 'const name = prefs.names ? displayNameFor(node) : (node.alias || node.name);'));
     $legal = $src('lib/legal.php');
     check_bool('プライバシーポリシーに担当の地点の編集がある', str_contains($legal, '**担当の地点の編集:**'));
     check_bool('プライバシーポリシー: 承認するまで反映しないと書いてある', str_contains($legal, '送った内容は**すぐには地図に反映されません。**'));
-    check_bool('プライバシーポリシー: 提案の記録は退会で消えると書いてある', str_contains($legal, '担当の地点の割り当てと変更の提案の記録が同時に削除されます'));
+    check_bool('プライバシーポリシー: 提案の記録は退会で消えると書いてある', str_contains($legal, '担当の地点の割り当てと変更の提案の記録・教職員氏名とメモの表示の承認が同時に削除されます'));
 }
 /**
  * アカウント削除の後片付けと、その入口(webhook)。
@@ -4005,7 +4156,7 @@ function km_check_hardening(): void
     check_bool('Apache の Timeout は 60', preg_match('/^Timeout 60$/m', $apache) === 1);
     $limitsIni = (string) preg_replace('/^\s*;.*$/m', '', $file('docker/php/99-limits.ini'));
     $iniMissing = [];
-    foreach (['max_execution_time = 30', 'default_socket_timeout = 15', 'session.use_strict_mode = 1', 'session.use_only_cookies = 1', 'session.use_trans_sid = 0'] as $iniLine) {
+    foreach (['max_execution_time = 30', 'default_socket_timeout = 15', 'session.use_strict_mode = 1', 'session.use_only_cookies = 1', 'session.use_trans_sid = 0', 'session.upload_progress.enabled = 0'] as $iniLine) {
         if (preg_match('/^' . preg_quote($iniLine, '/') . '$/m', $limitsIni) !== 1) {
             $iniMissing[] = $iniLine;
         }
@@ -4109,7 +4260,7 @@ function km_check_hardening(): void
     check_bool('proxy-web.conf に proxy_read_timeout を書かない(location で重複すると起動しない)', !str_contains((string) preg_replace('/^\s*#.*$/m', '', $file('nginx/km/proxy-web.conf')), 'proxy_read_timeout'));
     // 2 つ目は Soketi の WebSocket(/ws/app/。2026-10-19 に 6001 番から移した。1 本を長く張る)
     check('443 で 300s を許すのは downloads.php と /ws/app/ だけ', 2, substr_count($https, 'proxy_read_timeout 300s;'));
-    check_bool('未認証で重い口を km_api で絞る(メソッドを問わない)', str_contains($https, 'location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update|positioning-params|learning)|logto_me)\.php$ {') && str_contains($https, 'limit_req zone=km_api burst=120 nodelay;'));
+    check_bool('未認証で重い口を km_api で絞る(メソッドを問わない)', str_contains($https, 'location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update|positioning-params|learning|poster-image|poster-event|table|node-extras|display-defaults|user-map-data|map-events|poster-like)|logto_me)\.php$ {') && str_contains($https, 'limit_req zone=km_api burst=120 nodelay;'));
     check_bool('アプリの地図は km_appmap で絞る', preg_match('#location = /api/app-map\.php \{\s*limit_req zone=km_appmap burst=30 nodelay;#', $https) === 1);
     check_bool('callback.php は認可コードをログに残さない', preg_match('#location = /callback\.php \{\s*access_log [^;]+ km_no_query;#', $https) === 1);
     /*
@@ -4568,8 +4719,11 @@ function km_check_hardening(): void
      */
     km_check_heading('map-backup: 管理者だけ・形だけ確かめる・保存名は表から・20 件');
     $backupApi = $file('src/api/map-backup.php');
-    check_bool('管理者の権限を、どの方法でも最初に確かめる', preg_match('/\$principal = logto_require_principal\(\);\nlogto_assert_permissions\(\$principal, LOGTO_ADMIN_PERMISSIONS\);/', $backupApi) === 1
-        && strpos($backupApi, 'logto_assert_permissions') < strpos($backupApi, 'km_map_backup_list('));
+    // 2026-10-23 から学習の協力者も置ける。協力者が見る・戻す・消すのは自分が置いた分だけ
+    check_bool('管理者か学習の協力者の権限を、どの方法でも最初に確かめる', str_contains($backupApi, "\$principal = logto_require_principal();\n\$isAdmin = (\$principal['is_admin'] ?? 0) === 1;\nif (!\$isAdmin && (\$principal['is_learner'] ?? false) !== true) {")
+        && strpos($backupApi, "(\$principal['is_learner'] ?? false) !== true") < strpos($backupApi, 'km_map_backup_list('));
+    check_bool('協力者は自分の分だけ(一覧・中身・消す)', str_contains($backupApi, "km_map_backup_list(\$pdo, \$ownerFilter)")
+        && substr_count($backupApi, "\$ownerFilter !== null && !hash_equals(\$ownerFilter, (string) \$row['user_sub'])") === 2);
     check_bool('置いた・戻した・消したをタイムラインに残す', str_contains($backupApi, "'map.backup_create'") && str_contains($backupApi, "'map.backup_restore'") && str_contains($backupApi, "'map.backup_delete'"));
     check_bool('nginx: 専用の口で本文を 16m まで・回数を数える', str_contains($nginx, "location = /api/map-backup.php {\n        client_max_body_size 16m;\n        limit_req zone=km_api burst=120 nodelay;"));
     require_once __DIR__ . '/../lib/map-backup.php';
@@ -4597,7 +4751,10 @@ function km_check_hardening(): void
     };
     check_bool('保存名は 32 桁の 16 進 + .json.gz だけ(../ などを通さない)', $pathRejected('../../config/db.local.php') && $pathRejected('a.json.gz')
         && !$pathRejected(str_repeat('a', 32) . '.json.gz'));
-    check_bool('残すのは新しい方から 20 件', KM_MAP_BACKUP_KEEP === 20 && str_contains($file('src/lib/map-backup.php'), "foreach (array_slice(\$rows, \$keep) as \$row) {\n        km_map_backup_remove_row(\$pdo, \$row);"));
+    check_bool('残すのは置いた人ごとに新しい方から 20 件', KM_MAP_BACKUP_KEEP === 20 && str_contains($file('src/lib/map-backup.php'), "if (\$seen[\$owner] > \$keep) {\n            km_map_backup_remove_row(\$pdo, \$row);"));
+    check('パスワード付きの包みも受け、見分ける(中身は読まない)', [true, false, true],
+        [km_map_backup_is_locked('{"format":"kosenmap-encrypted","formatVersion":1,"inner":"kosenmap-map","data":"x"}'), km_map_backup_is_locked('{"format":"kosenmap-map","formatVersion":2}'),
+         $backupOk('{"format":"kosenmap-encrypted","formatVersion":1,"inner":"kosenmap-map","data":"x"}')]);
 
     /*
      * ## ストリートビューの写真(2026-10-06。lib/panorama.php・api/panorama.php)
@@ -4914,11 +5071,36 @@ function km_check_hardening(): void
     check_bool('取り込み: 新しいイベントは無効のまま・印は別表(ALTER を使わない)・中身は丸ごと入れ替える', str_contains($file('src/lib/map-event-import.php'), 'VALUES (?, ?, ?, 0, 1, NULL, NULL, NOW(), NOW())')
         && str_contains($eventsLib, 'CREATE TABLE IF NOT EXISTS km_map_event_sources') && !preg_match('/ALTER\s+TABLE/i', $eventsLib)
         && str_contains($file('src/lib/map-event-import.php'), 'foreach (KM_MAP_EVENT_CHILD_TABLES as $table) {'));
-    check_bool('アプリから取り込んだイベントは Website の地図編集で変えさせない(4 つの操作すべて)', substr_count($file('src/admin/api/map-edit.php'), 'km_map_event_assert_editable($pdo, $eventId);') === 4);
+    // 2026-10-23 から、アプリから取り込んだイベントも Website で直せる(利用者の指示)。直した時刻を残し、取り込み直す前に知らせる
+    check_bool('イベントを直す 5 つの操作すべてで、Website で直した時刻を残す・取り込み直すと消える', substr_count($file('src/admin/api/map-edit.php'), 'km_map_event_touch_web_edit($pdo, $eventId);') === 5
+        && in_array('km_map_event_web_edits', KM_MAP_EVENT_CHILD_TABLES, true)
+        && str_contains($file('src/admin/map-events.php'), "if (\$existing !== null && (\$existing['webEditedAt'] ?? null) !== null) {"));
+    check_bool('Website の地図編集で「表示しない」を切り替えられる・記録に文言', str_contains($file('src/admin/api/map-edit.php'), "case 'event.hidden.toggle': {")
+        && str_contains($file('src/admin/assets/js/map-editor.js'), "action: 'event.hidden.toggle'") && isset(KM_ADMIN_LOG_ACTION_LABELS['map.event_hidden']));
+    require_once __DIR__ . '/../lib/app-map-convert.php';
+    $webEventMap = json_decode('{"nodes":[{"uuid":"9d1cebb3-9aa6-4fca-8f08-9ca965237b9e","floor":"1F"},{"uuid":"0f8fad5b-d9cb-469f-a165-70867728950e","floor":"1F"}]}');
+    $webEvent = km_app_map_events_from_web([
+        'events' => [['id' => 1, 'name' => '祭', 'endsAt' => null]],
+        'closedNodes' => [], 'closedEdges' => [],
+        'aliases' => ['9d1cebb39aa64fca8f089ca965237b9e' => '受付'],
+        'hiddenNodes' => ['0f8fad5bd9cb469fa16570867728950e' => true],
+        'pois' => [['id' => 7, 'floor' => '1', 'name' => 'たこ焼き', 'category' => 'food', 'x' => 10, 'y' => 20, 'anchorNodeId' => '9d1cebb39aa64fca8f089ca965237b9e', 'note' => '']],
+        'onlyEventNodes' => false,
+    ], $webEventMap)['events'][0];
+    check('Web → アプリ: 臨時の名前・出さない地点・イベントの地点だけ・一時地点の接続も渡す',
+        [['9d1cebb3-9aa6-4fca-8f08-9ca965237b9e' => '受付'], ['0f8fad5b-d9cb-469f-a165-70867728950e'], false, [['placeUuid' => 'web-poi-7', 'nodeUuid' => '9d1cebb3-9aa6-4fca-8f08-9ca965237b9e']]],
+        [(array) $webEvent['nameOverrides'], $webEvent['hiddenNodeUuids'], $webEvent['onlyEventNodes'], $webEvent['placeLinks']]);
+    $eventsApi = $file('src/api/map-events.php');
+    check_bool('イベントを管理アプリへ渡す口は管理者だけ・GET だけ・1 イベントずつ(有効かは問わない)', str_contains($eventsApi, "require_method('GET');")
+        && str_contains($eventsApi, 'logto_assert_permissions($principal, LOGTO_ADMIN_PERMISSIONS);')
+        && str_contains($file('src/lib/map-event-export.php'), 'km_map_event_overlay($pdo, $id, true)')
+        && str_contains($eventsLib, '$events = $onlyPreview ? [] : km_map_event_active($pdo);'));
+    check_bool('取り込み: アプリで道へつないだ一時地点は、そのつなぎ先を案内先にする', str_contains($file('src/lib/map-event-import.php'), '$linkedTo[$placeUuid] = $toId($nodeUuid);'));
     check_bool('出さない地点の表が無くても重ね合わせ(通行止め)は続ける', (bool) preg_match('/try \{\s*\$stmt = \$pdo->prepare\("SELECT node_id AS nodeId FROM km_map_event_hidden/', $eventsLib));
     $indexPage = $file('src/index.php');
     $appJs = $file('src/Main/app.js');
-    check_bool('公開ページ: 案内の文が無ければ「イベントモード中…」・?room= は字の形だけ確かめて DB には渡さない', str_contains($indexPage, "'イベントモード中…('")
+    // 地図の上の案内の帯は 2026-10-23 に外した(利用者の指示)。案内はダウンロード・設定の中(#km-event-section)
+    check_bool('公開ページ: イベントの案内の帯は出さず設定の中に・?room= は字の形だけ確かめて DB には渡さない', !str_contains($indexPage, 'class="km-event-banner"') && str_contains($indexPage, 'id="km-event-section"')
         && str_contains($indexPage, "preg_match('/^[0-9A-Fa-f-]{32,36}\$/', \$roomParam) === 1")
         && str_contains($indexPage, '<meta name="km-focus-room" content="<?= km_home_e($kmFocusRoom) ?>">')
         && !preg_match('/km_db\(\)[^;]*\$room/', $indexPage));
@@ -4939,28 +5121,40 @@ function km_check_hardening(): void
     $cacheTmp = sys_get_temp_dir() . '/km-appmap-check-' . bin2hex(random_bytes(4));
     @mkdir($cacheTmp);
     $cacheSrc = "{$cacheTmp}/src.json";
-    file_put_contents($cacheSrc, '{"version":9,"nodes":[{"uuid":"a","title":"日本語 <x>","occupantName":"架空 太郎"},{"uuid":"b","occupantName":null}],"lines":[],'
+    file_put_contents($cacheSrc, '{"version":9,"nodes":[{"uuid":"a","title":"日本語 <x>","occupantName":"架空 太郎"},{"uuid":"b","occupantName":"架空 次郎"},'
+        . '{"uuid":"t","title":"教員室","subtitle":"9-999","occupantName":"架空 三郎"}],"lines":[],'
         . '"events":[{"uuid":"e","places":[{"uuid":"p1","staffOnly":true},{"uuid":"p2","staffOnly":false}]}]}');
+    $cacheConsent = ['a'];
+    $cacheMember = km_app_map_content_level(false, true, false, true, $cacheConsent);
+    $cacheLevels = ['public', 'event', 'member', $cacheMember, 'editor', 'editor-names'];
     $cacheOkAll = true;
-    foreach (KM_APP_MAP_CONTENT_LEVELS as $cacheLevel) {
-        $cached = km_app_map_cache_get('kosen-main', $cacheSrc, $cacheLevel, "{$cacheTmp}/c");
-        $direct = km_app_map_build_package(km_app_map_for_level(km_app_map_decode_snapshot((string) file_get_contents($cacheSrc)), $cacheLevel), 'kosen-main', 3, 'T', 'E', null, true, null, $cacheLevel, null, ['a' => [['id' => 1]]]);
+    $cacheBodies = [];
+    foreach ($cacheLevels as $cacheLevel) {
+        $cached = km_app_map_cache_get('kosen-main', $cacheSrc, $cacheLevel, "{$cacheTmp}/c", $cacheConsent);
+        $direct = km_app_map_build_package(km_app_map_for_level(km_app_map_decode_snapshot((string) file_get_contents($cacheSrc)), $cacheLevel, $cacheConsent), 'kosen-main', 3, 'T', 'E', null, true, null, $cacheLevel, null, ['a' => [['id' => 1]]]);
         $parts = $cached === null ? null : km_app_map_package_envelope($cached['sha256'], 'kosen-main', 3, 'T', 'E', null, null, $cacheLevel, null, ['a' => [['id' => 1]]]);
         $cacheOkAll = $cacheOkAll && $parts !== null && $parts[0] . file_get_contents($cached['body']) . $parts[1] === $direct;
+        $cacheBodies[$cacheLevel === $cacheMember ? 'member-x' : $cacheLevel] = $cached === null ? '' : (string) file_get_contents($cached['body']);
     }
-    check_bool('作り置き: 3 つの段とも、その場で組み立てた応答と同じ文字列', $cacheOkAll);
-    $visitorBody = (string) file_get_contents(km_app_map_cache_get('kosen-main', $cacheSrc, 'visitor', "{$cacheTmp}/c")['body']);
-    $staffBody = (string) file_get_contents(km_app_map_cache_get('kosen-main', $cacheSrc, 'staff', "{$cacheTmp}/c")['body']);
-    $namesBody = (string) file_get_contents(km_app_map_cache_get('kosen-main', $cacheSrc, 'names', "{$cacheTmp}/c")['body']);
-    check_bool('作り置き: 来場者版は氏名と閲覧不可の地点を落とし、スタッフ版は氏名だけ落とす', !str_contains($visitorBody, '架空') && !str_contains($visitorBody, '"p1"')
-        && !str_contains($staffBody, '架空') && str_contains($staffBody, '"p1"') && str_contains($namesBody, '架空'));
-    $firstBody = km_app_map_cache_get('kosen-main', $cacheSrc, 'visitor', "{$cacheTmp}/c")['body'];
+    check_bool('作り置き: どの段も、その場で組み立てた応答と同じ文字列', $cacheOkAll);
+    check_bool('作り置き: ふつうの人は氏名・スタッフ限定・教員室を落とす', !str_contains($cacheBodies['public'], '架空') && !str_contains($cacheBodies['public'], '"p1"') && !str_contains($cacheBodies['public'], '"t"'));
+    check_bool('作り置き: イベント運営はスタッフ限定だけ残し、氏名と教員室は落とす', !str_contains($cacheBodies['event'], '架空') && str_contains($cacheBodies['event'], '"p1"') && !str_contains($cacheBodies['event'], '"t"'));
+    check_bool('作り置き: 組織メンバーは教員室を残し、氏名は許可した地点だけ', str_contains($cacheBodies['member'], '"t"') && !str_contains($cacheBodies['member'], '架空')
+        && str_contains($cacheBodies['member-x'], '架空 太郎') && !str_contains($cacheBodies['member-x'], '架空 次郎') && !str_contains($cacheBodies['member-x'], '架空 三郎'));
+    check_bool('作り置き: 管理者は全部(氏名は錠に従う)', str_contains($cacheBodies['editor'], '"t"') && !str_contains($cacheBodies['editor'], '架空')
+        && str_contains($cacheBodies['editor-names'], '架空 三郎') && str_contains($cacheBodies['editor-names'], '"p1"'));
+    check_bool('知らない段は一番狭い段と同じに落とす', !str_contains((string) json_encode(km_app_map_for_level(km_app_map_decode_snapshot((string) file_get_contents($cacheSrc)), 'everything')), '"t"'));
+    $firstBody = km_app_map_cache_get('kosen-main', $cacheSrc, 'public', "{$cacheTmp}/c")['body'];
+    $firstMember = km_app_map_cache_get('kosen-main', $cacheSrc, $cacheMember, "{$cacheTmp}/c", $cacheConsent)['body'];
+    km_app_map_cache_get('kosen-main', $cacheSrc, 'member', "{$cacheTmp}/c");
+    check_bool('作り置き: 許可の組が変われば、前の組の作り置きを片付ける', !is_file($firstMember));
     file_put_contents($cacheSrc, '{"version":9,"nodes":[{"uuid":"z"}],"lines":[]}');
     touch($cacheSrc, time() + 5);
-    $second = km_app_map_cache_get('kosen-main', $cacheSrc, 'visitor', "{$cacheTmp}/c");
+    $second = km_app_map_cache_get('kosen-main', $cacheSrc, 'public', "{$cacheTmp}/c");
     check_bool('作り置き: 元を差し替えたら作り直し、古いものは片付ける', $second !== null && $second['body'] !== $firstBody && !is_file($firstBody) && isset($second['uuids']['z']));
-    check_bool('作り置き: 知らない段・おかしな配信 ID は作らない', km_app_map_cache_get('kosen-main', $cacheSrc, 'unknown', "{$cacheTmp}/c") === null
-        && km_app_map_cache_get('../x', $cacheSrc, 'visitor', "{$cacheTmp}/c") === null);
+    check_bool('作り置き: 知らない段・以前の段・おかしな配信 ID は作らない', km_app_map_cache_get('kosen-main', $cacheSrc, 'unknown', "{$cacheTmp}/c") === null
+        && km_app_map_cache_get('kosen-main', $cacheSrc, 'visitor', "{$cacheTmp}/c") === null
+        && km_app_map_cache_get('../x', $cacheSrc, 'public', "{$cacheTmp}/c") === null);
     foreach (array_merge(glob("{$cacheTmp}/c/*") ?: [], [$cacheSrc]) as $cacheFile) {
         @unlink($cacheFile);
     }
@@ -4978,7 +5172,15 @@ function km_check_hardening(): void
         && str_contains($panoApi, "'map.panorama_add'") && str_contains($panoApi, "'map.panorama_delete'"));
     check_bool('nginx: クエリ(ハッシュ)をログに書かない・本文 11m・回数を数える', str_contains($nginx, "location = /api/panorama.php {\n        access_log /var/log/nginx/access.log km_no_query;\n        client_max_body_size 11m;\n        limit_req zone=km_api burst=120 nodelay;"));
     check_bool('配信: 来場者版は閲覧不可の地点を落とした地図から一覧を作る', str_contains($appMapApi, 'km_panorama_manifest($pdo, km_panorama_uuids_of_map($map))')
-        && preg_match('/\$loadDeliveredMap = static function \(\).*?km_app_map_strip_staff_only\(\$map\).*?return \$map;/s', $appMapApi) === 1);
+        && preg_match('/\$loadDeliveredMap = static function \(\).*?return km_app_map_for_level\(\$map, \$contentLevel, \$consentedUuids\);/s', $appMapApi) === 1);
+    // Android 側の厳格化(2026-10-22): 段は管理者・組織メンバー・イベント運営を分けて決め、組織メンバーには許可した地点を渡す
+    check_bool('配信: 段は管理者・組織メンバー・イベント運営を分けて決める(運営は教員室を見ない)', str_contains($appMapApi, '$contentLevel = km_app_map_content_level($isAdmin, $isTeacher || $isLearner, $isEventStaff, $namesAllowed, $consentedUuids);')
+        && str_contains($appMapApi, "\$isLearner = is_array(\$principal) && (\$principal['is_learner'] ?? false) === true;")
+        && str_contains($appMapApi, '$consentedUuids = km_staff_node_consented_uuids($pdo);')
+        && substr_count($appMapApi, 'km_app_map_cache_get($slug, $path, $contentLevel, null, $consentedUuids)') === 2);
+    $nodeExtrasApi = $file('src/api/node-extras.php');
+    check_bool('写真といいね: 教員室・研究室は出さない', str_contains($nodeExtrasApi, '$likeable = $node !== null && !$restricted;')
+        && str_contains($nodeExtrasApi, "\$likes = \$restricted ? ['count' => 0, 'liked' => false] :"));
     $baseCompose = $file('compose.yaml');
     check_bool('入口と地図の正本はスワップを使わず、最後まで守る', preg_match('/\n  mariadb:\n(?:(?!\n  [a-z0-9-]+:\n)[\s\S])*?memswap_limit: 512m\n    oom_score_adj: -500\n/', $baseCompose) === 1
         && preg_match('/\n  reverse-proxy:\n(?:(?!\n  [a-z0-9-]+:\n)[\s\S])*?memswap_limit: 128m\n    oom_score_adj: -500\n/', $baseCompose) === 1);
@@ -6840,8 +7042,9 @@ function km_check_layout(): void
     km_check_heading('layout: 折り返し幅は1つ');
     // 3箇所にある。**同じ値であること**だけを見る(値そのものは CSS が正本)
     check_bool('styles.css が 768px で折り返す', $mobileBreak !== false);
-    check_bool('app.js も同じ幅で判断する', str_contains($appJs, "matchMedia('(max-width: 768px)')"));
-    check_bool('panel.js も同じ幅で判断する', str_contains($panelJs, "matchMedia('(max-width: 768px)')"));
+    check_bool('app.js も同じ幅で判断する', str_contains($appJs, 'if (width > 768) {') && str_contains($appJs, 'window.innerWidth <= 768'));
+    // panel.js は画面幅で何も入れ替えなくなった(2026-10-23。ログインはいつも引き出しの中)。左の引き出しは CSS の同じ幅で下から出る
+    check_bool('左の引き出しも同じ幅で下から出る', preg_match('/@media \(max-width: 768px\) \{[^@]*\.km-sheet \{[^}]*transform: translateY\(105%\)/s', $css) === 1);
 
     km_check_heading('layout: 階のレールは右');
     check_bool(
@@ -6869,7 +7072,9 @@ function km_check_layout(): void
     $headerEnd = strpos($index, '</header>');
     check_bool('操作バーがある', $bar !== false);
     check_bool('検索の開閉は操作バーの中', $bar !== false && $toggle !== false && $toggle > $bar);
-    check_bool('トップバーには置かない', $headerEnd !== false && $toggle !== false && $toggle > $headerEnd);
+    // 上のバーは外した(2026-10-23、利用者の指示)。⚙️ ダウンロード・設定と 🖼️ ポスターも左下の操作バーへ
+    check_bool('上のバー(.top-bar)は無い', $headerEnd === false && !str_contains($index, 'class="top-bar"'));
+    check_bool('⚙️ と 🖼️ も左下の操作バーの中', ($infoToggle = strpos($index, 'id="info-panel-toggle"')) !== false && $infoToggle > $bar && strpos($index, 'km-poster-btn') > $bar);
     check_bool('表示調整も同じ操作バーへ入る', str_contains($tuningJs, "getElementById('km-action-bar')"));
     // 操作バーの無いページ(admin/map-editor.php)でも出ること。**消えては困る**
     check_bool(
@@ -6889,9 +7094,11 @@ function km_check_layout(): void
      * PHP で2つ書くと、ログイン中と未ログインの出し分けが2箇所になって食い違う。
      */
     check('入口は2つだけ', 2, substr_count($index, 'sign-in.php?mode=signIn'));
-    check_bool('受け皿は空で置く', str_contains($index, '<div id="km-auth-slot"></div>'));
-    check_bool('動かす側がある', str_contains($index, 'id="km-auth-links"'));
-    check_bool('panel.js が入れ替える', str_contains($panelJs, "getElementById('km-auth-links')"));
+    // 2026-10-23 から: 1 回だけ組み立てて(ob_start)、ふだんは「ダウンロード・設定」の中、展示の PC は左下の小さな欄に出す
+    check_bool('ログインの欄は 1 回だけ組み立てる', substr_count($index, 'id="km-auth-links"') === 1 && str_contains($index, '$kmAuthLinksHtml = (string) ob_get_clean();'));
+    check_bool('ふだんはダウンロード・設定の中', str_contains($index, '<div id="km-auth-slot"><?= $kmAuthLinksHtml ?></div>'));
+    check_bool('展示の PC は左下の小さな欄', str_contains($index, '<div class="km-test-auth glass-panel"><?= $kmAuthLinksHtml ?></div>'));
+    check_bool('panel.js は画面幅で入れ替えない', !str_contains($panelJs, 'placeAuthLinks'));
 
     km_check_heading('layout: ズームボタン');
     // 左下は操作ピルが使う。ぶつからない側へ
@@ -7086,7 +7293,7 @@ function km_check_layout(): void
     check_bool('「はじめに」を閉じてから始める', str_contains($welcomeJs, "new CustomEvent('km-welcome-closed')") && str_contains($tutorialJs, "'km-welcome-closed'"));
     check_bool('地図が出てから始める', str_contains($appJs, "new CustomEvent('km-map-ready')") && str_contains($tutorialJs, "'km-map-ready'"));
     check_bool('QR から来た人と錠のときは出さない', str_contains($tutorialJs, 'meta[name="km-focus-room"]') && str_contains($tutorialJs, "classList.contains('km-map-unavailable')"));
-    check_bool('最初の手順は出発地(検索が閉じていれば「検索」から)', str_contains($tutorialJs, 'ここを押して、出発地を決めてください。') && str_contains($tutorialJs, 'when: searchCollapsed'));
+    check_bool('最初の手順は場所の検索(2026-10-23 から Google マップ風。選ぶと次へ)', str_contains($tutorialJs, "return [byId('km-place-input'), 'km-place-chosen'];") && str_contains($appJs, "placeInput.dispatchEvent(new CustomEvent('km-place-chosen'));"));
     check_bool('幕は見た目だけ(案内の上からも押せる)', preg_match('/\.km-tour \{[^}]*pointer-events: none/', $css) === 1);
     check_bool('テスト用アカウントは来場者ごとに出す', str_contains($tutorialJs, "SEEN_KEY + ':visit:'"));
     check_bool('設定からもう一度見られる', str_contains($index, 'data-km-tutorial-open'));
@@ -7121,9 +7328,878 @@ function km_check_layout(): void
     check_bool('合言葉はハッシュだけを置く', str_contains((string) file_get_contents(__DIR__ . '/../lib/test-mode.php'), 'km_setting_set($pdo, KM_TEST_SIGNOUT_PIN_SETTING, password_hash($pin, PASSWORD_DEFAULT));'));
     $homeCode = (string) file_get_contents(__DIR__ . '/../index.php');
     check_bool('展示の PC の地図の画面には、押せばすぐ出るログアウトを出さない', preg_match('/<\?php if \(\$kmTestMode !== null\): \?>.*?<details class="km-test-signout">.*?name="signout_pin".*?<\?php else: \?>.*?logout-btn/s', $homeCode) === 1);
+    // 2026-10-19(同日): 浮かせて開いた欄が「テスト中」の札(#ui-layer の外・1200)の後ろに回り、画面の右からもはみ出した。バーの中で横に開く
+    if (preg_match('/^\.km-test-signout > form \{(.*?)^\}/ms', (string) file_get_contents(__DIR__ . '/../Main/styles.css'), $signoutCss) === 1) {
+        check_bool('「係の人」の欄は浮かせず、上のバーの中で開く(入りきらなければ折り返す)', !str_contains($signoutCss[1], 'position: absolute') && str_contains($signoutCss[1], 'flex-wrap: wrap;'));
+    } else {
+        check_bool('「係の人」の欄の CSS がある', false);
+    }
+    // 2026-10-19(同日、利用者の指示): テスト用アカウントでは「ダウンロード・設定」を開けない。⚙️ も引き出しも書かない
+    check_bool('テスト用アカウントでは「ダウンロード・設定」の ⚙️ を出さない', preg_match('/<\?php if \(\$kmTestMode === null\): \?>\s*<button id="info-panel-toggle"/', $homeCode) === 1);
+    check_bool('テスト用アカウントでは引き出しごと書かない(APK・アカウント設定への導線をページに残さない)', preg_match('/<\?php if \(\$kmTestMode === null\): \?>\s*<div id="km-drawer-scrim".*?<\/aside>\s*<\?php endif; \?>/s', $homeCode) === 1);
+    check_bool('引き出しが無ければ(展示の PC)ログインの欄は左下の小さな欄に出す', preg_match('/<\?php if \(\$kmTestMode !== null\): \?>\s*<\?php \/\*[^*]*\*\/ \?>\s*<div class="km-test-auth glass-panel">/', $homeCode) === 1);
+    if (preg_match('/^\.action-group-left \{(.*?)^\}/ms', (string) file_get_contents(__DIR__ . '/../Main/styles.css'), $leftCss) === 1) {
+        check_bool('バーに残ったログインの欄はスマホで折り返す(画面の右へはみ出さない)', str_contains($leftCss[1], 'flex-wrap: wrap;') && str_contains($leftCss[1], 'min-width: 0;'));
+    } else {
+        check_bool('.action-group-left の CSS がある', false);
+    }
     $accountCode = (string) file_get_contents(__DIR__ . '/../account.php');
     check_bool('テスト用アカウントではアカウントの画面を使わせない(表示名・退会・サインアウト)', str_contains($accountCode, "\$blockedReason = 'test';\n            \$signedIn = false;")
         && strpos($accountCode, "\$blockedReason = 'test';") < strpos($accountCode, "if ((\$_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && !km_csrf_verify()) {"));
+
+    km_check_heading('posters: ポスター・広告と地点の URL(2026-10-21)');
+    require_once __DIR__ . '/../lib/posters.php';
+    require_once __DIR__ . '/../lib/admin-log.php';
+    require_once __DIR__ . '/../lib/csp.php';
+    check_bool('出し方の 3 段階: 表示しない は出さない', !km_poster_mode_shows('off', true) && !km_poster_mode_shows('off', false));
+    check_bool('出し方の 3 段階: イベント中のみ はイベント中だけ', km_poster_mode_shows('event', true) && !km_poster_mode_shows('event', false));
+    check_bool('出し方の 3 段階: 常に表示 はいつでも', km_poster_mode_shows('always', true) && km_poster_mode_shows('always', false));
+    check_bool('知らない出し方は出さない', !km_poster_mode_shows('sometimes', true));
+    check('まだ選んでいなければ「表示しない」', 'off', KM_POSTER_MODE_DEFAULT);
+    check_bool('リンクの URL は http / https だけ', km_poster_url_valid('https://www.ichinoseki.ac.jp/') && km_poster_url_valid('http://example.com/a?b=1')
+        && !km_poster_url_valid('javascript:alert(1)') && !km_poster_url_valid('data:text/html,x') && !km_poster_url_valid('ftp://example.com/')
+        && !km_poster_url_valid('//example.com/') && !km_poster_url_valid('/posters.php'));
+    check_bool('URL: 利用者名入り・空白・長すぎるものは断る', !km_poster_url_valid('https://user:pass@example.com/')
+        && !km_poster_url_valid("https://example.com/a b") && !km_poster_url_valid("https://example.com/\n") && !km_poster_url_valid('https://example.com/' . str_repeat('a', 500)));
+    check_bool('取りに行く先: 公開のアドレスは通す', km_poster_ip_allowed('8.8.8.8'));
+    $blockedIps = ['10.0.0.1', '172.17.0.1', '192.168.3.29', '127.0.0.1', '169.254.169.254', '100.64.0.1', '0.0.0.0', '::1', 'fd00::1', 'localhost'];
+    check('取りに行く先: 私的な網・自分・メタデータ・IPv6 は通さない', [], array_values(array_filter($blockedIps, 'km_poster_ip_allowed')));
+    $pngHeader = static fn (int $w, int $h): string => "\x89PNG\r\n\x1a\n" . pack('N', 13) . 'IHDR' . pack('NN', $w, $h) . "\x08\x02\x00\x00\x00" . pack('N', 0);
+    check('画像: 中身が PNG なら png', 'png', km_poster_image_check($pngHeader(600, 800))['ext']);
+    $posterImageError = static function (string $bytes): string {
+        try {
+            km_poster_image_check($bytes);
+            return '';
+        } catch (InvalidArgumentException $exception) {
+            return $exception->getMessage();
+        }
+    };
+    check_bool('画像: SVG・PDF・空は断る', $posterImageError('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>') !== ''
+        && $posterImageError("%PDF-1.7\n") !== '' && $posterImageError('') !== '');
+    check_bool('画像: 縦横 ' . KM_POSTER_MAX_DIMENSION . 'px を超えるものは断る(小さなファイルでも展開で端末のメモリが尽きる)', str_contains($posterImageError($pngHeader(5000, 10)), '4096px'));
+    check_bool('画像: A4 を 300dpi で取り込んだ大きさは通す', $posterImageError($pngHeader(2480, 3508)) === '');
+    $posterValidateError = static function (array $input): string {
+        try {
+            km_poster_validate($input);
+            return '';
+        } catch (InvalidArgumentException $exception) {
+            return $exception->getMessage();
+        }
+    };
+    check_bool('入力: 見出しは要る・URL は形を見る・地点の id にパスを入れさせない', $posterValidateError(['title' => '  ']) !== ''
+        && $posterValidateError(['title' => 'a', 'linkUrl' => 'javascript:x']) !== ''
+        && $posterValidateError(['title' => 'a', 'nodeId' => '../etc/passwd']) !== ''
+        && $posterValidateError(['title' => 'a', 'sortOrder' => '1.5']) !== '');
+    $validatedPoster = km_poster_validate(['title' => ' 模擬店 ', 'description' => "a\r\nb", 'linkUrl' => '', 'nodeId' => '', 'sortOrder' => '-2', 'isEnabled' => true]);
+    check('入力: 空の URL・地点・企画の番号は null、改行は \n にそろえる', ['模擬店', "a\nb", null, null, null, -2, true], array_values($validatedPoster));
+    check('入力: 企画の番号はそろえる・形の違うものは断る', ['A-1', true], [km_poster_validate(['title' => 'a', 'projectNo' => ' a－１ '])['projectNo'], $posterValidateError(['title' => 'a', 'projectNo' => 'A/1']) !== '']);
+    check_bool('保存名は自分で採番した形だけ(パスをはみ出させない・SVG を通さない)', km_poster_stored_name_valid('poster_' . str_repeat('a', 32) . '.webp')
+        && !km_poster_stored_name_valid('poster_' . str_repeat('a', 32) . '.svg') && !km_poster_stored_name_valid('../poster_' . str_repeat('a', 32) . '.png')
+        && !km_poster_stored_name_valid('avatar_' . str_repeat('a', 32) . '.png'));
+    if (extension_loaded('pdo_sqlite')) {
+        $posterDb = new PDO('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
+        check('表が無ければ「表示しない」・空(公開の経路で表を作らない)', ['off', []], [km_poster_mode($posterDb), km_posters_public($posterDb, true, [])]);
+        $posterDb->sqliteCreateFunction('UNIX_TIMESTAMP', static fn ($value): int => (int) strtotime((string) $value), 1);
+        $posterDb->exec('CREATE TABLE km_settings (name TEXT PRIMARY KEY, value TEXT, updated_at TEXT)');
+        $posterDb->exec('CREATE TABLE km_posters (id INTEGER PRIMARY KEY, title TEXT, description TEXT, link_url TEXT, node_id TEXT, image_stored_name TEXT,
+            image_source_url TEXT, image_width INT, image_height INT, sort_order INT, is_enabled INT, created_at TEXT, updated_at TEXT)');
+        $posterDb->exec("INSERT INTO km_posters VALUES
+            (1, '後ろ', NULL, 'https://example.com/', 'n1', 'poster_x.png', NULL, 10, 20, 5, 1, '2026-10-21 10:00:00', '2026-10-21 10:00:00'),
+            (2, '前', '説明', NULL, 'hiddenNode', 'poster_y.png', NULL, 10, 20, 1, 1, '2026-10-21 10:00:00', '2026-10-21 10:00:00'),
+            (3, '止めた', NULL, NULL, 'n1', 'poster_z.png', NULL, 10, 20, 0, 0, '2026-10-21 10:00:00', '2026-10-21 10:00:00'),
+            (4, '消えた地点', NULL, NULL, 'gone', 'poster_w.png', NULL, 10, 20, 9, 1, '2026-10-21 10:00:00', '2026-10-21 10:00:00')");
+        $posterNodes = ['n1' => ['name' => '図書館', 'floor' => '1'], 'hiddenNode' => ['name' => '倉庫', 'floor' => '2', 'hidden' => true]];
+        check('「表示しない」の間は出さない', [], km_posters_public($posterDb, true, $posterNodes));
+        $posterDb->exec("INSERT INTO km_settings VALUES ('poster_display_mode', 'event', '')");
+        check('「イベント中のみ」でイベントの外なら出さない', [], km_posters_public($posterDb, false, $posterNodes));
+        $publicPosters = km_posters_public($posterDb, true, $posterNodes);
+        check('止めたものは出さない・並び順どおり', [2, 1, 4], array_column($publicPosters, 'id'));
+        check('イベントで出さない地点・地図に無い地点は指さない(場所を漏らさない)', ['', 'n1', ''], array_column($publicPosters, 'nodeId'));
+        check('画像の URL は番号と版だけ', '/api/poster-image.php?id=1&v=' . strtotime('2026-10-21 10:00:00'), $publicPosters[1]['imageUrl'] ?? null);
+        check_bool('保存名は公開の地図データに載せない', !array_key_exists('storedName', $publicPosters[0]) && !str_contains((string) json_encode($publicPosters), 'poster_x.png'));
+        $posterDb->exec("INSERT INTO km_posters VALUES (5, '広告', NULL, NULL, NULL, 'poster_v.png', NULL, 10, 20, 7, 1, '2026-10-21 10:00:00', '2026-10-21 10:00:00')");
+        check('広告は「管理画面で地点に置いていない」ものだけ(隠した地点・消えた地点のポスターは広告にしない)', [2 => false, 1 => false, 5 => true, 4 => false],
+            array_column(km_posters_public($posterDb, true, $posterNodes), 'isAd', 'id'));
+        $posterDb->exec('CREATE TABLE km_map_node_links (node_id TEXT PRIMARY KEY, url TEXT, label TEXT, updated_at TEXT)');
+        $posterDb->exec("INSERT INTO km_map_node_links VALUES ('n1', 'https://example.com/lab', '研究室', ''), ('n2', 'javascript:alert(1)', NULL, '')");
+        check('地点の URL: 通らない値は表に入っていても出さない', ['n1'], array_keys(km_node_links_for_map($posterDb)));
+    } else {
+        check_skip('posters: 公開に出すもの', 'pdo_sqlite が無い');
+    }
+    $posterLib = (string) file_get_contents(__DIR__ . '/../lib/posters.php');
+    check_bool('外から取るとき: リダイレクトを curl に任せない・名前を引いた先を固定する', str_contains($posterLib, 'CURLOPT_FOLLOWLOCATION => false') && str_contains($posterLib, 'CURLOPT_RESOLVE =>')
+        && str_contains($posterLib, 'CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS') && preg_match('/foreach \(\$addresses as \$address\) \{\s*if \(!km_poster_ip_allowed\(\$address\)\)/', $posterLib) === 1);
+    check_bool('CSP: 公開ページの img-src に外部を足していない(画像は取り込んで自前で配る)', str_contains(km_csp_policy('public'), "img-src 'self' data:;") && str_contains(km_csp_policy('admin'), "img-src 'self' data:;"));
+    $posterImageApi = (string) file_get_contents(__DIR__ . '/../api/poster-image.php');
+    check_bool('公開の画像の口: いま出しているもので、止めていないものだけ', str_contains($posterImageApi, 'if (km_posters_showing_now($pdo)) {') && str_contains($posterImageApi, 'WHERE id = ? AND is_enabled = 1'));
+    check_bool('管理画面の画像・プレビューの口は guard.php の内側', str_starts_with(ltrim(substr((string) file_get_contents(__DIR__ . '/../admin/api/poster-image.php'), 0, 200)), '<?php')
+        && str_contains((string) file_get_contents(__DIR__ . '/../admin/api/poster-image.php'), "require dirname(__DIR__) . '/_inc/guard.php';")
+        && str_contains((string) file_get_contents(__DIR__ . '/../admin/api/poster-preview.php'), "require dirname(__DIR__) . '/_inc/guard.php';"));
+    check_bool('URL のプレビュー: POST と CSRF を見てから取りに行く', preg_match('/!== \'POST\'.*?km_csrf_verify\(\).*?km_poster_fetch_remote/s', (string) file_get_contents(__DIR__ . '/../admin/api/poster-preview.php')) === 1);
+    $mapDataLib = (string) file_get_contents(__DIR__ . '/../lib/map-data.php');
+    check_bool('地図データ: 錠の内側でだけポスターを載せ、地点に URL を付ける', str_contains($mapDataLib, "'posters' => km_posters_public(\$pdo, \$overlay['events'] !== [], \$nodesById, \$shownProjectNodes, \$projectPois),")
+        && strpos($mapDataLib, "'posters' => km_posters_public(") > strpos($mapDataLib, 'if (!$viewUnlocked) {') && str_contains($mapDataLib, "\$node['linkUrl'] = \$nodeLinks[\$id]['url'];"));
+    check_bool('公開ページ: ?poster= は数字の形だけ確かめる・🖼️ は出しているポスターがあるときだけ', str_contains($homeCode, "preg_match('/^[1-9]\\d{0,9}\$/', \$posterParam) === 1")
+        && str_contains($homeCode, '<?php if ($kmPosterCount > 0): ?>') && str_contains($homeCode, '<meta name="km-focus-poster" content="<?= km_home_e($kmFocusPoster) ?>">'));
+    $wallPage = (string) file_get_contents(__DIR__ . '/../posters.php');
+    check_bool('一覧のページ: 地図の錠が掛かっていれば地点を出さない・地図へは ?room= で移る', str_contains($wallPage, "km_posters_public(\$pdo, km_poster_event_active(\$pdo), [])")
+        && str_contains($wallPage, "'href' => '/?room=' . rawurlencode((string) \$nodeId) . '&poster=' . (int) \$poster['id'],") && str_contains($wallPage, "'href' => '/?poi=' . (int) \$poiId,") && str_contains($wallPage, 'km_map_guest_verify();'));
+    // 押したら大きく見る幕 → そこから地図・リンクへ(2026-10-22、利用者の指示「押して飛ばすより、押して拡大してから飛ぶ」)
+    $wallJs = (string) file_get_contents(__DIR__ . '/../Main/posters-page.js');
+    check_bool('一覧のページ: 画像を押すと大きく見る幕(画像のリンクは数えない・JS が無ければリンクへ)', str_contains($wallPage, 'data-km-poster-open')
+        && !preg_match('/data-km-poster-open[^>]*data-km-poster-link/s', $wallPage) && str_contains($wallPage, "km_public_asset('Main/posters-page.js')")
+        && str_contains($wallJs, 'event.preventDefault();') && str_contains($wallJs, 'event.ctrlKey || event.metaKey')
+        && str_contains($wallJs, "link.cloneNode(true)") && !preg_match('/innerHTML\s*=\s*[^\s\'"]/', $wallJs) && str_contains($wallJs, "if (event.key === 'Escape') close();"));
+    $appJsForPosters = (string) file_get_contents(__DIR__ . '/../Main/app.js');
+    check_bool('地図: ポスターと地点の URL は escapeHtml を通し、http(s) だけをリンクにする', str_contains($appJsForPosters, '${escapeHtml(poster.title)}')
+        && str_contains($appJsForPosters, 'href="${escapeHtml(poster.linkUrl)}" target="_blank" rel="noopener noreferrer"')
+        && str_contains($appJsForPosters, "if (node.linkUrl && /^https?:\\/\\//i.test(node.linkUrl)) {"));
+    check_bool('監査ログ: ポスターと地点の URL の操作に文言がある', isset(KM_ADMIN_LOG_ACTION_LABELS['poster.mode'], KM_ADMIN_LOG_ACTION_LABELS['poster.create'], KM_ADMIN_LOG_ACTION_LABELS['poster.update'], KM_ADMIN_LOG_ACTION_LABELS['poster.delete'], KM_ADMIN_LOG_ACTION_LABELS['map.node_link']));
+    check_bool('管理画面: サイドバーから開ける', str_contains((string) file_get_contents(__DIR__ . '/../admin/_inc/partials/sidebar.php'), '<a href="./posters.php" class="<?= $link(\'posters\') ?>">'));
+
+    km_check_heading('node-extras: アプリの部屋の写真(ポスター)といいね(2026-10-22)');
+    require_once __DIR__ . '/../lib/node-extras.php';
+    check('地点の uuid の形', [true, true, false, false], [km_node_uuid_valid('9d1cebb3-9aa6-4fca-8f08-9ca965237b9e'), km_node_uuid_valid('n_new_10'), km_node_uuid_valid(''), km_node_uuid_valid("a'b")]);
+    check('端末の印は 32 桁の 16 進だけ', [true, false, false], [km_node_like_device_valid(str_repeat('a1', 16)), km_node_like_device_valid(str_repeat('A1', 16)), km_node_like_device_valid('abc')]);
+    if (extension_loaded('pdo_sqlite')) {
+        $extrasDb = new PDO('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
+        $extrasDb->sqliteCreateFunction('UNIX_TIMESTAMP', static fn ($value): int => (int) strtotime((string) $value), 1);
+        $extrasDb->exec('CREATE TABLE km_settings (name TEXT PRIMARY KEY, value TEXT, updated_at TEXT)');
+        $extrasDb->exec('CREATE TABLE km_posters (id INTEGER PRIMARY KEY, title TEXT, description TEXT, link_url TEXT, node_id TEXT, stored_name TEXT, source_url TEXT, image_width INT, image_height INT, sort_order INT, is_enabled INT, created_at TEXT, updated_at TEXT)');
+        $extrasDb->exec("INSERT INTO km_posters VALUES (1, '展示', '説明', 'https://example.com/', 'room1', 'p.png', NULL, 10, 20, 0, 1, '', '2026-10-22 10:00:00'),
+            (2, '止めた', NULL, NULL, 'room1', 'q.png', NULL, 10, 20, 1, 0, '', '2026-10-22 10:00:00'),
+            (3, '教員室', NULL, NULL, 'staff1', 'r.png', NULL, 10, 20, 0, 1, '', '2026-10-22 10:00:00'),
+            (4, '広告', NULL, NULL, NULL, 's.png', NULL, 10, 20, 0, 1, '', '2026-10-22 10:00:00')");
+        $extrasDb->exec('CREATE TABLE km_map_nodes (id TEXT PRIMARY KEY, uuid TEXT, name TEXT, type2 TEXT)');
+        $extrasDb->exec("INSERT INTO km_map_nodes VALUES ('room1', 'uuid-room-1', '機械実習工場', '実習室'), ('staff1', 'uuid-staff-1', '管-115', '教員室')");
+        $room = km_node_extras_find_node($extrasDb, 'uuid-room-1');
+        check('写真: 地点は uuid で引く・無ければ null', ['room1', null], [$room['id'] ?? null, km_node_extras_find_node($extrasDb, 'nope')]);
+        check('写真: 出し方が「表示しない」の間は出さない', [], km_node_extras_posters($extrasDb, $room, true));
+        $extrasDb->exec("INSERT INTO km_settings VALUES ('poster_display_mode', 'always', '')");
+        $roomPosters = km_node_extras_posters($extrasDb, $room, false);
+        check('写真: その地点の出しているものだけ(広告・止めたものは出さない)・nodeId と isAd は返さない', [[1], false, '/api/poster-image.php?id=1&v='],
+            [array_column($roomPosters, 'id'), isset($roomPosters[0]['nodeId']) || isset($roomPosters[0]['isAd']), substr((string) ($roomPosters[0]['imageUrl'] ?? ''), 0, 29)]);
+        check('写真: 教員室・研究室の地点の写真は出さない(Web の一般向けと同じ)・Web の地図に無い地点も出さない', [[], []],
+            [km_node_extras_posters($extrasDb, km_node_extras_find_node($extrasDb, 'uuid-staff-1'), true), km_node_extras_posters($extrasDb, null, true)]);
+        // 企画の番号で置いたポスター(2026-10-23。それまでアプリには出なかった)
+        $extrasDb->exec("INSERT INTO km_posters VALUES (5, '企画', NULL, NULL, NULL, 't.png', NULL, 10, 20, 2, 1, '', '2026-10-22 10:00:00'), (6, 'ほかの企画', NULL, NULL, NULL, 'u.png', NULL, 10, 20, 3, 1, '', '2026-10-22 10:00:00')");
+        $extrasDb->exec('CREATE TABLE km_poster_projects (poster_id INTEGER PRIMARY KEY, project_no TEXT)');
+        $extrasDb->exec("INSERT INTO km_poster_projects VALUES (5, '22'), (6, '99')");
+        $extrasDb->exec('CREATE TABLE km_map_node_projects (node_uuid TEXT, project_no TEXT, sort_order INT, PRIMARY KEY (node_uuid, project_no))');
+        $extrasDb->exec("INSERT INTO km_map_node_projects VALUES ('uuid-room-1', '22', 0)");
+        $projectPosters = km_node_extras_posters($extrasDb, $room, false);
+        check('写真: 企画の番号で置いたポスターも出す(ほかの番号のものは出さない)・nodeIds と poiIds は返さない', [[1, 5], false],
+            [array_column($projectPosters, 'id'), isset($projectPosters[1]['nodeIds']) || isset($projectPosters[1]['poiIds'])]);
+
+        $extrasDb->exec('CREATE TABLE km_node_likes (node_uuid TEXT NOT NULL, voter_hash TEXT NOT NULL, source_hash TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (node_uuid, voter_hash))');
+        $voterA = km_app_keyed_hash(str_repeat('k', 32), 'node-like-voter', str_repeat('a', 32));
+        $voterB = km_app_keyed_hash(str_repeat('k', 32), 'node-like-voter', str_repeat('b', 32));
+        $sourceX = km_app_keyed_hash(str_repeat('k', 32), 'node-like-source', '203.0.113.1');
+        $likeNow = strtotime('2026-10-22 12:00:00');
+        check('いいね: 端末の印は元の値を含まない', false, str_contains($voterA, str_repeat('a', 32)));
+        check('いいね: 付ける → 1・自分は付けている', ['ok', ['count' => 1, 'liked' => true]],
+            [km_node_like_set($extrasDb, 'uuid-room-1', $voterA, $sourceX, true, $likeNow), km_node_like_state($extrasDb, 'uuid-room-1', $voterA)]);
+        check('いいね: 同じ端末が 2 回付けても 1・ほかの端末からは「付けていない」', [['count' => 1, 'liked' => false]],
+            [km_node_like_set($extrasDb, 'uuid-room-1', $voterA, $sourceX, true, $likeNow) === 'ok' ? km_node_like_state($extrasDb, 'uuid-room-1', $voterB) : null]);
+        km_node_like_set($extrasDb, 'uuid-room-1', $voterB, $sourceX, true, $likeNow);
+        km_node_like_set($extrasDb, 'uuid-room-1', $voterA, $sourceX, false, $likeNow);
+        check('いいね: 外すと消える(ほかの端末の分は残る)・端末の印が無ければ liked は false', ['count' => 1, 'liked' => false], km_node_like_state($extrasDb, 'uuid-room-1', null));
+        for ($i = 0; $i < KM_NODE_LIKE_SOURCE_LIMIT; $i++) {
+            km_node_like_set($extrasDb, 'flood-' . $i, $voterA, $sourceX, true, $likeNow);
+        }
+        check('いいね: 同じ送り元から 1 時間に ' . KM_NODE_LIKE_SOURCE_LIMIT . ' を超えたら断る・1 時間たてば付けられる', ['limited', 'ok'],
+            [km_node_like_set($extrasDb, 'uuid-room-1', $voterA, $sourceX, true, $likeNow + 60), km_node_like_set($extrasDb, 'uuid-room-1', $voterA, $sourceX, true, $likeNow + 3601)]);
+        check('いいね: 管理画面の 0 に戻す', [2, ['count' => 0, 'liked' => false]],
+            [km_node_likes_reset($extrasDb, 'uuid-room-1'), km_node_like_state($extrasDb, 'uuid-room-1', $voterA)]);
+    } else {
+        check_bool('node-extras の DB の試し(pdo_sqlite が無いので飛ばした)', true);
+    }
+    $extrasApi = (string) file_get_contents(__DIR__ . '/../api/node-extras.php');
+    check_bool('口: POST だけ・本文は 4KB まで・アクセスコードを確かめてから読む・付けるには端末の印が要る', str_contains($extrasApi, "require_method('POST');")
+        && str_contains($extrasApi, 'km_api_json_body(4 * 1024)') && strpos($extrasApi, 'km_learning_code_allowed(') < strpos($extrasApi, 'km_node_extras_find_node(')
+        && str_contains($extrasApi, "if (\$like !== null && \$device === '') {") && str_contains($extrasApi, "=== 'limited'"));
+    check_bool('いいね: IP・端末の印そのものは持たない(鍵つきの印だけ)', str_contains((string) file_get_contents(__DIR__ . '/../lib/node-extras.php'), "km_app_keyed_hash(km_app_secret(\$pdo, KM_NODE_LIKE_KEY_NAME), 'node-like-voter', \$device)")
+        && str_contains((string) file_get_contents(__DIR__ . '/../lib/node-extras.php'), "'node-like-source', km_map_rate_limit_key(\$ip)"));
+    $privacyForLikes = (string) json_encode(km_legal_privacy(), JSON_UNESCAPED_UNICODE);
+    check_bool('利用規約・プライバシーポリシー: いいね(誰が付けたかは記録しない・外すと消える)を書いた', str_contains((string) json_encode(km_legal_terms(), JSON_UNESCAPED_UNICODE), 'いいねは誰が付けたかを記録せず、数だけを表示します')
+        && str_contains($privacyForLikes, 'アプリの「いいね」(場所・端末ごとの印・送り元の印・日時') && str_contains($privacyForLikes, 'もう一度押して外した時点で削除されます'));
+    check_bool('管理画面: ポスターの画面で地点ごとのいいねを見て 0 に戻せる・記録に文言', str_contains((string) file_get_contents(__DIR__ . '/../admin/posters.php'), "if (\$formAction === 'likes_reset') {")
+        && isset(KM_ADMIN_LOG_ACTION_LABELS['node.likes_reset']));
+
+    /*
+     * バックアップ(2026-10-23、利用者の指示「サーバーでもバックアップデータを見れるように」)。
+     * 地図のバックアップを管理画面で見る・落とす・消す。Wi-Fi の学習データは**消す前に控えを取り、取れなければ消さない**。控えから戻せる
+     */
+    km_check_heading('backups: 地図のバックアップと Wi-Fi 学習の控え(2026-10-23)');
+    require_once __DIR__ . '/../lib/map-backup.php';
+    require_once __DIR__ . '/../lib/learning-backup.php';
+    check('地図の内訳: 階ごとの地点・線・イベント・氏名の入った地点・学習地点', ['floors' => ['1F' => 2, 'OUTSIDE' => 1], 'nodes' => 3, 'lines' => 1, 'events' => 1, 'occupants' => 1, 'fingerprints' => 0],
+        km_map_backup_summary('{"format":"kosenmap-map","formatVersion":2,"map":{"version":10,"nodes":[{"uuid":"a","floor":"1F","occupantName":"架空"},{"uuid":"b","floor":"1F"},{"uuid":"c","floor":"OUTSIDE"}],"lines":[{"startNodeUuid":"a","endNodeUuid":"b"}],"events":[{"uuid":"e"}]}}'));
+    check('地図の内訳: 地図でなければ null', null, km_map_backup_summary('{"x":1}'));
+    check('学習の内訳: 階ごとの記録・地点の数・測った期間', ['floors' => ['1F' => 2, '2F' => 1], 'nodes' => 2, 'from' => 1760000000000, 'to' => 1760000500000],
+        km_learning_backup_summary([['nodeUuid' => 'a', 'floor' => '2F', 'measuredAtMillis' => 1760000500000], ['nodeUuid' => 'a', 'floor' => '1F', 'measuredAtMillis' => 1760000000000], ['nodeUuid' => 'b', 'floor' => '1F']]));
+    // 2026-10-23: uploads/map-backups(0750・グループ www-data)を kmops が開けず、配備前の控えが落ちた
+    check_bool('uploads の下に作るディレクトリは 0755・host-setup は開けないディレクトリも見つけて直す', str_contains((string) file_get_contents(__DIR__ . '/../lib/map-backup.php'), '!@mkdir($dir, 0755, true)')
+        && str_contains((string) file_get_contents(__DIR__ . '/../lib/learning-backup.php'), '!@mkdir($dir, 0755, true)')
+        && str_contains((string) file_get_contents(__DIR__ . '/../lib/panorama.php'), '!@mkdir($dir, 0755, true)')
+        // host-setup.sh はリポジトリの scripts/ にある(ホストへ配った src だけのときは見ない)
+        && (($hostSetupRoot = km_check_repo_root()) === null || str_contains((string) file_get_contents($hostSetupRoot . '/scripts/host-setup.sh'), 'unopenable="$(find "$SRC/uploads" -type d \( ! -readable -o ! -executable \) 2>/dev/null | wc -l)"')));
+    $learningLib = (string) file_get_contents(__DIR__ . '/../lib/learning-data.php');
+    check_bool('学習データを消す前に控えを書く(書けなければ例外で何も消さない)', strpos($learningLib, 'km_learning_backup_save($pdo, $kind, $scope, $floor,') !== false
+        && strpos($learningLib, 'km_learning_backup_save($pdo, $kind, $scope, $floor,') < strpos($learningLib, 'UPDATE {$table} SET deleted = 1'));
+    check_bool('控え: 保存名は表からだけ・壊れていれば読まない(SHA-256)', str_contains((string) file_get_contents(__DIR__ . '/../lib/learning-backup.php'), "preg_match('/\\A[0-9a-f]{32}\\.json\\.gz\\z/', \$name)")
+        && str_contains((string) file_get_contents(__DIR__ . '/../lib/learning-backup.php'), "hash_equals((string) \$row['sha256'], hash('sha256', \$json))"));
+    $backupsPage = (string) file_get_contents(__DIR__ . '/../admin/backups.php');
+    check_bool('管理画面: バックアップを見る・落とす・消す・控えを戻す(消す・戻すは書き込みの権限と CSRF)', str_contains($backupsPage, "require __DIR__ . '/_inc/guard.php';")
+        && str_contains($backupsPage, "if (\$formAction === 'map_delete') {") && str_contains($backupsPage, "if (\$formAction === 'learning_restore') {")
+        && str_contains($backupsPage, '!km_csrf_verify()') && substr_count($backupsPage, '<?php if ($KM_ADMIN_CAN_WRITE): ?>') === 2
+        && str_contains((string) file_get_contents(__DIR__ . '/../admin/_inc/partials/sidebar.php'), '<a href="./backups.php" class="<?= $link(\'backups\') ?>">'));
+    check_bool('監査ログ: 落とす・戻すに文言', isset(KM_ADMIN_LOG_ACTION_LABELS['map.backup_download'], KM_ADMIN_LOG_ACTION_LABELS['learning.backup_download'], KM_ADMIN_LOG_ACTION_LABELS['learning.backup_restore']));
+
+    km_check_heading('map-node-stairs: 階段の上り口・下り口の向き(2026-10-22)');
+    require_once __DIR__ . '/../lib/app-map-convert.php';
+    check('向きは 0〜359 の整数・数でなければ null', [0, 90, 315, 0, null, null], [km_map_heading(0), km_map_heading('90'), km_map_heading(-45), km_map_heading(360), km_map_heading(null), km_map_heading('右')]);
+    $stairMap = json_decode('{"version":10,"nodes":[
+        {"uuid":"11111111-1111-1111-1111-111111111111","x":10,"y":20,"useWifi":true,"title":"A階段","subtitle":"","type1":"stairs","type2":"","note":"","floor":"1F","transferGroupId":"A","stairUpHeading":90,"stairDownHeading":270.4},
+        {"uuid":"22222222-2222-2222-2222-222222222222","x":30,"y":40,"useWifi":true,"title":"講義室","subtitle":"","type1":"room","type2":"","note":"","floor":"1F","stairUpHeading":45}
+    ],"lines":[]}');
+    $stairWeb = km_app_map_to_web($stairMap);
+    check('アプリ → Web: 階段の向きを持ち回る(列の並びには無いので km_map_nodes には書かない)', [90, 270, false],
+        [$stairWeb['nodes'][0]['stair_up_heading'], $stairWeb['nodes'][0]['stair_down_heading'], in_array('stair_up_heading', KM_APP_MAP_COMPARED_COLUMNS, true)]);
+    $stairRows = array_map(static fn (array $n): array => $n + ['id' => $n['id']], $stairWeb['nodes']);
+    $stairBack = km_app_map_snapshot_from_rows($stairRows, [])['map'];
+    check('Web → アプリ: 階段の向きが戻る・階段でない地点には載せない・無ければ項目ごと無い', [90, 270, false, false],
+        [$stairBack->nodes[0]->stairUpHeading ?? null, $stairBack->nodes[0]->stairDownHeading ?? null, property_exists($stairBack->nodes[1], 'stairUpHeading'),
+         property_exists(km_app_map_snapshot_from_rows([['stair_up_heading' => null] + $stairRows[0]], [])['map']->nodes[0], 'stairUpHeading')]);
+    if (extension_loaded('pdo_sqlite')) {
+        $stairDb = new PDO('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
+        check('表が無ければ空(配信を止めない)', [], km_map_node_stairs_all($stairDb));
+        $stairDb->exec('CREATE TABLE km_map_node_stairs (node_uuid TEXT PRIMARY KEY, up_heading INTEGER NULL, down_heading INTEGER NULL, updated_at TEXT NOT NULL)');
+        $stairDb->exec("INSERT INTO km_map_node_stairs VALUES ('22222222-2222-2222-2222-222222222222', 10, NULL, '')");
+        check('取り込み: 階段の向きを入れ、階段でない地点の向きは消す', [1, ['11111111-1111-1111-1111-111111111111' => ['up' => 90, 'down' => 270]]],
+            [km_map_node_stairs_sync($stairDb, $stairWeb['nodes']), km_map_node_stairs_all($stairDb)]);
+        $cleared = $stairWeb['nodes'];
+        $cleared[0]['stair_up_heading'] = null;
+        $cleared[0]['stair_down_heading'] = null;
+        check('取り込み: 向きを外した階段は消える', [0, []], [km_map_node_stairs_sync($stairDb, $cleared), km_map_node_stairs_all($stairDb)]);
+    }
+    $syncCode = (string) file_get_contents(__DIR__ . '/../lib/app-map-sync.php');
+    check_bool('取り込み: 表は取引の前に作り、作れなくても止めない・ノードを入れたあとに向きを入れる', strpos($syncCode, 'km_map_node_stairs_ensure_table($pdo);') < strpos($syncCode, '$pdo->beginTransaction();')
+        && strpos($syncCode, 'km_map_node_stairs_sync($pdo, $converted[\'nodes\']);') > strpos($syncCode, '$insertNode->execute($values);'));
+
+    /*
+     * 区画の色分けを手で決める(2026-10-23。lib/map-node-area.php)。地点の指定と区画の印は別の表で持ち、配信でアプリへ戻す。
+     * 区画の印は km_map_nodes に入れない(Web の地図・一覧に名前の無い地点を出さない)
+     */
+    /*
+     * 地図の履歴とブックマーク(2026-10-23。lib/user-map-data.php・api/user-map-data.php・Main/user-history.js・アプリの UserMapData.kt)。
+     * 混ぜ方: 項目ごとに新しい方・消した印と全部消した時刻は新しい方(古いものが生き返らない)・上限で切る。どちらの順に混ぜても同じ
+     */
+    km_check_heading('user-map-data: 地図の履歴とブックマークの同期(2026-10-23)');
+    require_once __DIR__ . '/../lib/user-map-data.php';
+    $t0 = 1_760_000_000_000;
+    $deviceA = ['bookmarks' => [['uuid' => 'room1', 'at' => $t0 + 1]], 'places' => [['uuid' => 'room1', 'at' => $t0 + 5], ['uuid' => 'room2', 'at' => $t0 + 2]],
+        'routes' => [['from' => 'a', 'to' => 'b', 'at' => $t0 + 3]], 'searches' => [['q' => ' 図書館 ', 'at' => $t0 + 4]],
+        'settings' => ['android' => ['values' => ['map_color_areas' => true], 'at' => $t0 + 1]]];
+    $deviceB = ['bookmarks' => [['uuid' => 'room3', 'at' => $t0 + 2]], 'places' => [['uuid' => 'room1', 'at' => $t0 + 9]],
+        'removed' => ['bookmarks' => ['room1' => $t0 + 6]], 'cleared' => ['searches' => $t0 + 10],
+        'settings' => ['android' => ['values' => ['map_color_areas' => false], 'at' => $t0 + 8]]];
+    $mergedAB = km_user_map_merge(km_user_map_normalize($deviceA), km_user_map_normalize($deviceB));
+    $mergedBA = km_user_map_merge(km_user_map_normalize($deviceB), km_user_map_normalize($deviceA));
+    check('混ぜる: ブックマークは消した印より古いものを落とす・開いた場所は新しい方を残して新しい順・全部消した検索は残らない・設定は新しい方',
+        [['room3'], [['room1', $t0 + 9], ['room2', $t0 + 2]], [], ['a>b'], false],
+        [array_column($mergedAB['bookmarks'], 'uuid'), array_map(static fn ($p) => [$p['uuid'], $p['at']], $mergedAB['places']), $mergedAB['searches'],
+         array_map(static fn ($r) => $r['from'] . '>' . $r['to'], $mergedAB['routes']), (array) $mergedAB['settings']['android']['values'] === ['map_color_areas' => false] ? false : true]);
+    check_bool('混ぜる: どちらの順に混ぜても同じ', json_encode($mergedAB) === json_encode($mergedBA));
+    check_bool('混ぜる: 消したあとに付け直したブックマークは残る', array_column(km_user_map_merge($mergedAB, km_user_map_normalize(['bookmarks' => [['uuid' => 'room1', 'at' => $t0 + 20]]]))['bookmarks'], 'uuid') === ['room1', 'room3']);
+    $flood = km_user_map_normalize(['places' => array_map(static fn ($i) => ['uuid' => 'p' . $i, 'at' => $t0 + $i], range(1, 80)),
+        'routes' => [['from' => 'x', 'to' => 'x', 'at' => $t0], ['from' => "a'b", 'to' => 'c', 'at' => $t0]], 'searches' => [['q' => "a\nb", 'at' => $t0], ['q' => 'ok', 'at' => 5]]]);
+    check('形: 開いた場所は 50 件まで(新しい方)・同じ地点の経路・おかしな地点・制御文字・おかしな時刻は捨てる', [50, 'p80', [], []],
+        [count($flood['places']), $flood['places'][0]['uuid'], $flood['routes'], $flood['searches']]);
+    $userMapApi = (string) file_get_contents(__DIR__ . '/../api/user-map-data.php');
+    check_bool('口: 誰のものかはトークンかサインインのセッションの sub だけ・Web の書き込みは CSRF・サインインしていなければ 401', str_contains($userMapApi, '$principal = logto_require_principal();')
+        && str_contains($userMapApi, "\$subject = trim((string) (\$client->getIdTokenClaims()->sub ?? ''));") && str_contains($userMapApi, 'if (!km_csrf_verify()) {')
+        && !str_contains($userMapApi, "\$_GET['user") && !str_contains($userMapApi, "\$input['user") && str_contains($userMapApi, "respond(['success' => false, 'message' => 'サインインしていません"));
+    check_bool('退会で消える', in_array('km_user_map_data', KM_ACCOUNT_DELETE_TABLES, true));
+    $termsForHistory = (string) json_encode(km_legal_terms(), JSON_UNESCAPED_UNICODE);
+    $privacyForHistory = (string) json_encode(km_legal_privacy(), JSON_UNESCAPED_UNICODE);
+    check_bool('利用規約・プライバシーポリシー: 履歴とブックマーク(端末の中だけ・サインインで同期・経路は確かめる・消し方・退会)', str_contains($termsForHistory, 'ふだんは端末の中だけに残ります')
+        && str_contains($privacyForHistory, '地図の履歴とブックマーク(ブックマークした場所・開いた場所・検索した言葉・経路の出発地と目的地')
+        && str_contains($privacyForHistory, '地図の「履歴」から一覧ごと・全部を消せます') && str_contains($privacyForHistory, 'アプリの設定・地図の履歴とブックマーク・') && KM_LEGAL_UPDATED >= '2026-10-23');
+    check_bool('利用規約・プライバシーポリシー: 教員室・研究室の決まりは Android アプリにも効く(2026-10-23 から)', str_contains($termsForHistory, '本サービスの Web の地図と Android アプリでは、**教員室・研究室の場所は')
+        && !str_contains($privacyForHistory, 'Android アプリへの配信では'));
+    $historyJs = (string) file_get_contents(__DIR__ . '/../Main/user-history.js');
+    $homeForHistory = (string) file_get_contents(__DIR__ . '/../index.php');
+    $appJsForHistory = (string) file_get_contents(__DIR__ . '/../Main/app.js');
+    check_bool('Web: 展示の PC では使わない・app.js より先に読む・サインインしている人だけ印と CSRF を渡す', str_contains($historyJs, "if (meta('km-test-mode') === '1') return;")
+        && strpos($homeForHistory, "km_public_asset('Main/user-history.js')") < strpos($homeForHistory, "km_public_asset('Main/app.js')) ?>\"></script>")
+        && str_contains($homeForHistory, '$kmUserMapKey = ($loggedIn && $kmTestMode === null'));
+    check_bool('Web: 経路の確かめ 3 つ(サインイン後に置くか・前回の経路を出すか・消すとき)とログアウトのとき', str_contains($historyJs, "'この端末だけ'") && str_contains($historyJs, "'前回の経路'")
+        && str_contains($historyJs, "'経路は残す'") && str_contains($historyJs, "'この端末から消す'"));
+    check_bool('Web: 詳細を開いた・経路を引いたを知らせる・一覧から開ける', str_contains($appJsForHistory, "new CustomEvent('km:node-opened'") && str_contains($appJsForHistory, "new CustomEvent('km:route'")
+        && str_contains($appJsForHistory, 'window.kmOpenNode = function (id) {') && str_contains($appJsForHistory, 'data-km-bookmark="${escapeHtml(id)}"'));
+
+    km_check_heading('display-defaults: アプリの表示調整の既定を配る(2026-10-23)');
+    require_once __DIR__ . '/../lib/display-defaults.php';
+    check('形だけ確かめて並べる(真偽・整数・短い文字列・文字列の並び)', ['map_color_areas' => true, 'map_label_size_percent' => 140, 'map_visible_node_types' => ['road', 'room']],
+        km_display_defaults_normalize(['map_visible_node_types' => ['road', 'room'], 'map_label_size_percent' => 140, 'map_color_areas' => true]));
+    $displayRejects = 0;
+    foreach ([['Bad-Key' => 1], ['k' => 1.5], ['k' => str_repeat('a', 65)], ['k' => ["a\nb"]], ['k' => ['x' => 'y']], ['k' => 2_000_000], array_fill_keys(array_map(static fn ($i) => 'k' . $i, range(1, 201)), true)] as $bad) {
+        try {
+            km_display_defaults_normalize($bad);
+        } catch (InvalidArgumentException) {
+            $displayRejects++;
+        }
+    }
+    check('名前の形・小数・長い文字列・制御文字・連想配列・大きすぎる数・201 項目は断る', 7, $displayRejects);
+    $displayApi = (string) file_get_contents(__DIR__ . '/../api/display-defaults.php');
+    check_bool('口: 読むのは誰でも・配る/やめるは管理者のトークン・本文 32KB・記録に文言', str_contains($displayApi, "logto_assert_permissions(\$principal, LOGTO_ADMIN_PERMISSIONS);")
+        && strpos($displayApi, "=== 'GET'") < strpos($displayApi, 'logto_require_principal()') && str_contains($displayApi, 'km_api_json_body(32 * 1024)')
+        && isset(KM_ADMIN_LOG_ACTION_LABELS['display.defaults_publish'], KM_ADMIN_LOG_ACTION_LABELS['display.defaults_unpublish']));
+
+    km_check_heading('map-node-area: 区画の色分けの手の指定と区画の印(2026-10-23)');
+    check('種類は決まった語だけ・色は #RRGGBB(アプリの ARGB の数も読む)', ['room', null, '#CDE7F7', '#56B4E9', null, null],
+        [km_map_area_kind('room'), km_map_area_kind('kitchen'), km_map_area_color(0xFFCDE7F7), km_map_area_color('#56b4e9'), km_map_area_color('blue'), km_map_area_color(-1)]);
+    check('#RRGGBB → 不透明の ARGB', [0xFFCDE7F7, null], [km_map_area_color_argb('#CDE7F7'), km_map_area_color_argb(null)]);
+    $areaMap = json_decode('{"version":10,"nodes":[
+        {"uuid":"r1","x":10,"y":20,"useWifi":true,"title":"講義室","subtitle":"","type1":"room","type2":"","note":"","floor":"1F","areaKind":"corridor","areaColor":4291684343},
+        {"uuid":"r2","x":30,"y":40,"useWifi":true,"title":"倉庫","subtitle":"","type1":"room","type2":"","note":"","floor":"1F"},
+        {"uuid":"m1","x":55.5,"y":66.25,"useWifi":false,"title":"","subtitle":"","type1":"area","type2":"","note":"","floor":"2F","areaKind":"room"}
+    ],"lines":[]}');
+    $areaWeb = km_app_map_to_web($areaMap);
+    check('アプリ → Web: 区画の印は km_map_nodes に入れない(知らない種類にも数えない)・指定を取り出す', [['r1', 'r2'], [], ['r1' => ['kind' => 'corridor', 'color' => '#CDE7F7']], 1],
+        [array_column($areaWeb['nodes'], 'uuid'), $areaWeb['skipped']['unknownType'], $areaWeb['area']['overrides'], count($areaWeb['area']['markers'])]);
+    $areaBack = km_app_map_snapshot_from_rows(array_map(static fn (array $n): array => $n, $areaWeb['nodes']), [])['map'];
+    km_map_area_apply($areaBack, $areaWeb['area']);
+    check('Web → アプリ: 指定と区画の印が戻る・指定の無い地点には項目を足さない', ['corridor', 0xFFCDE7F7, false, 'area', '2F', 55.5, 66.25, 'room'],
+        [$areaBack->nodes[0]->areaKind ?? null, $areaBack->nodes[0]->areaColor ?? null, property_exists($areaBack->nodes[1], 'areaKind'),
+         $areaBack->nodes[2]->type1 ?? null, $areaBack->nodes[2]->floor ?? null, $areaBack->nodes[2]->x ?? null, $areaBack->nodes[2]->y ?? null, $areaBack->nodes[2]->areaKind ?? null]);
+    if (extension_loaded('pdo_sqlite')) {
+        $areaDb = new PDO('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
+        check('表が無ければ空(配信を止めない)', ['overrides' => [], 'markers' => []], km_map_node_area_all($areaDb));
+        $areaDb->exec('CREATE TABLE km_map_node_area (node_uuid TEXT PRIMARY KEY, area_kind TEXT NULL, area_color TEXT NULL, marker_floor TEXT NULL, marker_x REAL NULL, marker_y REAL NULL, updated_at TEXT NOT NULL)');
+        $areaDb->exec("INSERT INTO km_map_node_area VALUES ('old', 'room', NULL, NULL, NULL, NULL, '')");
+        check('取り込み: 表を丸ごと入れ替える(前の指定は残らない)・読み戻すと同じ', [2, $areaWeb['area']],
+            [km_map_node_area_sync($areaDb, $areaWeb['area']), km_map_node_area_all($areaDb)]);
+    }
+    check_bool('取り込み: 区画の表は取引の前に作り、ノードを入れたあとに入れ替える・配信で足す・Web の地図に区画の印を出さない', strpos($syncCode, 'km_map_node_area_ensure_table($pdo);') < strpos($syncCode, '$pdo->beginTransaction();')
+        && strpos($syncCode, "km_map_node_area_sync(\$pdo, \$converted['area']);") > strpos($syncCode, '$insertNode->execute($values);')
+        && str_contains((string) file_get_contents(__DIR__ . '/../lib/app-map-convert.php'), "km_map_area_apply(\$result['map'], km_map_node_area_all(\$pdo));")
+        && str_contains((string) file_get_contents(__DIR__ . '/../lib/map-data.php'), "if ((string) (\$node['type'] ?? '') === 'area') {"));
+
+    /*
+     * 企画の番号・スケジュール・イベント中に出す地点(2026-10-23、利用者の指示)。番号はアプリで振り、Website は番号から
+     * ポスターの置き場・スケジュールの場所を決める。1 つの地点に番号がいくつも。イベント中は「イベントの地点」だけを出す
+     */
+    km_check_heading('map-node-projects・event-schedule: 企画の番号とスケジュール(2026-10-23)');
+    require_once __DIR__ . '/../lib/map-node-projects.php';
+    require_once __DIR__ . '/../lib/event-schedule.php';
+    check('番号はそろえる(全角→半角・大文字・ダッシュ)・形の違うものは null', ['A-1', 'B2', 'C-3', null, null, null],
+        [km_map_project_number(' a-1 '), km_map_project_number('Ｂ２'), km_map_project_number('c−3'), km_map_project_number('A/1'), km_map_project_number(str_repeat('A', 17)), km_map_project_number('')]);
+    check('一覧は重複を 1 つ・入れた順・10 個まで', [['A-1', 'B-2'], 10], [km_map_project_numbers(['a-1', 'B-2', 'A-1', 'x/y']), count(km_map_project_numbers(array_map(static fn ($n) => 'P' . $n, range(1, 15))))]);
+    $projectMap = json_decode('{"version":10,"nodes":[
+        {"uuid":"9d1cebb3-9aa6-4fca-8f08-9ca965237b9e","x":10,"y":20,"useWifi":true,"title":"講義室","subtitle":"","type1":"room","type2":"","note":"","floor":"1F","projectNumbers":["a-1","A-2"]},
+        {"uuid":"r2","x":30,"y":40,"useWifi":true,"title":"倉庫","subtitle":"","type1":"room","type2":"","note":"","floor":"1F"}
+    ],"lines":[]}');
+    $projectWeb = km_app_map_to_web($projectMap);
+    check('アプリ → Web: 地点ごとの番号を取り出す(番号の無い地点は入れない)', ['9d1cebb3-9aa6-4fca-8f08-9ca965237b9e' => ['A-1', 'A-2']], $projectWeb['projects']);
+    $projectBack = km_app_map_snapshot_from_rows(array_map(static fn (array $n): array => $n, $projectWeb['nodes']), [])['map'];
+    km_map_projects_apply($projectBack, $projectWeb['projects']);
+    check('Web → アプリ: 番号が戻る・番号の無い地点には項目を足さない', [['A-1', 'A-2'], false], [$projectBack->nodes[0]->projectNumbers ?? null, property_exists($projectBack->nodes[1], 'projectNumbers')]);
+    check('番号 → 地点: 出している地点だけ・番号の順', ['A-1' => ['n1', 'n2'], 'B-1' => ['n2']],
+        km_map_project_nodes(['n1' => ['A-1'], 'n2' => ['B-1', 'A-1'], 'n3' => ['A-1']], ['n1' => true, 'n2' => true]));
+    if (extension_loaded('pdo_sqlite')) {
+        $projectDb = new PDO('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
+        check('表が無ければ空(配信と公開の地図を止めない)', [[], []], [km_map_node_projects_all($projectDb), km_event_schedule_public($projectDb, [])]);
+        $projectDb->exec('CREATE TABLE km_map_node_projects (node_uuid TEXT, project_no TEXT, sort_order INT, PRIMARY KEY (node_uuid, project_no))');
+        $projectDb->exec("INSERT INTO km_map_node_projects VALUES ('old', 'Z-9', 0)");
+        check('取り込み: 表を丸ごと入れ替える・並びを保つ', [2, $projectWeb['projects']], [km_map_node_projects_sync($projectDb, $projectWeb['projects']), km_map_node_projects_all($projectDb)]);
+    }
+    $syncForProjects = (string) file_get_contents(__DIR__ . '/../lib/app-map-sync.php');
+    check_bool('取り込み: 番号の表は取引の前に作り、ノードを入れたあとに入れ替える・配信で足す', strpos($syncForProjects, 'km_map_node_projects_ensure_table($pdo);') < strpos($syncForProjects, '$pdo->beginTransaction();')
+        && strpos($syncForProjects, "km_map_node_projects_sync(\$pdo, \$converted['projects']);") > strpos($syncForProjects, '$insertNode->execute($values);')
+        && str_contains((string) file_get_contents(__DIR__ . '/../lib/app-map-convert.php'), "km_map_projects_apply(\$result['map'], km_map_node_projects_all(\$pdo));"));
+    $scheduleError = static function (array $input): string {
+        try {
+            km_event_schedule_validate($input);
+            return '';
+        } catch (InvalidArgumentException $exception) {
+            return $exception->getMessage();
+        }
+    };
+    check('スケジュールの入力: 番号と日時をそろえる・空は null', ['A-1', '展示', null, null, '2026-11-03 10:00:00', '2026-11-03 11:30:00', true],
+        array_values(km_event_schedule_validate(['projectNo' => 'a-1', 'title' => ' 展示 ', 'startsAt' => '2026-11-03T10:00', 'endsAt' => '2026-11-03 11:30', 'isPublic' => true])));
+    check_bool('スケジュールの入力: 名前・始まりは要る・終わりは始まりより後・番号と日付の形を見る', $scheduleError(['title' => '', 'startsAt' => '2026-11-03 10:00']) !== ''
+        && $scheduleError(['title' => 'a']) !== '' && $scheduleError(['title' => 'a', 'startsAt' => '2026-11-03 10:00', 'endsAt' => '2026-11-03 09:00']) !== ''
+        && $scheduleError(['title' => 'a', 'startsAt' => '2026-02-30 10:00']) !== '' && $scheduleError(['title' => 'a', 'projectNo' => 'A/1', 'startsAt' => '2026-11-03 10:00']) !== '');
+    check('公開: 一般に出す行だけ・場所は番号の地点(出している地点だけ)・印は外す', [[1, ['n1', 'n2']], [3, []]],
+        array_map(static fn (array $r): array => [$r['id'], $r['nodeIds']], km_event_schedule_public_rows([
+            ['id' => 1, 'projectNo' => 'A-1', 'title' => 'a', 'organizer' => '', 'description' => '', 'startsAt' => '2026-11-03 10:00:00', 'endsAt' => null, 'isPublic' => true],
+            ['id' => 2, 'projectNo' => 'A-1', 'title' => 'b', 'organizer' => '', 'description' => '', 'startsAt' => '2026-11-03 10:00:00', 'endsAt' => null, 'isPublic' => false],
+            ['id' => 3, 'projectNo' => 'Q-9', 'title' => 'c', 'organizer' => '', 'description' => '', 'startsAt' => '2026-11-03 10:00:00', 'endsAt' => null, 'isPublic' => true],
+        ], ['A-1' => ['n1', 'n2']])));
+    check('公開の行に「一般に出す」の印を残さない', false, array_key_exists('isPublic', km_event_schedule_public_rows([['id' => 1, 'projectNo' => null, 'title' => 'a', 'organizer' => '', 'description' => '', 'startsAt' => 'x', 'endsAt' => null, 'isPublic' => true]], [])[0]));
+    $mapDataForEvents = (string) file_get_contents(__DIR__ . '/../lib/map-data.php');
+    check('イベント中に出す地点: 番号・イベント中の名前・階段・出入口・トイレ・道は出す、ふつうの部屋は出さない', [true, true, true, true, true, true, false, false],
+        [km_map_event_node_visible(['type' => 'room', 'projects' => ['A-1']], false), km_map_event_node_visible(['type' => 'room'], true),
+         km_map_event_node_visible(['type' => 'stairs'], false), km_map_event_node_visible(['type' => 'entrance'], false),
+         km_map_event_node_visible(['type' => 'facility', 'name' => '男子トイレ'], false), km_map_event_node_visible(['type' => 'road'], false),
+         km_map_event_node_visible(['type' => 'room', 'name' => '講義室'], false), km_map_event_node_visible(['type' => 'facility', 'name' => '体育館'], false)]);
+    check_bool('地図データ: イベントの地点だけを出すのは有効なイベントがあり ON のとき・隠すのは印だけ(経路は通れる)・スケジュールとポスターは出している地点だけ', str_contains($mapDataForEvents, "if (\$overlay['events'] !== [] && (\$overlay['onlyEventNodes'] ?? false) && empty(\$node['hidden'])")
+        && str_contains($mapDataForEvents, "'schedule' => km_event_schedule_public(\$pdo, \$shownProjectNodes, \$projectPois),")
+        && str_contains($mapDataForEvents, "km_map_project_nodes(\$projectsById, array_filter(\$nodesById, static fn (array \$n): bool => empty(\$n['hidden'])))")
+        && strpos($mapDataForEvents, "'schedule' =>") > strpos($mapDataForEvents, 'if (!$viewUnlocked) {'));
+    $eventsLib = (string) file_get_contents(__DIR__ . '/../lib/map-events.php');
+    check_bool('イベントの設定は別表・行が無ければ ON・子の表と一緒に消し、取り込みで入れ直す', str_contains($eventsLib, 'CREATE TABLE IF NOT EXISTS km_map_event_options (')
+        && in_array('km_map_event_options', KM_MAP_EVENT_CHILD_TABLES, true) && str_contains($eventsLib, "if (\$options[(int) \$eventId] ?? true) {")
+        && str_contains((string) file_get_contents(__DIR__ . '/../lib/map-event-import.php'), "'onlyEventNodes' => (\$event->onlyEventNodes ?? null) !== false,"));
+    $postersForProjects = (string) file_get_contents(__DIR__ . '/../lib/posters.php');
+    check_bool('ポスター: 企画の番号は別表・番号の地点全部に出す(地点の指定より先)・番号のあるものは広告にしない', str_contains($postersForProjects, 'CREATE TABLE IF NOT EXISTS km_poster_projects (')
+        && str_contains($postersForProjects, "\$nodeIds = \$projectNo !== '' ? (\$projectNodes[\$projectNo] ?? []) : (\$nodeId !== '' ? [\$nodeId] : []);")
+        && str_contains($postersForProjects, "'isAd' => (string) (\$row['nodeId'] ?? '') === '' && \$projectNo === '',"));
+    $schedulePage = (string) file_get_contents(__DIR__ . '/../admin/schedule.php');
+    check_bool('管理画面: スケジュールは guard の内側・CSRF・記録に文言・サイドバー', str_contains($schedulePage, "require __DIR__ . '/_inc/guard.php';") && str_contains($schedulePage, 'km_csrf_verify()')
+        && isset(KM_ADMIN_LOG_ACTION_LABELS['schedule.create'], KM_ADMIN_LOG_ACTION_LABELS['schedule.update'], KM_ADMIN_LOG_ACTION_LABELS['schedule.delete'], KM_ADMIN_LOG_ACTION_LABELS['schedule.public'])
+        && str_contains((string) file_get_contents(__DIR__ . '/../admin/_inc/partials/sidebar.php'), "./schedule.php"));
+    /*
+     * 一時地点の経路と番号(2026-10-23、利用者の報告「一時ノードのルート案内がうまく動作しない」。kosenmap_map+event.json を調べた)。
+     * 版 22 のアプリは一時地点の接続を a / b の名前で書き出していた(R8)。読めずに一番近い地点へつなぎ、トイレや体育館の出入口が案内先になっていた
+     */
+    km_check_heading('一時地点: 接続の古い名前・道を先に・名前の番号・表示調整の既定を Web へ(2026-10-23)');
+    require_once __DIR__ . '/../lib/map-event-import.php';
+    $importNodes = [
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' => ['floor' => '1', 'type' => 'room', 'x' => 10.0, 'y' => 10.0],
+        'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' => ['floor' => '1', 'type' => 'road', 'x' => 40.0, 'y' => 10.0],
+        'cccccccccccccccccccccccccccccccc' => ['floor' => '1', 'type' => 'road', 'x' => 90.0, 'y' => 10.0],
+    ];
+    $importEvent = json_decode('{"uuid":"ev","name":"祭","places":[
+        {"uuid":"p1","name":"21","floor":"1F","x":12,"y":1190,"category":"模擬店","note":"","staffOnly":false},
+        {"uuid":"p2","name":"ゴミ箱","floor":"1F","x":12,"y":1190,"category":"","note":"","staffOnly":false}],
+        "placeLinks":[{"a":"p1","b":"cccccccc-cccc-cccc-cccc-cccccccccccc"}]}');
+    $importConverted = km_map_event_from_app($importEvent, $importNodes);
+    check('取り込み: 版 22 の a / b の接続を読む・つないでいない地点は部屋より道を先に選ぶ', ['cccccccccccccccccccccccccccccccc', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'],
+        array_column($importConverted['pois'], 'anchorNodeId'));
+    check_bool('取り込み: Website で作って渡したイベント(web-event-<番号>)は、その番号のイベントを更新する', str_contains((string) file_get_contents(__DIR__ . '/../lib/map-event-import.php'), "if (\$found === false && \$webEventId !== null) {"));
+    // イベントの取り込みでも教室の企画の番号を入れる(2026-10-23、利用者の報告「取り込むと地点が 35 で少ない」。それまで番号は捨てていた)
+    $importProjectsMap = json_decode('{"nodes":[{"uuid":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","projectNumbers":["22"]},{"uuid":"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb","projectNumbers":["33","３４"]},{"uuid":"cccccccc-cccc-cccc-cccc-cccccccccccc"},{"uuid":"dddddddd-dddd-dddd-dddd-dddddddddddd","projectNumbers":["22"]}],"events":[]}');
+    $importProjects = km_map_event_import_projects_of_map($importProjectsMap);
+    check('取り込み: 書き出しの地点の企画の番号を置き場に入れ、読み戻しても同じ・地点の無い書き出しは null(表を触らない)',
+        [3, $importProjects, null, [], null],
+        [count($importProjects), km_map_event_import_projects_of(json_decode((string) json_encode(['p' => $importProjects]))->p),
+            km_map_event_import_projects_of_map(json_decode('{"events":[]}')), km_map_event_import_projects_of(json_decode('[]')), km_map_event_import_projects_of(null)]);
+    check('取り込み: 番号の見せ物(地点の数・Website に無い地点・番号の数・いまの数)', ['nodes' => 3, 'unknown' => 1, 'numbers' => 3, 'current' => 0],
+        km_map_event_import_projects_summary($importProjects, ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' => [], 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' => []], []));
+    $mapEventsAdmin = (string) file_get_contents(__DIR__ . '/../admin/map-events.php');
+    check_bool('取り込みの画面: 企画の番号も入れ替える(既定で印)・一時地点の数と分けて出す', str_contains($mapEventsAdmin, "if (\$pending['projects'] !== null && (\$_POST['import_projects'] ?? '') === '1') {")
+        && str_contains($mapEventsAdmin, 'name="import_projects" value="1" id="km-import-projects" checked')
+        && str_contains($mapEventsAdmin, '一時地点 <?= $event[\'poiCount\'] ?>')
+        && str_contains((string) file_get_contents(__DIR__ . '/../lib/map-event-import.php'), "'projects' => km_map_event_import_projects_of_map(\$map)]"));
+    check('一時地点の名前が番号なら企画の番号(名前全体のときだけ)', ['21', 'A-3', null, null, null],
+        [km_map_project_number_from_name(' 21 '), km_map_project_number_from_name('a-3'), km_map_project_number_from_name('受付'), km_map_project_number_from_name('21 たこ焼き'), km_map_project_number_from_name('')]);
+    check('番号ごとの臨時の地点', ['21' => [7, 9], 'A-3' => [8]], km_map_project_pois([['id' => 7, 'name' => '21'], ['id' => 8, 'name' => 'A-3'], ['id' => 9, 'name' => '２１'], ['id' => 10, 'name' => 'ゴミ箱']]));
+    check('スケジュール: 番号の一時地点も場所にする', [7], km_event_schedule_public_rows([['id' => 1, 'projectNo' => '21', 'title' => 'a', 'organizer' => '', 'description' => '', 'startsAt' => 'x', 'endsAt' => null, 'isPublic' => true]], [], ['21' => [7]])[0]['poiIds']);
+    $appJsForPoi = (string) file_get_contents(__DIR__ . '/../Main/app.js');
+    check_bool('公開の地図: 一時地点は部屋と同じ吹き出し・名前はポスターの見出し(7 文字以上は 6 文字 + …)・備考はポスターの説明', str_contains($appJsForPoi, 'marker.bindPopup(poiDetailHtml(poi, shown));')
+        && str_contains($appJsForPoi, "return chars.length >= 7 ? chars.slice(0, 6).join('') + '…' : chars.join('');")
+        && str_contains($appJsForPoi, "note: poster && poster.description ? poster.description : String(poi.note || ''),"));
+    check('教室のイベント中の名前が番号なら、その番号も付ける(二重にしない・番号でない名前は足さない)', ['n1' => ['22', '32'], 'n2' => ['33']],
+        km_map_projects_with_aliases(['n1' => ['22'], 'n2' => ['33']], ['n1' => '32', 'n2' => '33', 'n3' => 'たこ焼き']));
+    if (extension_loaded('pdo_sqlite')) {
+        // 管理画面(ポスター・スケジュール)でも、イベント中の名前が番号の地点を数える(2026-10-23、企画 32 の報告)
+        $adminProjectsDb = new PDO('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+        $adminProjectsDb->exec('CREATE TABLE km_map_node_projects (node_uuid TEXT, project_no TEXT, sort_order INT)');
+        $adminProjectsDb->exec("INSERT INTO km_map_node_projects VALUES ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '22', 0)");
+        check('管理画面の番号: イベントの表が無くても表の番号は出る', ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' => ['22']], km_map_projects_for_admin($adminProjectsDb));
+        $adminProjectsDb->exec('CREATE TABLE km_map_event_aliases (event_id INT, node_id TEXT, alias TEXT)');
+        $adminProjectsDb->exec("INSERT INTO km_map_event_aliases VALUES (7, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', '32'), (8, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', '33'), (7, 'cccccccccccccccccccccccccccccccc', '救護室')");
+        check('管理画面の番号: イベント中の名前「32」の地点が番号 32 に入る(全部のイベント・番号でない名前は入れない)',
+            ['22' => ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'], '32' => ['bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'], '33' => ['bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb']],
+            km_map_project_nodes(km_map_projects_for_admin($adminProjectsDb)));
+    }
+    check_bool('管理画面のポスターとスケジュールは、イベント中の名前の番号も数える', str_contains((string) file_get_contents(__DIR__ . '/../admin/posters.php'), '$projectNodes = km_map_project_nodes(km_map_projects_for_admin($pdo));')
+        && str_contains((string) file_get_contents(__DIR__ . '/../admin/schedule.php'), '$projectNodes = km_map_project_nodes(km_map_projects_for_admin($pdo));'));
+    check_bool('公開の地図: 番号で置いたポスターとスケジュールの場所に、イベント中の名前の番号も入る', str_contains((string) file_get_contents(__DIR__ . '/../lib/map-data.php'), "\$projectsById = km_map_projects_with_aliases(km_map_projects_by_node_id(\$pdo), \$overlay['aliases']);"));
+    check_bool('公開の地図: 企画の教室はイベント中、札と吹き出しの名前がポスターの見出し(札は縮める)・備考がポスターの説明・ポスターが無ければ番号を前に付ける',
+        str_contains($appJsForPoi, 'escapeHtml(project ? (project.fromPoster ? shortPoiName(project.name) : project.name) : displayNameFor(node));')
+        && str_contains($appJsForPoi, 'const title = project ? project.name : (node.alias || node.name);')
+        && str_contains($appJsForPoi, "if (!graphData.event || numbers.length === 0) return null;")
+        && str_contains($appJsForPoi, "return { name: prefix ? `\${prefix} \${base}` : base, note: '', fromPoster: false };"));
+    check_bool('公開の地図: 一時地点は部屋の地点と同じに描く(外も部屋。2026-10-23 に建物から戻した)・同じ種類の束に入れて出し入れと札の間引きも同じ・編集画面は今までの印',
+        preg_match("/function poiNodeType\(poi\) \{[^}]*return 'room';\s*\}/", $appJsForPoi) === 1
+        && str_contains($appJsForPoi, 'const marker = createPoiMarker(poi, type);')
+        && str_contains($appJsForPoi, "className: 'km-node km-node-' + type + (hasPoster ? ' km-node-has-poster' : ''),")
+        && str_contains($appJsForPoi, 'poiMarkers.forEach(fn);')
+        && str_contains($appJsForPoi, 'if (!window.isAdmin) return;'));
+    require_once __DIR__ . '/../lib/display-defaults.php';
+    check('表示調整の既定を Web の形に(対応する項目だけ)', [
+        'nodeSize' => 120, 'labelSize' => 110, 'labelMode' => 'text_only', 'roomNames' => true, 'accessPoints' => false, 'roadGraph' => true,
+        'types' => ['room' => ['shape' => 'star', 'size' => 90, 'label' => false, 'showScale' => 1.5, 'visible' => true], 'facility' => ['visible' => false],
+            'stairs' => ['visible' => true], 'road' => ['visible' => false], 'entrance' => ['visible' => false], 'wall' => ['visible' => false], 'wifi_router' => ['visible' => false]],
+    ], km_display_defaults_for_web([
+        'map_node_size_percent' => 120, 'map_label_size_percent' => 110, 'map_node_label_mode' => 'text', 'map_display_layers' => ['layer_room_names'],
+        'map_show_road_graph' => true, 'map_node_shape_room' => 'star', 'map_node_size_room' => 90, 'map_node_label_room' => false, 'map_node_zoom_room' => '1.5',
+        'map_visible_node_types' => ['room', 'stairs'], 'map_color_areas' => true, 'map_node_color_room' => '#FF0000',
+    ]));
+    check_bool('公開ページ: 配った表示調整の既定を置き、map-style.js がそれを既定にする(「既定に戻す」も)', str_contains((string) file_get_contents(__DIR__ . '/../index.php'), '<script type="application/json" id="km-display-defaults"<?= km_csp_nonce_attr() ?>>')
+        && str_contains((string) file_get_contents(__DIR__ . '/../Main/map-style.js'), "document.getElementById('km-display-defaults')")
+        && str_contains((string) file_get_contents(__DIR__ . '/../Main/map-tuning.js'), 'style.defaultTypes()'));
+    km_check_heading('Google マップ風: 検索 → 場所 → 経路・共有・♡・左の引き出し(2026-10-23)');
+    $gmApp = (string) file_get_contents(__DIR__ . '/../Main/app.js');
+    $gmIndex = (string) file_get_contents(__DIR__ . '/../index.php');
+    $gmCss = (string) file_get_contents(__DIR__ . '/../Main/styles.css');
+    check_bool('出発地・目的地は地点の id で持つ・一時地点はつなぎ先(道でも)で断らない', str_contains($gmApp, 'const startNode = routeStartId || resolveNodeByLabel(startText);')
+        && str_contains($gmApp, "if (poi ? String(poi.anchorNodeId) !== String(nodeId) : !isRoutableNode(node)) return;")
+        && str_contains($gmApp, 'data-km-poi="${Number(poi.id)}"'));
+    check_bool('片方だけ選んだら経路の欄を開いて、もう片方を尋ねる', str_contains($gmApp, "openRoutePanel(type === 'start' ? 'end' : 'start');") && str_contains($gmApp, "openRoutePanel(startNode ? 'end' : 'start');"));
+    check_bool('出発・到着の印は札より前の層・経路の線は点より前', str_contains($gmApp, "window.map.createPane('kmRoutePins').style.zIndex = '680';")
+        && str_contains($gmApp, "window.map.createPane('kmRouteLine').style.zIndex = '610';") && str_contains($gmApp, "pane: 'kmRoutePins',"));
+    check_bool('経路の途中で階を移っても拡大率を戻さない(寄せるのは引いた直後の 1 回だけ)', str_contains($gmApp, 'if (currentRoutePath && !routeFitPending) {')
+        && str_contains($gmApp, 'if (routeFitPending && pathBoundsGroup.getLayers().length > 0) {') && str_contains($gmApp, 'window.map.setView(firstOnFloor, window.map.getZoom());'));
+    check_bool('検索の窓・種類のチップ・左の引き出し・一致率を読む(app.js より前)', str_contains($gmIndex, 'id="km-place-input"') && str_contains($gmIndex, 'id="km-category-chips"')
+        && strpos($gmIndex, "Main/km-sheet.js')") < strpos($gmIndex, "<script defer src=\"<?= km_home_e(km_public_asset('Main/app.js'))") && strpos($gmIndex, "Main/search-rank.js')") < strpos($gmIndex, "<script defer src=\"<?= km_home_e(km_public_asset('Main/app.js'))"));
+    check_bool('左の引き出しは左から(PC)・地図を覆わない', preg_match('/\.km-sheet \{[^}]*left: 0;[^}]*transform: translateX\(-105%\);/s', $gmCss) === 1 && !str_contains((string) file_get_contents(__DIR__ . '/../Main/km-sheet.js'), 'scrim'));
+    check_bool('候補のアイコンはその場所のポスター(無ければ種類の形)', str_contains($gmApp, "box.classList.add('has-poster');") && str_contains($gmApp, "box.innerHTML = nodeIconHtml({ name: item.name }, item.type);"));
+    check_bool('共有: 場所・一時地点・経路の URL。navigator.share が無ければ写す', str_contains($gmApp, "shareUrl('/?poi=' + Number(button.dataset.kmPoi)")
+        && str_contains($gmApp, "shareUrl('/?' + fromPart + '&' + toPart, label") && str_contains($gmApp, "'fromPoi=' + routeStartPoi") && str_contains($gmApp, 'await navigator.clipboard.writeText(url);'));
+    check_bool('共有のリンクは字の形だけ確かめて meta で渡す(from/to は 32 字の 16 進・poi は数字)', str_contains($gmIndex, "preg_match('/^[0-9A-Fa-f-]{32,36}\$/', \$value) !== 1")
+        && str_contains($gmIndex, "preg_match('/^[1-9]\\d{0,9}\$/', \$poiParam) === 1") && str_contains($gmIndex, '<meta name="km-focus-from" content="<?= km_home_e($kmFocusFrom) ?>">') && str_contains($gmIndex, '$kmFocusFromPoi = $kmFocusFrom === null ? $kmPoiParam(\'fromPoi\') : null;'));
+    check_bool('表示調整・履歴・予定も左の引き出しに出す', str_contains((string) file_get_contents(__DIR__ . '/../Main/map-tuning.js'), "sheet.open({ key: 'tuning', title: '表示調整'")
+        && str_contains((string) file_get_contents(__DIR__ . '/../Main/user-history.js'), "sheet.open({ key: 'history', title: '履歴とブックマーク'")
+        && str_contains((string) file_get_contents(__DIR__ . '/../Main/event-schedule.js'), "sheet.open({ key: 'schedule', title: 'スケジュール'"));
+    check_bool('♡ の端末の印は押すときだけ作り、URL に載せない', str_contains($gmApp, 'const device = deviceId(true);') && str_contains($gmApp, "headers: device ? { 'X-KM-Device': device } : {}")
+        && str_contains((string) file_get_contents(__DIR__ . '/../api/poster-like.php'), "\$_SERVER['HTTP_X_KM_DEVICE']"));
+    require_once __DIR__ . '/../lib/poster-likes.php';
+    check('♡: 尋ねる番号をそろえる(重複・形の違うものを外す)', [3, 1, 20], km_poster_like_ids('3,1,3,x,0,-2,20'));
+    if (extension_loaded('pdo_sqlite')) {
+        $likeDb = new PDO('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
+        check('♡: 表が無ければ 0(地図のデータは止めない)', [[], [['id' => 5, 'count' => 0, 'liked' => false]]], [km_poster_like_counts($likeDb), km_poster_like_state($likeDb, [5], 'v')]);
+        $likeDb->exec('CREATE TABLE km_poster_likes (poster_id INT NOT NULL, voter_hash TEXT NOT NULL, source_hash TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (poster_id, voter_hash))');
+        $likeNow = strtotime('2026-10-23 12:00:00');
+        km_poster_like_set($likeDb, 5, 'voterA', 'src', true, $likeNow);
+        km_poster_like_set($likeDb, 5, 'voterA', 'src', true, $likeNow);
+        km_poster_like_set($likeDb, 5, 'voterB', 'src', true, $likeNow);
+        check('♡: 1 端末 1 つ・数と自分が押したか', [['id' => 5, 'count' => 2, 'liked' => true], ['id' => 5, 'count' => 2, 'liked' => false]],
+            [km_poster_like_state($likeDb, [5], 'voterA')[0], km_poster_like_state($likeDb, [5], 'voterC')[0]]);
+        km_poster_like_set($likeDb, 5, 'voterA', 'src', false, $likeNow);
+        check('♡: 外すと消える・地図のデータの数', [5 => 1], km_poster_like_counts($likeDb));
+        for ($i = 0; $i < KM_POSTER_LIKE_SOURCE_LIMIT; $i++) {
+            km_poster_like_set($likeDb, 100 + $i, 'flood', 'src2', true, $likeNow);
+        }
+        check('♡: 同じ送り元から 1 時間に ' . KM_POSTER_LIKE_SOURCE_LIMIT . ' を超えたら断る・1 時間たてば付けられる', ['limited', 'ok'],
+            [km_poster_like_set($likeDb, 999, 'flood', 'src2', true, $likeNow + 60), km_poster_like_set($likeDb, 999, 'flood', 'src2', true, $likeNow + 3601)]);
+        check('♡: 管理画面の 0 に戻す', [1, []], [km_poster_likes_reset($likeDb, 5), km_poster_like_state($likeDb, [5], null) === [['id' => 5, 'count' => 0, 'liked' => false]] ? [] : ['残った']]);
+    }
+    $likeApi = (string) file_get_contents(__DIR__ . '/../api/poster-like.php');
+    check_bool('♡ の口: 付け外しは CSRF を見てから・いま出しているポスターだけ・鍵つきの印だけ持つ', str_contains($likeApi, "if (!km_csrf_verify()) {")
+        && strpos($likeApi, 'km_csrf_verify()') < strpos($likeApi, 'km_poster_like_set(') && str_contains($likeApi, "\$shown = array_column(km_posters_public(\$pdo, km_poster_event_active(\$pdo), []), 'id');")
+        && str_contains((string) file_get_contents(__DIR__ . '/../lib/poster-likes.php'), "km_app_keyed_hash(km_app_secret(\$pdo, KM_POSTER_LIKE_KEY_NAME), 'poster-like-voter', \$device)"));
+    check_bool('♡: 地図のデータに数を載せる・管理画面で 0 に戻せる・プライバシーポリシーに書いた', str_contains((string) file_get_contents(__DIR__ . '/../lib/posters.php'), "'likes' => \$likes[(int) \$row['id']] ?? 0,")
+        && str_contains((string) file_get_contents(__DIR__ . '/../admin/posters.php'), "if (\$formAction === 'poster_likes_reset') {")
+        && str_contains((string) json_encode(km_legal_privacy(), JSON_UNESCAPED_UNICODE), 'ポスターの ♡'));
+    check_bool('ポスターから結びつけた場所へ(地図の引き出し・一覧のページ)', str_contains($gmApp, "head.textContent = poster.projectNo ? `企画 \${poster.projectNo} の場所` : '場所';")
+        && str_contains((string) file_get_contents(__DIR__ . '/../posters.php'), "foreach (\$poster['poiIds'] ?? [] as \$poiId) {"));
+
+    km_check_heading('posters: 広告(重み 10%・必ず 1 件)・数・チュートリアルの終わりの知らせ(2026-10-21)');
+    check('広告の重みは 10%(利用者の指示。全部同じ)', 10, KM_POSTER_AD_WEIGHT);
+    check('広告が 1 件なら 100%・2 件なら 50%・10 件なら 10%・無ければ 0(表示しないわけではない)', [1.0, 0.5, 0.1, 0.0],
+        [km_poster_ad_share(1), km_poster_ad_share(2), km_poster_ad_share(10), km_poster_ad_share(0)]);
+    require_once __DIR__ . '/../lib/legal.php';
+    $termsText = (string) json_encode(km_legal_terms(), JSON_UNESCAPED_UNICODE);
+    check_bool('利用規約: 第 7 条に広告の重み(定数から書く)・1 件なら 100%・数だけ記録すること', str_contains($termsText, '第7条(ポスター・広告の表示)')
+        && str_contains($termsText, '**どの広告も同じ重み(10%)で選びます**') && str_contains($termsText, '広告が 1 件なら 100%、2 件ならそれぞれ 50% の確率')
+        && str_contains($termsText, '記録するのは数だけで、誰が見た・押したかは記録しません') && str_contains($termsText, '第12条(準拠法)') && KM_LEGAL_UPDATED >= '2026-10-21');
+    check_bool('プライバシーポリシー: ポスター・広告の数を取得する情報に書いた', str_contains((string) json_encode(km_legal_privacy(), JSON_UNESCAPED_UNICODE), 'ポスター・広告の数(広告を表示した回数・リンクが押された数'));
+    $tutorialJs = (string) file_get_contents(__DIR__ . '/../Main/tutorial.js');
+    $tutorialEndJs = (string) file_get_contents(__DIR__ . '/../Main/tutorial-end.js');
+    check_bool('チュートリアルが終わったら知らせる(最後まで・スキップ・Esc のどれでも finish を通る)', str_contains($tutorialJs, "new CustomEvent('km-tutorial-finished'")
+        && str_contains($tutorialJs, "skip.addEventListener('click', finish);") && str_contains($tutorialJs, "if (event.key === 'Escape') finish();"));
+    check_bool('広告: 地点なし(isAd)だけ・あれば必ず 1 件を重みで選ぶ・出したら数える・閉じたら終わりの知らせ', str_contains($tutorialEndJs, 'poster.isAd === true')
+        && str_contains($tutorialEndJs, "if (list.length > 0) {\n            showAd(pickAd(list), showEnd);") && str_contains($tutorialEndJs, 'let roll = Math.random() * weight * list.length;')
+        && !str_contains($tutorialEndJs, 'Math.random() < ') && str_contains($tutorialEndJs, "window.kmPosterStat(poster.id, 'impression')")
+        && str_contains($tutorialEndJs, "link.rel = 'noopener noreferrer';") && !str_contains($tutorialEndJs, 'innerHTML'));
+    check_bool('公開ページ: 終わりの知らせ(アンケートは URL があるときだけ・スマホの QR)と重みを置く・数える JS を先に読む', str_contains($homeCode, 'data-ad-weight="<?= (int) KM_POSTER_AD_WEIGHT ?>"')
+        && str_contains($homeCode, "<?php if (\$kmTutorialEnd['surveyUrl'] !== ''): ?>") && str_contains($homeCode, 'スマホでもマップを見ることができます')
+        && strpos($homeCode, "km_public_asset('Main/poster-stats.js')") < strpos($homeCode, "km_public_asset('Main/tutorial-end.js')")
+        && str_contains($homeCode, '$kmTestMode !== null || $kmEventCollect !== null || $kmHasPosters'));
+    $statMemory = [];
+    check('数: リンクは同じセッションで 1 回だけ・広告の表示は 60 秒に 1 回だけ', [true, false, true, true, false, true], [
+        km_poster_stat_allowed($statMemory, 3, 'click', 1000), km_poster_stat_allowed($statMemory, 3, 'click', 5000), km_poster_stat_allowed($statMemory, 4, 'click', 5000),
+        km_poster_stat_allowed($statMemory, 3, 'impression', 1000), km_poster_stat_allowed($statMemory, 3, 'impression', 1059), km_poster_stat_allowed($statMemory, 3, 'impression', 1060),
+    ]);
+    $statsLib = (string) file_get_contents(__DIR__ . '/../lib/posters.php');
+    $statsApi = (string) file_get_contents(__DIR__ . '/../api/poster-event.php');
+    $statsJs = (string) file_get_contents(__DIR__ . '/../Main/poster-stats.js');
+    check_bool('数: 表は ポスター × 日 の数だけ(IP・利用者・端末を置かない)・出していないポスター/地点のポスターの表示は数えない', preg_match('/CREATE TABLE IF NOT EXISTS km_poster_stats \(\s*poster_id INT NOT NULL,\s*day DATE NOT NULL,\s*impressions INT NOT NULL DEFAULT 0,\s*clicks INT NOT NULL DEFAULT 0,\s*PRIMARY KEY \(poster_id, day\)\s*\)/', $statsLib) === 1
+        && str_contains($statsLib, "|| !km_posters_showing_now(\$pdo)) {") && str_contains($statsLib, "if (\$kind === 'impression' && (string) (\$nodeId ?? '') !== '') {"));
+    check_bool('数える口: POST・CSRF・セッションで絞る・数えたかを外に教えない(204)', str_contains($statsApi, "require_method('POST');") && strpos($statsApi, 'km_csrf_verify()') < strpos($statsApi, 'km_poster_stat_record(')
+        && str_contains($statsApi, 'km_poster_stat_allowed($memory, $posterId, $kind, time())') && str_contains($statsApi, 'http_response_code(204);') && !str_contains($statsApi, 'REMOTE_ADDR'));
+    check_bool('数える JS: 押したことを端末に覚えて 2 度目を送らない・送るのは番号と種類だけ', str_contains($statsJs, "if (kind === 'click' && clickedBefore(id)) return;")
+        && str_contains($statsJs, 'body: JSON.stringify({ poster: posterId, kind: kind }),') && str_contains($statsJs, "a[data-km-poster-link]"));
+    check_bool('リンクに数える印(地図の詳細・大きく見る幕・広告・一覧のページ)', str_contains($appJsForPosters = (string) file_get_contents(__DIR__ . '/../Main/app.js'), 'data-km-poster-link="${Number(poster.id)}"')
+        && str_contains($appJsForPosters, "link.setAttribute('data-km-poster-link', String(Number(poster.id)));") && str_contains($tutorialEndJs, "link.setAttribute('data-km-poster-link', String(poster.id));")
+        && substr_count((string) file_get_contents(__DIR__ . '/../posters.php'), 'data-km-poster-link=') === 1);
+    check_bool('ポスターを消したら数も消す・管理画面に数を出す', str_contains($statsLib, "km_poster_stats_delete(\$pdo, \$id);") && str_contains((string) file_get_contents(__DIR__ . '/../admin/posters.php'), '$stats = km_poster_stats_totals($pdo);'));
+    $tutorialEndError = static function (string $text, string $url): string {
+        try {
+            // 書き込みの前に断るものだけを試す(DB は使わない)
+            if (mb_strlen(trim($text)) > KM_TUTORIAL_END_TEXT_MAX) {
+                throw new InvalidArgumentException('long');
+            }
+            require_once __DIR__ . '/../lib/test-mode.php';
+            if (!km_test_survey_url_valid(trim($url))) {
+                throw new InvalidArgumentException('url');
+            }
+            return '';
+        } catch (InvalidArgumentException $exception) {
+            return $exception->getMessage();
+        }
+    };
+    check('終わりの知らせ: 本文は 200 字まで・アンケートは https だけ', ['', 'long', 'url', 'url'], [
+        $tutorialEndError('ok', 'https://forms.gle/x'), $tutorialEndError(str_repeat('あ', 201), ''),
+        $tutorialEndError('ok', 'http://example.com/'), $tutorialEndError('ok', 'javascript:alert(1)'),
+    ]);
+
+    /*
+     * ## まとめて取り込む(2026-10-21、利用者の指示「模擬店のページ 1〜58 から自動で広告を作る」「今後も使うので機能に」)
+     * 見本の HTML は高専祭のサイトの形(Next.js が組み立てた article)を真似た**作り物**(本物の文は写さない)。
+     */
+    km_check_heading('poster-import: 番号のページから広告をまとめて作る(2026-10-21)');
+    require_once __DIR__ . '/../lib/poster-import.php';
+    $importUrlError = static function (string $template, int $number): string {
+        try {
+            return km_poster_import_url($template, $number);
+        } catch (InvalidArgumentException) {
+            return 'error';
+        }
+    };
+    check('URL: %N に番号・0 は使わない・%N はちょうど 1 つ・http(s) だけ',
+        ['https://example.test/shops/7/detail', 'error', 'error', 'error', 'error'],
+        [$importUrlError('https://example.test/shops/%N/detail', 7), $importUrlError('https://example.test/shops/%N/detail', 0),
+            $importUrlError('https://example.test/shops/detail', 1), $importUrlError('https://example.test/%N/%N', 1), $importUrlError('ftp://example.test/%N', 1)]);
+    check_bool('既定は高専祭の模擬店の 1〜58', KM_POSTER_IMPORT_TEMPLATE_DEFAULT === 'https://kosensai.ichinoseki.ac.jp/shops/%N/detail'
+        && KM_POSTER_IMPORT_FIRST_DEFAULT === 1 && KM_POSTER_IMPORT_LAST_DEFAULT === 58 && KM_POSTER_IMPORT_MIN === 1);
+    $importFixture = '<!DOCTYPE html><html><body><main><article><p class="x">No. <!-- -->07</p><h2 class="y">試しの 店</h2>'
+        . '<div><img alt="a" src="/_next/image?url=%2Fimg%2Fshops%2F07.webp&amp;w=3840&amp;q=75">'
+        . '<img alt="b" src="/_next/image?url=%2Fimg%2Fshops%2F07.webp&amp;w=640&amp;q=75"><img alt="c" src="//evil.test/x.png"></div>'
+        . '<section><div><h2>コメント</h2><p>一行目' . "\n" . '  二行目  </p></div></section>'
+        . '<section><div><h2>お知らせ</h2></div><p>なし</p></section></article></main></body></html>';
+    $importParsed = km_poster_import_parse($importFixture, 'https://example.test/shops/7/detail');
+    check('読み方: 番号・名前・コメント(改行は残す)・元の画像(縮小の口を外す・同じものは 1 つ・// は取らない)', [
+        'number' => 7, 'title' => '試しの 店', 'description' => "一行目\n二行目", 'images' => ['https://example.test/img/shops/07.webp'],
+    ], $importParsed);
+    $importNoArticle = 'ok';
+    try {
+        km_poster_import_parse('<html><body><h2>x</h2></body></html>', 'https://example.test/');
+    } catch (InvalidArgumentException) {
+        $importNoArticle = 'error';
+    }
+    check('読み方: 店の欄が無いページは断る', 'error', $importNoArticle);
+    check('長い名前は上限で切って … を付ける', [5, '…'], [mb_strlen(km_poster_import_clip('あいうえおかきく', 5)), mb_substr(km_poster_import_clip('あいうえおかきく', 5), -1)]);
+    $importLib = (string) file_get_contents(__DIR__ . '/../lib/poster-import.php');
+    check_bool('取り込み: 取りに行くのは km_poster_fetch_remote だけ(公開のアドレスだけ・リダイレクトの先も確かめる)', substr_count($importLib, 'km_poster_fetch_remote(') === 3
+        && !preg_match('/\bcurl_init\(|file_get_contents\(\s*\$/', $importLib));
+    check_bool('取り込み: 同じページは作り直さず直す(出し入れ・並び順・地点は今のまま)・404 は飛ばす', str_contains($importLib, "\$existing = km_poster_find_by_link(\$pdo, \$pageUrl);")
+        && str_contains($importLib, "'isEnabled' => \$existing['isEnabled'],") && str_contains($importLib, "if (\$exception->getCode() === 404) {")
+        && str_contains($importLib, "'nodeId' => '',"));
+    check_bool('取りに行く口は応答の番号を code に載せる(404 を見分ける)', str_contains((string) file_get_contents(__DIR__ . '/../lib/posters.php'), "'画像を取りに行けませんでした(応答 ' . \$status . ')。', \$status);"));
+    $importApi = (string) file_get_contents(__DIR__ . '/../admin/api/poster-import.php');
+    check_bool('口: 管理者だけ・POST・CSRF・1 回に 1 つの番号・セッションを先に閉じる・操作の記録', str_contains($importApi, "require dirname(__DIR__) . '/_inc/guard.php';")
+        && str_contains($importApi, "if (!km_csrf_verify()) {") && str_contains($importApi, "is_int(\$input['number'] ?? null)")
+        && str_contains($importApi, 'session_write_close();') && str_contains($importApi, "km_admin_log_record('content', 'poster.import'")
+        && isset(KM_ADMIN_LOG_ACTION_LABELS['poster.import']));
+    $importJs = (string) file_get_contents(__DIR__ . '/../admin/assets/js/poster-import.js');
+    $importPage = (string) file_get_contents(__DIR__ . '/../admin/posters.php');
+    check_bool('画面: 番号を 1 つずつ・間を空ける・止められる・番号は 1 から', str_contains($importJs, 'await importOne(template, number, enabled)')
+        && str_contains($importJs, 'const WAIT_MS = 400;') && str_contains($importJs, 'stopRequested')
+        && str_contains($importPage, 'min="<?= KM_POSTER_IMPORT_MIN ?>"') && str_contains($importPage, "assets/js/poster-import.js"));
+    check_bool('利用規約: 広告は収益化していない', str_contains($termsText, '広告は収益化していません。'));
+
+    km_check_heading('table-api: テーブル管理の外部接続(2026-10-21)');
+    require_once __DIR__ . '/../lib/table-api.php';
+    $apiUser = 'kmx_' . str_repeat('a', 16);
+    $apiPass = str_repeat('b', 48);
+    check('ユーザー名とキー: Basic(PHP が分けたもの)', [$apiUser, $apiPass], km_table_api_credentials(['PHP_AUTH_USER' => $apiUser, 'PHP_AUTH_PW' => $apiPass]));
+    check('ユーザー名とキー: Authorization の Basic・Bearer <ID>:<キー>', [[$apiUser, $apiPass], [$apiUser, $apiPass]], [
+        km_table_api_credentials(['HTTP_AUTHORIZATION' => 'Basic ' . base64_encode($apiUser . ':' . $apiPass)]),
+        km_table_api_credentials(['HTTP_AUTHORIZATION' => 'Bearer ' . $apiUser . ':' . $apiPass]),
+    ]);
+    check('ユーザー名とキー: 形の違うもの・無いものは断る(クエリでは受けない)', [null, null, null, null], [
+        km_table_api_credentials([]),
+        km_table_api_credentials(['PHP_AUTH_USER' => 'root', 'PHP_AUTH_PW' => $apiPass]),
+        km_table_api_credentials(['PHP_AUTH_USER' => $apiUser, 'PHP_AUTH_PW' => 'short']),
+        km_table_api_credentials(['HTTP_AUTHORIZATION' => 'Bearer ' . $apiUser, 'QUERY_STRING' => 'key=' . $apiPass]),
+    ]);
+    $apiValuesError = static function (mixed $input): string {
+        try {
+            km_table_api_values($input);
+            return '';
+        } catch (InvalidArgumentException $exception) {
+            return 'x';
+        }
+    };
+    check('書き込む値: {列: 値} だけ(id・入れ子・配列の形・変な列名は断る)', ['x', 'x', 'x', 'x', 'x', ''], [
+        $apiValuesError([]), $apiValuesError(['a', 'b']), $apiValuesError(['id' => 1]), $apiValuesError(['name' => ['x']]),
+        $apiValuesError(['na`me' => 'x']), $apiValuesError(['name' => 'x']),
+    ]);
+    check('書き込む値: null は空(→ NULL)・真偽は 1/0・数は文字に', ['a' => '', 'b' => '1', 'c' => '0', 'd' => '3.5'], km_table_api_values(['a' => null, 'b' => true, 'c' => false, 'd' => 3.5]));
+    $apiLib = (string) file_get_contents(__DIR__ . '/../lib/table-api.php');
+    $apiEndpointCode = (string) file_get_contents(__DIR__ . '/../api/table.php');
+    check_bool('キーは SHA-256 だけを置く・ユーザー名とキーはこちらで作る(乱数)', str_contains($apiLib, "hash('sha256', \$secret)") && str_contains($apiLib, "\$keyId = 'kmx_' . bin2hex(random_bytes(8));")
+        && str_contains($apiLib, '$secret = bin2hex(random_bytes(24));') && !preg_match('/CREATE TABLE IF NOT EXISTS km_table_api_keys \([^;]*\bsecret\s+VARCHAR/s', $apiLib));
+    check_bool('最小限の権限: 1 つの表だけ・kmt_ だけ・既定は読む + 足す・取り消し/表の削除で止まる', KM_TABLE_API_DEFAULT_PERMISSIONS === ['can_read', 'can_insert']
+        && str_contains($apiLib, 'WHERE key_id = ? AND revoked_at IS NULL') && str_contains($apiLib, '!km_table_is_managed_name($table) || !km_table_exists($pdo, $table) || km_table_is_deleted($pdo, $table)')
+        && str_contains($apiEndpointCode, "if (!is_string(\$tableParam) || (\$tableParam !== '' && \$tableParam !== \$connection['table'])) {"));
+    check_bool('口: 操作ごとに権限を見てから触る・Cookie を使わない・書き込みは記録に残す', strpos($apiEndpointCode, 'if (!$connection[$need]) {') < strpos($apiEndpointCode, 'km_table_rows(')
+        && !str_contains($apiEndpointCode, 'km_session_start') && substr_count($apiEndpointCode, "km_admin_log_record('table', 'table.api_write'") === 3
+        && isset(KM_ADMIN_LOG_ACTION_LABELS['table.api_create'], KM_ADMIN_LOG_ACTION_LABELS['table.api_revoke'], KM_ADMIN_LOG_ACTION_LABELS['table.api_write']));
+    check_bool('管理画面: キーは作った直後の 1 回だけ出す', str_contains((string) file_get_contents(__DIR__ . '/../admin/tables.php'), "unset(\$_SESSION['km_table_api_new']);"));
+
+    km_check_heading('map-floors: 階と平面図の差し替え・追加・削除・zip(2026-10-21)');
+    require_once __DIR__ . '/../lib/map-floors.php';
+    require_once __DIR__ . '/../lib/zip-read.php';
+    // 試しの zip を組む(格納 / deflate・印・CRC・申告の大きさを変えられる)
+    $makeZip = static function (array $entries): string {
+        $body = '';
+        $central = '';
+        foreach ($entries as $entry) {
+            $data = (string) $entry['data'];
+            $method = (int) ($entry['method'] ?? 8);
+            $stored = $method === 8 ? (string) gzdeflate($data) : $data;
+            $crc = $entry['crc'] ?? (crc32($data) & 0xFFFFFFFF);
+            $uncomp = $entry['uncomp'] ?? strlen($data);
+            $flags = (int) ($entry['flags'] ?? 0);
+            $name = (string) $entry['name'];
+            $offset = strlen($body);
+            $body .= "PK\x03\x04" . pack('vvvvvVVVvv', 20, $flags, $method, 0, 0, $crc, strlen($stored), $uncomp, strlen($name), 0) . $name . $stored;
+            $central .= "PK\x01\x02" . pack('vvvvvvVVVvvvvvVV', 20, 20, $flags, $method, 0, 0, $crc, strlen($stored), $uncomp, strlen($name), 0, 0, 0, 0, 0, $offset) . $name;
+        }
+        return $body . $central . "PK\x05\x06" . pack('vvvvVVv', 0, 0, count($entries), count($entries), strlen($central), strlen($body), 0);
+    };
+    $zipTmp = tempnam(sys_get_temp_dir(), 'kmzip');
+    $readZip = static function (string $bytes) use ($zipTmp): array|string {
+        file_put_contents($zipTmp, $bytes);
+        try {
+            return km_zip_read_all($zipTmp, 5, 1024 * 1024, 2 * 1024 * 1024);
+        } catch (InvalidArgumentException $exception) {
+            return $exception->getMessage();
+        }
+    };
+    $pngHeaderFloor = "\x89PNG\r\n\x1a\n" . pack('N', 13) . 'IHDR' . pack('NN', 1600, 1200) . "\x08\x02\x00\x00\x00" . pack('N', 0);
+    $zipEntries = $readZip($makeZip([
+        ['name' => '1F.png', 'data' => $pngHeaderFloor, 'method' => 0],
+        ['name' => 'maps/' . mb_convert_encoding('２階.png', 'CP932', 'UTF-8'), 'data' => $pngHeaderFloor . str_repeat("\0", 2000)],
+        ['name' => 'maps/', 'data' => '', 'method' => 0],
+        ['name' => '__MACOSX/._1F.png', 'data' => 'x', 'method' => 0],
+        ['name' => '.DS_Store', 'data' => 'x', 'method' => 0],
+        ['name' => '../../evil.png', 'data' => 'abc'],
+    ]));
+    check('zip: 格納と deflate を読み、フォルダ・__MACOSX・隠しを飛ばし、名前は最後の部分だけ(CP932 も読む)', ['1F.png', '２階.png', 'evil.png'], is_array($zipEntries) ? array_column($zipEntries, 'name') : $zipEntries);
+    check_bool('zip: 中身はそのまま取り出す', is_array($zipEntries) && ($zipEntries[1]['bytes'] ?? '') === $pngHeaderFloor . str_repeat("\0", 2000));
+    check_bool('zip: パスワード付き・CRC 違い・数の上限・大きすぎ・膨らむもの(zip 爆弾)は断る',
+        is_string($readZip($makeZip([['name' => 'a.png', 'data' => 'x', 'flags' => 1]])))
+        && is_string($readZip($makeZip([['name' => 'a.png', 'data' => 'abc', 'crc' => 1]])))
+        && is_string($readZip($makeZip(array_map(static fn (int $i): array => ['name' => $i . '.png', 'data' => 'x'], range(1, 6)))))
+        && is_string($readZip($makeZip([['name' => 'big.png', 'data' => str_repeat('a', 1024 * 1024 + 1)]])))
+        && is_string($readZip($makeZip([['name' => 'bomb.png', 'data' => str_repeat('a', 3 * 1024 * 1024), 'uncomp' => 10]])))
+        && is_string($readZip('not a zip')));
+    @unlink($zipTmp);
+    $floorList = [
+        ['id' => 'outside', 'label' => '外'], ['id' => '1', 'label' => '1F'], ['id' => '2', 'label' => '2F'],
+        ['id' => 'bldg_library_1f', 'label' => '図書館 1F'], ['id' => 'b1', 'label' => '地下 1F'],
+    ];
+    $matched = array_map(static fn (string $name): ?string => km_map_floor_match($name, $floorList),
+        ['１階.png', '1F.PNG', '2階.jpg', '外全体図.png', '外.webp', 'bldg_library_1f.png', '図書館1F.png', '地下１Ｆ.png', 'b1.png', 'unknown.png']);
+    check('zip: 名前から階を当てる(id・名前・元の画像の名前。全角・「階」も)', ['1', '1', '2', 'outside', 'outside', 'bldg_library_1f', 'bldg_library_1f', 'b1', 'b1', null], $matched);
+    check_bool('階の id は小文字・数字・_ で 16 字まで', km_map_floor_id_valid('6') && km_map_floor_id_valid('bldg_new_1f') && !km_map_floor_id_valid('../x')
+        && !km_map_floor_id_valid('A1') && !km_map_floor_id_valid('') && !km_map_floor_id_valid(str_repeat('a', 17)) && !km_map_floor_id_valid('_x'));
+    check_bool('縦横の比: 同じなら知らせない・2% を超えて違えば知らせる', !km_map_floor_aspect_differs(3200, 2400, 1600, 1200)
+        && km_map_floor_aspect_differs(1600, 1600, 1600, 1200) && !km_map_floor_aspect_differs(0, 0, 1600, 1200));
+    check_bool('差し替えた画像のパス: 自分で採番した形だけ(.. や SVG を通さない)', km_map_floor_upload_name_valid('floor_' . str_repeat('0', 32) . '.png')
+        && !km_map_floor_upload_name_valid('floor_' . str_repeat('0', 32) . '.svg') && km_map_floor_image_file('upload:../config/db.local.php') === null
+        && km_map_floor_image_file('../config/db.local.php') === null && km_map_floor_image_file('upload:floor_' . str_repeat('0', 32) . '.png') === null);
+    check_bool('組み込みの画像は Main/ の下から引ける', km_map_floor_image_file('Picture/１階.png') !== null && km_map_floor_image_file('Picture/bldg/bldg_library_1f.png') !== null);
+    check_bool('組み込みの階: 外・1〜5F・建物の階を知っている(元の画像に戻す・消した階を戻す)', count(array_filter(
+        array_merge(array_column(KM_MAP_CAMPUS_FLOORS, 'id'), array_column(KM_BUILDING_FLOORS, 'id')),
+        static fn (string $id): bool => km_map_floor_builtin($id) !== null && km_map_floor_image_file(km_map_floor_builtin($id)['image']) !== null
+    )) === count(KM_MAP_CAMPUS_FLOORS) + count(KM_BUILDING_FLOORS) && km_map_floor_builtin('6') === null);
+    $floorValidateError = static function (string $label, string $sort, string $keywords): string {
+        try {
+            km_map_floor_validate($label, $sort, $keywords);
+            return '';
+        } catch (InvalidArgumentException $exception) {
+            return $exception->getMessage();
+        }
+    };
+    check_bool('名前は要る・並び順は整数', $floorValidateError(' ', '1', '') !== '' && $floorValidateError('6F', '1.5', '') !== '' && $floorValidateError(str_repeat('あ', 33), '1', '') !== '' && $floorValidateError('6F', '6', '') === '');
+    check('建物の手がかりは「、」・空白・カンマで分ける', ['図書館', 'メディアセンター', 'Lib'], km_map_floor_keywords('図書館、メディアセンター, Lib 図書館'));
+    require_once __DIR__ . '/../lib/map-data.php';
+    check('「中へ」に出す建物の階: いま在る組み込み(DB の名前)と、足した建物の中', [['bldg_gym1', '体育館(改)'], ['bldg_new', '新棟']], array_map(
+        static fn (array $f): array => [$f['id'], $f['label']],
+        km_map_data_building_floors(
+            [['id' => '1', 'label' => '1F'], ['id' => 'bldg_gym1', 'label' => '体育館(改)'], ['id' => 'bldg_new', 'label' => '新棟'], ['id' => '6', 'label' => '6F']],
+            ['bldg_new' => ['kind' => 'building', 'keywords' => ['新棟']], '6' => ['kind' => 'campus', 'keywords' => []]]
+        )
+    ));
+    check('階の種類: 組み込みの建物・足した建物の中は building、それ以外は campus', ['building', 'building', 'campus', 'campus'], [
+        km_map_floor_kind('bldg_gym1', []), km_map_floor_kind('bldg_new', ['bldg_new' => ['kind' => 'building']]),
+        km_map_floor_kind('6', ['6' => ['kind' => 'campus']]), km_map_floor_kind('1', []),
+    ]);
+    $floorImageApi = (string) file_get_contents(__DIR__ . '/../api/floor-image.php');
+    check_bool('見取り図の口: 差し替えた画像も組み込みも km_map_floor_image_file で引く(錠の確かめの後)', str_contains($floorImageApi, '$path = km_map_floor_image_file((string) $svgPath);')
+        && strpos($floorImageApi, 'km_map_floor_image_file((string) $svgPath)') > strpos($floorImageApi, 'if (!$viewUnlocked) {'));
+    check_bool('地図データ: 階の無い地点と、その線を出さない', str_contains($mapDataLib = (string) file_get_contents(__DIR__ . '/../lib/map-data.php'), "if (!isset(\$floorIds[(string) \$node['floor']])) {")
+        && str_contains($mapDataLib, "isset(\$nodesById[(string) \$edge['source']], \$nodesById[(string) \$edge['target']])"));
+    check_bool('公開ページ: 右の階の並びは地図データの校舎の階から作る(無ければ組み込みの 6 つ)', str_contains($homeCode, "if ((\$railFloor['kind'] ?? 'campus') === 'campus') {")
+        && str_contains($homeCode, 'KM_MAP_CAMPUS_FLOORS') && !str_contains($homeCode, '<button class="floor-btn" data-floor="2"'));
+    $floorsPage = (string) file_get_contents(__DIR__ . '/../admin/map-floors.php');
+    check_bool('管理画面: 1F は消させない・地点のある階は印が無ければ消さない', str_contains((string) file_get_contents(__DIR__ . '/../lib/map-floors.php'), "if (\$floorId === KM_MAP_FLOOR_INITIAL) {")
+        && str_contains((string) file_get_contents(__DIR__ . '/../lib/map-floors.php'), "if (\$floor['nodeCount'] > 0 && !\$withNodes) {")
+        && str_contains($floorsPage, "km_map_floor_delete(\$pdo, \$floorId, isset(\$_POST['with_nodes']))"));
+    check_bool('zip の小さな画像の口: 置き場はセッションが決める(URL で選ばせない)', str_contains((string) file_get_contents(__DIR__ . '/../admin/api/floor-staging-image.php'), "\$staged = \$_SESSION['km_floor_zip'] ?? null;")
+        && str_contains($floorsPage, "const KM_FLOOR_ZIP_SESSION_KEY = 'km_floor_zip';"));
+    check_bool('監査ログ: 階の操作に文言がある', isset(KM_ADMIN_LOG_ACTION_LABELS['map.floor_image'], KM_ADMIN_LOG_ACTION_LABELS['map.floor_update'], KM_ADMIN_LOG_ACTION_LABELS['map.floor_add'], KM_ADMIN_LOG_ACTION_LABELS['map.floor_delete'], KM_ADMIN_LOG_ACTION_LABELS['map.floor_zip']));
+
+    /*
+     * PHP の RCE(CVE-2026-109618 / 109619)のつなぎ「multipart を PHP へ渡さない」(2026-10-21〜22)は、
+     * PHP 8.4.27 を当てて確かめたので 10-22 に外した(nginx の map と 2 つの if。docs/05-containers.ipynb §10)。
+     * 残すのは、そのとき作ったメンテナンス中の画面(下)と、php.ini の session.upload_progress.enabled = 0(上の 99-limits.ini の値)。
+     * nginx の雛形はリポジトリにしか無い(配備先の src だけでは読めない)ので、そのときは飛ばす
+     */
+    $shieldRepoRoot = km_check_repo_root();
+    $shieldNginx = $shieldRepoRoot === null ? false : @file_get_contents($shieldRepoRoot . '/nginx/default.conf.template');
+    if ($shieldRepoRoot === null) {
+        check_skip('メンテナンス中の画面(nginx)', '手元の作業ツリーで確認する。配備先に nginx/ は出ない');
+    } elseif (is_string($shieldNginx)) {
+        $shieldCode = (string) preg_replace('/^\s*#.*$/m', '', $shieldNginx);
+        $shieldServers = [];
+        if (preg_match('/^server \{\n    listen 443 ssl;.*?\n\}\n/ms', $shieldCode, $shieldMain) === 1) {
+            $shieldServers['443 の Web アプリ'] = $shieldMain[0];
+        }
+
+        /*
+         * ## メンテナンス中の画面(2026-10-21、利用者の指示。nginx/km/maintenance.conf)
+         * web や Logto が居ないとき(nginx が出す 502)だけ、nginx が自分で 503 の画面を返す。
+         * 相手が自分で返す 5xx・待ち切れの 504・回数の制限(429)では出さない。
+         */
+        km_check_heading('maintenance: web・Logto が居ないときはメンテナンス中の画面(2026-10-21)');
+        $maintConf = (string) @file_get_contents($shieldRepoRoot . '/nginx/km/maintenance.conf');
+        $maintCode = (string) preg_replace('/^\s*#.*$/m', '', $maintConf);
+        $maintHtml = (string) @file_get_contents($shieldRepoRoot . '/nginx/km/maintenance.html');
+        check_bool('nginx が出す 502 だけを 503 の画面にする(504 は含めない・相手の応答は横取りしない)', str_contains($maintCode, 'error_page 502 =503 /__km_maintenance;')
+            && !str_contains($maintCode, '504') && !str_contains($shieldCode . $maintCode, 'proxy_intercept_errors'));
+        check_bool('画面の口は内部だけ・503 にも見出しを付ける(always)', str_contains($maintCode, "location = /__km_maintenance {\n    internal;\n    alias /etc/nginx/km/maintenance.html;")
+            && str_contains($maintCode, "add_header Content-Security-Policy \"default-src 'none'; style-src 'unsafe-inline';") && substr_count($maintCode, ' always;') >= 6);
+        $mainInclude = isset($shieldServers['443 の Web アプリ']) && str_contains($shieldServers['443 の Web アプリ'], "    include /etc/nginx/km/maintenance.conf;\n");
+        $authInclude = preg_match('/^server \{\n    listen 443 ssl;\n    listen \[::\]:443 ssl;\n    http2 on;\n    server_name \$\{KM_AUTH_DOMAIN\};.*?\n\}\n/ms', $shieldCode, $maintAuth) === 1
+            && str_contains($maintAuth[0], "    include /etc/nginx/km/maintenance.conf;\n");
+        check_bool('443 の Web アプリと Logto の入口(auth)が読み込む', $mainInclude && $authInclude && substr_count($shieldCode, 'include /etc/nginx/km/maintenance.conf;') === 2);
+        check_bool('管理用のホストでも公開側へ飛ばさない($km_leave_admin_host の例外)', str_contains($shieldCode, '|__km_maintenance$)"  0;'));
+        check_bool('画面は外のものを読まず、JS を持たない', $maintHtml !== '' && !preg_match('/<script|https?:\/\/|<link|<img|@import/i', $maintHtml)
+            && str_contains($maintHtml, 'メンテナンス中'));
+        $maintDeploy = (string) @file_get_contents($shieldRepoRoot . '/scripts/deploy-to-host.ps1');
+        check_bool('配備の荷に必ず入れる(conf が無いと nginx が起動しない)', str_contains($maintDeploy, "'./nginx/km/maintenance.conf'") && str_contains($maintDeploy, "'./nginx/km/maintenance.html'"));
+        check_bool('PHP の RCE のつなぎ(multipart を 403)は外した(PHP 8.4.27。10-22)', !str_contains($shieldCode, 'km_php_shield_multipart'));
+    }
 
     km_check_heading('test-mode: テスト用アカウント(展示の PC。2026-10-15)');
     $testLib = (string) file_get_contents(__DIR__ . '/../lib/test-mode.php');

@@ -65,12 +65,25 @@ HOST_LABEL="$(hostname 2>/dev/null || echo unknown)"
 # `docker compose ps --format` に Go テンプレートは渡せない(compose v2 は
 # table / json しか受けない)。id を採ってから inspect する。
 # 区切りは `|`。イメージ名にもサービス名にも現れない。
+#
+# **止まっているコンテナも数える(`ps -a`。2026-10-22、利用者の指摘)。** 以前は `ps -q`(動いているものだけ)で、
+# PHP の RCE で web などを止めていた間、止めたサービスは**比べられもせず、一覧から黙って消えた**
+# (phpMyAdmin の修正版が出ても知らせない)。止まっていても、次に起こせばその像で動く —— 見張る相手に変わりはない。
+# `run` で作った使い捨てのコンテナが同じサービス名で混ざることがあるので、同じ行は 1 つにまとめる。
 running_images() {
-  for _cid in $(docker compose ps -q 2>/dev/null); do
+  for _cid in $(docker compose ps -a -q 2>/dev/null); do
     docker inspect \
       --format '{{index .Config.Labels "com.docker.compose.service"}}|{{.Config.Image}}' \
       "$_cid" 2>/dev/null || true
-  done
+  done | sort -u
+}
+
+# サービスのコンテナが止まっているか(一覧に「止まっています」と添える)
+service_state() {
+  _sid="$(docker compose ps -a -q "$1" 2>/dev/null | head -n 1)"
+  if [ -n "$_sid" ]; then
+    docker inspect --format '{{.State.Status}}' "$_sid" 2>/dev/null || true
+  fi
 }
 
 # そのイメージが実際に持っている digest。無ければ空
@@ -171,19 +184,24 @@ add_item() {
 # **パイプで while を回さない。** サブシェルになり、中で立てた ITEMS が消える。
 IMAGE_LIST="$(running_images)"
 if [ -z "$IMAGE_LIST" ]; then
-  echo "動いているコンテナがありません。--path が正しいか確かめてください: $PATH_ROOT" >&2
+  echo "コンテナがありません(止まっているものも無い)。--path が正しいか確かめてください: $PATH_ROOT" >&2
   exit 1
 fi
 
-echo "== 動いているコンテナ =="
+echo "== コンテナ(止まっているものも) =="
 for _line in $IMAGE_LIST; do
   _service="${_line%%|*}"
   _image="${_line#*|}"
   _digest="$(local_digest "$_image")"
+  _state="$(service_state "$_service")"
+  _note=""
+  if [ -n "$_state" ] && [ "$_state" != "running" ]; then
+    _note="  (止まっています: $_state)"
+  fi
   if is_floating_tag "$_image"; then
-    echo "  $_service  $_image  ${_digest:-digest不明}  ← タグが固定されていません"
+    echo "  $_service  $_image  ${_digest:-digest不明}  ← タグが固定されていません$_note"
   else
-    echo "  $_service  $_image  ${_digest:-digest不明}"
+    echo "  $_service  $_image  ${_digest:-digest不明}$_note"
   fi
 done
 

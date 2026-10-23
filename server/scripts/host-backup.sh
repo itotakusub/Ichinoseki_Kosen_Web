@@ -119,6 +119,12 @@ add_problem() {
 # 問題が無いのか止まったのか読み分けられない。
 finish() {
   _code=$?
+  # 控えのために起こした DB は、**起こす前の状態(止まっている)に戻す**(成功・失敗を問わない)
+  if [ -n "$STARTED_DBS" ]; then
+    echo "== 控えのために起こした DB を止め直します:$STARTED_DBS =="
+    # shellcheck disable=SC2086
+    docker compose stop -t 60 $STARTED_DBS >/dev/null 2>&1 || echo "  ★ 止め直せませんでした:$STARTED_DBS(docker compose stop で止めてください)" >&2
+  fi
   rm -rf "$WORK" 2>/dev/null || true
   if [ "$NOTIFY" -eq 1 ]; then
     send_report
@@ -142,6 +148,8 @@ send_report() {
 ATTACH_ARGS=""
 ATTACH_NOTE=""
 WORK=""
+# 止まっていたので、控えのあいだだけ起こした DB(finish が止め直す)
+STARTED_DBS=""
 
 if [ "$LIST_ONLY" -eq 1 ]; then
   echo "== $BACKUP_DIR =="
@@ -215,13 +223,49 @@ if ! docker compose config -q >/dev/null 2>&1; then
   exit 1
 fi
 
-# **止まっていると撃てない。** 先に確かめて、分かる形で止める
+<<'WHY' true
+**DB が止まっていたら、控えのあいだだけ起こす**(2026-10-22、利用者の指摘)。
+
+以前は「動いていません。up -d してから取ってください」で止めていた。ところが PHP の RCE(CVE-2026-109618 / 109619)で
+**修正版を当てるまで nginx と certbot 以外を止めた**とき、update-containers.ps1 の「修正版を当てる」が
+**最初の控えで必ず止まり**、修正版を当てる道そのものが塞がった(`up -d` すると古い PHP まで起きてしまう)。
+
+- 起こすのは **DB の 2 つだけ**(`docker compose start`。作り直さない・依存も起こさない)。PHP(web)は起こさない
+- 健康になるまで待ってから撃つ(最大 120 秒)
+- 終わったら(失敗しても)finish が**止め直す** —— 止めた人の判断を、控えが黙って覆さない
+- コンテナそのものが無い(作られていない)ときは、これまでどおり止める
+WHY
 for _svc in mariadb postgres; do
   _cid="$(docker compose ps -q "$_svc" 2>/dev/null | head -n 1 || true)"
+  if [ -n "$_cid" ]; then
+    continue
+  fi
+  _cid="$(docker compose ps -a -q "$_svc" 2>/dev/null | head -n 1 || true)"
   if [ -z "$_cid" ]; then
-    add_problem "$_svc が動いていません。docker compose up -d してから取ってください。"
+    add_problem "$_svc のコンテナがありません。docker compose up -d してから取ってください。"
     exit 1
   fi
+  echo "== $_svc が止まっているので、控えのあいだだけ起こします =="
+  if ! docker compose start "$_svc" >/dev/null 2>&1; then
+    add_problem "$_svc を起こせませんでした(docker compose start $_svc)。"
+    exit 1
+  fi
+  STARTED_DBS="$STARTED_DBS $_svc"
+  # healthcheck があれば healthy、無ければ running を待つ
+  _waited=0
+  while :; do
+    _health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$_cid" 2>/dev/null || true)"
+    if [ "$_health" = "healthy" ] || [ "$_health" = "running" ]; then
+      break
+    fi
+    if [ "$_waited" -ge 120 ]; then
+      add_problem "$_svc を起こしましたが、120 秒たっても使える状態になりません(いま: ${_health:-不明})。"
+      exit 1
+    fi
+    sleep 2
+    _waited=$((_waited + 2))
+  done
+  echo "  $_svc: ${_health}(${_waited} 秒)"
 done
 
 echo "== 1. MariaDB =="

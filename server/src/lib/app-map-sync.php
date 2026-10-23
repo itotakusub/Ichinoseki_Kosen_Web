@@ -385,6 +385,37 @@ function km_app_map_sync_apply(
 ): array {
     // BSSID の列を広げる。**取引の前に**(ALTER は取引を勝手に確定させる)
     $bssidWidth = km_map_nodes_ensure_bssid_width($pdo);
+    // 階段の上り口・下り口の向きの表(2026-10-22。lib/map-node-stairs.php)。CREATE も取引の前に。作れなくても取り込みは止めない
+    require_once __DIR__ . '/map-node-stairs.php';
+    $stairsTable = true;
+    try {
+        km_map_node_stairs_ensure_table($pdo);
+    } catch (Throwable $exception) {
+        error_log('km_app_map_sync_apply: 階段の向きの表を作れません: ' . $exception->getMessage());
+        $stairsTable = false;
+    }
+    // 区画の色の指定と区画の印の表(2026-10-23。lib/map-node-area.php)。同じく取引の前に作る
+    require_once __DIR__ . '/map-node-area.php';
+    $areaTable = isset($converted['area']);
+    try {
+        if ($areaTable) {
+            km_map_node_area_ensure_table($pdo);
+        }
+    } catch (Throwable $exception) {
+        error_log('km_app_map_sync_apply: 区画の表を作れません: ' . $exception->getMessage());
+        $areaTable = false;
+    }
+    // 企画の番号の表(2026-10-23。lib/map-node-projects.php)。同じく取引の前に作る
+    require_once __DIR__ . '/map-node-projects.php';
+    $projectsTable = isset($converted['projects']);
+    try {
+        if ($projectsTable) {
+            km_map_node_projects_ensure_table($pdo);
+        }
+    } catch (Throwable $exception) {
+        error_log('km_app_map_sync_apply: 企画の番号の表を作れません: ' . $exception->getMessage());
+        $projectsTable = false;
+    }
     $pdo->beginTransaction();
     try {
         /*
@@ -460,6 +491,18 @@ function km_app_map_sync_apply(
                 $added++;
             }
         }
+        // 階段の上り口・下り口の向き(取り込んだ地図が正本。向きの無い階段は消す)
+        if ($stairsTable) {
+            km_map_node_stairs_sync($pdo, $converted['nodes']);
+        }
+        // 区画の色の指定と区画の印(取り込んだ地図が正本。表を丸ごと入れ替える)
+        if ($areaTable) {
+            km_map_node_area_sync($pdo, $converted['area']);
+        }
+        // 企画の番号(取り込んだ地図が正本。表を丸ごと入れ替える)
+        if ($projectsTable) {
+            km_map_node_projects_sync($pdo, $converted['projects']);
+        }
 
         /*
          * 辺。**在るものは触らない。**
@@ -530,6 +573,12 @@ function km_app_map_sync_apply(
          * 取り込みのたびに建物の中の地点が隅へ寄る。
          */
         require_once __DIR__ . '/building-floors.php';
+        /*
+         * **管理画面で足した階も除く**(2026-10-21、lib/map-floors.php)。範囲は足したときの画像の大きさで、
+         * アプリはその階を知らない —— 1600×1200 で上書きすると、その階の地点が全部ずれる。
+         */
+        require_once __DIR__ . '/map-floors.php';
+        $customFloors = km_map_floor_custom_rows($pdo);
         $floors = 0;
         $bounds = $pdo->prepare(
             'INSERT INTO km_map_floor_bounds (floor_id, coord_width, coord_height)
@@ -538,7 +587,7 @@ function km_app_map_sync_apply(
         );
         foreach ($pdo->query('SELECT id FROM km_map_floors') as $row) {
             $floorId = (string) $row['id'];
-            if (km_building_floor_is($floorId)) {
+            if (km_building_floor_is($floorId) || isset($customFloors[$floorId])) {
                 continue;
             }
             $bounds->execute([

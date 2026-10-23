@@ -81,6 +81,15 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     'map.backup_create' => 'がノードをサーバーへバックアップしました',
     'map.backup_restore' => 'がサーバーのバックアップからノードを取り出しました',
     'map.backup_delete' => 'がサーバーのノードのバックアップを消しました',
+    'map.backup_download' => 'が管理画面で地図のバックアップをダウンロードしました',
+    'learning.backup_download' => 'が管理画面で Wi-Fi 学習の控えをダウンロードしました',
+    'learning.backup_restore' => 'が Wi-Fi 学習の控えをサーバーへ戻しました',
+    'schedule.create' => 'がスケジュールに催しを足しました',
+    'schedule.update' => 'がスケジュールの催しを直しました',
+    'schedule.delete' => 'がスケジュールから催しを消しました',
+    'schedule.public' => 'がスケジュールの「一般に出す」を切り替えました',
+    'display.defaults_publish' => 'がアプリの表示調整の既定を配りました',
+    'display.defaults_unpublish' => 'がアプリの表示調整の既定を配るのをやめました',
     // ストリートビューの写真(2026-10-06、lib/panorama.php)
     'map.panorama_add' => 'が地点にストリートビューの写真を足しました',
     'map.panorama_delete' => 'が地点のストリートビューの写真を外しました',
@@ -156,6 +165,7 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     'staffnode.proposed' => 'が地点の変更を提案しました',
     'staffnode.approved' => 'が地点の変更の提案を承認しました',
     'staffnode.rejected' => 'が地点の変更の提案を却下しました',
+    'staffnode.consent_withdrawn' => 'が地点の名前・備考の表示をやめました',
     /*
      * 主語は「あなた」ではない —— 記録するのは webhook を受けたサーバー側で、
      * その時点で**消えた人はもう居ない。**それでも辞書は同じ形にしておく
@@ -198,12 +208,33 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     'map.event_closure' => 'がイベントの通行止めを変更しました',
     'map.event_poi' => 'がイベントの臨時地点を変更しました',
     'map.event_alias' => 'がイベントの臨時名称を変更しました',
+    'map.event_hidden' => 'がイベント中に出さない地点を切り替えました',
     'map.event_import' => 'が管理アプリのイベントを取り込みました',
     'test.mark' => 'がアカウントにテスト用の印を付けました',
     'test.unmark' => 'がアカウントのテスト用の印を外しました',
     'test.settings' => 'がテスト用の表示(アンケート・操作方法)を変更しました',
     'test.events_csv' => 'がテスト用アカウントの記録を書き出しました',
     'test.events_delete' => 'がテスト用アカウントの記録を消しました',
+    // ポスター・広告と地点の URL(2026-10-21、admin/posters.php)
+    'poster.mode' => 'がポスターの出し方を変更しました',
+    'poster.create' => 'がポスターを足しました',
+    'poster.update' => 'がポスターを変更しました',
+    'poster.delete' => 'がポスターを消しました',
+    'poster.import' => 'がポスターをまとめて取り込みました',
+    'node.likes_reset' => 'が部屋のいいねを 0 に戻しました',
+    'poster.likes_reset' => 'がポスターの ♡ を 0 に戻しました',
+    // テーブル管理の外部接続(2026-10-21、lib/table-api.php)。書き込みは外のプログラムからで、実行者は無く IP だけ残る
+    'table.api_create' => 'がテーブルの外部接続を作りました',
+    'table.api_revoke' => 'がテーブルの外部接続を取り消しました',
+    'table.api_write' => 'の外部接続がテーブルの行を書き換えました',
+    'poster.tutorial_end' => 'がチュートリアルの終わりの知らせを変更しました',
+    'map.node_link' => 'が地点の URL を変更しました',
+    // 階と平面図(2026-10-21、admin/map-floors.php)
+    'map.floor_image' => 'が階の画像を差し替えました',
+    'map.floor_update' => 'が階の名前・並び順を変更しました',
+    'map.floor_add' => 'が階を足しました',
+    'map.floor_delete' => 'が階を消しました',
+    'map.floor_zip' => 'が zip で階の画像をまとめて差し替えました',
     'map.event_cleanup_mode' => 'が期限切れイベントの掃除方法を変更しました',
     'map.event_cleanup' => 'が期限切れのイベントを削除しました',
     /*

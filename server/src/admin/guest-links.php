@@ -6,7 +6,8 @@ declare(strict_types=1);
  * お試しの閲覧リンク(lib/map-guest.php。2026-09-30、利用者の指示)。
  *
  * 期限と使える台数を決めてリンクを発行する。開いた人は仮アカウントを作り、そのブラウザだけ期限まで
- * 地図の錠を通れる。**教職員氏名は、ここで「教員名を見せる」にした仮アカウントだけ**に出る。途中で取り消せる。
+ * 地図の錠を通れる。途中で取り消せる。**教員室・研究室と教職員氏名は出さない**(2026-10-22 から。lib/node-visibility.php。
+ * 以前の「教員名を見せる」は Web の地図に効かなくなったので、画面の切り替えは外した)。
  *
  * **リンクはここで 1 回しか見せない**(表には要約だけを置く)。見せる前に URL へ載せて
  * 戻し先を作ると、アクセスログやブラウザの履歴にトークンが残るので、セッションで 1 回だけ渡す。
@@ -230,7 +231,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
               <i class="bi bi-info-circle-fill me-2 mt-1" aria-hidden="true"></i>
               <div data-i18n="page.guestLinks.notice">
                 リンクを開いた人は、名前(と所属)を入れて仮アカウントを作ると、期限まで地図のパスワード無しで地図を見られます。
-                教員の地点の名前は、下の一覧で「教員名を見せる」にした仮アカウントだけに出ます(作っただけでは出ません)。
+                教員室・研究室と教員名は出しません(本校の教職員としてサインインした人だけ。2026-10-22 から例外なし)。
                 仮アカウントはこのサーバーの DB にだけ作り、Logto のアカウントは要りません。誰がいつ作り、最後にいつ見たかは下の一覧で分かり、人ごとに止められます。
                 リンクを知っている人は誰でも作れるので、短い期限と少ない人数にしてください。
               </div>
@@ -357,29 +358,18 @@ require __DIR__ . '/_inc/partials/page-header.php';
                                   <td>
                                     <?php if ($account['revoked']): ?>
                                       <span class="badge text-bg-danger" data-i18n="page.guestLinks.accountStopped">止めた</span>
-                                    <?php elseif ($account['namesAllowed']): ?>
-                                      <span class="badge text-bg-warning" data-i18n="page.guestLinks.namesOn">教員名が見える</span>
                                     <?php else: ?>
+                                      <?php
+                                      /*
+                                       * 2026-10-22 から、お試しの閲覧では教員室・研究室も教員名も出さない(利用者の指示「例外なし」。lib/node-visibility.php)。
+                                       * 以前の「教員名を見せる / 隠す」の切り替えは Web の地図に効かなくなったので、画面から外した
+                                       */
+                                      ?>
                                       <span class="badge text-bg-light" data-i18n="page.guestLinks.namesOff">地図だけ</span>
                                     <?php endif; ?>
                                   </td>
                                   <td class="text-end text-nowrap">
                                     <?php if (!$account['revoked'] && $row['status'] !== 'expired' && !$row['revoked']): ?>
-                                      <form method="post" class="d-inline<?= $account['namesAllowed'] ? '' : ' km-guest-names-form' ?>">
-                                        <?= km_csrf_field() ?>
-                                        <input type="hidden" name="action" value="set_names" />
-                                        <input type="hidden" name="account_id" value="<?= (int) $account['id'] ?>" />
-                                        <input type="hidden" name="allow" value="<?= $account['namesAllowed'] ? '0' : '1' ?>" />
-                                        <?php if ($account['namesAllowed']): ?>
-                                          <button type="submit" class="btn btn-sm btn-outline-secondary">
-                                            <span data-i18n="page.guestLinks.namesDeny">教員名を隠す</span>
-                                          </button>
-                                        <?php else: ?>
-                                          <button type="submit" class="btn btn-sm btn-outline-warning">
-                                            <span data-i18n="page.guestLinks.namesAllow">教員名を見せる</span>
-                                          </button>
-                                        <?php endif; ?>
-                                      </form>
                                       <form method="post" class="d-inline km-guest-revoke-form">
                                         <?= km_csrf_field() ?>
                                         <input type="hidden" name="action" value="revoke_account" />

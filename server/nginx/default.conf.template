@@ -195,8 +195,9 @@ map "$km_admin_split$km_on_admin_host" $km_host_role {
 #   /api/map-data.php・floor-image.php … 地図エディタのデータと見取り図(管理者の印で錠を越える)
 #   /api/download.php  admin/downloads.php の「落とす」
 #   /ws/app/           チャットと死活監視の WebSocket(Soketi。2026-10-19 に 6001 番からここへ移した)
+#   /__km_maintenance  メンテナンス中の画面(km/maintenance.conf。内部の移動なので、飛ばすと 404 になる)
 map "$km_host_role:$uri" $km_leave_admin_host {
-    "~^admin:/(admin/|Main/|vendor-web/|ws/app/|sign-in\.php$|sign-out\.php$|callback\.php$|favicon\.svg$|api/(map-data|floor-image|download)\.php$)"  0;
+    "~^admin:/(admin/|Main/|vendor-web/|ws/app/|sign-in\.php$|sign-out\.php$|callback\.php$|favicon\.svg$|api/(map-data|floor-image|download)\.php$|__km_maintenance$)"  0;
     "~^admin:"   1;
     default      0;
 }
@@ -285,6 +286,9 @@ map $http_origin $km_ws_origin_denied {
     "${KM_ADMIN_URL}"  0;
     default            1;
 }
+
+# (2026-10-21〜22 にここへ置いていた「multipart を PHP へ渡さない」つなぎ($km_php_shield_multipart)は、
+#  PHP 8.4.27 を当てて確かめたので 10-22 に外した。経緯は docs/05-containers.ipynb §10・status.md)
 
 # **クエリ文字列を書かない**アクセスログ。
 #
@@ -386,6 +390,8 @@ server {
     if ($km_leave_admin_host) {
         return 308 $km_app_url$request_uri;
     }
+    # web が居ないとき(nginx が出す 502)は、メンテナンス中の画面にする(2026-10-21。中身と理由は km/maintenance.conf)
+    include /etc/nginx/km/maintenance.conf;
 
     add_header X-Content-Type-Options nosniff always;
     add_header Referrer-Policy strict-origin-when-cross-origin always;
@@ -504,9 +510,13 @@ server {
     # route-weights は 2026-09-25 に足した(読みは誰でもできる。書きは管理者のトークンが要る)。
     # map-calibration(北と距離の補正)と app-update(アプリの更新の確認)は 2026-10-05 に足した。
     # positioning-params(アプリの測位のパラメータ)と learning(Wi-Fi の学習データ)は 2026-10-06 に足した。
+    # poster-image(ポスターの画像。誰でも取れる)・poster-event(ポスターの数を数える)・table(テーブル管理の外部接続。接続 ID とキーが要る)は 2026-10-21 に足した。
+    # node-extras(アプリの部屋の写真といいね。地図のアクセスコードが要る)は 2026-10-22 に足した。
+    # display-defaults(アプリの表示調整の既定。読みは誰でも)と user-map-data(履歴とブックマークの同期。サインインが要る)は 2026-10-23 に足した。
+# map-events(Website のイベントを管理アプリへ渡す。管理者だけ)と poster-like(ポスターの ♡。付けるには公開ページの CSRF が要る)も同じ日に足した。
     # **メソッドを問わず数える。** 見取り図・APK・人数・アカウント画像・地図のデータは GET でも PHP が毎回働く。
     # 静的資材の正規表現とは重ならない(こちらは `.php` で終わる)ので、並び順はここでよい。
-    location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update|positioning-params|learning)|logto_me)\.php$ {
+    location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update|positioning-params|learning|poster-image|poster-event|table|node-extras|display-defaults|user-map-data|map-events|poster-like)|logto_me)\.php$ {
         limit_req zone=km_api burst=120 nodelay;
         include /etc/nginx/km/proxy-web.conf;
         proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
@@ -869,6 +879,9 @@ server {
     add_header X-Content-Type-Options nosniff always;
     add_header Referrer-Policy strict-origin-when-cross-origin always;
     include /etc/nginx/km/hsts-*.conf;
+
+    # Logto が居ないときは、メンテナンス中の画面にする(2026-10-21。中身と理由は km/maintenance.conf)
+    include /etc/nginx/km/maintenance.conf;
 
     # 確認コード欄に autocomplete="one-time-code" を付けるスクリプト(2026-10-12。中身と理由は km/logto-otp-autocomplete.js)。
     # Logto のサインイン画面の CSP は script-src 'self' を許すので、同じ origin から返す

@@ -10,41 +10,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const unlockSection = document.getElementById('km-unlock-section');
 
     /*
-     * ---- ログインの2つを、画面幅で置き換える ----
-     *
-     * スマホでは、トップバーの #km-auth-links を「ダウンロード・設定」パネルの
-     * #km-auth-slot へ移す(2026-09-05、利用者の指示)。
-     *
-     * **同じ要素を動かす。複製しない。** ログイン中と未ログインで中身が変わるので、
-     * 2つ置くと出し分けの枝が2箇所になり、片方だけ直したときに必ず食い違う。
-     *
-     * 幅は styles.css の `@media (max-width: 768px)` と同じ値にすること ——
-     * ずれると「バーからは消えたが、パネルにも出ていない」幅が生まれる。
+     * ログインの欄は、PC でもスマホでもこの引き出しの中(#km-auth-slot)。index.php が初めからそこに書く
+     * (2026-10-23、利用者の指示「上のバーをなくして、ログインは設定項目に」)。以前は画面幅で上のバーと行き来させていた
      */
-    const authLinks = document.getElementById('km-auth-links');
-    const authSlot = document.getElementById('km-auth-slot');
-    const authSection = document.getElementById('km-auth-section');
-    const topActions = document.querySelector('.top-actions');
-    const narrowScreen = window.matchMedia('(max-width: 768px)');
-
-    function placeAuthLinks() {
-        if (!authLinks || !authSlot || !topActions) return;
-
-        if (narrowScreen.matches) {
-            if (authLinks.parentNode !== authSlot) authSlot.appendChild(authLinks);
-            if (authSection) authSection.hidden = false;
-        } else {
-            // トップバーでは ⚙️ より左。並び順まで元に戻す
-            if (authLinks.parentNode !== topActions) topActions.insertBefore(authLinks, topActions.firstChild);
-            if (authSection) authSection.hidden = true;
-        }
-
-        // バーの高さが変わるので、地図の収まりを取り直す(app.js が公開している)
-        if (typeof window.kmRefitMap === 'function') window.kmRefitMap();
-    }
-
-    placeAuthLinks();
-    narrowScreen.addEventListener('change', placeAuthLinks);
 
     if (!toggleBtn || !panel || !unlockSection) return;
 
@@ -118,25 +86,17 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        /*
+         * 教職員氏名と教員室・研究室(2026-10-22、利用者の指示「権限チェックを厳格化。例外なし」)。
+         * **パスワードでは開かない。** 本校の教職員(組織のメンバー)としてサインインした人にだけ出し、
+         * 氏名とメモは先生が許可した地点だけ(lib/node-visibility.php)。入力欄は出さない。
+         */
         if (meta.namesUnlocked) {
-            showStatus('教職員氏名', '✅ 現在表示中です。');
+            showStatus('教職員氏名', '✅ 教職員としてサインインしています。教員室・研究室を表示し、先生が許可した地点では氏名とメモも表示します。');
             return;
         }
 
-        if (meta.mode === 'hidden') {
-            showStatus('教職員氏名', '現在、氏名の表示は無効化されています。');
-            return;
-        }
-
-        if (meta.mode !== 'password') {
-            // 地図データを取得できていない(サーバー未接続など)場合はここに来る。
-            showStatus('教職員氏名', '現在の状態を確認できませんでした。');
-            return;
-        }
-
-        window.kmRenderUnlockForm(unlockSection, {
-            heading: '教職員氏名の表示',
-        });
+        showStatus('教職員氏名', '教員室・研究室と教職員氏名は、本校の教職員としてサインインしたときだけ表示します。');
     }
 
     /**

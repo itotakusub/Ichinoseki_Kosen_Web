@@ -33,6 +33,9 @@ declare(strict_types=1);
  */
 
 require_once __DIR__ . '/app-map.php';
+require_once __DIR__ . '/map-node-stairs.php';
+require_once __DIR__ . '/map-node-area.php';
+require_once __DIR__ . '/map-node-projects.php';
 
 /**
  * アプリの基準マップ画像の実寸(`res/drawable/f1_r.png` ほか、全階 1600×1200)。
@@ -250,6 +253,10 @@ function km_app_map_to_web(stdClass $map): array
         }
 
         $type1 = (string) ($node->type1 ?? '');
+        // 区画の印(2026-10-23。lib/map-node-area.php)は km_map_nodes に入れない。区画の表へ別に入る(戻りの 'area')
+        if ($type1 === KM_MAP_AREA_MARKER_TYPE) {
+            continue;
+        }
         if (!in_array($type1, KM_APP_MAP_NODE_TYPES, true)) {
             // **黙って通さない。** 知らない種類を入れると、描画もカテゴリ検索も外れる
             $unknownType[$type1] = ($unknownType[$type1] ?? 0) + 1;
@@ -304,6 +311,12 @@ function km_app_map_to_web(stdClass $map): array
             'tx_power_at_one_meter' => km_app_map_nullable_int($node->txPowerAtOneMeter ?? null),
             'path_loss_exponent' => km_app_map_nullable_float($node->pathLossExponent ?? null),
             'transfer_group_id' => $transfer === '' ? null : $transfer,
+            /*
+             * 階段の上り口・下り口の向き(2026-10-22。lib/map-node-stairs.php)。km_map_nodes の列ではなく
+             * 別の表へ入れる(取り込みの最後に km_map_node_stairs_sync)。列の並びに無いので km_map_nodes には書かれない
+             */
+            'stair_up_heading' => km_map_heading($node->stairUpHeading ?? null),
+            'stair_down_heading' => km_map_heading($node->stairDownHeading ?? null),
             /*
              * **倍率は掛けない。** 見取り図をアプリの画像へ揃える前提なので、
              * x はそのまま。y だけ Leaflet の向きに合わせて反転する。
@@ -367,6 +380,10 @@ function km_app_map_to_web(stdClass $map): array
     return [
         'nodes' => $nodes,
         'edges' => $edges,
+        // 区画の色の指定と区画の印(2026-10-23。取り込みで km_map_node_area を入れ替える)
+        'area' => km_map_area_from_app($map),
+        // 企画の番号(2026-10-23。取り込みで km_map_node_projects を入れ替える)
+        'projects' => km_map_projects_from_app($map),
         'skipped' => [
             'unknownFloor' => array_values(array_unique($unknownFloor)),
             'unknownType' => $unknownType,
@@ -462,6 +479,15 @@ function km_app_map_snapshot_from_rows(
         $node->txPowerAtOneMeter = km_app_map_nullable_int($row['tx_power_at_one_meter'] ?? null);
         $node->pathLossExponent = km_app_map_nullable_float($row['path_loss_exponent'] ?? null);
         $node->occupantName = $occupant === '' ? null : $occupant;
+        // 階段の上り口・下り口の向き(2026-10-22。別の表から km_app_map_from_web が足す)。**在るときだけ載せる**(形を変えない)
+        $upHeading = km_map_heading($row['stair_up_heading'] ?? null);
+        $downHeading = km_map_heading($row['stair_down_heading'] ?? null);
+        if ($type === 'stairs' && $upHeading !== null) {
+            $node->stairUpHeading = $upHeading;
+        }
+        if ($type === 'stairs' && $downHeading !== null) {
+            $node->stairDownHeading = $downHeading;
+        }
 
         $nodes[] = $node;
         $byId[(string) ($row['id'] ?? '')] = $node;
@@ -589,6 +615,18 @@ function km_app_map_from_web(PDO $pdo): array
                 transfer_group_id, x, y, z
            FROM km_map_nodes'
     )->fetchAll(PDO::FETCH_ASSOC);
+    // 階段の上り口・下り口の向き(2026-10-22。別の表。無ければ足さない)
+    $stairs = km_map_node_stairs_all($pdo);
+    if ($stairs !== []) {
+        foreach ($nodes as &$row) {
+            $heading = $stairs[(string) ($row['uuid'] ?? '')] ?? null;
+            if ($heading !== null) {
+                $row['stair_up_heading'] = $heading['up'];
+                $row['stair_down_heading'] = $heading['down'];
+            }
+        }
+        unset($row);
+    }
 
     $edges = $pdo->query(
         'SELECT from_node_id, to_node_id FROM km_map_edges'
@@ -611,7 +649,13 @@ function km_app_map_from_web(PDO $pdo): array
            FROM km_map_overlays'
     );
 
-    return km_app_map_snapshot_from_rows($nodes, $edges, $fingerprints, $overlays);
+    $result = km_app_map_snapshot_from_rows($nodes, $edges, $fingerprints, $overlays);
+    // 区画の色の指定と区画の印(2026-10-23。別の表。無ければ足さない)
+    km_map_area_apply($result['map'], km_map_node_area_all($pdo));
+    // 企画の番号(2026-10-23。別の表。無ければ足さない)
+    km_map_projects_apply($result['map'], km_map_node_projects_all($pdo));
+
+    return $result;
 }
 
 /**
@@ -906,8 +950,29 @@ function km_app_map_events_from_web(array $overlay, stdClass $map): array
         $closedLineKeys[$from['floor'] . ':' . $endpoints[0] . ':' . $endpoints[1]] = true;
     }
 
+    // --- 臨時の名前・出さない地点(2026-10-23。アプリの nameOverrides / hiddenNodeUuids) ---
+    $nameOverrides = [];
+    foreach (($overlay['aliases'] ?? []) as $shortId => $alias) {
+        $found = $byShortId[(string) $shortId] ?? null;
+        if ($found === null) {
+            $skipped['unknownNode']++;
+            continue;
+        }
+        $nameOverrides[$found['uuid']] = (string) $alias;
+    }
+    $hiddenNodeUuids = [];
+    foreach (array_keys($overlay['hiddenNodes'] ?? []) as $shortId) {
+        $found = $byShortId[(string) $shortId] ?? null;
+        if ($found === null) {
+            $skipped['unknownNode']++;
+            continue;
+        }
+        $hiddenNodeUuids[$found['uuid']] = true;
+    }
+
     // --- 臨時の地点 ---
     $places = [];
+    $placeLinks = [];
     foreach (($overlay['pois'] ?? []) as $poi) {
         if (!is_array($poi)) {
             continue;
@@ -918,9 +983,15 @@ function km_app_map_events_from_web(array $overlay, stdClass $map): array
             continue;
         }
         $category = (string) ($poi['category'] ?? 'other');
+        $placeUuid = 'web-poi-' . (int) ($poi['id'] ?? 0);
+        // 案内先(つなぎ先)はアプリの「一時地点を道へつなぐ線」になる(2026-10-23。同じ階のときだけ)
+        $anchor = $byShortId[(string) ($poi['anchorNodeId'] ?? '')] ?? null;
+        if ($anchor !== null && $anchor['floor'] === $appFloor) {
+            $placeLinks[] = ['placeUuid' => $placeUuid, 'nodeUuid' => $anchor['uuid']];
+        }
         $places[] = [
             // ノードの UUID とぶつからない形にする。ぶつかると描画も経路も壊れる
-            'uuid' => 'web-poi-' . (int) ($poi['id'] ?? 0),
+            'uuid' => $placeUuid,
             'name' => (string) ($poi['name'] ?? ''),
             'floor' => $appFloor,
             'x' => (float) ($poi['x'] ?? 0),
@@ -971,6 +1042,11 @@ function km_app_map_events_from_web(array $overlay, stdClass $map): array
         // Website 側に「階ごとの立入禁止」が無い。線とノードで表す
         'closedFloors' => [],
         'places' => $places,
+        // 2026-10-23: 名前の上書き・出さない地点・イベントの地点だけ・一時地点の接続もアプリへ渡す
+        'nameOverrides' => (object) $nameOverrides,
+        'hiddenNodeUuids' => array_keys($hiddenNodeUuids),
+        'onlyEventNodes' => (bool) ($overlay['onlyEventNodes'] ?? true),
+        'placeLinks' => $placeLinks,
     ];
 
     return [

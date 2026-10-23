@@ -11,6 +11,8 @@ declare(strict_types=1);
  *   DELETE ?id=<数>           消す
  *
  * Logto のアクセストークンに管理者の権限(LOGTO_ADMIN_PERMISSIONS)が全部あるときだけ。
+ * 2026-10-23 から学習の協力者(LOGTO_LEARNING_PERMISSION)も使える。**協力者は自分が置いた分だけ**を見る・戻す・消す
+ * (ほかの人のバックアップには先生の名前が入りうる)。POST の ?learning=1 は「Wi-Fi 学習を含む」の印。
  * **組織トークン(教職員)からは管理者の権限は生まれない**(logto_guard.php の守り)。
  * 置いた・戻した・消したはタイムラインに残す。
  */
@@ -29,7 +31,12 @@ if (!in_array($method, ['GET', 'POST', 'DELETE'], true)) {
 }
 
 $principal = logto_require_principal();
-logto_assert_permissions($principal, LOGTO_ADMIN_PERMISSIONS);
+$isAdmin = ($principal['is_admin'] ?? 0) === 1;
+if (!$isAdmin && ($principal['is_learner'] ?? false) !== true) {
+    respond(['success' => false, 'message' => 'この操作に必要なLogto権限がありません(管理者か学習の協力者)。'], 403);
+}
+// 協力者は自分の分だけ。sub が空なら誰の分にも当たらない
+$ownerFilter = $isAdmin ? null : (string) ($principal['subject'] ?? '');
 
 /*
  * タイムラインの実行者と、一覧の「作った人」。アクセストークンには利用者名が入らない
@@ -58,12 +65,13 @@ try {
 $id = isset($_GET['id']) ? (int) $_GET['id'] : 0;
 
 if ($method === 'GET' && $id <= 0) {
-    respond(['success' => true, 'keep' => KM_MAP_BACKUP_KEEP, 'backups' => km_map_backup_list($pdo)]);
+    respond(['success' => true, 'keep' => KM_MAP_BACKUP_KEEP, 'backups' => km_map_backup_list($pdo, $ownerFilter)]);
 }
 
 if ($method === 'GET') {
     $row = km_map_backup_find($pdo, $id);
-    if ($row === null) {
+    // 協力者にはほかの人の分を「無い」と答える(在ることも知らせない)
+    if ($row === null || ($ownerFilter !== null && !hash_equals($ownerFilter, (string) $row['user_sub']))) {
         respond(['success' => false, 'message' => 'そのバックアップはありません(古いものは自動で消えます)。'], 404);
     }
     try {
@@ -83,7 +91,11 @@ if ($method === 'GET') {
 }
 
 if ($method === 'DELETE') {
-    if ($id <= 0 || !km_map_backup_delete($pdo, $id)) {
+    $row = $id > 0 ? km_map_backup_find($pdo, $id) : null;
+    if ($row !== null && $ownerFilter !== null && !hash_equals($ownerFilter, (string) $row['user_sub'])) {
+        $row = null;
+    }
+    if ($row === null || !km_map_backup_delete($pdo, $id)) {
         respond(['success' => false, 'message' => 'そのバックアップはありません。'], 404);
     }
     km_admin_log_record('content', 'map.backup_delete', '#' . $id);
@@ -102,9 +114,10 @@ if ($stream !== false) {
 }
 $nodeCount = isset($_GET['nodes']) && ctype_digit((string) $_GET['nodes']) ? (int) $_GET['nodes'] : null;
 $note = (string) ($_GET['note'] ?? '');
+$withLearning = ($_GET['learning'] ?? '') === '1';
 
 try {
-    $created = km_map_backup_create($pdo, $json, (string) ($principal['subject'] ?? ''), $actorName, $nodeCount, $note);
+    $created = km_map_backup_create($pdo, $json, (string) ($principal['subject'] ?? ''), $actorName, $nodeCount, $note, $withLearning);
 } catch (InvalidArgumentException $exception) {
     respond(['success' => false, 'message' => $exception->getMessage()], 400);
 } catch (Throwable $exception) {
@@ -112,9 +125,10 @@ try {
     respond(['success' => false, 'message' => '保存できませんでした。'], 500);
 }
 
-km_admin_log_record('content', 'map.backup_create', '#' . $created['id'] . ($nodeCount !== null ? " / {$nodeCount} 地点" : ''));
+km_admin_log_record('content', 'map.backup_create', '#' . $created['id'] . ($nodeCount !== null ? " / {$nodeCount} 地点" : '')
+    . ($withLearning ? ' / 学習あり' : '') . ($created['locked'] ? ' / パスワード付き' : ''));
 respond([
     'success' => true,
     'backup' => $created,
-    'message' => 'サーバーにバックアップしました(新しい方から ' . KM_MAP_BACKUP_KEEP . ' 件を残します)。',
+    'message' => 'サーバーにバックアップしました(置いた人ごとに、新しい方から ' . KM_MAP_BACKUP_KEEP . ' 件を残します)。',
 ]);

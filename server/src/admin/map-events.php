@@ -26,8 +26,9 @@ $events = [];
 $isolation = null;
 $cleanupMode = 'manual';
 $expiredForCleanup = [];
-$importPending = ['events' => [], 'uploadedAt' => null, 'error' => null];
+$importPending = ['events' => [], 'projects' => null, 'uploadedAt' => null, 'error' => null];
 $importPreview = [];
+$importProjects = null;
 
 try {
     $pdo = km_db();
@@ -71,6 +72,11 @@ try {
                     }
                     $result = km_map_event_import_apply($pdo, $pendingEvent);
                     $applied[] = $result['converted']['name'] . ($result['created'] ? '(新規・無効)' : '(入れ替え)');
+                }
+                // 教室などに振った企画の番号(2026-10-23。同じファイルの地図から。それまでここでは入らなかった)
+                if ($pending['projects'] !== null && ($_POST['import_projects'] ?? '') === '1') {
+                    km_map_event_import_apply_projects($pdo, $pending['projects']);
+                    $applied[] = '企画の番号 ' . count($pending['projects']) . ' 地点';
                 }
                 if ($applied === []) {
                     throw new InvalidArgumentException('取り込むイベントを選んでください。');
@@ -129,6 +135,8 @@ try {
                     'endsAt' => (string) ($_POST['ends_at'] ?? ''),
                     'isEnabled' => isset($_POST['is_enabled']),
                     'hideOccupantNames' => isset($_POST['hide_occupant_names']),
+                    // イベントの地点だけを出す(2026-10-23。lib/map-events.php の km_map_event_options)
+                    'onlyEventNodes' => isset($_POST['only_event_nodes']),
                     'bannerText' => (string) ($_POST['banner_text'] ?? ''),
                     'bannerUrl' => (string) ($_POST['banner_url'] ?? ''),
                 ]);
@@ -179,6 +187,11 @@ try {
     $importPending = km_map_event_import_load();
     if ($importPending['events'] !== []) {
         $importPreview = km_map_event_import_preview($pdo, $importPending['events']);
+    }
+    if ($importPending['projects'] !== null) {
+        $importProjects = km_map_event_import_projects_summary(
+            $importPending['projects'], km_map_event_import_known_nodes($pdo), km_map_node_projects_all($pdo)
+        );
     }
 
     // いま重ねている内容で、到達できなくなる場所がどれだけあるか
@@ -343,6 +356,7 @@ $fmt = static fn (?string $value): string => $value === null || $value === ''
                   管理アプリで作ったイベント(部屋の名前・表示しない地点・通行止め・一時地点)を入れます。
                   アプリの「地図の書き出し」で作ったファイルを上げてください。
                   同じイベントを取り込み直すと、中身は丸ごと入れ替わります。<strong>新しいイベントは無効のまま入る</strong>ので、期間と案内の文を確かめてから有効にしてください。
+                  取り込んだイベントも「地図編集」で直せます。直した内容は、管理アプリの設定のイベントの「Website から取り込む」でアプリへ戻せます。
                 </p>
                 <form method="post" enctype="multipart/form-data" class="row g-2 align-items-end">
                   <?= km_csrf_field() ?>
@@ -400,6 +414,10 @@ $fmt = static fn (?string $value): string => $value === null || $value === ''
                             if ($skip['badLineKey'] > 0) {
                                 $notes[] = "読めない通行止めの線 {$skip['badLineKey']} 件";
                             }
+                            // Website で直した内容がある(2026-10-23。取り込むとアプリの中身で置き換わる)
+                            if ($existing !== null && ($existing['webEditedAt'] ?? null) !== null) {
+                                $notes[] = 'Website で直した内容(' . $fmt($existing['webEditedAt']) . ')は、取り込むとアプリの中身で置き換わります。先に管理アプリの「Website から取り込む」で戻してください';
+                            }
                             $closures = count($c['closedEdges']) + count($c['closedNodes']);
                           ?>
                           <tr>
@@ -427,6 +445,21 @@ $fmt = static fn (?string $value): string => $value === null || $value === ''
                         </tbody>
                       </table>
                     </div>
+                    <?php if ($importProjects !== null): ?>
+                      <?php // 教室などに振った企画の番号(2026-10-23。一時地点とは別に、部屋の地点ごとに持つ) ?>
+                      <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" name="import_projects" value="1" id="km-import-projects" checked>
+                        <label class="form-check-label" for="km-import-projects">
+                          企画の番号も入れ替える(番号のある地点 <strong><?= (int) $importProjects['nodes'] ?></strong>・番号 <?= (int) $importProjects['numbers'] ?> 個。いま Website: <?= (int) $importProjects['current'] ?> 地点)
+                        </label>
+                        <div class="form-text">
+                          教室などの地点に管理アプリで振った番号です。一時地点の数(上の表)とは別に数えます。番号でポスターとスケジュールの場所が決まり、「イベントの地点だけ」のときも出る地点になります。
+                          <?php if ($importProjects['unknown'] > 0): ?>
+                            <span class="text-danger">Website に無い地点が <?= (int) $importProjects['unknown'] ?> あります(先に「アプリの地図を取り込む」を)。</span>
+                          <?php endif; ?>
+                        </div>
+                      </div>
+                    <?php endif; ?>
                     <button type="submit" class="btn btn-primary">選んだイベントを取り込む</button>
                   </form>
                   <form method="post" class="mt-2">
@@ -471,8 +504,14 @@ $fmt = static fn (?string $value): string => $value === null || $value === ''
                               <?php if ($event['hideOccupantNames']): ?>
                                 <span class="badge text-bg-secondary fs-8" data-i18n="page.mapEvents.namesHidden">氏名を隠す</span>
                               <?php endif; ?>
+                              <?php if ($event['onlyEventNodes'] ?? true): ?>
+                                <span class="badge text-bg-info fs-8" title="期間中はイベントの地点だけを出す">イベントの地点だけ</span>
+                              <?php endif; ?>
                               <?php if (($event['appUuid'] ?? null) !== null): ?>
-                                <span class="badge text-bg-primary fs-8" title="中身は管理アプリで直して取り込み直します">アプリから(<?= km_e($fmt($event['importedAt'] ?? null)) ?>)</span>
+                                <span class="badge text-bg-primary fs-8" title="管理アプリから取り込んだイベント。Website でも直せます">アプリから(<?= km_e($fmt($event['importedAt'] ?? null)) ?>)</span>
+                                <?php if (($event['webEditedAt'] ?? null) !== null): ?>
+                                  <span class="badge text-bg-warning fs-8" title="Website で直した内容があります。管理アプリの「Website から取り込む」でアプリへ戻せます">Web で直した(<?= km_e($fmt($event['webEditedAt'])) ?>)</span>
+                                <?php endif; ?>
                               <?php endif; ?>
                             </td>
                             <td class="fs-7">
@@ -481,7 +520,7 @@ $fmt = static fn (?string $value): string => $value === null || $value === ''
                             </td>
                             <td class="text-end fs-7">
                               通行止め <?= $event['closureCount'] ?><br>
-                              地点 <?= $event['poiCount'] ?> / 名前 <?= $event['aliasCount'] ?>
+                              一時地点 <?= $event['poiCount'] ?> / 名前 <?= $event['aliasCount'] ?>
                               <?php if ($event['hiddenCount'] > 0): ?>
                                 <br>表示しない <?= $event['hiddenCount'] ?>
                               <?php endif; ?>
@@ -588,6 +627,18 @@ $fmt = static fn (?string $value): string => $value === null || $value === ''
                           <strong data-i18n="page.mapEvents.fieldHideNames">期間中は教職員氏名を隠す</strong>
                           <div class="text-body-secondary fs-7" data-i18n="page.mapEvents.hideNamesHint">
                             外部の来場者が地図を見るため、解除パスワードを知っている人にも表示しません。
+                          </div>
+                        </label>
+                      </div>
+
+                      <div class="form-check mb-2">
+                        <input class="form-check-input" type="checkbox" id="km-event-only-nodes" name="only_event_nodes"
+                               <?= ($editing === null || ($editing['onlyEventNodes'] ?? true)) ? 'checked' : '' ?>>
+                        <label class="form-check-label" for="km-event-only-nodes">
+                          <strong>期間中はイベントの地点だけを出す</strong>
+                          <div class="text-body-secondary fs-7">
+                            企画の番号がある地点・イベント中の名前を付けた地点・臨時の地点・トイレ・階段・出入口だけを地図に出します(経路は通れます)。
+                            工事の通行止めのように部屋を隠したくないときは外してください。
                           </div>
                         </label>
                       </div>

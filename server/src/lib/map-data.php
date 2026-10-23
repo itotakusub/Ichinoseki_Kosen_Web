@@ -43,8 +43,15 @@ function km_map_floor_image_endpoint(string $floorId, string $svgPath): string
 {
     // ?v= は更新時刻。nginx が静的資材へ長い Cache-Control を付けるため、
     // 版が無いと見取り図を差し替えても反映されない(直リンク時代と同じ理由)。
-    $version = km_public_asset('Main/' . ltrim($svgPath, '/'));
-    $stamp = str_contains($version, '?v=') ? substr($version, strpos($version, '?v=') + 3) : '';
+    if (str_starts_with($svgPath, 'upload:')) {
+        // 管理画面で差し替えた画像(lib/map-floors.php。uploads/ に置く)。版は置いた時刻
+        require_once __DIR__ . '/map-floors.php';
+        $file = km_map_floor_image_file($svgPath);
+        $stamp = $file !== null ? (string) (int) @filemtime($file) : '';
+    } else {
+        $version = km_public_asset('Main/' . ltrim($svgPath, '/'));
+        $stamp = str_contains($version, '?v=') ? substr($version, strpos($version, '?v=') + 3) : '';
+    }
 
     return '/api/floor-image.php?floor=' . rawurlencode($floorId)
         . ($stamp !== '' ? '&v=' . rawurlencode($stamp) : '');
@@ -62,6 +69,8 @@ const KM_FLOOR_IMAGE_TYPES = [
     'jpg' => 'image/jpeg',
     'jpeg' => 'image/jpeg',
     'webp' => 'image/webp',
+    // 管理画面で差し替えた画像は GIF もありうる(lib/map-floors.php は PNG / JPEG / GIF / WebP を受ける)
+    'gif' => 'image/gif',
 ];
 
 /**
@@ -107,11 +116,14 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
     $overlay = km_map_event_overlay($pdo, $previewEventId);
 
     /*
-     * **イベント中は氏名を出さない。**
+     * **教員室・研究室と、先生の名前・備考を誰に出すか**(2026-10-22、利用者の指示「権限チェックを厳格化」。lib/node-visibility.php)。
      *
-     * 高専祭やオープンキャンパスでは外部の来場者が地図を見る。解除パスワードを
-     * 知っている人のセッションであっても、期間中は伏せる。
-     * 判定がここ1箇所しか無いので、ここで潰せば漏れない。
+     *   - 組織メンバー(教職員)でなければ、教員室・研究室の地点を**地点ごと出さない**
+     *   - 組織メンバーには出す。担当(occupantName)と、教員室・研究室のメモ(note)は**先生が許可した地点だけ**
+     *   - **例外は無い**(テスト用アカウント・お試しの閲覧リンク・地図のパスワード・管理者のサインインでも同じ)。
+     *     以前の「氏名の錠」(km_map_names_unlocked。hidden / password / public)は Website の判定には使わない
+     *     (Android アプリへの配信は今もそちら。lib/app-map.php)
+     *   - **イベント中は氏名を出さない**(外部の来場者が見る。許可があっても期間中は伏せる)
      *
      * ## 編集画面には必ず出す($forAdmin)
      *
@@ -123,7 +135,11 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
      *
      * 「見せない」と「編集させる」は両立しない。編集画面では出す。
      */
-    $unlocked = $forAdmin || (km_map_names_unlocked($config) && !$overlay['hideOccupantNames']);
+    require_once __DIR__ . '/node-visibility.php';
+    $member = km_map_teacher_session();
+    // 許可を読むのは組織メンバーのときだけ(それ以外は名前を出さないので、表を引く必要が無い)
+    $consented = (!$forAdmin && $member) ? km_staff_node_consented_ids($pdo) : [];
+    $unlocked = $forAdmin || ($member && !$overlay['hideOccupantNames']);
 
     /*
      * ノード座標系は km_map_floors の列ではなく**別表**に持つ。
@@ -153,7 +169,16 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
     $floors = $pdo
         ->query('SELECT id, label, svg_path AS svgPath, sort_order AS sortOrder FROM km_map_floors ORDER BY sort_order')
         ->fetchAll();
+    /*
+     * 階の種類(2026-10-21、lib/map-floors.php)。campus = 右の階の並びに出す階、building = 建物の中(「中へ」で開く)。
+     * 管理画面で足した階は km_map_floor_custom に種類を持つ(表が無ければ足した階は無い)。
+     */
+    require_once __DIR__ . '/map-floors.php';
+    $customFloors = km_map_floor_custom_rows($pdo);
+    $floorIds = [];
     foreach ($floors as &$floor) {
+        $floorIds[(string) $floor['id']] = true;
+        $floor['kind'] = km_map_floor_kind((string) $floor['id'], $customFloors);
         // **常に PHP 経由にする。** 公開のときだけ直リンクにすると経路が2本になり、
         // 設定を切り替えた瞬間に古い HTML が直リンクを掴んだままになる。
         $floor['svgPath'] = km_map_floor_image_endpoint(
@@ -201,11 +226,41 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
         $nodeColumns .= ', ' . $column . ($alias === null ? '' : ' AS ' . $alias);
     }
     $nodeStmt = $pdo->query("SELECT {$nodeColumns} FROM km_map_nodes");
+    // 地点の URL(2026-10-21、lib/posters.php)。表が無ければ空
+    require_once __DIR__ . '/posters.php';
+    $nodeLinks = km_node_links_for_map($pdo);
+    // 企画の番号(2026-10-23。lib/map-node-projects.php。管理アプリで振る)。表が無ければ空
+    require_once __DIR__ . '/map-node-projects.php';
+    $projectsById = km_map_projects_with_aliases(km_map_projects_by_node_id($pdo), $overlay['aliases']);
     $nodesById = [];
     $nodeTypes = [];
     foreach ($nodeStmt->fetchAll() as $node) {
-        if (!$unlocked) {
-            $node['occupantName'] = null;
+        /*
+         * **階の無い地点は出さない**(2026-10-21)。管理画面で階を消したあと、アプリの地図を取り込むと
+         * その階の地点がまた入りうる。描く階が無いのに経路探索にだけ残ると、見えない階を通る案内になる。
+         * 線はこのあと「両端が在るものだけ」に絞る。
+         */
+        if (!isset($floorIds[(string) $node['floor']])) {
+            continue;
+        }
+        // 区画の印(アプリの色分けだけで使う。2026-10-23)は Web の地図に出さない。ふつうは km_map_nodes に入らない(lib/map-node-area.php)
+        if ((string) ($node['type'] ?? '') === 'area') {
+            continue;
+        }
+        if (!$forAdmin) {
+            $restricted = km_map_node_is_restricted($node);
+            $visibility = km_map_node_visibility($restricted, $member, isset($consented[(string) $node['id']]), $overlay['hideOccupantNames']);
+            // 組織メンバーでなければ、教員室・研究室は地点ごと出さない(線も下で両端が在るものだけに絞られる)
+            if (!$visibility['show']) {
+                continue;
+            }
+            if (!$visibility['names']) {
+                $node['occupantName'] = null;
+                // 教員室・研究室のメモには先生の名前が書かれている(アプリの地図の取り込み)。許可が無ければ出さない
+                if ($restricted && array_key_exists('note', $node)) {
+                    $node['note'] = null;
+                }
+            }
         }
         /*
          * 座標は**数として返す。** decimal 列は PDO が文字列で返すので、
@@ -229,12 +284,30 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
         if (isset($overlay['hiddenNodes'][$id])) {
             $node['hidden'] = true;
         }
+        // 地点の URL。詳細に「くわしく」のリンクを出す(Main/app.js の nodeDetailHtml)
+        if (isset($nodeLinks[$id])) {
+            $node['linkUrl'] = $nodeLinks[$id]['url'];
+            $node['linkLabel'] = $nodeLinks[$id]['label'];
+        }
+        if (isset($projectsById[$id])) {
+            $node['projects'] = $projectsById[$id];
+        }
+        /*
+         * イベント中は「イベントの地点」だけを出す(2026-10-23、利用者の指示。有効なイベントのどれかが ON のとき)。
+         * 出さない地点にも印(hidden)を付けるだけ —— 経路は通れる。出し入れは Main/app.js が決める
+         */
+        if ($overlay['events'] !== [] && ($overlay['onlyEventNodes'] ?? false) && empty($node['hidden'])
+            && !km_map_event_node_visible($node, isset($overlay['aliases'][$id]))) {
+            $node['hidden'] = true;
+        }
         $nodesById[$id] = $node;
     }
 
-    $edges = $pdo
-        ->query('SELECT from_node_id AS source, to_node_id AS target, distance FROM km_map_edges')
-        ->fetchAll();
+    $edges = array_values(array_filter(
+        $pdo->query('SELECT from_node_id AS source, to_node_id AS target, distance FROM km_map_edges')->fetchAll(),
+        // 両端が出している地点のものだけ(上で階の無い地点を外した)
+        static fn (array $edge): bool => isset($nodesById[(string) $edge['source']], $nodesById[(string) $edge['target']])
+    ));
     foreach ($edges as &$edge) {
         $key = km_map_event_edge_key((string) $edge['source'], (string) $edge['target']);
         if (isset($overlay['closedEdges'][$key])) {
@@ -296,6 +369,12 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
      * ことに意味がある —— 印にすると「管理画面を一度開いた人」が公開ページでも
      * 素通りしてしまい、設定した本人が錠を確かめられなくなる(実際そうなっていた)。
      */
+    // 企画の番号 → 出している地点(ポスターとスケジュールの場所。隠した地点は入れない)
+    require_once __DIR__ . '/event-schedule.php';
+    $shownProjectNodes = km_map_project_nodes($projectsById, array_filter($nodesById, static fn (array $n): bool => empty($n['hidden'])));
+    // 一時地点(臨時の地点)の名前が番号なら、その地点にも付ける(2026-10-23、利用者の運用「一時ノードの名前にポスター番号を明記」)
+    $projectPois = km_map_project_pois($overlay['pois']);
+
     $viewUnlocked = $forAdmin || km_map_view_unlocked($config);
     if (!$viewUnlocked) {
         return [
@@ -321,6 +400,17 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
         'passwordRequested' => km_map_password_requested($config),
         'event' => $event,
         'eventPois' => $overlay['pois'],
+        /*
+         * ポスター(2026-10-21、lib/posters.php)。**出し方の 3 段階**(表示しない / イベント中のみ / 常に表示)を見て、
+         * 出さないときは空。地点は上の一覧に在って出しているものだけ指す(錠・イベントで隠した地点を漏らさない)。
+         * 錠が掛かっているときは上で返しているので、ここへは来ない。
+         */
+        'posters' => km_posters_public($pdo, $overlay['events'] !== [], $nodesById, $shownProjectNodes, $projectPois),
+        /*
+         * 企画のスケジュール(2026-10-23。lib/event-schedule.php)。一般に出す印の行だけ。場所は企画の番号から引き、
+         * 出している地点だけを指す(錠・イベントで隠した地点の場所を漏らさない)
+         */
+        'schedule' => km_event_schedule_public($pdo, $shownProjectNodes, $projectPois),
         'buildings' => km_map_building_overlays($pdo),
         /*
          * 建物の階(2026-09-24。lib/building-floors.php)。**平面図 1 枚が 1 つの階。**
@@ -328,14 +418,7 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
          * 名前の手がかり(keywords)ごと渡す —— **中にまだ地点が無くても案内したい**ので、
          * 地点から導くのでは足りない。
          */
-        'buildingFloors' => array_map(
-            static fn (array $floor): array => [
-                'id' => $floor['id'],
-                'label' => $floor['label'],
-                'keywords' => $floor['keywords'],
-            ],
-            KM_BUILDING_FLOORS
-        ),
+        'buildingFloors' => km_map_data_building_floors($floors, $customFloors),
         /*
          * 経路の重み(2026-09-25)。**管理アプリから配ったときだけ載せる**(lib/route-weights.php)。
          * 載っていなければ Main/dijkstra.js は自分の既定(KM_ROUTE_WEIGHTS)で動く。
@@ -347,6 +430,61 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
             return $stored === null ? null : km_route_weights_for_web($stored);
         })(),
     ];
+}
+
+/**
+ * イベント中に出す地点か(2026-10-23、利用者の決定。アプリの MapEvent.kt の isEventVisibleNode と同じ)。**純粋関数**
+ *
+ * 名前を出す種類(部屋・施設・階段・出入口)のうち、企画の番号がある・イベント中の名前を付けた・階段・出入口・トイレ だけを出す。
+ * 道・壁・ルーターなどは変えない。臨時の地点は別の一覧(eventPois)で、いつも出す
+ *
+ * @param array<string, mixed> $node km_map_data の地点
+ */
+function km_map_event_node_visible(array $node, bool $hasAlias): bool
+{
+    $type = (string) ($node['type'] ?? '');
+    if (!in_array($type, ['room', 'facility', 'stairs', 'entrance'], true) || $type === 'stairs' || $type === 'entrance') {
+        return true;
+    }
+    if (!empty($node['projects']) || $hasAlias) {
+        return true;
+    }
+    foreach (['name', 'title', 'subtitle', 'type2'] as $key) {
+        if (preg_match('/WC|トイレ|便所|お手洗い/iu', (string) ($node[$key] ?? '')) === 1) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * 「中へ」に出す建物の階。組み込み(lib/building-floors.php)と、管理画面で足した建物の中(lib/map-floors.php)。
+ * **いま在る階だけ**(管理画面で消した階を出さない)。名前は DB の値(管理画面で直せる)。
+ *
+ * @param array<int, array{id:string, label:string}> $floors km_map_floors の行
+ * @param array<string, array{kind:string, keywords:array<int,string>}> $customFloors
+ * @return array<int, array{id:string, label:string, keywords:array<int,string>}>
+ */
+function km_map_data_building_floors(array $floors, array $customFloors): array
+{
+    $labels = [];
+    foreach ($floors as $floor) {
+        $labels[(string) $floor['id']] = (string) $floor['label'];
+    }
+    $result = [];
+    foreach (KM_BUILDING_FLOORS as $floor) {
+        if (isset($labels[$floor['id']])) {
+            $result[] = ['id' => $floor['id'], 'label' => $labels[$floor['id']], 'keywords' => $floor['keywords']];
+        }
+    }
+    foreach ($floors as $floor) {
+        $id = (string) $floor['id'];
+        if (($customFloors[$id]['kind'] ?? '') === 'building') {
+            $result[] = ['id' => $id, 'label' => $labels[$id], 'keywords' => $customFloors[$id]['keywords']];
+        }
+    }
+
+    return $result;
 }
 
 /**

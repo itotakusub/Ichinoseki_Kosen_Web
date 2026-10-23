@@ -919,6 +919,83 @@ function km_app_map_strip_occupant_names(stdClass $map): void
 }
 
 /**
+ * 教員室・研究室の地点を落とす(2026-10-22、利用者の指示「Android 側にも厳格化」。判定は Web と同じ km_map_node_is_restricted)。
+ * **引数を書き換える。** 地点と一緒に、その地点に付いた線・精度評価・イベントの名前の差し替えも落とす
+ * (アプリは線の両端と評価の地点が地図に在ることを確かめていて、無いと地図ごと読めない)。
+ *
+ * Wi-Fi の学習(fingerprints)は残す。名前を持たず、位置の推定に要る(部屋の形は下絵に描いてある)。
+ *
+ * @return list<string> 落とした地点の uuid
+ */
+function km_app_map_strip_restricted_nodes(stdClass $map): array
+{
+    require_once __DIR__ . '/node-visibility.php';
+
+    if (!isset($map->nodes) || !is_array($map->nodes)) {
+        return [];
+    }
+    $removed = [];
+    $kept = [];
+    foreach ($map->nodes as $node) {
+        if ($node instanceof stdClass) {
+            $title = trim((string) ($node->title ?? ''));
+            $subtitle = trim((string) ($node->subtitle ?? ''));
+            // Web の name は title と subtitle をつないだもの(app-map-convert.php の km_app_map_node_name)。同じものを見る
+            $name = $subtitle === '' ? $title : $title . ' ' . $subtitle;
+            if (km_map_node_is_restricted(['type2' => (string) ($node->type2 ?? ''), 'title' => $title, 'name' => $name])) {
+                $removed[(string) ($node->uuid ?? '')] = true;
+                continue;
+            }
+        }
+        $kept[] = $node;
+    }
+    if ($removed === []) {
+        return [];
+    }
+    $map->nodes = $kept;
+    $touches = static fn ($item, string ...$keys): bool => $item instanceof stdClass
+        && array_filter($keys, static fn (string $key): bool => isset($removed[(string) ($item->{$key} ?? '')])) !== [];
+    if (isset($map->lines) && is_array($map->lines)) {
+        $map->lines = array_values(array_filter($map->lines, static fn ($line): bool => !$touches($line, 'startNodeUuid', 'endNodeUuid')));
+    }
+    if (isset($map->evaluations) && is_array($map->evaluations)) {
+        $map->evaluations = array_values(array_filter($map->evaluations, static fn ($row): bool => !$touches($row, 'nodeUuid')));
+    }
+    foreach ((isset($map->events) && is_array($map->events)) ? $map->events : [] as $event) {
+        if (!($event instanceof stdClass)) {
+            continue;
+        }
+        if (isset($event->nameOverrides) && $event->nameOverrides instanceof stdClass) {
+            foreach (array_keys($removed) as $uuid) {
+                unset($event->nameOverrides->{$uuid});
+            }
+        }
+        foreach (['hiddenNodeUuids', 'closedNodeUuids'] as $key) {
+            if (isset($event->{$key}) && is_array($event->{$key})) {
+                $event->{$key} = array_values(array_filter($event->{$key}, static fn ($uuid): bool => !isset($removed[(string) $uuid])));
+            }
+        }
+    }
+
+    return array_map('strval', array_keys($removed));
+}
+
+/**
+ * 氏名を [$uuids] の地点だけに残す(先生が許可した地点。lib/node-visibility.php)。**引数を書き換える。**
+ *
+ * @param list<string> $uuids
+ */
+function km_app_map_keep_occupant_names_for(stdClass $map, array $uuids): void
+{
+    $allowed = array_fill_keys($uuids, true);
+    foreach ((isset($map->nodes) && is_array($map->nodes)) ? $map->nodes : [] as $node) {
+        if ($node instanceof stdClass && !isset($allowed[(string) ($node->uuid ?? '')])) {
+            $node->occupantName = null;
+        }
+    }
+}
+
+/**
  * 氏名を配ってよいか。Website の「地図データ公開設定」に従う。
  *
  * | mode | staff | それ以外 |
@@ -1039,30 +1116,69 @@ function km_app_map_package_envelope(
     return count($parts) === 2 ? [$parts[0], $parts[1]] : null;
 }
 
-/** 中身の段。来場者版・スタッフ版(閲覧不可の地点あり・氏名なし)・氏名入り。 */
-const KM_APP_MAP_CONTENT_LEVELS = ['visitor', 'staff', 'names'];
+/**
+ * 中身の段(2026-10-22 から。利用者の指示「Android 側にも厳格化」で、Web の lib/node-visibility.php と同じ決まりにした)。
+ *
+ * | 段 | 誰 | 教員室・研究室 | 先生の名前 | スタッフ限定の一時地点 |
+ * |---|---|---|---|---|
+ * | public | ログインしていない・ふつうの人 | 落とす | 落とす | 落とす |
+ * | event | イベント運営(staff:event:access) | 落とす | 落とす | 残す |
+ * | member / member-<12 桁> | 組織メンバー(教職員) | 残す | **先生が許可した地点だけ**(<12 桁> は許可の組の印) | 残す |
+ * | editor / editor-names | 管理者(アプリで地図を直す人。Web の地図編集と同じ) | 残す | 公開設定が許せば全部 | 残す |
+ *
+ * 段の名前に許可の組の印を入れるのは、**許可の取り下げを次の取得ですぐ効かせる**ため(段が変わると同じ版でも送り直す)。
+ * 以前の段の名前(visitor / staff / names)は km_app_map_parse_have_level が古いアプリとして扱う。
+ */
+const KM_APP_MAP_CONTENT_LEVELS = ['public', 'event', 'member', 'editor'];
+
+/** 以前(2026-09-25〜10-22)の段の名前。これを送ってくるのは古いアプリ(新しい段を覚えられない) */
+const KM_APP_MAP_LEGACY_CONTENT_LEVELS = ['visitor', 'staff', 'names'];
 
 /**
- * この要求に配る中身の段(2026-09-25、W-52)。api/app-map.php の「何を落とすか」と同じ判定から決める。
+ * この要求に配る中身の段(2026-09-25、W-52。2026-10-22 に段を作り直した)。
  *
- * @param bool $privileged スタッフか教職員(閲覧不可の地点を見せてよい)
- * @param bool $names      氏名も配ってよい(km_app_map_may_send_occupant_names)
+ * @param bool             $isAdmin      管理者(地図を直す人)
+ * @param bool             $isTeacher    組織メンバー(教職員。組織トークンでサーバーが確かめた)
+ * @param bool             $isEventStaff イベント運営
+ * @param bool             $namesAllowed 氏名を配ってよい(km_app_map_may_send_occupant_names。公開設定の錠)
+ * @param list<string>     $consentedUuids 先生が許可した地点(並べたもの)。組織メンバーの段にだけ効く
  */
-function km_app_map_content_level(bool $privileged, bool $names): string
+function km_app_map_content_level(bool $isAdmin, bool $isTeacher, bool $isEventStaff, bool $namesAllowed = false, array $consentedUuids = []): string
 {
-    if (!$privileged) {
-        return 'visitor';
+    if ($isAdmin) {
+        return $namesAllowed ? 'editor-names' : 'editor';
+    }
+    if ($isTeacher) {
+        return $namesAllowed && $consentedUuids !== []
+            ? 'member-' . substr(hash('sha256', implode("\n", $consentedUuids)), 0, 12)
+            : 'member';
     }
 
-    return $names ? 'names' : 'staff';
+    return $isEventStaff ? 'event' : 'public';
 }
 
-/** 端末が送ってきた haveLevel。知らない値は 'unknown'(= 必ず送り直す)、無ければ null(古いアプリ)。 */
+/** 段の名前が正しい形か(public / event / member / member-<12 桁> / editor / editor-names) */
+function km_app_map_content_level_valid(string $level): bool
+{
+    return preg_match('/\A(?:public|event|member(?:-[0-9a-f]{12})?|editor(?:-names)?)\z/', $level) === 1;
+}
+
+/** 段の大きな区分(public / event / member / editor)。形が違えば null */
+function km_app_map_content_level_base(string $level): ?string
+{
+    return km_app_map_content_level_valid($level) ? explode('-', $level, 2)[0] : null;
+}
+
+/**
+ * 端末が送ってきた haveLevel。知らない値は 'unknown'(= 必ず送り直す)、無ければ null(古いアプリ)。
+ * **以前の段の名前も null**(古いアプリは新しい段を覚えられず、同じ版を送り直しても置き換えない。毎回まるごと送らないため)。
+ * 古いアプリの手元の地図は、次に版を上げたときに置き換わる。
+ */
 function km_app_map_parse_have_level(mixed $raw): ?string
 {
-    if (!is_string($raw) || $raw === '') {
+    if (!is_string($raw) || $raw === '' || in_array($raw, KM_APP_MAP_LEGACY_CONTENT_LEVELS, true)) {
         return null;
     }
 
-    return in_array($raw, KM_APP_MAP_CONTENT_LEVELS, true) ? $raw : 'unknown';
+    return km_app_map_content_level_valid($raw) ? $raw : 'unknown';
 }

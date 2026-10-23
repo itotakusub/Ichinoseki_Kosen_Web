@@ -192,6 +192,19 @@
       : t('page.mapEditor.savedAlias', '臨時の名前を設定しました'));
   };
 
+  // イベント中に出さない地点の入り切り(2026-10-23)。出さないだけで、経路は通れる
+  const toggleNodeHidden = async (id) => {
+    const body = await send({ action: 'event.hidden.toggle', eventId, node: id });
+    const node = window.graphData.nodes[id];
+    if (body.hidden) {
+      node.hidden = true;
+    } else {
+      delete node.hidden;
+    }
+    redraw();
+    setStatus(body.hidden ? 'イベント中は出さないにしました(経路は通れます)' : 'イベント中も出すにしました');
+  };
+
   const createPoi = async (x, y) => {
     const name = window.prompt(t('page.mapEditor.promptPoiName', '臨時の地点の名前(例: たこ焼き)'), '');
     if (name === null || name.trim() === '') return;
@@ -253,6 +266,7 @@
     ],
     'event-poi': ['page.mapEditor.hintEventPoi', '地図をクリックすると、そこに臨時の地点を置きます。'],
     'event-alias': ['page.mapEditor.hintEventAlias', '臨時の名前を付けたい地点をクリックします。'],
+    'event-hidden': ['page.mapEditor.hintEventHidden', 'イベント中に出さない地点をクリックします(もう一度で戻します)。札に「イベント中は出さない」と付きます。'],
   };
 
   const setMode = (next) => {
@@ -294,6 +308,11 @@
     try {
       if (mode === 'event-alias') {
         await setNodeAlias(id);
+        return;
+      }
+
+      if (mode === 'event-hidden') {
+        await toggleNodeHidden(id);
         return;
       }
 
@@ -388,7 +407,7 @@
 
   /** 地図のクリック。追加系と、移動の2クリック目。 */
   const onMapClick = async (event) => {
-    const noMapClick = ['none', 'edit', 'delete', 'align', 'edge', 'event-closure', 'event-alias'];
+    const noMapClick = ['none', 'edit', 'delete', 'align', 'edge', 'event-closure', 'event-alias', 'event-hidden'];
     if (noMapClick.includes(mode)) {
       return;
     }
@@ -534,6 +553,37 @@
     selectedForAlign = [];
     movingNodeId = null;
     setStatus('');
+  });
+
+  /*
+   * 地点の札に出すもの(2026-10-23、利用者の指示「UUID と座標、先生の名前表示は ON-OFF で切り替え」)。
+   * 閲覧者の手元(localStorage)に覚え、app.js の札(window.kmAdminLabelPrefs)を描き直す。既定は今までどおり全部 ON。
+   * **読み込みは地図より先**(最初に描く札から効かせる)。壊れた値は既定に倒す
+   */
+  const LABEL_PREFS_KEY = 'km-editor-label-prefs';
+  const labelPrefs = { id: true, xy: true, names: true };
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(LABEL_PREFS_KEY) || '{}');
+    Object.keys(labelPrefs).forEach((key) => {
+      if (typeof saved[key] === 'boolean') labelPrefs[key] = saved[key];
+    });
+  } catch (_) {
+    // 読めなければ既定のまま
+  }
+  window.kmAdminLabelPrefs = labelPrefs;
+  document.querySelectorAll('.km-label-pref').forEach((input) => {
+    const key = input.dataset.kmLabelPref;
+    if (!(key in labelPrefs)) return;
+    input.checked = labelPrefs[key];
+    input.addEventListener('change', () => {
+      labelPrefs[key] = input.checked;
+      try {
+        window.localStorage.setItem(LABEL_PREFS_KEY, JSON.stringify(labelPrefs));
+      } catch (_) {
+        // 覚えられなくても、この画面の間は効く
+      }
+      redraw();
+    });
   });
 
   // app.js は DOMContentLoaded で地図を組み立てるので、window.map が出てから繋ぐ。

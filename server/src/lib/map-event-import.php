@@ -92,9 +92,13 @@ function km_map_event_import_store(string $tmpPath, int $size): ?string
     if ($path === null) {
         return '置き場所の設定を読めませんでした。';
     }
-    // 置くのはイベントだけ(地図の本体は要らない。氏名も置き場に残さない)
+    /*
+     * 置くのはイベントと、地点に振った企画の番号だけ(地図の本体は要らない。氏名も置き場に残さない)。
+     * 番号(2026-10-23、利用者の報告「教室に企画番号を設定したが表示されない・取り込むと地点が 35 で少ない」)は
+     * それまで「アプリの地図を取り込む」でしか入らず、ここでは捨てていた。地点の無い書き出しなら null(表を触らない)
+     */
     $payload = json_encode(
-        ['uploadedAt' => date('Y-m-d H:i:s'), 'events' => $events],
+        ['uploadedAt' => date('Y-m-d H:i:s'), 'events' => $events, 'projects' => km_map_event_import_projects_of_map($map)],
         JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
     );
     if ($payload === false || @file_put_contents($path, $payload) === false) {
@@ -126,26 +130,100 @@ function km_map_event_import_events_of(stdClass $map): array
 }
 
 /**
- * 取り込み待ち。無ければ events が空。
+ * 書き出しの地図の地点に振った企画の番号(uuid => 番号)。地点が 1 つも無い書き出しなら null。**純粋関数**
  *
- * @return array{events: array<int, stdClass>, uploadedAt: ?string, error: ?string}
+ * @return array<string, list<string>>|null
+ */
+function km_map_event_import_projects_of_map(stdClass $map): ?array
+{
+    if (!isset($map->nodes) || !is_array($map->nodes) || $map->nodes === []) {
+        return null;
+    }
+    return km_map_projects_from_app($map);
+}
+
+/**
+ * 置き場に入れた番号を読み戻す(JSON の {} / [] / null のどれでも)。**純粋関数**
+ *
+ * @return array<string, list<string>>|null
+ */
+function km_map_event_import_projects_of(mixed $stored): ?array
+{
+    if ($stored === null || (!is_array($stored) && !($stored instanceof stdClass))) {
+        return null;
+    }
+    $projects = [];
+    foreach ((array) $stored as $uuid => $numbers) {
+        $uuid = trim((string) $uuid);
+        $numbers = km_map_project_numbers($numbers);
+        if ($uuid !== '' && strlen($uuid) <= 64 && $numbers !== []) {
+            $projects[$uuid] = $numbers;
+        }
+    }
+    return $projects;
+}
+
+/**
+ * 取り込み待ち。無ければ events が空。projects は地点に振った企画の番号(地点の無い書き出し・前の版で置いたものは null)
+ *
+ * @return array{events: array<int, stdClass>, projects: ?array<string, list<string>>, uploadedAt: ?string, error: ?string}
  */
 function km_map_event_import_load(): array
 {
     $path = km_map_event_import_path();
     if ($path === null || !is_readable($path)) {
-        return ['events' => [], 'uploadedAt' => null, 'error' => null];
+        return ['events' => [], 'projects' => null, 'uploadedAt' => null, 'error' => null];
     }
     $decoded = json_decode((string) file_get_contents($path));
     if (!($decoded instanceof stdClass) || !is_array($decoded->events ?? null)) {
-        return ['events' => [], 'uploadedAt' => null, 'error' => '取り込み待ちのファイルを読み取れません。捨ててから上げ直してください。'];
+        return ['events' => [], 'projects' => null, 'uploadedAt' => null, 'error' => '取り込み待ちのファイルを読み取れません。捨ててから上げ直してください。'];
     }
 
     return [
         'events' => km_map_event_import_events_of($decoded),
+        'projects' => km_map_event_import_projects_of($decoded->projects ?? null),
         'uploadedAt' => is_string($decoded->uploadedAt ?? null) ? $decoded->uploadedAt : null,
         'error' => null,
     ];
+}
+
+/**
+ * 企画の番号の見せ物: 番号のある地点の数・そのうち Website に無い地点・番号の数・いま Website にある番号の地点の数。**純粋関数**
+ *
+ * @param array<string, list<string>> $projects uuid => 番号
+ * @param array<string, mixed> $knownNodes id => …(km_map_event_import_known_nodes)
+ * @param array<string, list<string>> $current いまの表(uuid => 番号)
+ * @return array{nodes:int, unknown:int, numbers:int, current:int}
+ */
+function km_map_event_import_projects_summary(array $projects, array $knownNodes, array $current): array
+{
+    $unknown = 0;
+    $numbers = [];
+    foreach ($projects as $uuid => $list) {
+        if (!isset($knownNodes[km_app_map_node_id((string) $uuid)])) {
+            $unknown++;
+        }
+        foreach ($list as $number) {
+            $numbers[$number] = true;
+        }
+    }
+    return ['nodes' => count($projects), 'unknown' => $unknown, 'numbers' => count($numbers), 'current' => count($current)];
+}
+
+/** 企画の番号の表を、取り込んだファイルの番号で丸ごと入れ替える(地図の取り込みと同じ)。入れた行の数 */
+function km_map_event_import_apply_projects(PDO $pdo, array $projects): int
+{
+    // CREATE は取引を確定させるので、取引の前に
+    km_map_node_projects_ensure_table($pdo);
+    $pdo->beginTransaction();
+    try {
+        $saved = km_map_node_projects_sync($pdo, $projects);
+        $pdo->commit();
+    } catch (Throwable $exception) {
+        $pdo->rollBack();
+        throw $exception;
+    }
+    return $saved;
 }
 
 /** 取り込み待ちを捨てる。無ければ何もしない。 */
@@ -197,6 +275,7 @@ function km_map_event_import_datetime(mixed $millis): ?string
  *   pois: array<int, array{floor:string, name:string, category:string, x:int, y:int, anchorNodeId:?string, note:string}>,
  *   aliases: array<string, string>,
  *   hidden: array<int, string>,
+ *   onlyEventNodes: bool,
  *   skipped: array{unknownNode:int, unknownFloor:array<int, string>, staffOnly:int, badLineKey:int}
  * }
  */
@@ -280,6 +359,19 @@ function km_map_event_from_app(stdClass $event, array $knownNodes): array
     }
 
     // --- 一時地点 → 臨時の地点 ---
+    // アプリで道へつないだ線(2026-10-23。MapEvent.placeLinks)。あれば、それを案内先(つなぎ先)にする
+    $linkedTo = [];
+    // **版 22 のアプリは項目名を a / b で書き出していた**(R8 に縮められた。2026-10-23 に見つけた)。それも読む
+    foreach (is_array($event->placeLinks ?? null) ? $event->placeLinks : [] as $link) {
+        if (!($link instanceof stdClass)) {
+            continue;
+        }
+        $placeUuid = $link->placeUuid ?? $link->a ?? null;
+        $nodeUuid = $link->nodeUuid ?? $link->b ?? null;
+        if (is_string($placeUuid) && is_string($nodeUuid) && !isset($linkedTo[$placeUuid])) {
+            $linkedTo[$placeUuid] = $toId($nodeUuid);
+        }
+    }
     $pois = [];
     foreach (is_array($event->places ?? null) ? $event->places : [] as $place) {
         if (!($place instanceof stdClass)) {
@@ -318,7 +410,10 @@ function km_map_event_from_app(stdClass $event, array $knownNodes): array
             'category' => $category,
             'x' => (int) round($x),
             'y' => (int) round($y),
-            'anchorNodeId' => km_map_event_import_anchor($knownNodes, $webFloor, $x, $y),
+            // つないだ先が同じ階にあればそれ、無ければ同じ階の一番近い通れる地点
+            'anchorNodeId' => ($linked = $linkedTo[(string) ($place->uuid ?? '')] ?? null) !== null && ($knownNodes[$linked]['floor'] ?? null) === $webFloor
+                ? $linked
+                : km_map_event_import_anchor($knownNodes, $webFloor, $x, $y),
             'note' => mb_substr($note, 0, 255),
         ];
     }
@@ -333,6 +428,8 @@ function km_map_event_from_app(stdClass $event, array $knownNodes): array
         'pois' => $pois,
         'aliases' => $aliases,
         'hidden' => array_map('strval', array_keys($hidden)),
+        // イベントの地点だけを出す(2026-10-23。アプリの MapEvent.onlyEventNodes。無い・null は ON)
+        'onlyEventNodes' => ($event->onlyEventNodes ?? null) !== false,
         'skipped' => $skipped,
     ];
 }
@@ -345,20 +442,43 @@ function km_map_event_from_app(stdClass $event, array $knownNodes): array
  */
 function km_map_event_import_anchor(array $knownNodes, string $webFloor, float $x, float $y): ?string
 {
-    $best = null;
-    $bestDistance = INF;
-    foreach ($knownNodes as $id => $node) {
-        if ($node['floor'] !== $webFloor || !in_array($node['type'], KM_MAP_EVENT_IMPORT_ANCHOR_TYPES, true)) {
-            continue;
+    /*
+     * **道と階段を先に探す**(2026-10-23)。以前は部屋・出入口・建物も同じ重みで選び、1F のゴミ箱が女子トイレに、
+     * 外のゴミ箱が体育館の出入口につながった(経路がその部屋・建物の中へ向かう)。道も階段も無い階でだけ、ほかの種類を使う
+     */
+    foreach ([['road', 'stairs'], KM_MAP_EVENT_IMPORT_ANCHOR_TYPES] as $types) {
+        $best = null;
+        $bestDistance = INF;
+        foreach ($knownNodes as $id => $node) {
+            if ($node['floor'] !== $webFloor || !in_array($node['type'], $types, true)) {
+                continue;
+            }
+            $distance = ($node['x'] - $x) ** 2 + ($node['y'] - $y) ** 2;
+            if ($distance < $bestDistance) {
+                $bestDistance = $distance;
+                $best = (string) $id;
+            }
         }
-        $distance = ($node['x'] - $x) ** 2 + ($node['y'] - $y) ** 2;
-        if ($distance < $bestDistance) {
-            $bestDistance = $distance;
-            $best = (string) $id;
+        if ($best !== null) {
+            return $best;
         }
     }
 
-    return $best;
+    return null;
+}
+
+/**
+ * uuid が `web-event-<番号>` で、その番号の Website のイベントが在り、まだアプリの印が無ければ、その番号。ほかは null
+ */
+function km_map_event_import_web_event_id(PDO $pdo, string $uuid): ?int
+{
+    if (preg_match('/\Aweb-event-(\d{1,9})\z/', $uuid, $m) !== 1) {
+        return null;
+    }
+    $id = (int) $m[1];
+    $stmt = $pdo->prepare('SELECT 1 FROM km_map_events e WHERE e.id = ? AND NOT EXISTS (SELECT 1 FROM km_map_event_sources s WHERE s.event_id = e.id)');
+    $stmt->execute([$id]);
+    return $stmt->fetchColumn() !== false ? $id : null;
 }
 
 /** DB に在るノード(id => 階・種類・座標)。 */
@@ -397,7 +517,17 @@ function km_map_event_import_preview(PDO $pdo, array $events): array
     $preview = [];
     foreach ($events as $event) {
         $converted = km_map_event_from_app($event, $known);
-        $preview[] = ['converted' => $converted, 'existing' => $existingByUuid[$converted['uuid']] ?? null];
+        // Website で作って渡したイベント(web-event-<番号>)は、その番号のイベントを入れ替える(km_map_event_import_apply と同じ)
+        $existing = $existingByUuid[$converted['uuid']] ?? null;
+        $webEventId = $existing === null ? km_map_event_import_web_event_id($pdo, $converted['uuid']) : null;
+        if ($webEventId !== null) {
+            foreach (km_map_events_all($pdo) as $row) {
+                if ((int) $row['id'] === $webEventId) {
+                    $existing = $row;
+                }
+            }
+        }
+        $preview[] = ['converted' => $converted, 'existing' => $existing];
     }
 
     return $preview;
@@ -421,6 +551,16 @@ function km_map_event_import_apply(PDO $pdo, stdClass $event): array
         $stmt = $pdo->prepare('SELECT event_id FROM km_map_event_sources WHERE app_uuid = ?');
         $stmt->execute([$converted['uuid']]);
         $found = $stmt->fetchColumn();
+        /*
+         * Website で作って管理アプリへ渡したイベント(uuid が web-event-<番号>。lib/map-event-export.php)は、
+         * **その Website のイベントを更新する**(2026-10-23。以前は同じ名前のイベントがもう 1 つできた)。印もここで付ける
+         */
+        $webEventId = km_map_event_import_web_event_id($pdo, $converted['uuid']);
+        if ($found === false && $webEventId !== null) {
+            $pdo->prepare('INSERT INTO km_map_event_sources (event_id, app_uuid, imported_at) VALUES (?, ?, NOW())')
+                ->execute([$webEventId, $converted['uuid']]);
+            $found = $webEventId;
+        }
         $created = $found === false;
 
         if ($created) {
@@ -483,6 +623,9 @@ function km_map_event_import_apply(PDO $pdo, stdClass $event): array
         foreach ($converted['hidden'] as $id) {
             $hidden->execute([$eventId, $id]);
         }
+        // 子の表と一緒に消したので、アプリの値で入れ直す
+        $pdo->prepare('INSERT INTO km_map_event_options (event_id, only_event_nodes) VALUES (?, ?)')
+            ->execute([$eventId, $converted['onlyEventNodes'] ? 1 : 0]);
 
         $pdo->commit();
     } catch (Throwable $exception) {

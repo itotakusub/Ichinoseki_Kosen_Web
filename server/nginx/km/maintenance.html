@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>メンテナンス中 | KosenMap</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f5f7fa;
+    --card: #ffffff;
+    --text: #1f2933;
+    --muted: #52606d;
+    --accent: #2563eb;
+    --border: #d9e2ec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #11161d;
+      --card: #1b222c;
+      --text: #e4e7eb;
+      --muted: #9aa5b1;
+      --accent: #60a5fa;
+      --border: #2d3748;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 16px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", sans-serif;
+    line-height: 1.7;
+  }
+  main {
+    width: 100%;
+    max-width: 480px;
+    padding: 32px 24px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    text-align: center;
+  }
+  .icon { font-size: 48px; line-height: 1; }
+  h1 { margin: 16px 0 8px; font-size: 22px; }
+  p { margin: 8px 0; color: var(--muted); }
+  .en { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border); font-size: 14px; }
+  .en strong { color: var(--text); }
+</style>
+</head>
+<body>
+<main>
+  <div class="icon" aria-hidden="true">🛠️</div>
+  <h1>ただいまメンテナンス中です</h1>
+  <p>安全のための緊急の更新を行っています。<br>終わりしだい再開します。</p>
+  <p>ご不便をおかけして申し訳ありません。しばらくしてから、もう一度開いてください。</p>
+  <p class="en"><strong>Under maintenance.</strong><br>We are applying an urgent security update. Please try again later.</p>
+</main>
+</body>
+</html>

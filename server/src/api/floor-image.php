@@ -136,17 +136,14 @@ if ($buildingKey !== '') {
  * DB の値でも念のため確かめる。**管理画面から入る値なので、
  * ここが唯一の防波堤ではない**が、`..` を含むパスが混ざったときに
  * ファイルシステムを歩き回らせない。
+ *
+ * 管理画面で差し替えた画像(2026-10-21)は `upload:floor_<32 桁>.<拡張子>` で uploads/ に在る。
+ * 組み込みは `Main/` の下。どちらも外へ出るものは null(lib/map-floors.php の km_map_floor_image_file)。
  */
-$relative = ltrim(str_replace('\\', '/', $svgPath), '/');
-if ($relative === '' || str_contains($relative, '..')) {
-    error_log("api/floor-image.php: 不正なパスが登録されています: {$svgPath}");
-    http_response_code(500);
-    exit;
-}
-
-$base = realpath(__DIR__ . '/../Main');
-$path = realpath(__DIR__ . '/../Main/' . $relative);
-if ($base === false || $path === false || !str_starts_with($path, $base . DIRECTORY_SEPARATOR)) {
+require_once __DIR__ . '/../lib/map-floors.php';
+$path = km_map_floor_image_file((string) $svgPath);
+if ($path === null) {
+    error_log("api/floor-image.php: 画像が見つからないか、不正なパスが登録されています: {$svgPath}");
     http_response_code(404);
     exit;
 }

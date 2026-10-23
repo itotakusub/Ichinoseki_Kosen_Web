@@ -275,6 +275,13 @@ docker compose exec -u root web chmod 640 config/<?= km_e(basename($configPath))
                       </div>
 
                       <h4 class="fs-6 mb-2" data-i18n="page.mapSettings.nameTitle">教職員氏名</h4>
+                      <?php // 2026-10-22、利用者の指示「権限チェックを厳格化。例外なし」(lib/node-visibility.php) ?>
+                      <div class="alert alert-secondary fs-7 py-2" role="note">
+                        <strong>Web の地図はこの設定を使いません。</strong>
+                        教員室・研究室は本校の教職員(組織のメンバー)としてサインインした人にだけ出し、教職員氏名とメモは先生が許可した地点だけ出します
+                        (「<a href="./staff-nodes.php">教職員の地点</a>」で承認)。パスワード・お試しの閲覧リンク・テスト用アカウントでは開きません。
+                        下の設定は Android アプリへの配信に効きます。
+                      </div>
                       <div class="mb-3">
                         <div class="form-check">
                           <input

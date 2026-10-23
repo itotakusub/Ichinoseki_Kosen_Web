@@ -218,6 +218,51 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 返したものと同じで、教職員氏名は解除していなければ既に null になっている)。
     window.graphData = graphData;
 
+    /*
+     * ---- ポスター(2026-10-21、lib/posters.php) ----
+     *
+     * 出し方(表示しない / イベント中のみ / 常に表示)はサーバーが決め、出さないときは空で届く。
+     * 地点に置いたものは、その地点の詳細に出し、地図の名前に 🖼️ を付ける。
+     * 一覧のページ(/posters.php)から来たとき(`?room=…&poster=<番号>`)は、そのポスターを詳細の先頭に出す。
+     */
+    const postersById = new Map();
+    const postersByNode = new Map();
+    (graphData.posters || []).forEach(function (poster) {
+        postersById.set(Number(poster.id), poster);
+        // 企画の番号で置いたポスターは、その番号の地点全部に出す(2026-10-23。nodeIds。無い古い応答は nodeId だけ)
+        const nodeIds = Array.isArray(poster.nodeIds) && poster.nodeIds.length > 0 ? poster.nodeIds : (poster.nodeId ? [poster.nodeId] : []);
+        nodeIds.forEach(function (nodeId) {
+            if (!postersByNode.has(nodeId)) postersByNode.set(nodeId, []);
+            postersByNode.get(nodeId).push(poster);
+        });
+        // 名前が番号の一時地点(臨時の地点)にも出す。鍵は 'poi:<番号>'(2026-10-23)
+        (poster.poiIds || []).forEach(function (poiId) {
+            const key = 'poi:' + poiId;
+            if (!postersByNode.has(key)) postersByNode.set(key, []);
+            postersByNode.get(key).push(poster);
+        });
+    });
+
+    /*
+     * ---- 企画のスケジュール(2026-10-23、lib/event-schedule.php) ----
+     * 一般に出す印の行だけが届く。場所は企画の番号から引いた地点(nodeIds)。地点の詳細に「この場所の予定」を出す。
+     * 一覧は Main/event-schedule.js が出す
+     */
+    const scheduleByNode = new Map();
+    (graphData.schedule || []).forEach(function (entry) {
+        (entry.nodeIds || []).forEach(function (nodeId) {
+            if (!scheduleByNode.has(nodeId)) scheduleByNode.set(nodeId, []);
+            scheduleByNode.get(nodeId).push(entry);
+        });
+        (entry.poiIds || []).forEach(function (poiId) {
+            const key = 'poi:' + poiId;
+            if (!scheduleByNode.has(key)) scheduleByNode.set(key, []);
+            scheduleByNode.get(key).push(entry);
+        });
+    });
+    const focusPosterMeta = document.querySelector('meta[name="km-focus-poster"]');
+    const focusPosterId = focusPosterMeta ? Number(focusPosterMeta.getAttribute('content')) : 0;
+
     // ---- 初期設定 ----
     /*
      * 階を移るときの好み(2026-09-22)。**端末に覚える**(閲覧者ごとの好みなのでサーバーへは送らない)。
@@ -279,6 +324,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     window.currentFloor = "1"; // 文字列として扱う
     let currentRoutePath = null;
     /*
+     * 出発地・目的地は**地点の id で持つ**(2026-10-23、利用者の報告「出発地・目的地にできない。ボタンが反応しない」)。
+     * 以前は入力欄の文字(札)から引き直していたので、同じ札の地点が 2 つあると先の方になり、
+     * 一時地点(つなぎ先が道や階段)は札にできず黙って断られていた。手で打ち直したら id は捨てて、文字から引く
+     */
+    let routeStartId = null;
+    let routeEndId = null;
+    // 一時地点を選んだときはその番号(共有のリンクに入れる。つなぎ先の道の id では、開いた人に名前が出ない)
+    let routeStartPoi = null;
+    let routeEndPoi = null;
+    // 経路を引き直したところ。この 1 回だけ経路に合わせて寄せる(階を移るたびに拡大率を戻さない。2026-10-23)
+    let routeFitPending = false;
+    /*
      * 階のレールを畳むための状態(使うのは下の「階のレールを自動で畳む」節)。
      *
      * **宣言だけ先に置く。** 畳む処理は地図の `dragstart` からも呼ばれ、
@@ -327,11 +384,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     function setSearchPanelCollapsed(collapsed, refit = true) {
         if (!searchPanel) return;
         searchPanel.classList.toggle('collapsed', collapsed);
+        // 経路の欄と左の引き出し(場所の詳細など)は同じ左側に出る。経路の欄を開いたら引き出しは閉じる(2026-10-23)
+        if (!collapsed && window.KmSheet) window.KmSheet.close();
+        document.body.classList.toggle('km-route-panel-open', !collapsed);
         if (mobileSearchToggle) {
             const icon = mobileSearchToggle.querySelector('.km-action-icon');
             const label = mobileSearchToggle.querySelector('.km-action-label');
-            if (icon) icon.textContent = collapsed ? '🔍' : '✕';
-            if (label) label.textContent = collapsed ? '検索' : '閉じる';
+            // 場所の検索は上の窓に移ったので、このボタンは「経路」(2026-10-23)
+            if (icon) icon.textContent = collapsed ? '🧭' : '✕';
+            if (label) label.textContent = collapsed ? '経路' : '閉じる';
             mobileSearchToggle.classList.toggle('is-active', !collapsed);
             mobileSearchToggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
         }
@@ -385,7 +446,10 @@ document.addEventListener('DOMContentLoaded', async () => {
          * ピルが「検索」と書かれたまま(=閉じているときの顔)で開いた状態になり、
          * 押すとどうなるのかが読めない。
          */
-        setSearchPanelCollapsed(window.matchMedia('(max-width: 768px)').matches, false);
+        /*
+         * 2026-10-23 から PC でも畳んで始める(Google マップ風。まず上の窓で場所を探し、「経路」で開く)
+         */
+        setSearchPanelCollapsed(true, false);
     }
 
     /*
@@ -437,6 +501,16 @@ document.addEventListener('DOMContentLoaded', async () => {
      * zoom.js は Old/Main/ へ退避した。
      */
     L.control.zoom({ position: 'bottomright' }).addTo(window.map);
+
+    /*
+     * 経路の重ね(2026-10-23、利用者の指摘「出発の表示がノードよりも後ろ。最前面に」)。
+     * Leaflet の既定では地点の点(markerPane 600)より札(tooltipPane 650)が前で、出発・到着の印は点と同じ層にいた。
+     *   kmRouteLine 610 … 経路の線と途中の点。地点の点より前、札より後ろ
+     *   kmRoutePins 680 … 出発・到着の印。札より前、吹き出し(popupPane 700)より後ろ
+     * z-index は CSSOM で入れる(style 属性ではないので CSP に掛からない。Leaflet 自身も同じことをしている)
+     */
+    window.map.createPane('kmRouteLine').style.zIndex = '610';
+    window.map.createPane('kmRoutePins').style.zIndex = '680';
 
     /*
      * 地図の初期化が終わったことを知らせる。**送出は残す** ——
@@ -730,6 +804,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     let activeMarkerGroups = [];
     // ノードID -> マーカー。検索結果からポップアップを開くのに使う。
     const markersById = new Map();
+    // 臨時の地点の番号 -> マーカー。「予定」の一覧から開くため(2026-10-23。公開の地図は部屋のマーカーと一緒に作る)
+    const poiMarkers = new Map();
+
+    const KM_POI_ICONS = {
+        food: '🍢', exhibit: '🎨', reception: '📋',
+        firstaid: '🚑', toilet: '🚻', stage: '🎤', other: '📍',
+    };
+
+    /** 臨時の地点の種類の言葉(Website の値。lib/map-events.php の KM_MAP_EVENT_POI_CATEGORIES) */
+    const KM_POI_LABELS = {
+        food: '模擬店', exhibit: '展示', reception: '受付',
+        firstaid: '救護', toilet: 'トイレ', stage: 'ステージ', other: '臨時の地点',
+    };
 
     /**
      * ノードの図形。**種類ごとに色と形を変える**(アプリと同じ)。
@@ -772,10 +859,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         const type = String(node.type || 'room');
         const setting = mapStyle.typeSetting(tuning, type);
         const box = nodeBox(type).box;
+        // ポスターのある地点。図形に輪を付け、名前に 🖼️ を付ける(styles.css の .km-node-has-poster)
+        const hasPoster = postersByNode.has(id);
 
         const marker = L.marker([node.y, node.x], {
             icon: L.divIcon({
-                className: 'km-node km-node-' + type,
+                className: 'km-node km-node-' + type + (hasPoster ? ' km-node-has-poster' : ''),
                 html: nodeIconHtml(node, type),
                 iconSize: [box, box],
                 iconAnchor: [box / 2, box / 2],
@@ -786,18 +875,32 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
 
         // ツールチップは html: true で描くので、DB 由来の文字列は必ずエスケープする
-        let tooltipContent = escapeHtml(displayNameFor(node));
+        // 企画の地点はイベント中、一時地点と同じく番号のポスターの見出しを出す(7 文字以上なら縮める。2026-10-23)
+        const project = projectDisplayFor(id, node);
+        let tooltipContent = (hasPoster ? '<span class="km-label-poster" aria-hidden="true">🖼️</span>' : '')
+            // 縮めるのはポスターの見出しだけ(「28 ファーストペンギンファブ」のように番号を付けた部屋の名前は縮めない)
+            + escapeHtml(project ? (project.fromPoster ? shortPoiName(project.name) : project.name) : displayNameFor(node));
         if (window.isAdmin) {
             /*
              * **`style="…"` を書かない。** CSP に `'unsafe-inline'` が無く、
              * style 属性には nonce もハッシュも効かない(`lib/csp.php`)。
              * ここは以前インラインの style を持っており、**効かないまま気付かれていなかった。**
              */
-            tooltipContent = `<div class="km-admin-tip">
-                <span class="km-admin-tip-id">${escapeHtml(id)}</span><br>
-                ${escapeHtml(displayNameFor(node))}<br>
-                <span class="km-admin-tip-xy">(${node.x}, ${node.y})</span>
-            </div>`;
+            /*
+             * 出すもの(ID・座標・先生の名前)は地図編集の切り替えに従う(2026-10-23。admin/map-editor.php・map-editor.js)。
+             * 切り替えが無い画面では今までどおり全部出す
+             */
+            const prefs = window.kmAdminLabelPrefs || { id: true, xy: true, names: true };
+            const name = prefs.names ? displayNameFor(node) : (node.alias || node.name);
+            tooltipContent = '<div class="km-admin-tip">'
+                + (prefs.id ? `<span class="km-admin-tip-id">${escapeHtml(id)}</span><br>` : '')
+                + escapeHtml(name)
+                // 企画の番号(管理アプリで振る)と、イベント中に出さない印(2026-10-23。地図編集で見分けるため)
+                + (Array.isArray(node.projects) && node.projects.length > 0
+                    ? `<br><span class="km-admin-tip-project">企画 ${node.projects.map(escapeHtml).join('・')}</span>` : '')
+                + (node.hidden ? '<br><span class="km-admin-tip-hidden">イベント中は出さない</span>' : '')
+                + (prefs.xy ? `<br><span class="km-admin-tip-xy">(${node.x}, ${node.y})</span>` : '')
+                + '</div>';
         }
 
         /*
@@ -823,12 +926,15 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         if (!window.isAdmin) {
             /*
+             * 詳細は**左の引き出し**に出す(2026-10-23、Google マップ風。下の openPlaceSheet)。
+             * 引き出しの無いページだけ、今までどおり点の吹き出し。
+             *
              * **onclick 属性は使えない。** CSP(script-src に 'unsafe-inline' なし)は
              * インラインのイベントハンドラを実行させない — nonce もハッシュも
              * 属性には効かない。実際 1.0.1 でここが動かなくなっていた。
-             * 行き先は data 属性に置き、クリックは下の委譲リスナーで受ける。
+             * 行き先は data 属性に置き、クリックは委譲リスナー(handleDetailClick)で受ける。
              */
-            marker.bindPopup(nodeDetailHtml(id, node, type));
+            if (!window.KmSheet) marker.bindPopup(nodeDetailHtml(id, node, type));
             // どの地点の詳細が開いたかを、popupopen で引けるようにする(テスト用アカウントの記録)
             marker.kmNodeId = id;
         }
@@ -853,9 +959,61 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (window.handleMarkerClickForBuilder) {
                     window.handleMarkerClickForBuilder(id, marker);
                 }
+                return;
+            }
+            // 公開の地図: 左の引き出しに詳細(2026-10-23)
+            if (!window.isAdmin && window.KmSheet) {
+                L.DomEvent.stopPropagation(e);
+                openPlaceSheet({ nodeId: id });
             }
         });
 
+        return marker;
+    }
+
+    /**
+     * 臨時の地点(一時ノード)のマーカー。**部屋(外は建物)の地点と同じ見た目と振る舞い**(2026-10-23、利用者の指示)。
+     * 形・色・大きさ・札の出し方は表示調整のその種類の設定に従う。名前はポスターの見出し(poiDisplay。札は 7 文字以上なら縮める)。
+     * 吹き出しは poiDetailHtml。案内はつなぎ先の地点へ(公開の地図だけで使う)
+     */
+    function createPoiMarker(poi, type) {
+        const shown = poiDisplay(poi);
+        const setting = mapStyle.typeSetting(tuning, type);
+        const box = nodeBox(type).box;
+        const hasPoster = postersByNode.has('poi:' + poi.id);
+
+        const marker = L.marker([poi.y, poi.x], {
+            icon: L.divIcon({
+                className: 'km-node km-node-' + type + (hasPoster ? ' km-node-has-poster' : ''),
+                html: nodeIconHtml({ name: shown.name }, type),
+                iconSize: [box, box],
+                iconAnchor: [box / 2, box / 2],
+            }),
+            keyboard: false,
+            interactive: true,
+        });
+
+        const typeAllowsLabel = setting.label === null ? tuning.labelMode !== 'icon_only' : setting.label;
+        if (shown.name.trim() !== '' && typeAllowsLabel) {
+            marker.bindTooltip((hasPoster ? '<span class="km-label-poster" aria-hidden="true">🖼️</span>' : '')
+                + escapeHtml(shortPoiName(shown.name)), {
+                permanent: true,
+                direction: 'top',
+                offset: [0, -box / 2],
+                interactive: true,
+                className: 'km-label km-label-' + type,
+                html: true,
+            });
+        }
+        // 詳細は左の引き出し(2026-10-23)。引き出しの無いページだけ点の吹き出し
+        if (window.KmSheet) {
+            marker.on('click', (e) => {
+                L.DomEvent.stopPropagation(e);
+                openPlaceSheet({ poiId: Number(poi.id) });
+            });
+        } else {
+            marker.bindPopup(poiDetailHtml(poi, shown));
+        }
         return marker;
     }
 
@@ -966,10 +1124,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         const floorLabel = String(node.floor) === 'outside' ? '外' : `${node.floor}F`;
         const typeLabel = mapStyle.LABELS[type] || type;
         // イベント中の名前は**置き換える**(2026-10-14、利用者の判断)。普段の名前は下に小さく残す
-        const title = node.alias || node.name;
+        // 企画の地点はイベント中、ポスターの見出しを名前に・説明を備考に(一時地点の吹き出しと同じ。2026-10-23)
+        const project = projectDisplayFor(id, node);
+        const title = project ? project.name : (node.alias || node.name);
 
         let rows = '';
-        if (node.alias) {
+        if ((project && project.fromPoster) || node.alias) {
             rows += `<div class="km-detail-row"><span>普段の名前</span><b>${escapeHtml(node.name)}</b></div>`;
         }
         if (node.subtitle) {
@@ -988,18 +1148,40 @@ document.addEventListener('DOMContentLoaded', async () => {
             rows += `<div class="km-detail-row km-detail-closed"><span>立入禁止</span>`
                 + `<b>${escapeHtml(node.closureReason || '')}</b></div>`;
         }
+        // 地点の URL(2026-10-21)。サーバーが http / https だけに確かめてあるが、ここでも形を見てから出す
+        if (node.linkUrl && /^https?:\/\//i.test(node.linkUrl)) {
+            rows += `<a class="km-detail-link" href="${escapeHtml(node.linkUrl)}" target="_blank" rel="noopener noreferrer">`
+                + `${escapeHtml(node.linkLabel || 'くわしく見る')} ↗</a>`;
+        }
+        // 企画の番号(2026-10-23。管理アプリで振る)
+        if (Array.isArray(node.projects) && node.projects.length > 0) {
+            rows += `<div class="km-detail-row"><span>企画</span><b>${node.projects.map(escapeHtml).join('・')}</b></div>`;
+        }
+        if (project && project.note) {
+            rows += `<div class="km-detail-row"><span>備考</span><b>${escapeHtml(project.note)}</b></div>`;
+        }
+        const posters = posterListHtml(id);
+        const schedule = scheduleListHtml(id);
 
         /*
          * **押せないボタンを出さない。** 目的地にできない地点で
          * 灰色のボタンだけ見せても、なぜ押せないのかは伝わらない。
          * 建物名のときは、代わりに何を選べばよいかを一行で言う。
          */
+        /*
+         * ボタン(2026-10-23 から Google マップ風に「経路」「ここから出発」「共有」)。
+         * 「経路」はここを目的地にして、出発地を選んでもらう(経路の欄が開く)
+         */
+        const share = `<button type="button" class="popup-btn secondary km-detail-share" data-km-share="place" data-km-node="${escapeHtml(id)}">↗ 共有</button>`;
         const actions = isRoutableNode(node)
-            ? `<button class="popup-btn" data-km-pick="start" data-km-node="${escapeHtml(id)}">ここを出発地にする</button>
-               <button class="popup-btn secondary" data-km-pick="end" data-km-node="${escapeHtml(id)}">ここを目的地にする</button>`
+            ? `<div class="km-detail-actions">
+                 <button class="popup-btn km-detail-route" data-km-pick="end" data-km-node="${escapeHtml(id)}">🧭 経路</button>
+                 <button class="popup-btn secondary" data-km-pick="start" data-km-node="${escapeHtml(id)}">ここから出発</button>
+                 ${share}
+               </div>`
             : (node.type === 'facility'
-                ? `<p class="km-detail-note">建物そのものは行き先にできません。中の部屋を選んでください。</p>`
-                : '');
+                ? `<p class="km-detail-note">建物そのものは行き先にできません。中の部屋を選んでください。</p><div class="km-detail-actions">${share}</div>`
+                : `<div class="km-detail-actions">${share}</div>`);
 
         /*
          * 中の階へ入る道(2026-09-22)。**階があるときだけ出す。**
@@ -1015,6 +1197,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                         data-km-node="${escapeHtml(link.nodeId)}">${escapeHtml(link.label || link.floor)}</button>`).join('')}
                </div>`;
 
+        // ブックマーク(2026-10-23。Main/user-history.js が押したときと開いたときの状態を受け持つ)
+        const bookmark = window.KmUserHistory && window.KmUserHistory.enabled
+            ? `<button type="button" class="popup-btn secondary km-bookmark-btn" data-km-bookmark="${escapeHtml(id)}" aria-pressed="false">☆ ブックマーク</button>`
+            : '';
+
         return `
             <div class="popup-content km-detail">
                 <span class="popup-title">${escapeHtml(title)}</span>
@@ -1023,11 +1210,94 @@ document.addEventListener('DOMContentLoaded', async () => {
                     <span class="km-detail-floor">${escapeHtml(floorLabel)}</span>
                 </div>
                 ${rows}
+                ${schedule}
+                ${posters}
                 ${enter}
                 ${actions}
+                ${bookmark}
             </div>
         `;
     }
+
+    /** スケジュールの日時を「11/3 10:00〜11:00」の形に(サーバーは Y-m-d H:i:s。端末の時刻帯に関係なく字のまま読む) */
+    function scheduleTimeLabel(entry) {
+        const parse = (value) => /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})/.exec(String(value || ''));
+        const start = parse(entry.startsAt);
+        if (!start) return '';
+        const end = parse(entry.endsAt);
+        const day = `${Number(start[2])}/${Number(start[3])}`;
+        let label = `${day} ${start[4]}:${start[5]}`;
+        if (end) {
+            label += end[1] === start[1] && end[2] === start[2] && end[3] === start[3]
+                ? `〜${end[4]}:${end[5]}`
+                : `〜${Number(end[2])}/${Number(end[3])} ${end[4]}:${end[5]}`;
+        }
+        return label;
+    }
+    window.kmScheduleTimeLabel = scheduleTimeLabel;
+
+    /** 予定が開催中か(始まり〜終わり。終わりが無ければ始まりから 1 時間)。字の日時を端末の時刻として比べる */
+    function scheduleIsNow(entry, now) {
+        const toDate = (value) => {
+            const m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})/.exec(String(value || ''));
+            return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5])) : null;
+        };
+        const start = toDate(entry.startsAt);
+        if (!start) return false;
+        const end = toDate(entry.endsAt) || new Date(start.getTime() + 3600000);
+        return start <= now && now < end;
+    }
+    window.kmScheduleIsNow = scheduleIsNow;
+
+    /** 地点の詳細に出す「この場所の予定」(2026-10-23)。開催中には印を付ける */
+    function scheduleListHtml(nodeId) {
+        const list = scheduleByNode.get(nodeId) || [];
+        if (list.length === 0) return '';
+        const now = new Date();
+        return `<div class="km-schedule-list" aria-label="この場所の予定"><div class="km-schedule-head">この場所の予定</div>${list.map(function (entry) {
+            const live = scheduleIsNow(entry, now);
+            return `<div class="km-schedule-item${live ? ' is-live' : ''}">
+                <span class="km-schedule-time">${escapeHtml(scheduleTimeLabel(entry))}${live ? ' <em>開催中</em>' : ''}</span>
+                <b class="km-schedule-title">${escapeHtml(entry.title)}</b>
+                ${entry.organizer ? `<span class="km-schedule-org">${escapeHtml(entry.organizer)}</span>` : ''}
+                ${entry.description ? `<span class="km-schedule-desc">${escapeHtml(entry.description)}</span>` : ''}
+            </div>`;
+        }).join('')}</div>`;
+    }
+
+    /**
+     * 地点の詳細に出すポスター(2026-10-21)。一覧のページから来たポスターを先頭にし、印を付ける。
+     * 画像の箱は**大きさを決めてある**(styles.css の .km-poster-thumb) —— 画像が読み終わってから
+     * 吹き出しの高さが変わると、寄せた位置からずれる。押すと大きく見られる(openPosterViewer)。
+     */
+    function posterListHtml(nodeId) {
+        const list = (postersByNode.get(nodeId) || []).slice();
+        if (list.length === 0) return '';
+        list.sort(function (a, b) {
+            return (Number(b.id) === focusPosterId) - (Number(a.id) === focusPosterId);
+        });
+
+        return `<div class="km-poster-list" aria-label="ポスター">${list.map(function (poster) {
+            const focused = Number(poster.id) === focusPosterId;
+            const link = poster.linkUrl && /^https?:\/\//i.test(poster.linkUrl)
+                ? `<a class="km-poster-link" href="${escapeHtml(poster.linkUrl)}" target="_blank" rel="noopener noreferrer" data-km-poster-link="${Number(poster.id)}">くわしく見る ↗</a>`
+                : '';
+            return `<figure class="km-poster${focused ? ' is-focused' : ''}">
+                <button type="button" class="km-poster-thumb" data-km-poster-view="${escapeHtml(String(poster.id))}"
+                        aria-label="${escapeHtml(poster.title)}(大きく見る)">
+                    <img src="${escapeHtml(poster.imageUrl)}" alt="" width="${Number(poster.width) || 0}" height="${Number(poster.height) || 0}">
+                </button>
+                <figcaption class="km-poster-caption">
+                    <b class="km-poster-title">${escapeHtml(poster.title)}</b>
+                    ${poster.description ? `<span class="km-poster-desc">${escapeHtml(poster.description)}</span>` : ''}
+                    ${link}
+                    <button type="button" class="secondary-btn km-like-btn" data-km-poster-like="${Number(poster.id)}" aria-pressed="false">♡ ${Number(poster.likes) || 0}</button>
+                </figcaption>
+            </figure>`;
+        }).join('')}</div>`;
+    }
+
+    // ポスターを大きく見るのは左の引き出し(下の「場所の詳細・検索・共有」の節の openPosterViewer。2026-10-23)
 
     /** その階のマーカー一式を作る(作成済みならそれを返す)。種類ごとに分ける。 */
     function buildFloorMarkers(floor) {
@@ -1054,6 +1324,22 @@ document.addEventListener('DOMContentLoaded', async () => {
             groups[type].addLayer(marker);
         }
 
+        /*
+         * 臨時の地点(一時ノード)も部屋の地点と同じに描く(2026-10-23、利用者の指示「Room ノードのような動作。外は Facility」)。
+         * 同じ種類の束に入れるので、出し入れ(表示調整の種類・倍率)・外の建物名を薄くする・札の重なりの間引きも部屋・建物と同じに効く。
+         * 編集画面は renderEventOverlay が今までどおり印で描く
+         */
+        if (!window.isAdmin) {
+            (graphData.eventPois || []).forEach(function (poi) {
+                if (String(poi.floor) !== key) return;
+                const type = poiNodeType(poi);
+                if (!groups[type]) return;
+                const marker = createPoiMarker(poi, type);
+                poiMarkers.set(Number(poi.id), marker);
+                groups[type].addLayer(marker);
+            });
+        }
+
         floorMarkerLayers.set(key, groups);
         return groups;
     }
@@ -1064,6 +1350,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         activeMarkerGroups = [];
         floorMarkerLayers.clear();
         markersById.clear();
+        poiMarkers.clear();
     }
 
     /** 画面の描画を止めないよう、空いた時間に実行する。 */
@@ -1135,9 +1422,21 @@ document.addEventListener('DOMContentLoaded', async () => {
         const height = window.innerHeight;
         let top = EDGE_GAP, left = EDGE_GAP, right = EDGE_GAP, bottom = EDGE_GAP;
 
-        const topBar = document.querySelector('.top-bar');
-        if (isPanelVisible(topBar)) {
-            top = topBar.getBoundingClientRect().bottom + PANEL_GAP;
+        // 上の検索の窓と、その下の種類のチップ(2026-10-23 に上のバーから置き換えた)
+        ['km-searchbox', 'km-category-chips'].forEach((elementId) => {
+            const element = document.getElementById(elementId);
+            if (isPanelVisible(element)) top = Math.max(top, element.getBoundingClientRect().bottom + PANEL_GAP);
+        });
+
+        // 左の引き出し(場所の詳細など。Main/km-sheet.js)。PC は左に立つ、スマホは下から出る
+        const sheetEl = document.getElementById('km-sheet');
+        if (sheetEl && sheetEl.classList.contains('is-open')) {
+            // 滑り出している途中でも、出きったときの大きさで数える(位置ではなく幅と高さを見る)
+            if (width > 768) {
+                left = Math.max(left, sheetEl.offsetWidth + PANEL_GAP);
+            } else {
+                bottom = Math.max(bottom, sheetEl.offsetHeight + PANEL_GAP);
+            }
         }
 
         const panel = document.getElementById('search-panel');
@@ -1201,6 +1500,12 @@ document.addEventListener('DOMContentLoaded', async () => {
      * (実測: 幅400pxで zoom が -1 に張り付き、6号棟から先が画面の外に出ていた)。
      */
     function applyFit(rawBounds) {
+        fitMinZoom(rawBounds);
+        window.map.fitBounds(L.latLngBounds(rawBounds), mapFitPadding());
+    }
+
+    /** その階の全体が入る倍率まで、ズームの下限を下げる(収めはしない。経路の途中で階を移るとき用。2026-10-23) */
+    function fitMinZoom(rawBounds) {
         /*
          * 呼び出し側は [[0,0],[h,w]] の素の配列を渡してくる(Leaflet はそれを受け付ける)。
          * ここでは getNorthWest() などを使うので、**LatLngBounds へ揃えてから触る**。
@@ -1229,8 +1534,15 @@ document.addEventListener('DOMContentLoaded', async () => {
             const fitZoom = Math.floor(Math.log2(scale) * 4) / 4;
             window.map.setMinZoom(Math.min(-1, fitZoom));
         }
+    }
 
-        window.map.fitBounds(bounds, padding);
+    /** いまの経路がその階で始まる所。無ければ null */
+    function firstRouteLatLngOn(floor) {
+        for (const id of currentRoutePath || []) {
+            const node = graphData.nodes[id];
+            if (node && String(node.floor) === String(floor)) return [node.y, node.x];
+        }
+        return null;
     }
 
     /** いまの階を、パネルを避けた形で収め直す。 */
@@ -1340,9 +1652,21 @@ document.addEventListener('DOMContentLoaded', async () => {
          * それまでの視点は意味を持たない)。
          */
         currentFloorBounds = bounds;
-        userMovedMap = false;
         window.map.invalidateSize(); // コンテナサイズの再計算
-        applyFit(bounds);
+        /*
+         * **経路を出している間は、拡大率を戻さない**(2026-10-23、利用者の指摘「ルートを設定して別の階に行くと
+         * 拡大率がリセットされて面倒」)。下限の倍率だけその階に合わせ直し、位置は drawPath がその階の経路の始まりへ動かす。
+         * 経路を引いた直後(routeFitPending)と、経路の無いときは今までどおり階の全体を見せる。
+         */
+        if (currentRoutePath && !routeFitPending) {
+            fitMinZoom(bounds);
+            if (!firstRouteLatLngOn(window.currentFloor)) {
+                window.map.setView(L.latLngBounds(bounds).getCenter(), window.map.getZoom());
+            }
+        } else {
+            userMovedMap = false;
+            applyFit(bounds);
+        }
 
         renderGlobalLabels();
         renderGlobalEdges();
@@ -1453,6 +1777,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             showRoomNotice('この部屋は今は案内していません。地図から探してください。');
             return;
         }
+        if (focusPosterId && !postersById.has(focusPosterId)) {
+            // 一覧のページを開いたあとで出し方が変わった・止められた。部屋は開く
+            showRoomNotice('このポスターは今は掲示していません。');
+        }
         const floor = String(node.floor);
         const open = () => {
             userMovedMap = true;   // このあと収め直して位置を戻さない
@@ -1470,10 +1798,13 @@ document.addEventListener('DOMContentLoaded', async () => {
             const center = window.map.project([node.y, node.x], zoom)
                 .add([size.x / 2 - visibleX, size.y / 2 - visibleY]);
             window.map.setView(window.map.unproject(center, zoom), zoom, { animate: false });
-            L.popup({ autoPan: false })
-                .setLatLng([node.y, node.x])
-                .setContent(nodeDetailHtml(id, node, String(node.type || 'room')))
-                .openOn(window.map);
+            // 詳細は左の引き出し(2026-10-23)。引き出しの無いページは今までどおり、その場の吹き出し
+            if (!openPlaceSheet({ nodeId: id })) {
+                L.popup({ autoPan: false })
+                    .setLatLng([node.y, node.x])
+                    .setContent(nodeDetailHtml(id, node, String(node.type || 'room')))
+                    .openOn(window.map);
+            }
         };
         if (floor !== String(window.currentFloor) && floorImages[floor]) {
             // 階の図は非同期に載る。**載ってから寄せる**(kmEnterBuilding と同じ)
@@ -1555,12 +1886,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     /** 札の要素 → その点のマーカー(点の中心を測って、線の根元にする) */
     function markersByLabel() {
         const byLabel = new Map();
-        markersById.forEach(function (marker) {
+        forEachPointMarker(function (marker) {
             const tip = marker.getTooltip && marker.getTooltip();
             const el = tip && tip.getElement && tip.getElement();
             if (el && el.isConnected) byLabel.set(el, marker);
         });
         return byLabel;
+    }
+
+    /** 地点のマーカー全部(臨時の地点も部屋と同じに数える。2026-10-23) */
+    function forEachPointMarker(fn) {
+        markersById.forEach(fn);
+        poiMarkers.forEach(fn);
     }
 
     function clearLabelLayout(el) {
@@ -1609,7 +1946,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const items = [];
         const targets = [];
         const nodes = [];
-        markersById.forEach(function (marker) {
+        forEachPointMarker(function (marker) {
             const icon = marker.getElement && marker.getElement();
             if (!icon || !icon.isConnected) return;
             const r = icon.getBoundingClientRect();
@@ -1677,6 +2014,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     window.map.on('popupopen', (e) => {
         const source = e.popup && e.popup._source;
         if (source && source.kmNodeId) testLog('detail', { node: source.kmNodeId, floor: String(window.currentFloor) });
+        // 履歴の「開いた場所」とブックマークの ☆(2026-10-23。Main/user-history.js)
+        if (source && source.kmNodeId) window.dispatchEvent(new CustomEvent('km:node-opened', { detail: { id: source.kmNodeId } }));
     });
 
     window.map.on('zoomend', () => {
@@ -1805,17 +2144,30 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     });
 
+    // 手で打ち直したら、選んであった地点(id)は捨てる。案内開始は打った文字から引く
+    if (startInput) startInput.addEventListener('input', () => { routeStartId = null; routeStartPoi = null; });
+    if (endInput) endInput.addEventListener('input', () => { routeEndId = null; routeEndPoi = null; });
+
     // ---- UIイベントリスナー ----
     if (searchBtn) {
         searchBtn.addEventListener('click', () => {
             const startText = startInput.value;
             const endText = endInput.value;
 
-            const startNode = resolveNodeByLabel(startText);
-            const endNode = resolveNodeByLabel(endText);
+            const startNode = routeStartId || resolveNodeByLabel(startText);
+            const endNode = routeEndId || resolveNodeByLabel(endText);
 
             if (!startNode || !endNode) {
+                // 片方だけのときは、足りない方を選んでもらう(黙って何もしないと、ボタンが壊れて見える)
+                if (startNode || endNode) {
+                    openRoutePanel(startNode ? 'end' : 'start');
+                    return;
+                }
                 alert('リストから出発地と目的地を選択または正しく入力してください');
+                return;
+            }
+            if (startNode === endNode) {
+                alert('出発地と目的地が同じです。');
                 return;
             }
 
@@ -1832,7 +2184,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                 ].filter(Boolean).join(','),
             });
             if (path) {
+                // 履歴の「経路」と「検索した言葉」(2026-10-23。Main/user-history.js)
+                window.dispatchEvent(new CustomEvent('km:route', { detail: { from: startNode, to: endNode, fromText: startText, toText: endText } }));
                 currentRoutePath = path;
+                routeFitPending = true;
+                setRouteHint('');
                 /*
                  * 好みを変えて引き直したときも、**最初の区間から**案内し直す ——
                  * 経路が変われば、それまでの「いま何番目」は別の経路の番号になる。
@@ -1864,9 +2220,44 @@ document.addEventListener('DOMContentLoaded', async () => {
         resetBtn.addEventListener('click', () => {
             startInput.value = '';
             endInput.value = '';
+            routeStartId = null;
+            routeEndId = null;
+            routeStartPoi = null;
+            routeEndPoi = null;
+            setRouteHint('');
             clearRoute();
         });
     }
+
+    /*
+     * 経路の欄の一言(2026-10-23)。片方だけ選んだときに「出発地を選んでください」を出す。
+     * 欄は検索パネル(#search-panel)。無ければ作らない
+     */
+    let routeHint = null;
+    function setRouteHint(text) {
+        if (!searchPanel) return;
+        if (!routeHint) {
+            routeHint = document.createElement('p');
+            routeHint.className = 'km-route-hint';
+            routeHint.setAttribute('role', 'status');
+            const inner = searchPanel.querySelector('.search-inner');
+            if (inner) inner.insertBefore(routeHint, inner.firstChild);
+        }
+        routeHint.textContent = text;
+        routeHint.hidden = text === '';
+    }
+
+    /** 経路の欄を開き、足りない方の欄へフォーカスを置く('start' か 'end') */
+    function openRoutePanel(missing) {
+        setSearchPanelCollapsed(false);
+        if (window.KmSheet) window.KmSheet.close('place');
+        setRouteHint(missing === 'start'
+            ? '出発地を選んでください(検索するか、地図の地点を押して「ここから出発」)'
+            : '目的地を選んでください(検索するか、地図の地点を押して「経路」)');
+        const input = missing === 'start' ? startInput : endInput;
+        if (input) window.setTimeout(() => input.focus(), 50);
+    }
+    window.kmOpenRoutePanel = openRoutePanel;
 
     /**
      * 経路を消して、案内の帯を下げる。**入力欄は残す**(✕ は「案内をやめる」で、
@@ -1916,7 +2307,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     /** 畳んだ取っ手に出す名前。ボタンの文字(外 / 1F …)をそのまま借りる */
     function floorToggleTextFor(floor) {
         const btn = document.querySelector(`.floor-nav .floor-btn[data-floor="${floor}"]`);
-        return btn ? btn.textContent.trim() : String(floor);
+        // 建物の中は並びにボタンが無い。id(bldg_…)ではなく名前を出す(2026-10-21)
+        return btn ? btn.textContent.trim() : floorLabelFor(floor);
     }
 
     function syncFloorToggle() {
@@ -2014,50 +2406,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         startFloorIdleTimer();
     }
 
-    const categorySelect = document.getElementById('category-select');
-    if (categorySelect) {
-        categorySelect.addEventListener('change', () => {
-            const type = categorySelect.value;
-            if (!type) return;
-            const picked = categorySelect.options[categorySelect.selectedIndex];
-            testLog('category', { text: picked ? picked.textContent : type });
-
-            const results = [];
-            const patterns = {
-                'WC': /WC|トイレ|便所|お手洗い/i,
-                'stairs': /階段|エレベーター|EV/i,
-                'room': /室|教室|実験|講義|ラボ/i,
-                'facility': /棟|館|ホール|センター/i
-            };
-
-            for (const [id, node] of Object.entries(graphData.nodes)) {
-                // 人が行ける場所だけ。通路の点・壁・Wi-Fi ルーターは候補にしない
-                if (node.type === 'road' || node.type === 'wall' || node.type === 'wifi_router') continue;
-                // イベント中に出さない地点も出さない(2026-10-14)
-                if (node.hidden) continue;
-                const pattern = patterns[type];
-                const shownName = node.alias || node.name;
-                if (node.type === type || (pattern && (pattern.test(node.name) || pattern.test(shownName)))) {
-                    results.push({ id, name: shownName, floor: node.floor, x: node.x, y: node.y });
-                }
-            }
-
-            if (results.length > 0) {
-                // 見出しは選んだ項目の文字(「🚻 トイレ」など)。内部の値(WC)は出さない
-                const option = categorySelect.options[categorySelect.selectedIndex];
-                const title = option ? option.textContent.trim() : type;
-                /*
-                 * 結果は検索パネルの中に出るので、**パネルは畳まない**
-                 * (以前は別のシートに出していたので、スマホでは畳んで場所を空けていた)。
-                 * 1 件選ぶと、そのときに畳む(openNodeFromList)。
-                 */
-                showCategoryResults(title, results);
-            } else {
-                alert("該当する場所が見つかりませんでした。");
-            }
-            categorySelect.value = "";
-        });
-    }
+    // 種類でまとめて探すのは、検索の窓の下のチップ(下の「種類でまとめて探す」。2026-10-23)
 
 
     // ---- 関数類 ----
@@ -2093,10 +2442,37 @@ document.addEventListener('DOMContentLoaded', async () => {
         return node.occupantName ? `${node.name} ${node.occupantName}` : node.name;
     }
 
+    /**
+     * 企画の番号がある地点(教室など)の、イベント中の名前と備考(2026-10-23、利用者の指摘「教室に企画番号を設定したが、うまく表示されない」)。
+     * 一時地点(poiDisplay)と同じ見せ方 —— 番号のポスターがあれば、名前はポスターの見出し・備考はポスターの説明。
+     * ポスターが無ければ、番号を名前の前に付ける。**イベント中だけ**(普段は部屋の名前のまま)。当たらなければ null
+     */
+    function projectDisplayFor(id, node) {
+        const numbers = Array.isArray(node.projects) ? node.projects : [];
+        if (!graphData.event || numbers.length === 0) return null;
+        const base = node.alias || node.name;
+        const posters = (postersByNode.get(id) || []).filter(p => p.projectNo && numbers.indexOf(p.projectNo) >= 0);
+        if (posters.length === 0) {
+            // イベント中の名前そのものが番号(「32」)なら、二重に出さない
+            const prefix = numbers.filter(n => n !== String(base || '').trim().toUpperCase()).join('・');
+            return { name: prefix ? `${prefix} ${base}` : base, note: '', fromPoster: false };
+        }
+        return {
+            name: posters.map(p => p.title).join('・'),
+            note: posters.map(p => p.description).filter(Boolean).join(' / '),
+            fromPoster: true,
+        };
+    }
+
     function getLabelForNode(id, node) {
         const floorLabel = String(node.floor) === "outside" ? "外" : `${node.floor}F`;
         // 臨時名称があるときは、その名前で引く(2026-10-14 から置き換え。displayNameFor と同じ)
         const name = node.alias || node.name;
+        // 企画の地点はポスターの見出しでも探せる(部屋の名前も残す。2026-10-23)
+        const project = projectDisplayFor(id, node);
+        if (project) {
+            return project.fromPoster ? `[${floorLabel}] ${project.name}(${node.name})` : `[${floorLabel}] ${project.name}`;
+        }
         return `[${floorLabel}] ${name}`;
     }
 
@@ -2121,7 +2497,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         const poi = (graphData.eventPois || []).find(p => {
             if (!p.anchorNodeId) return false;
             const floorLabel = String(p.floor) === "outside" ? "外" : `${p.floor}F`;
-            return `[${floorLabel}] ${p.name}` === text;
+            // 名前が番号の一時地点はポスターの見出しで探せる(2026-10-23。poiDisplay)
+            return `[${floorLabel}] ${poiDisplay(p).name}` === text;
         });
 
         return poi && graphData.nodes[poi.anchorNodeId] ? poi.anchorNodeId : undefined;
@@ -2147,7 +2524,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             const anchor = graphData.nodes[poi.anchorNodeId];
             if (!anchor) return;
             const floorLabel = String(poi.floor) === "outside" ? "外" : `${poi.floor}F`;
-            labels.push(`[${floorLabel}] ${poi.name}`);
+            labels.push(`[${floorLabel}] ${poiDisplay(poi).name}`);
         });
 
         labels.sort((a, b) => a.localeCompare(b, 'ja'));
@@ -2222,10 +2599,69 @@ document.addEventListener('DOMContentLoaded', async () => {
      * 「この廊下は通れません」は来場者にこそ要る情報で、出さないと
      * 経路が遠回りになった理由が伝わらない。
      */
-    const KM_POI_ICONS = {
-        food: '🍢', exhibit: '🎨', reception: '📋',
-        firstaid: '🚑', toilet: '🚻', stage: '🎤', other: '📍',
-    };
+    /**
+     * 臨時の地点に出す名前と備考(2026-10-23、利用者の指示「名前はポスターに対応した名前、備考には説明」)。
+     * 名前が企画の番号の一時地点で、その番号のポスターがあれば、ポスターの見出しと説明。無ければ地点の名前とメモ
+     */
+    function poiDisplay(poi) {
+        const poster = (postersByNode.get('poi:' + poi.id) || [])[0];
+        const number = /^[0-9A-Za-z][0-9A-Za-z_-]{0,15}$/.test(String(poi.name || '').trim()) ? String(poi.name).trim().toUpperCase() : null;
+        return {
+            name: poster ? poster.title : String(poi.name || ''),
+            note: poster && poster.description ? poster.description : String(poi.note || ''),
+            number: number,
+        };
+    }
+
+    /** 札の名前。**7 文字以上なら 6 文字 + …**(文字は見た目の 1 文字で数える。絵文字や合成文字を割らない) */
+    function shortPoiName(name) {
+        const chars = Array.from(String(name || ''));
+        return chars.length >= 7 ? chars.slice(0, 6).join('') + '…' : chars.join('');
+    }
+    window.kmShortPoiName = shortPoiName;
+
+    /** 臨時の地点が地図で何として振る舞うか(2026-10-23、利用者の指示「一時ノードは Room ノードのような動作。外は Facility」) */
+    function poiNodeType(poi) {
+        /*
+         * いつも部屋(2026-10-23、利用者の判断「Outside の Facility は厳しい。Room みたいに」)。
+         * 建物にしていた間は、外で拡大すると建物名と一緒に薄くなり、押せなくなっていた
+         */
+        return 'room';
+    }
+
+    /** 臨時の地点の吹き出し。部屋の詳細(nodeDetailHtml)と同じ形(種類は部屋・外は建物。模擬店などは「分類」に出す) */
+    function poiDetailHtml(poi, shown) {
+        const floorLabel = String(poi.floor) === 'outside' ? '外' : `${poi.floor}F`;
+        const type = poiNodeType(poi);
+        let rows = `<div class="km-detail-row"><span>分類</span><b>${escapeHtml(KM_POI_LABELS[poi.category] || KM_POI_LABELS.other)}</b></div>`;
+        if (shown.number) {
+            rows += `<div class="km-detail-row"><span>企画</span><b>${escapeHtml(shown.number)}</b></div>`;
+        }
+        if (shown.note) {
+            rows += `<div class="km-detail-row"><span>備考</span><b>${escapeHtml(shown.note)}</b></div>`;
+        }
+        // ボタンは onclick を書かない(CSP)。data 属性 + 委譲で拾う。案内先(つなぎ先)が無ければ出さない
+        const actions = poi.anchorNodeId && graphData.nodes[poi.anchorNodeId]
+            ? `<div class="km-detail-actions">
+                 <button class="popup-btn km-detail-route" data-km-pick="end" data-km-node="${escapeHtml(poi.anchorNodeId)}" data-km-poi="${Number(poi.id)}">🧭 経路</button>
+                 <button class="popup-btn secondary" data-km-pick="start" data-km-node="${escapeHtml(poi.anchorNodeId)}" data-km-poi="${Number(poi.id)}">ここから出発</button>
+                 <button type="button" class="popup-btn secondary km-detail-share" data-km-share="place" data-km-poi="${Number(poi.id)}">↗ 共有</button>
+               </div>`
+            : '<p class="km-detail-note">この地点はまだ道につながっていないので、案内できません。</p>';
+        return `
+            <div class="popup-content km-detail">
+                <span class="popup-title">${escapeHtml(shown.name)}</span>
+                <div class="km-detail-meta">
+                    <span class="km-detail-chip km-chip-${escapeHtml(type)}">${escapeHtml(mapStyle.LABELS[type] || type)}</span>
+                    <span class="km-detail-floor">${escapeHtml(floorLabel)}</span>
+                </div>
+                ${rows}
+                ${scheduleListHtml('poi:' + poi.id)}
+                ${posterListHtml('poi:' + poi.id)}
+                ${actions}
+            </div>
+        `;
+    }
 
     let eventLayers = [];
 
@@ -2269,7 +2705,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             eventLayers.push(marker);
         });
 
-        // --- 臨時の地点 ---
+        /*
+         * --- 臨時の地点(地図編集の画面だけ) ---
+         * 公開の地図では部屋(外は建物)の地点と同じに描く(2026-10-23、利用者の指示。buildFloorMarkers の createPoiMarker)。
+         * 編集画面は今までどおり印で描く(地点の札と取り違えないため)
+         */
+        if (!window.isAdmin) return;
         (graphData.eventPois || []).forEach(poi => {
             if (String(poi.floor) !== floor) return;
             const icon = KM_POI_ICONS[poi.category] || KM_POI_ICONS.other;
@@ -2282,19 +2723,16 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }),
             }).addTo(window.map);
 
-            // ポップアップのボタンは onclick を書かない(CSP)。data 属性 + 委譲で拾う
-            const anchorButtons = poi.anchorNodeId
-                ? `<div class="popup-actions">
-                     <button class="popup-btn" data-km-pick="start" data-km-node="${escapeHtml(poi.anchorNodeId)}">出発地に設定</button>
-                     <button class="popup-btn" data-km-pick="end" data-km-node="${escapeHtml(poi.anchorNodeId)}">目的地に設定</button>
-                   </div>`
-                : '';
-            marker.bindPopup(
-                `<b>${escapeHtml(poi.name)}</b>`
-                + (poi.note ? `<br>${escapeHtml(poi.note)}` : '')
-                + anchorButtons
-            );
-            marker.bindTooltip(escapeHtml(poi.name), { permanent: false, direction: 'top' });
+            // 部屋と同じ吹き出し(km-detail)にする(2026-10-23、利用者の指示)。名前はポスターの見出し・備考はポスターの説明
+            const shown = poiDisplay(poi);
+            marker.bindPopup(poiDetailHtml(poi, shown));
+            // 地図の札は 7 文字以上なら縮める(部屋の札と同じ形)
+            marker.bindTooltip(escapeHtml(shortPoiName(shown.name)), {
+                permanent: true,
+                direction: 'top',
+                offset: [0, -14],
+                className: 'km-label km-label-poi',
+            });
             eventLayers.push(marker);
         });
     }
@@ -2533,9 +2971,10 @@ document.addEventListener('DOMContentLoaded', async () => {
      * 「経路の線を1つ足した」として扱えばよく、消すときも1回で済む。
      */
     function drawRouteLine(latlngs) {
-        const base = L.polyline(latlngs, { color: '#ef4444', weight: 7, opacity: 0.9 });
+        // 地点の点より前に描く。線そのものは押せなくする(下の点を押せるように)
+        const base = L.polyline(latlngs, { color: '#ef4444', weight: 7, opacity: 0.9, pane: 'kmRouteLine', interactive: false });
         const stripe = L.polyline(latlngs, {
-            color: '#ffffff', weight: 2.5, opacity: 0.9, dashArray: '10, 10',
+            color: '#ffffff', weight: 2.5, opacity: 0.9, dashArray: '10, 10', pane: 'kmRouteLine', interactive: false,
         });
         const group = L.featureGroup([base, stripe]).addTo(window.map);
 
@@ -2547,6 +2986,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         currentMarkers = [];
         let currentFloorLatLngs = [];
         let pathBoundsGroup = new L.FeatureGroup();
+        // この階で経路が始まる所(階を移ったとき、拡大率を保ったままここへ動かす)
+        let firstOnFloor = null;
 
         for (let i = 0; i < pathNodeIds.length; i++) {
             const id = pathNodeIds[i];
@@ -2556,6 +2997,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             if (String(node.floor) === String(window.currentFloor)) {
                 currentFloorLatLngs.push([node.y, node.x]);
+                if (!firstOnFloor) firstOnFloor = [node.y, node.x];
 
                 // 出発・到着ピン、または中間地点の表示
                 if (isStart || isEnd) {
@@ -2567,9 +3009,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                         iconSize: [60, 40],
                         iconAnchor: [30, 40]
                     });
-                    const marker = L.marker([node.y, node.x], { 
-                        icon: pinIcon, 
-                        zIndexOffset: 2000 // 最前面に表示
+                    const marker = L.marker([node.y, node.x], {
+                        icon: pinIcon,
+                        // 札より前の専用の層(上の kmRoutePins)。同じ層の中でも前へ
+                        pane: 'kmRoutePins',
+                        zIndexOffset: 2000,
+                        interactive: false,
+                        keyboard: false,
                     }).addTo(window.map);
                     currentMarkers.push(marker);
                     pathBoundsGroup.addLayer(marker);
@@ -2580,7 +3026,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                      * 仕込んだ HTML が経路を引いた人の画面へ出る状態だった(2026-09-14 の診断)。
                      */
                     const marker = L.circleMarker([node.y, node.x], {
-                        radius: 6, color: '#e11d48', fillColor: '#f43f5e', fillOpacity: 1
+                        radius: 6, color: '#e11d48', fillColor: '#f43f5e', fillOpacity: 1, pane: 'kmRouteLine',
                     }).bindTooltip(escapeHtml(node.alias || node.name)).addTo(window.map);
                     currentMarkers.push(marker);
                     pathBoundsGroup.addLayer(marker);
@@ -2597,15 +3043,22 @@ document.addEventListener('DOMContentLoaded', async () => {
             currentMarkers.push(polyline);
             pathBoundsGroup.addLayer(polyline);
         }
-        if (pathBoundsGroup.getLayers().length > 0) {
+        /*
+         * 寄せるのは**経路を引いた直後の 1 回だけ**(2026-10-23、利用者の指摘「別の階に行くと拡大率がリセットされて面倒」)。
+         * 階を移ったあと(案内の帯・階のボタン)は拡大率をそのままにして、その階の経路の始まりへ動かすだけ。
+         */
+        if (routeFitPending && pathBoundsGroup.getLayers().length > 0) {
+            routeFitPending = false;
             /*
              * **パネルと帯を避けて収める**(mapFitPadding は案内の帯も数える)。
              * 以前は四方 50px 固定で、出発・到着のピンが下の操作やシートの裏に潜った。
              */
             const padding = mapFitPadding();
-            // 出発・到着の吹き出しは点の**上へ 40px** 伸びる。そのぶん上を空けないとトップバーの裏に潜る
+            // 出発・到着の吹き出しは点の**上へ 40px** 伸びる。そのぶん上を空けないと検索の窓の裏に潜る
             padding.paddingTopLeft = padding.paddingTopLeft.add([0, 48]);
             window.map.fitBounds(pathBoundsGroup.getBounds(), padding);
+        } else if (firstOnFloor) {
+            window.map.setView(firstOnFloor, window.map.getZoom());
         }
     }
 
@@ -2617,16 +3070,39 @@ document.addEventListener('DOMContentLoaded', async () => {
      * addEventListener を付ける形にすると付け直しの管理が要る。地図コンテナで
      * まとめて受ければ、いつ作られたものでも拾える。
      */
-    document.getElementById('map')?.addEventListener('click', (event) => {
+    /*
+     * 2026-10-23 から、公開の地図の詳細は左の引き出し(Main/km-sheet.js)に出る。**同じ口で受ける**
+     * (引き出しにもこの関数を付ける。下の「場所の詳細・検索・共有」の節)
+     */
+    function handleDetailClick(event) {
         const enterButton = event.target.closest('[data-km-enter]');
         if (enterButton) {
             window.kmEnterBuilding(enterButton.dataset.kmEnter, enterButton.dataset.kmNode);
             return;
         }
+        // ポスターの画像(地点の詳細)。大きく見る
+        const posterButton = event.target.closest('[data-km-poster-view]');
+        if (posterButton) {
+            openPosterViewer(posterButton.dataset.kmPosterView, posterButton);
+            return;
+        }
+        // ♡(ポスターのいいね)
+        const likeButton = event.target.closest('[data-km-poster-like]');
+        if (likeButton) {
+            togglePosterLike(likeButton);
+            return;
+        }
+        // 共有(場所)
+        const shareButton = event.target.closest('[data-km-share]');
+        if (shareButton) {
+            sharePlace(shareButton);
+            return;
+        }
         const button = event.target.closest('[data-km-pick]');
         if (!button) return;
-        window.setAsLocation(button.dataset.kmNode, button.dataset.kmPick);
-    });
+        window.setAsLocation(button.dataset.kmNode, button.dataset.kmPick, { poiId: button.dataset.kmPoi });
+    }
+    document.getElementById('map')?.addEventListener('click', handleDetailClick);
 
     /**
      * 建物の中(その階)へ移る。**入口の地点まで寄せてから開く** ——
@@ -2654,20 +3130,44 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     };
 
-    window.setAsLocation = function (nodeId, type) {
+    /**
+     * 出発地・目的地にする。`opts.poiId` は臨時の地点(一時ノード)の番号 —— そのときの nodeId はつなぎ先。
+     * 両方そろえば経路を出す。片方だけなら経路の欄を開いて、もう片方を選んでもらう(2026-10-23)。
+     */
+    window.setAsLocation = function (nodeId, type, opts) {
         const node = graphData.nodes[nodeId];
+        if (!node) return;
+        const poiId = opts && opts.poiId !== undefined && opts.poiId !== null && opts.poiId !== '' ? Number(opts.poiId) : null;
+        const poi = poiId !== null ? (graphData.eventPois || []).find(p => Number(p.id) === poiId) : null;
         /*
-         * **口の側でも弾く。** ボタンは出していないが、
-         * `window.setAsLocation` は誰でも呼べる形で外に出ている
-         * (イベントの臨時地点のポップアップからも呼ばれる)。
+         * **口の側でも弾く。** `window.setAsLocation` は誰でも呼べる形で外に出ている。
+         * ただし一時地点のつなぎ先は道・階段のことがある(取り込みが道を先に選ぶ)ので、一時地点のときは弾かない
+         * —— ここで弾いていたのが「ボタンが反応しない」の原因だった(2026-10-23)
          */
-        if (!isRoutableNode(node)) return;
-        const label = getLabelForNode(nodeId, node);
-        if (type === 'start') { if (startInput) startInput.value = label; }
-        else { if (endInput) endInput.value = label; }
+        if (poi ? String(poi.anchorNodeId) !== String(nodeId) : !isRoutableNode(node)) return;
+        const label = poi ? poiSearchLabel(poi) : getLabelForNode(nodeId, node);
+        if (type === 'start') {
+            routeStartId = nodeId;
+            routeStartPoi = poi ? Number(poi.id) : null;
+            if (startInput) startInput.value = label;
+        } else {
+            routeEndId = nodeId;
+            routeEndPoi = poi ? Number(poi.id) : null;
+            if (endInput) endInput.value = label;
+        }
         window.map.closePopup();
-        if (startInput && endInput && startInput.value && endInput.value) searchBtn.click();
+        if (routeStartId && routeEndId) {
+            searchBtn.click();
+        } else {
+            openRoutePanel(type === 'start' ? 'end' : 'start');
+        }
     };
+
+    /** 臨時の地点の札(検索の候補・経路の欄と同じ)。名前が番号ならポスターの見出し */
+    function poiSearchLabel(poi) {
+        const floorLabel = String(poi.floor) === 'outside' ? '外' : `${poi.floor}F`;
+        return `[${floorLabel}] ${poiDisplay(poi).name}`;
+    }
 
     /**
      * 階の呼び名。ボタンの文字(外 / 1F …)→ 建物の階の名前(図書館 1F …)→ 「nF」の順に探す。
@@ -2681,6 +3181,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         const known = (graphData.floors || []).find(f => String(f.id) === key);
         if (known && known.label) return known.label;
         return key === 'outside' ? '外' : `${key}F`;
+    }
+
+    /** 目的地の呼び名。一時地点を選んだときは、つなぎ先(道)ではなく一時地点の名前(2026-10-23) */
+    function goalLabel(node) {
+        if (routeEndPoi !== null) {
+            const poi = (graphData.eventPois || []).find(p => Number(p.id) === routeEndPoi);
+            if (poi) return poiDisplay(poi).name;
+        }
+        return routeNodeLabel(node);
     }
 
     /** 案内の帯に出す地点の呼び名。**名前が無くても何のことか分かる言葉にする。** */
@@ -2770,7 +3279,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         if (arrived) {
             const goal = graphData.nodes[routeSteps[routeSteps.length - 1].nodeId];
-            routeText.textContent = `${routeNodeLabel(goal)}に到着しました`;
+            routeText.textContent = `${goalLabel(goal)}に到着しました`;
             routeSub.textContent = '✕ で案内を終えます';
             return;
         }
@@ -2784,7 +3293,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const standingThere = step.kind === 'transfer' && currentRoutePath && step.nodeId === currentRoutePath[0];
         routeText.textContent = standingThere
             ? `${routeNodeLabel(node)}から ${floorLabelFor(step.nextFloor)} へ`
-            : `${routeNodeLabel(node)}に向かう`;
+            : `${step.kind === 'goal' ? goalLabel(node) : routeNodeLabel(node)}に向かう`;
         const where = floorLabelFor(step.floor);
         const counter = `${routeStepIndex + 1}/${routeSteps.length}`;
         routeSub.textContent = step.kind === 'goal'
@@ -2916,6 +3425,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             return true;
         }
         // 出発地を置き換えて、目的地まで引き直す(案内開始と同じ道を通す)
+        routeStartId = nodeId;
+        routeStartPoi = null;
         if (startInput) startInput.value = getLabelForNode(nodeId, node);
         searchBtn.click();
         return true;
@@ -2931,92 +3442,734 @@ document.addEventListener('DOMContentLoaded', async () => {
         const step = routeSteps[Math.min(routeStepIndex, routeSteps.length - 1)];
         const node = graphData.nodes[step.nodeId];
         if (!node) return;
-        const center = () => window.map.setView([node.y, node.x], Math.max(window.map.getZoom(), 1));
+        let centered = false;
+        const center = () => {
+            if (centered) return;
+            centered = true;
+            window.map.setView([node.y, node.x], Math.max(window.map.getZoom(), 1));
+        };
         if (String(step.floor) !== String(window.currentFloor) && floorImages[step.floor]) {
-            // 図が載ってから寄せる。先に寄せると、載ったときの収め直しで戻される
+            // 図が載ってから寄せる。先に寄せると、載ったときの動きで戻される。
+            // 拡大率を保つようにしたので(2026-10-23)動かないこともある —— 保険の時間差も置く
             window.map.once('moveend', center);
+            window.setTimeout(center, 700);
             changeFloor(step.floor);
             return;
         }
         center();
     }
 
-    /**
-     * カテゴリー検索の結果を、検索パネルの中に並べる(2026-09-25)。
-     * 以前はルート案内のシートを借りていたが、そのシートは廃止した。
+    /*
+     * ======== 場所の詳細・検索・共有(Google マップ風。2026-10-23、利用者の指示) ========
+     *
+     * 流れは「場所を検索(一致率順)→ 左の引き出しに場所の詳細 → 経路」。先生に「完成形は Google マップだね」と言われたので、
+     * 動きを参考にした(見た目は写さない)。
+     *
+     * - 地点の詳細は地図の吹き出しではなく、左から出る引き出し(Main/km-sheet.js)に出す。押した点には輪を付ける
+     * - 上の検索の窓・経路の欄の出発地と目的地は、どれも一致率の順の候補(Main/search-rank.js)。候補のアイコンはその場所のポスター
+     * - 「共有」は場所(?room= / ?poi=)と経路(?from=&to=)の URL。navigator.share が無ければリンクを写す
      */
-    function showCategoryResults(title, results) {
-        const box = document.getElementById('category-results');
-        if (!box) return;
-        box.innerHTML = '';
-        box.hidden = false;
+    const sheet = window.KmSheet || null;
+    window.map.createPane('kmSelect').style.zIndex = '640';
+    let selectionRing = null;
 
-        const head = document.createElement('div');
-        head.className = 'km-category-head';
-        const heading = document.createElement('span');
-        heading.textContent = `${title}(${results.length} 件)`;
-        const close = document.createElement('button');
-        close.type = 'button';
-        close.className = 'km-category-close';
-        close.setAttribute('aria-label', '結果を閉じる');
-        close.textContent = '×';
-        close.addEventListener('click', () => {
-            box.hidden = true;
-            box.innerHTML = '';
+    function markSelected(latlng) {
+        clearSelected();
+        selectionRing = L.circleMarker(latlng, {
+            pane: 'kmSelect', radius: 15, color: '#2563EB', weight: 3, fillColor: '#2563EB', fillOpacity: 0.15, interactive: false,
+        }).addTo(window.map);
+    }
+    function clearSelected() {
+        if (selectionRing) window.map.removeLayer(selectionRing);
+        selectionRing = null;
+    }
+
+    /** 引き出しが隠している所を避けて、その点が見えるように動かす(拡大率は変えない) */
+    function revealLatLng(latlng) {
+        /*
+         * mapFitPadding は 1 辺を画面の 40% で頭打ちにする(寄せの計算が壊れないように)。スマホの引き出しは 50% を超えるので、
+         * ここでは引き出しの大きさそのもので「見えている所」を出し、点がその外ならその真ん中へ動かす
+         */
+        const sheetEl = document.getElementById('km-sheet');
+        if (!sheetEl || !sheetEl.classList.contains('is-open')) return;
+        const point = window.map.latLngToContainerPoint(latlng);
+        const size = window.map.getSize();
+        const top = mapFitPadding().paddingTopLeft.y;
+        let dx = 0;
+        let dy = 0;
+        if (size.x > 768) {
+            const left = sheetEl.offsetWidth + PANEL_GAP;
+            if (point.x < left + 24 || point.x > size.x - 24) dx = point.x - (left + size.x) / 2;
+        } else {
+            const bottom = size.y - sheetEl.offsetHeight - PANEL_GAP;
+            if (point.y > bottom - 24 || point.y < top) dy = point.y - (top + bottom) / 2;
+        }
+        if (dx !== 0 || dy !== 0) window.map.panBy([dx, dy]);
+    }
+
+    function floorText(floor) {
+        return String(floor) === 'outside' ? '外' : floorLabelFor(floor);
+    }
+
+    /**
+     * 場所の詳細を左の引き出しに出す。target は { nodeId } か { poiId }。
+     * 引き出しが無いページ(地図編集)では false を返す(呼ぶ側が今までの吹き出しを使う)
+     */
+    function openPlaceSheet(target) {
+        if (!sheet) return false;
+        let html;
+        let title;
+        let latlng;
+        if (target.poiId !== undefined && target.poiId !== null) {
+            const poi = (graphData.eventPois || []).find(p => Number(p.id) === Number(target.poiId));
+            if (!poi) return false;
+            const shown = poiDisplay(poi);
+            html = poiDetailHtml(poi, shown);
+            title = shown.name;
+            latlng = [poi.y, poi.x];
+            testLog('detail', { node: poi.anchorNodeId || '', text: 'poi:' + poi.id, floor: String(poi.floor) });
+        } else {
+            const id = target.nodeId;
+            const node = graphData.nodes[id];
+            if (!node) return false;
+            const project = projectDisplayFor(id, node);
+            html = nodeDetailHtml(id, node, String(node.type || 'room'));
+            title = project ? project.name : displayNameFor(node);
+            latlng = [node.y, node.x];
+            testLog('detail', { node: id, floor: String(window.currentFloor) });
+        }
+        const content = document.createElement('div');
+        content.className = 'km-place';
+        // 中身は nodeDetailHtml / poiDetailHtml(DB の値はそちらでエスケープ済み)
+        content.innerHTML = html;
+        sheet.open({ key: 'place', title: title, content: content, onClose: clearSelected, focus: false });
+        markSelected(latlng);
+        // ポスターの ♡ の数と、この端末が押したか
+        const likeIds = Array.from(content.querySelectorAll('[data-km-poster-like]')).map(b => Number(b.dataset.kmPosterLike));
+        likeIds.forEach(posterId => {
+            const poster = postersById.get(posterId);
+            if (poster && !posterLikeState.has(posterId)) posterLikeState.set(posterId, { count: Number(poster.likes) || 0, liked: false });
         });
-        head.append(heading, close);
-        box.appendChild(head);
+        paintLikes();
+        refreshPosterLikes(likeIds);
+        // 場所を開いたら経路の欄は畳む(どちらも左に出る。経路は詳細の「経路」から開き直せる)
+        if (searchPanel && !searchPanel.classList.contains('collapsed')) setSearchPanelCollapsed(true, false);
+        // 引き出しが出きって(0.3 秒)、寄せの動きも終わってから、隠れた所を避けて動かす
+        window.setTimeout(() => revealLatLng(latlng), 550);
+        if (target.nodeId) window.dispatchEvent(new CustomEvent('km:node-opened', { detail: { id: target.nodeId } }));
+        return true;
+    }
+    window.kmOpenPlace = openPlaceSheet;
 
+    /**
+     * その場所へ移って詳細を開く(検索・一覧・予定・ポスターから)。階が違えばその階へ移ってから。
+     * 拡大は「部屋が見えるところ」まで(小さいときだけ上げる)
+     */
+    function goToPlace(target) {
+        let floor;
+        let latlng;
+        if (target.poiId !== undefined && target.poiId !== null) {
+            const poi = (graphData.eventPois || []).find(p => Number(p.id) === Number(target.poiId));
+            if (!poi) return;
+            floor = String(poi.floor);
+            latlng = [poi.y, poi.x];
+        } else {
+            const node = graphData.nodes[target.nodeId];
+            if (!node) return;
+            floor = String(node.floor);
+            latlng = [node.y, node.x];
+            testLog('pick', { node: target.nodeId });
+        }
+        let done = false;
+        const go = () => {
+            if (done) return;
+            done = true;
+            userMovedMap = true;   // 階の図が載ったときの収め直しで戻さない
+            window.map.setView(latlng, Math.max(window.map.getZoom(), 2));
+            window.renderGlobalLabels();
+            if (!openPlaceSheet(target)) {
+                // 引き出しの無いページ: 今までどおり点の吹き出し
+                const marker = target.poiId != null ? poiMarkers.get(Number(target.poiId)) : markersById.get(target.nodeId);
+                if (marker && window.map.hasLayer(marker)) marker.openPopup();
+            }
+        };
+        if (floor !== String(window.currentFloor) && floorImages[floor]) {
+            window.map.once('moveend', go);
+            window.setTimeout(go, 700);
+            changeFloor(floor);
+        } else {
+            go();
+        }
+    }
+
+    // 臨時の地点を開く(Main/event-schedule.js の「地図で見る」・ポスターの「地図で見る」)
+    window.kmOpenPoi = function (id) { goToPlace({ poiId: Number(id) }); };
+    // 履歴とブックマークの一覧から開く(Main/user-history.js)
+    window.kmOpenNode = function (id) { if (graphData.nodes[id]) goToPlace({ nodeId: id }); };
+    /** 一覧から選んだ地点へ寄せて、詳細を開く(カテゴリーの結果)。 */
+    function openNodeFromList(node) {
+        goToPlace({ nodeId: node.id });
+    }
+
+    /* ---------------- 検索の候補(一致率順) ---------------- */
+
+    const rankApi = window.KmSearchRank || null;
+    let searchItems = null;
+
+    /** 候補にするもの。地点(人が行く所)・臨時の地点。名前のほかに別名(ポスターの見出し・部屋番号・分類・企画の番号)も引く */
+    function buildSearchItems() {
+        const items = [];
+        for (const [id, node] of Object.entries(graphData.nodes)) {
+            if (node.hidden) continue;
+            if (node.type === 'road' || node.type === 'wall' || node.type === 'wifi_router' || node.type === 'area') continue;
+            if (!String(node.name || '').trim()) continue;
+            const project = projectDisplayFor(id, node);
+            const posters = postersByNode.get(id) || [];
+            items.push({
+                kind: 'node',
+                id: id,
+                floor: String(node.floor),
+                name: project ? project.name : (node.alias || node.name),
+                extras: [node.name, node.alias, node.title, node.subtitle, node.type2, mapStyle.LABELS[node.type]]
+                    .concat(node.projects || [], posters.map(p => p.title))
+                    .filter(Boolean),
+                type: String(node.type || 'room'),
+                routable: isRoutableNode(node),
+                poster: posters[0] || null,
+            });
+        }
+        (graphData.eventPois || []).forEach(poi => {
+            const shown = poiDisplay(poi);
+            const posters = postersByNode.get('poi:' + poi.id) || [];
+            items.push({
+                kind: 'poi',
+                poiId: Number(poi.id),
+                id: poi.anchorNodeId || '',
+                floor: String(poi.floor),
+                name: shown.name,
+                extras: [poi.name, KM_POI_LABELS[poi.category] || '', poi.note || ''].concat(posters.map(p => p.title)).filter(Boolean),
+                type: poiNodeType(poi),
+                routable: Boolean(poi.anchorNodeId && graphData.nodes[poi.anchorNodeId]),
+                poster: posters[0] || null,
+            });
+        });
+        return items;
+    }
+
+    function searchCandidates(query, onlyRoutable) {
+        if (!rankApi) return [];
+        if (!searchItems) searchItems = buildSearchItems();
+        const pool = onlyRoutable ? searchItems.filter(item => item.routable) : searchItems;
+        return rankApi.rank(pool, query, { floor: String(window.currentFloor), limit: 8 });
+    }
+
+    /** 候補のアイコン。ポスターがあればその画像、無ければ種類の色と形(地図の点と同じ) */
+    function candidateIcon(item) {
+        const box = document.createElement('span');
+        box.className = 'km-result-icon';
+        if (item.poster && item.poster.imageUrl) {
+            const img = document.createElement('img');
+            img.src = item.poster.imageUrl;
+            img.alt = '';
+            img.loading = 'lazy';
+            img.decoding = 'async';
+            box.classList.add('has-poster');
+            box.appendChild(img);
+        } else {
+            // nodeIconHtml は地図の点と同じ SVG(色と形は表示調整の種類の設定)。名前は入らない
+            box.innerHTML = nodeIconHtml({ name: item.name }, item.type);
+        }
+        return box;
+    }
+
+    /**
+     * 入力欄に一致率順の候補を付ける。選ぶと onPick(item)。↑↓ で選び Enter で決める。Esc で閉じる
+     * @param {HTMLInputElement} input
+     * @param {HTMLElement} list ul(role=listbox)
+     * @param {(item: object) => void} onPick
+     * @param {boolean} onlyRoutable 出発地・目的地の欄は、案内できる所だけ
+     */
+    function attachSearch(input, list, onPick, onlyRoutable) {
+        if (!input || !list) return;
+        let items = [];
+        let active = -1;
+
+        function close() {
+            list.hidden = true;
+            list.innerHTML = '';
+            items = [];
+            active = -1;
+            input.setAttribute('aria-expanded', 'false');
+            input.removeAttribute('aria-activedescendant');
+        }
+        function highlight(index) {
+            active = index;
+            Array.from(list.children).forEach((li, i) => li.setAttribute('aria-selected', String(i === index)));
+            const current = list.children[index];
+            if (current) {
+                input.setAttribute('aria-activedescendant', current.id);
+                current.scrollIntoView({ block: 'nearest' });
+            }
+        }
+        function pick(index) {
+            const item = items[index];
+            if (!item) return;
+            close();
+            onPick(item);
+        }
+        function render() {
+            const query = input.value.trim();
+            items = query === '' ? [] : searchCandidates(query, onlyRoutable);
+            list.innerHTML = '';
+            if (query === '') { close(); return; }
+            if (items.length === 0) {
+                const empty = document.createElement('li');
+                empty.className = 'km-result-empty';
+                empty.textContent = '見つかりませんでした。別の言葉で探すか、下の種類のボタンを使ってください。';
+                list.appendChild(empty);
+            }
+            items.forEach((item, index) => {
+                const li = document.createElement('li');
+                li.className = 'km-result';
+                li.id = list.id + '-' + index;
+                li.setAttribute('role', 'option');
+                li.setAttribute('aria-selected', 'false');
+                const text = document.createElement('span');
+                text.className = 'km-result-text';
+                const name = document.createElement('b');
+                name.className = 'km-result-name';
+                name.textContent = item.name;   // DB の値。textContent で入れる
+                const sub = document.createElement('small');
+                sub.className = 'km-result-sub';
+                sub.textContent = [floorText(item.floor), item.kind === 'poi' ? '臨時' : (mapStyle.LABELS[item.type] || '')].filter(Boolean).join(' · ');
+                text.append(name, sub);
+                li.append(candidateIcon(item), text);
+                // 押したとき入力欄からフォーカスが外れて閉じる前に決める
+                li.addEventListener('mousedown', (event) => { event.preventDefault(); pick(index); });
+                list.appendChild(li);
+            });
+            list.hidden = false;
+            input.setAttribute('aria-expanded', 'true');
+            active = -1;
+        }
+
+        input.addEventListener('input', render);
+        input.addEventListener('focus', () => { if (input.value.trim() !== '') render(); });
+        input.addEventListener('blur', () => window.setTimeout(close, 150));
+        input.addEventListener('keydown', (event) => {
+            if (event.key === 'ArrowDown' && items.length > 0) {
+                event.preventDefault();
+                highlight(Math.min(active + 1, items.length - 1));
+            } else if (event.key === 'ArrowUp' && items.length > 0) {
+                event.preventDefault();
+                highlight(Math.max(active - 1, 0));
+            } else if (event.key === 'Enter') {
+                if (items.length > 0) {
+                    event.preventDefault();
+                    pick(active >= 0 ? active : 0);
+                }
+            } else if (event.key === 'Escape') {
+                close();
+            }
+        });
+    }
+
+    // 上の検索の窓: 選ぶとその場所へ
+    const placeInput = document.getElementById('km-place-input');
+    const placeClear = document.getElementById('km-place-clear');
+    attachSearch(placeInput, document.getElementById('km-place-results'), (item) => {
+        placeInput.value = item.name;
+        if (placeClear) placeClear.hidden = false;
+        testLog('search', { field: 'place', text: item.name, node: item.kind === 'node' ? item.id : '' });
+        // 履歴の「検索した言葉」(Main/user-history.js)
+        window.dispatchEvent(new CustomEvent('km:search', { detail: { text: item.name } }));
+        goToPlace(item.kind === 'poi' ? { poiId: item.poiId } : { nodeId: item.id });
+        placeInput.dispatchEvent(new CustomEvent('km-place-chosen'));
+        placeInput.blur();
+    }, false);
+    if (placeInput && placeClear) {
+        placeInput.addEventListener('input', () => { placeClear.hidden = placeInput.value === ''; });
+        placeClear.addEventListener('click', () => {
+            placeInput.value = '';
+            placeClear.hidden = true;
+            placeInput.focus();
+            if (sheet) sheet.close('place');
+        });
+    }
+    // 経路の欄の出発地・目的地: 選ぶと出発地・目的地にする(両方そろえば経路を出す)
+    [[startInput, 'km-start-results', 'start'], [endInput, 'km-end-results', 'end']].forEach(([input, listId, field]) => {
+        attachSearch(input, document.getElementById(listId), (item) => {
+            window.setAsLocation(item.id, field, item.kind === 'poi' ? { poiId: item.poiId } : undefined);
+            // 操作の案内(Main/tutorial.js)と記録は change を見ている
+            input.dispatchEvent(new Event('change'));
+        }, true);
+    });
+    // 「経路」(検索の窓の 🧭)。場所を開いていればそこを目的地に
+    const routeOpenBtn = document.getElementById('km-route-open');
+    if (routeOpenBtn) {
+        routeOpenBtn.addEventListener('click', () => {
+            const collapsed = !searchPanel || searchPanel.classList.contains('collapsed');
+            if (!collapsed) { setSearchPanelCollapsed(true); return; }
+            openRoutePanel(routeEndId ? 'start' : 'end');
+        });
+    }
+    // ⇅ 入れ替え
+    const swapBtn = document.getElementById('km-route-swap');
+    if (swapBtn && startInput && endInput) {
+        swapBtn.addEventListener('click', () => {
+            [startInput.value, endInput.value] = [endInput.value, startInput.value];
+            [routeStartId, routeEndId] = [routeEndId, routeStartId];
+            [routeStartPoi, routeEndPoi] = [routeEndPoi, routeStartPoi];
+            if ((routeStartId || startInput.value) && (routeEndId || endInput.value)) searchBtn.click();
+        });
+    }
+
+    /* ---------------- 種類でまとめて探す(チップ) ---------------- */
+
+    const CATEGORY_PATTERNS = {
+        WC: /WC|トイレ|便所|お手洗い/i,
+        stairs: /階段|エレベーター|EV/i,
+        room: /室|教室|実験|講義|ラボ/i,
+        facility: /棟|館|ホール|センター/i,
+    };
+    document.querySelectorAll('[data-km-category]').forEach((chip) => {
+        chip.addEventListener('click', () => {
+            const type = chip.dataset.kmCategory;
+            const title = chip.textContent.trim();
+            testLog('category', { text: title });
+            const results = [];
+            if (type === 'event') {
+                (graphData.eventPois || []).forEach(poi => results.push({ poiId: Number(poi.id), name: poiDisplay(poi).name, floor: String(poi.floor), type: 'room', poster: (postersByNode.get('poi:' + poi.id) || [])[0] || null }));
+                for (const [id, node] of Object.entries(graphData.nodes)) {
+                    if (node.hidden || !Array.isArray(node.projects) || node.projects.length === 0) continue;
+                    const project = projectDisplayFor(id, node);
+                    results.push({ id: id, name: project ? project.name : displayNameFor(node), floor: String(node.floor), type: String(node.type), poster: (postersByNode.get(id) || [])[0] || null });
+                }
+            } else {
+                const pattern = CATEGORY_PATTERNS[type];
+                for (const [id, node] of Object.entries(graphData.nodes)) {
+                    // 人が行ける場所だけ。通路の点・壁・Wi-Fi ルーター・イベント中に出さない地点は出さない
+                    if (node.type === 'road' || node.type === 'wall' || node.type === 'wifi_router' || node.hidden) continue;
+                    const shownName = node.alias || node.name;
+                    if (node.type === type || (pattern && (pattern.test(node.name) || pattern.test(shownName)))) {
+                        results.push({ id: id, name: shownName, floor: String(node.floor), type: String(node.type), poster: (postersByNode.get(id) || [])[0] || null });
+                    }
+                }
+            }
+            // いまの階を先に、そのあと階の順・名前の順
+            const current = String(window.currentFloor);
+            results.sort((a, b) => (a.floor === current ? 0 : 1) - (b.floor === current ? 0 : 1)
+                || String(a.floor).localeCompare(String(b.floor), 'ja', { numeric: true })
+                || String(a.name).localeCompare(String(b.name), 'ja'));
+            showCategoryResults(title, results);
+        });
+    });
+
+    /** 種類でまとめた結果を、左の引き出しに並べる */
+    function showCategoryResults(title, results) {
+        if (!sheet) return;
+        const box = document.createElement('div');
+        box.className = 'km-category-sheet';
+        const count = document.createElement('p');
+        count.className = 'km-category-count';
+        count.textContent = results.length === 0 ? '見つかりませんでした。' : `${results.length} 件`;
+        box.appendChild(count);
         const list = document.createElement('ul');
         list.className = 'km-category-list';
-        results.forEach(node => {
-            const item = document.createElement('li');
+        results.forEach(item => {
+            const li = document.createElement('li');
             const button = document.createElement('button');
             button.type = 'button';
-            button.className = 'km-category-item';
-            // 名前は DB の値。textContent で入れるのでエスケープは要らない
-            const name = document.createElement('span');
-            name.textContent = node.name;
-            const floor = document.createElement('small');
-            floor.textContent = floorLabelFor(node.floor);
-            button.append(name, floor);
-            button.addEventListener('click', () => openNodeFromList(node));
-            item.appendChild(button);
-            list.appendChild(item);
+            button.className = 'km-result km-category-item';
+            const text = document.createElement('span');
+            text.className = 'km-result-text';
+            const name = document.createElement('b');
+            name.className = 'km-result-name';
+            name.textContent = item.name;
+            const sub = document.createElement('small');
+            sub.className = 'km-result-sub';
+            sub.textContent = floorText(item.floor);
+            text.append(name, sub);
+            button.append(candidateIcon(item), text);
+            // 選んだら、その場所の詳細へ(「←」でこの一覧へ戻れる)
+            button.addEventListener('click', () => {
+                const target = item.poiId !== undefined ? { poiId: item.poiId } : { nodeId: item.id };
+                goToPlace(target);
+            });
+            li.appendChild(button);
+            list.appendChild(li);
         });
         box.appendChild(list);
+        sheet.open({ key: 'category', title: title, content: box });
     }
 
-    /** 一覧から選んだ地点へ寄せて、詳細を開く。 */
-    function openNodeFromList(node) {
-        testLog('pick', { node: node.id });
-        if (window.innerWidth <= 768 && searchPanel) setSearchPanelCollapsed(true);
-        if (String(node.floor) !== String(window.currentFloor)) changeFloor(node.floor);
-        setTimeout(() => {
-            /*
-             * 寄った状態に見合うマーカーを載せてから開く。以前は表示中の
-             * マーカーを座標で総当たりして探していたが、ID で引ければ済む
-             * (同じ座標に複数のノードが立っていると誤爆する形でもあった)。
-             *
-             * **移動が終わってから開くこと。** setView はアニメーションする =
-             * 直後の getZoom() はまだ寄る前の値を返しうる。その値で
-             * renderGlobalLabels() を呼ぶと部屋のマーカーがまだ地図に載らず、
-             * hasLayer() が false になってポップアップが出ない。
-             */
-            let opened = false;
-            const openWhenReady = () => {
-                if (opened) return;
-                opened = true;
-                window.renderGlobalLabels();
-                const marker = markersById.get(node.id);
-                if (marker && window.map.hasLayer(marker)) marker.openPopup();
-            };
+    /* ---------------- 共有 ---------------- */
 
-            // 既に同じ位置・倍率だと moveend が飛んでこないので、保険の時間差も置く
-            window.map.once('moveend', openWhenReady);
-            window.setTimeout(openWhenReady, 600);
-
-            window.map.setView([node.y, node.x], 2);
-        }, 300);
+    function toast(text) {
+        const note = document.createElement('div');
+        note.className = 'km-room-notice km-toast';
+        note.setAttribute('role', 'status');
+        note.textContent = text;
+        document.body.append(note);
+        window.setTimeout(() => note.remove(), 3500);
     }
+
+    /** URL を共有する。共有の画面があればそれ、無ければクリップボードへ写す */
+    async function shareUrl(path, title) {
+        const url = new URL(path, window.location.origin).toString();
+        testLog('share', { text: path });
+        if (navigator.share) {
+            try {
+                await navigator.share({ title: title, text: title, url: url });
+                return;
+            } catch (error) {
+                if (error && error.name === 'AbortError') return;   // 自分で閉じた
+            }
+        }
+        try {
+            await navigator.clipboard.writeText(url);
+            toast('リンクを写しました');
+        } catch (error) {
+            // 写せない(古いブラウザ・権限)。リンクを見せて手で写してもらう
+            window.prompt('このリンクを写してください', url);
+        }
+    }
+
+    function sharePlace(button) {
+        if (button.dataset.kmPoi) {
+            const poi = (graphData.eventPois || []).find(p => Number(p.id) === Number(button.dataset.kmPoi));
+            shareUrl('/?poi=' + Number(button.dataset.kmPoi), poi ? poiDisplay(poi).name : '高専マップ案内');
+            return;
+        }
+        const id = button.dataset.kmNode;
+        const node = graphData.nodes[id];
+        shareUrl('/?room=' + encodeURIComponent(id), node ? displayNameFor(node) : '高専マップ案内');
+    }
+
+    function shareRoute() {
+        if (!currentRoutePath || currentRoutePath.length < 2) return;
+        const from = currentRoutePath[0];
+        const to = currentRoutePath[currentRoutePath.length - 1];
+        const label = `${startInput && startInput.value ? startInput.value : routeNodeLabel(graphData.nodes[from])} → ${endInput && endInput.value ? endInput.value : routeNodeLabel(graphData.nodes[to])}`;
+        // 一時地点はその番号で渡す(?fromPoi= / ?toPoi=)。開いた人の欄に、つなぎ先の道ではなく一時地点の名前が出る
+        const fromPart = routeStartPoi !== null && routeStartId === from ? 'fromPoi=' + routeStartPoi : 'from=' + encodeURIComponent(from);
+        const toPart = routeEndPoi !== null && routeEndId === to ? 'toPoi=' + routeEndPoi : 'to=' + encodeURIComponent(to);
+        shareUrl('/?' + fromPart + '&' + toPart, label + '(高専マップ案内)');
+    }
+    const routeShareBtn = document.getElementById('km-route-share');
+    if (routeShareBtn) routeShareBtn.addEventListener('click', shareRoute);
+
+    /* ---------------- ポスター(拡大・♡・地図で見る) ---------------- */
+
+    /** ポスターを大きく見る。左の引き出しに出す(場所の詳細から開けば「←」で戻れる) */
+    function openPosterViewer(posterId) {
+        const poster = postersById.get(Number(posterId));
+        if (!poster || !sheet) return;
+        const box = document.createElement('div');
+        box.className = 'km-poster-sheet';
+        const img = document.createElement('img');
+        img.className = 'km-poster-sheet-image';
+        img.src = poster.imageUrl;
+        img.alt = poster.title;
+        box.appendChild(img);
+        const actions = document.createElement('div');
+        actions.className = 'km-poster-sheet-actions';
+        actions.appendChild(posterLikeButton(poster));
+        if (poster.linkUrl && /^https?:\/\//i.test(poster.linkUrl)) {
+            const link = document.createElement('a');
+            link.className = 'secondary-btn km-poster-link';
+            link.href = poster.linkUrl;
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            link.textContent = 'くわしく見る ↗';
+            // 押したら数える(Main/poster-stats.js。同じ端末は 1 人)
+            link.setAttribute('data-km-poster-link', String(Number(poster.id)));
+            actions.appendChild(link);
+        }
+        box.appendChild(actions);
+        if (poster.description) {
+            const desc = document.createElement('p');
+            desc.className = 'km-poster-sheet-desc';
+            desc.textContent = poster.description;
+            box.appendChild(desc);
+        }
+        // 結びつけた場所(企画の番号の地点・一時地点)へ(2026-10-23、利用者の指示)
+        const places = posterPlaces(poster);
+        if (places.length > 0) {
+            const head = document.createElement('p');
+            head.className = 'km-poster-sheet-head';
+            head.textContent = poster.projectNo ? `企画 ${poster.projectNo} の場所` : '場所';
+            box.appendChild(head);
+            places.forEach(place => {
+                const go = document.createElement('button');
+                go.type = 'button';
+                go.className = 'secondary-btn km-poster-go';
+                go.textContent = `📍 ${place.label}(${floorText(place.floor)})`;
+                go.addEventListener('click', () => goToPlace(place.target));
+                box.appendChild(go);
+            });
+        }
+        sheet.open({ key: 'poster', title: poster.title, content: box, push: sheet.isOpen() });
+        refreshPosterLikes([poster.id]);
+    };
+
+    /** ポスターを結びつけた場所(地図に出している地点と一時地点) */
+    function posterPlaces(poster) {
+        const places = [];
+        const nodeIds = Array.isArray(poster.nodeIds) && poster.nodeIds.length > 0 ? poster.nodeIds : (poster.nodeId ? [poster.nodeId] : []);
+        nodeIds.forEach(id => {
+            const node = graphData.nodes[id];
+            if (node && !node.hidden) places.push({ target: { nodeId: id }, label: node.alias || node.name, floor: node.floor });
+        });
+        (poster.poiIds || []).forEach(poiId => {
+            const poi = (graphData.eventPois || []).find(p => Number(p.id) === Number(poiId));
+            if (poi) places.push({ target: { poiId: Number(poi.id) }, label: String(poi.name || ''), floor: poi.floor });
+        });
+        return places;
+    }
+
+    /*
+     * ♡(ポスターのいいね。2026-10-23、利用者の指示)。数は地図のデータの poster.likes、押したかは api/poster-like.php の GET。
+     * 端末の印はこの端末のでたらめな値(localStorage)。サーバーは鍵つきの印にしてだけ持つ(lib/poster-likes.php)
+     */
+    const posterLikeState = new Map();   // id → { count, liked }
+    // 端末の印は**♡ を押すときだけ作る**(プライバシーポリシーのとおり。見るだけの人の端末には何も残さない)
+    function deviceId(create) {
+        try {
+            let id = window.localStorage.getItem('km-device-id');
+            if (!/^[0-9a-f]{32}$/.test(id || '')) {
+                if (!create) return null;
+                const bytes = new Uint8Array(16);
+                window.crypto.getRandomValues(bytes);
+                id = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+                window.localStorage.setItem('km-device-id', id);
+            }
+            return id;
+        } catch (e) {
+            return null;
+        }
+    }
+    function csrfToken() {
+        const meta = document.querySelector('meta[name="km-csrf"]');
+        return meta ? meta.getAttribute('content') : '';
+    }
+    function posterLikeButton(poster) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'secondary-btn km-like-btn';
+        button.dataset.kmPosterLike = String(Number(poster.id));
+        if (!posterLikeState.has(Number(poster.id))) posterLikeState.set(Number(poster.id), { count: Number(poster.likes) || 0, liked: false });
+        paintLike(button);
+        return button;
+    }
+    function paintLike(button) {
+        const state = posterLikeState.get(Number(button.dataset.kmPosterLike)) || { count: 0, liked: false };
+        button.textContent = `${state.liked ? '♥' : '♡'} ${state.count}`;
+        button.classList.toggle('is-liked', state.liked);
+        button.setAttribute('aria-pressed', String(state.liked));
+        button.setAttribute('aria-label', state.liked ? `いいねを外す(${state.count})` : `いいね(${state.count})`);
+    }
+    function paintLikes() {
+        document.querySelectorAll('[data-km-poster-like]').forEach(paintLike);
+    }
+    async function refreshPosterLikes(ids) {
+        if (ids.length === 0) return;
+        const device = deviceId(false);
+        try {
+            // 端末の印は URL に載せない(アクセスの記録に残る)。見出しで送る
+            const response = await fetch('/api/poster-like.php?ids=' + ids.map(Number).join(','), { credentials: 'same-origin', headers: device ? { 'X-KM-Device': device } : {} });
+            if (!response.ok) return;
+            const data = await response.json();
+            (data.likes || []).forEach(entry => posterLikeState.set(Number(entry.id), { count: Number(entry.count) || 0, liked: Boolean(entry.liked) }));
+            paintLikes();
+        } catch (e) {
+            // 数が読めなくても見る分には困らない
+        }
+    }
+    async function togglePosterLike(button) {
+        const id = Number(button.dataset.kmPosterLike);
+        const device = deviceId(true);
+        if (!device) { toast('この端末では ♡ を覚えられません'); return; }
+        const before = posterLikeState.get(id) || { count: 0, liked: false };
+        const like = !before.liked;
+        // 先に見た目を変える(押した手応え)。断られたら戻す
+        posterLikeState.set(id, { count: Math.max(0, before.count + (like ? 1 : -1)), liked: like });
+        paintLikes();
+        try {
+            const response = await fetch('/api/poster-like.php', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json', 'X-KM-CSRF': csrfToken() },
+                body: JSON.stringify({ poster: id, device: device, like: like }),
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok || !data.success) throw new Error(data.message || 'failed');
+            posterLikeState.set(id, { count: Number(data.count) || 0, liked: Boolean(data.liked) });
+            testLog('like', { text: 'poster:' + id + (like ? ':on' : ':off') });
+        } catch (error) {
+            posterLikeState.set(id, before);
+            toast(error && error.message && error.message !== 'failed' ? error.message : '♡ を送れませんでした。時間をおいてもう一度試してください');
+        }
+        paintLikes();
+    }
+
+    /* ---------------- 引き出しの中のボタン(地図の吹き出しと同じ口) ---------------- */
+
+    if (sheet) {
+        sheet.element().addEventListener('click', handleDetailClick);
+        // 地図の寄せの余白に引き出しを数え直す
+        window.addEventListener('km:sheet', (event) => {
+            document.body.classList.toggle('km-place-open', Boolean(event.detail && event.detail.open));
+            if (!event.detail || !event.detail.open) clearSelected();
+        });
+    }
+
+    /* ---------------- 共有のリンクから開いたとき ---------------- */
+
+    let focusShareDone = false;
+    function focusFromUrl() {
+        if (focusShareDone) return;
+        focusShareDone = true;
+        const read = (name) => {
+            const meta = document.querySelector(`meta[name="${name}"]`);
+            return meta ? meta.getAttribute('content') : '';
+        };
+        const poiId = read('km-focus-poi');
+        // 経路の端は地点の id か一時地点の番号。どちらも、いまの地図にあるものだけ
+        const end = (idName, poiName) => {
+            const id = read(idName);
+            if (id) return graphData.nodes[id] && !graphData.nodes[id].hidden ? { id: id, label: getLabelForNode(id, graphData.nodes[id]), poi: null } : false;
+            const poiNo = read(poiName);
+            if (!poiNo) return null;
+            const poi = (graphData.eventPois || []).find(p => Number(p.id) === Number(poiNo));
+            return poi && poi.anchorNodeId && graphData.nodes[poi.anchorNodeId] ? { id: poi.anchorNodeId, label: poiSearchLabel(poi), poi: Number(poi.id) } : false;
+        };
+        const from = end('km-focus-from', 'km-focus-from-poi');
+        const to = end('km-focus-to', 'km-focus-to-poi');
+        if (from !== null && to !== null) {
+            if (!from || !to) {
+                showRoomNotice('共有された経路の場所は、今は案内していません。地図から探してください。');
+                return;
+            }
+            routeStartId = from.id;
+            routeStartPoi = from.poi;
+            routeEndId = to.id;
+            routeEndPoi = to.poi;
+            if (startInput) startInput.value = from.label;
+            if (endInput) endInput.value = to.label;
+            searchBtn.click();
+            return;
+        }
+        if (poiId) {
+            if (!(graphData.eventPois || []).some(p => Number(p.id) === Number(poiId))) {
+                showRoomNotice('この場所は今は案内していません(イベントが終わったのかもしれません)。');
+                return;
+            }
+            goToPlace({ poiId: Number(poiId) });
+        }
+    }
+    window.setTimeout(() => {
+        if (window.kmMapReady) focusFromUrl();
+        else document.addEventListener('km-map-ready', () => window.setTimeout(focusFromUrl, 0), { once: true });
+    }, 0);
 });

@@ -147,7 +147,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
                 <div class="flex-grow-1">
                   <strong>イベント「<?= km_e($kmEditEvent['name']) ?>」の重ね合わせを編集しています。</strong>
                   <div class="fs-7" data-i18n="page.mapEditor.eventNotice">
-                    ここでの通行止め・臨時の地点・臨時の名前は、このイベント専用です。
+                    ここでの通行止め・臨時の地点・臨時の名前・表示しない地点は、このイベント専用です。
                     地図そのもの(場所や経路)は変わりません。
                   </div>
                 </div>
@@ -217,6 +217,11 @@ require __DIR__ . '/_inc/partials/page-header.php';
                         <i class="bi bi-tag me-1" aria-hidden="true"></i>
                         <span data-i18n="page.mapEditor.modeEventAlias">臨時の名前</span>
                       </button>
+                      <?php // イベント中に出さない地点(2026-10-23。今まではアプリでだけ付けられた) ?>
+                      <button type="button" class="btn btn-outline-secondary btn-sm km-mode" data-km-mode="event-hidden">
+                        <i class="bi bi-eye-slash me-1" aria-hidden="true"></i>
+                        <span>表示しない</span>
+                      </button>
                     <?php endif; ?>
                   </div>
                   <div class="card-footer">
@@ -239,6 +244,22 @@ require __DIR__ . '/_inc/partials/page-header.php';
                       <strong id="km-node-count"><?= (int) $nodeCount ?></strong>
                     </div>
                     <div id="km-editor-status" class="mt-2 text-body-secondary"></div>
+                    <?php /* 地点の札に出すもの(2026-10-23、利用者の指示「UUID と座標、先生の名前表示は ON-OFF で切り替え」)。
+                             この画面の閲覧者の手元(localStorage)に覚える。map-editor.js が app.js の札を描き直す */ ?>
+                    <hr class="my-2">
+                    <div class="fs-7 text-body-secondary mb-1" data-i18n="page.mapEditor.labelGroup">地点の札に出すもの</div>
+                    <div class="form-check form-switch">
+                      <input class="form-check-input km-label-pref" type="checkbox" role="switch" id="km-label-pref-id" data-km-label-pref="id" checked>
+                      <label class="form-check-label" for="km-label-pref-id" data-i18n="page.mapEditor.labelId">ID(UUID)</label>
+                    </div>
+                    <div class="form-check form-switch">
+                      <input class="form-check-input km-label-pref" type="checkbox" role="switch" id="km-label-pref-xy" data-km-label-pref="xy" checked>
+                      <label class="form-check-label" for="km-label-pref-xy" data-i18n="page.mapEditor.labelXy">座標</label>
+                    </div>
+                    <div class="form-check form-switch">
+                      <input class="form-check-input km-label-pref" type="checkbox" role="switch" id="km-label-pref-names" data-km-label-pref="names" checked>
+                      <label class="form-check-label" for="km-label-pref-names" data-i18n="page.mapEditor.labelNames">先生の名前</label>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -248,11 +269,18 @@ require __DIR__ . '/_inc/partials/page-header.php';
                 <div class="card">
                   <div class="card-header d-flex flex-wrap align-items-center gap-2">
                     <h3 class="card-title mb-0" data-i18n="page.mapEditor.mapTitle">地図</h3>
-                    <div class="card-tools ms-auto btn-group btn-group-sm" id="km-floor-buttons">
+                    <?php
+                    /*
+                     * 階のボタン。**折り返す**(2026-10-23、利用者の指摘「見切れている」)。
+                     * 建物の階を足して数が増え、つなげたボタンの帯(btn-group)のままだと右へはみ出して押せなかった。
+                     * mw-100 で見出しの幅を超えないようにし、入りきらなければ次の行へ
+                     */
+                    ?>
+                    <div class="card-tools ms-auto d-flex flex-wrap justify-content-end gap-1 mw-100" id="km-floor-buttons">
                       <?php foreach ($floors as $i => $floor): ?>
                         <button
                           type="button"
-                          class="btn btn-outline-secondary floor-btn<?= (string) $floor['id'] === '1' ? ' active' : '' ?>"
+                          class="btn btn-sm btn-outline-secondary floor-btn<?= (string) $floor['id'] === '1' ? ' active' : '' ?>"
                           data-floor="<?= km_e((string) $floor['id']) ?>"
                         ><?= km_e((string) $floor['label']) ?></button>
                       <?php endforeach; ?>

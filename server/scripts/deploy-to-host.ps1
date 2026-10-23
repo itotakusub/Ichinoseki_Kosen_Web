@@ -473,6 +473,9 @@ $mustContain = @(
     './nginx/km/proxy-web.conf'
     # Logto の確認コード欄の自動入力(2026-10-12)。無いと nginx の差し込みが 404 を読みにいく
     './nginx/km/logto-otp-autocomplete.js'
+    # メンテナンス中の画面(2026-10-21)。conf が無いと nginx が起動しない(include の名前に * が無いため)
+    './nginx/km/maintenance.conf'
+    './nginx/km/maintenance.html'
     # 更新の確認と通知。**この2つは対**で、片方だけだと cron が空振りする
     './scripts/check-updates.sh'
     './src/scripts/notify-update.php'
