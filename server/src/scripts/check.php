@@ -7800,10 +7800,16 @@ function km_check_layout(): void
         km_map_projects_with_aliases(['n1' => ['22'], 'n2' => ['33']], ['n1' => '32', 'n2' => '33', 'n3' => 'たこ焼き']));
     check_bool('公開の地図: 番号で置いたポスターとスケジュールの場所に、イベント中の名前の番号も入る', str_contains((string) file_get_contents(__DIR__ . '/../lib/map-data.php'), "\$projectsById = km_map_projects_with_aliases(km_map_projects_by_node_id(\$pdo), \$overlay['aliases']);"));
     check_bool('公開の地図: 企画の教室はイベント中、札と吹き出しの名前がポスターの見出し(札は縮める)・備考がポスターの説明・ポスターが無ければ番号を前に付ける',
-        str_contains($appJsForPoi, 'escapeHtml(project ? shortPoiName(project.name) : displayNameFor(node));')
+        str_contains($appJsForPoi, 'escapeHtml(project ? (project.fromPoster ? shortPoiName(project.name) : project.name) : displayNameFor(node));')
         && str_contains($appJsForPoi, 'const title = project ? project.name : (node.alias || node.name);')
         && str_contains($appJsForPoi, "if (!graphData.event || numbers.length === 0) return null;")
         && str_contains($appJsForPoi, "return { name: prefix ? `\${prefix} \${base}` : base, note: '', fromPoster: false };"));
+    check_bool('公開の地図: 一時地点は部屋の地点と同じに描く(外は建物)・同じ種類の束に入れて出し入れと札の間引きも同じ・編集画面は今までの印',
+        str_contains($appJsForPoi, "return String(poi.floor) === 'outside' ? 'facility' : 'room';")
+        && str_contains($appJsForPoi, 'const marker = createPoiMarker(poi, type);')
+        && str_contains($appJsForPoi, "className: 'km-node km-node-' + type + (hasPoster ? ' km-node-has-poster' : ''),")
+        && str_contains($appJsForPoi, 'poiMarkers.forEach(fn);')
+        && str_contains($appJsForPoi, 'if (!window.isAdmin) return;'));
     require_once __DIR__ . '/../lib/display-defaults.php';
     check('表示調整の既定を Web の形に(対応する項目だけ)', [
         'nodeSize' => 120, 'labelSize' => 110, 'labelMode' => 'text_only', 'roomNames' => true, 'accessPoints' => false, 'roadGraph' => true,

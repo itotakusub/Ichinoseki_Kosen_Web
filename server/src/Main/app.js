@@ -775,6 +775,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     let activeMarkerGroups = [];
     // ノードID -> マーカー。検索結果からポップアップを開くのに使う。
     const markersById = new Map();
+    // 臨時の地点の番号 -> マーカー。「予定」の一覧から開くため(2026-10-23。公開の地図は部屋のマーカーと一緒に作る)
+    const poiMarkers = new Map();
+
+    const KM_POI_ICONS = {
+        food: '🍢', exhibit: '🎨', reception: '📋',
+        firstaid: '🚑', toilet: '🚻', stage: '🎤', other: '📍',
+    };
+
+    /** 臨時の地点の種類の言葉(Website の値。lib/map-events.php の KM_MAP_EVENT_POI_CATEGORIES) */
+    const KM_POI_LABELS = {
+        food: '模擬店', exhibit: '展示', reception: '受付',
+        firstaid: '救護', toilet: 'トイレ', stage: 'ステージ', other: '臨時の地点',
+    };
 
     /**
      * ノードの図形。**種類ごとに色と形を変える**(アプリと同じ)。
@@ -836,7 +849,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 企画の地点はイベント中、一時地点と同じく番号のポスターの見出しを出す(7 文字以上なら縮める。2026-10-23)
         const project = projectDisplayFor(id, node);
         let tooltipContent = (hasPoster ? '<span class="km-label-poster" aria-hidden="true">🖼️</span>' : '')
-            + escapeHtml(project ? shortPoiName(project.name) : displayNameFor(node));
+            // 縮めるのはポスターの見出しだけ(「28 ファーストペンギンファブ」のように番号を付けた部屋の名前は縮めない)
+            + escapeHtml(project ? (project.fromPoster ? shortPoiName(project.name) : project.name) : displayNameFor(node));
         if (window.isAdmin) {
             /*
              * **`style="…"` を書かない。** CSP に `'unsafe-inline'` が無く、
@@ -916,6 +930,44 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
         });
 
+        return marker;
+    }
+
+    /**
+     * 臨時の地点(一時ノード)のマーカー。**部屋(外は建物)の地点と同じ見た目と振る舞い**(2026-10-23、利用者の指示)。
+     * 形・色・大きさ・札の出し方は表示調整のその種類の設定に従う。名前はポスターの見出し(poiDisplay。札は 7 文字以上なら縮める)。
+     * 吹き出しは poiDetailHtml。案内はつなぎ先の地点へ(公開の地図だけで使う)
+     */
+    function createPoiMarker(poi, type) {
+        const shown = poiDisplay(poi);
+        const setting = mapStyle.typeSetting(tuning, type);
+        const box = nodeBox(type).box;
+        const hasPoster = postersByNode.has('poi:' + poi.id);
+
+        const marker = L.marker([poi.y, poi.x], {
+            icon: L.divIcon({
+                className: 'km-node km-node-' + type + (hasPoster ? ' km-node-has-poster' : ''),
+                html: nodeIconHtml({ name: shown.name }, type),
+                iconSize: [box, box],
+                iconAnchor: [box / 2, box / 2],
+            }),
+            keyboard: false,
+            interactive: true,
+        });
+
+        const typeAllowsLabel = setting.label === null ? tuning.labelMode !== 'icon_only' : setting.label;
+        if (shown.name.trim() !== '' && typeAllowsLabel) {
+            marker.bindTooltip((hasPoster ? '<span class="km-label-poster" aria-hidden="true">🖼️</span>' : '')
+                + escapeHtml(shortPoiName(shown.name)), {
+                permanent: true,
+                direction: 'top',
+                offset: [0, -box / 2],
+                interactive: true,
+                className: 'km-label km-label-' + type,
+                html: true,
+            });
+        }
+        marker.bindPopup(poiDetailHtml(poi, shown));
         return marker;
     }
 
@@ -1273,6 +1325,22 @@ document.addEventListener('DOMContentLoaded', async () => {
             groups[type].addLayer(marker);
         }
 
+        /*
+         * 臨時の地点(一時ノード)も部屋の地点と同じに描く(2026-10-23、利用者の指示「Room ノードのような動作。外は Facility」)。
+         * 同じ種類の束に入れるので、出し入れ(表示調整の種類・倍率)・外の建物名を薄くする・札の重なりの間引きも部屋・建物と同じに効く。
+         * 編集画面は renderEventOverlay が今までどおり印で描く
+         */
+        if (!window.isAdmin) {
+            (graphData.eventPois || []).forEach(function (poi) {
+                if (String(poi.floor) !== key) return;
+                const type = poiNodeType(poi);
+                if (!groups[type]) return;
+                const marker = createPoiMarker(poi, type);
+                poiMarkers.set(Number(poi.id), marker);
+                groups[type].addLayer(marker);
+            });
+        }
+
         floorMarkerLayers.set(key, groups);
         return groups;
     }
@@ -1283,6 +1351,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         activeMarkerGroups = [];
         floorMarkerLayers.clear();
         markersById.clear();
+        poiMarkers.clear();
     }
 
     /** 画面の描画を止めないよう、空いた時間に実行する。 */
@@ -1778,12 +1847,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     /** 札の要素 → その点のマーカー(点の中心を測って、線の根元にする) */
     function markersByLabel() {
         const byLabel = new Map();
-        markersById.forEach(function (marker) {
+        forEachPointMarker(function (marker) {
             const tip = marker.getTooltip && marker.getTooltip();
             const el = tip && tip.getElement && tip.getElement();
             if (el && el.isConnected) byLabel.set(el, marker);
         });
         return byLabel;
+    }
+
+    /** 地点のマーカー全部(臨時の地点も部屋と同じに数える。2026-10-23) */
+    function forEachPointMarker(fn) {
+        markersById.forEach(fn);
+        poiMarkers.forEach(fn);
     }
 
     function clearLabelLayout(el) {
@@ -1832,7 +1907,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const items = [];
         const targets = [];
         const nodes = [];
-        markersById.forEach(function (marker) {
+        forEachPointMarker(function (marker) {
             const icon = marker.getElement && marker.getElement();
             if (!icon || !icon.isConnected) return;
             const r = icon.getBoundingClientRect();
@@ -2350,7 +2425,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 企画の地点はポスターの見出しでも探せる(部屋の名前も残す。2026-10-23)
         const project = projectDisplayFor(id, node);
         if (project) {
-            return project.fromPoster ? `[${floorLabel}] ${project.name}(${name})` : `[${floorLabel}] ${project.name}`;
+            return project.fromPoster ? `[${floorLabel}] ${project.name}(${node.name})` : `[${floorLabel}] ${project.name}`;
         }
         return `[${floorLabel}] ${name}`;
     }
@@ -2478,17 +2553,6 @@ document.addEventListener('DOMContentLoaded', async () => {
      * 「この廊下は通れません」は来場者にこそ要る情報で、出さないと
      * 経路が遠回りになった理由が伝わらない。
      */
-    const KM_POI_ICONS = {
-        food: '🍢', exhibit: '🎨', reception: '📋',
-        firstaid: '🚑', toilet: '🚻', stage: '🎤', other: '📍',
-    };
-
-    /** 臨時の地点の種類の言葉(Website の値。lib/map-events.php の KM_MAP_EVENT_POI_CATEGORIES) */
-    const KM_POI_LABELS = {
-        food: '模擬店', exhibit: '展示', reception: '受付',
-        firstaid: '救護', toilet: 'トイレ', stage: 'ステージ', other: '臨時の地点',
-    };
-
     /**
      * 臨時の地点に出す名前と備考(2026-10-23、利用者の指示「名前はポスターに対応した名前、備考には説明」)。
      * 名前が企画の番号の一時地点で、その番号のポスターがあれば、ポスターの見出しと説明。無ければ地点の名前とメモ
@@ -2510,10 +2574,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     window.kmShortPoiName = shortPoiName;
 
-    /** 臨時の地点の吹き出し。部屋の詳細(nodeDetailHtml)と同じ形 */
+    /** 臨時の地点が地図で何として振る舞うか(2026-10-23、利用者の指示「一時ノードは Room ノードのような動作。外は Facility」) */
+    function poiNodeType(poi) {
+        return String(poi.floor) === 'outside' ? 'facility' : 'room';
+    }
+
+    /** 臨時の地点の吹き出し。部屋の詳細(nodeDetailHtml)と同じ形(種類は部屋・外は建物。模擬店などは「分類」に出す) */
     function poiDetailHtml(poi, shown) {
         const floorLabel = String(poi.floor) === 'outside' ? '外' : `${poi.floor}F`;
-        let rows = '';
+        const type = poiNodeType(poi);
+        let rows = `<div class="km-detail-row"><span>分類</span><b>${escapeHtml(KM_POI_LABELS[poi.category] || KM_POI_LABELS.other)}</b></div>`;
         if (shown.number) {
             rows += `<div class="km-detail-row"><span>企画</span><b>${escapeHtml(shown.number)}</b></div>`;
         }
@@ -2529,7 +2599,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             <div class="popup-content km-detail">
                 <span class="popup-title">${escapeHtml(shown.name)}</span>
                 <div class="km-detail-meta">
-                    <span class="km-detail-chip km-chip-poi">${escapeHtml(KM_POI_LABELS[poi.category] || KM_POI_LABELS.other)}</span>
+                    <span class="km-detail-chip km-chip-${escapeHtml(type)}">${escapeHtml(mapStyle.LABELS[type] || type)}</span>
                     <span class="km-detail-floor">${escapeHtml(floorLabel)}</span>
                 </div>
                 ${rows}
@@ -2540,13 +2610,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         `;
     }
 
-    let eventLayers = [];    // 今の階の臨時の地点のマーカー(id → marker)。「予定」の一覧から開くため(2026-10-23)
-    const poiMarkers = new Map();
+    let eventLayers = [];
 
     function renderEventOverlay() {
         eventLayers.forEach(layer => window.map.removeLayer(layer));
         eventLayers = [];
-        poiMarkers.clear();
 
         const floor = String(window.currentFloor);
 
@@ -2584,7 +2652,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             eventLayers.push(marker);
         });
 
-        // --- 臨時の地点 ---
+        /*
+         * --- 臨時の地点(地図編集の画面だけ) ---
+         * 公開の地図では部屋(外は建物)の地点と同じに描く(2026-10-23、利用者の指示。buildFloorMarkers の createPoiMarker)。
+         * 編集画面は今までどおり印で描く(地点の札と取り違えないため)
+         */
+        if (!window.isAdmin) return;
         (graphData.eventPois || []).forEach(poi => {
             if (String(poi.floor) !== floor) return;
             const icon = KM_POI_ICONS[poi.category] || KM_POI_ICONS.other;
@@ -2600,7 +2673,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             // 部屋と同じ吹き出し(km-detail)にする(2026-10-23、利用者の指示)。名前はポスターの見出し・備考はポスターの説明
             const shown = poiDisplay(poi);
             marker.bindPopup(poiDetailHtml(poi, shown));
-            poiMarkers.set(Number(poi.id), marker);
             // 地図の札は 7 文字以上なら縮める(部屋の札と同じ形)
             marker.bindTooltip(escapeHtml(shortPoiName(shown.name)), {
                 permanent: true,
