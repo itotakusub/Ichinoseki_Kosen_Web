@@ -181,3 +181,58 @@ function km_map_project_nodes(array $projectsById, ?array $visible = null): arra
     ksort($nodes, SORT_NATURAL);
     return $nodes;
 }
+
+/**
+ * 一時地点(臨時の地点)の名前が、そのまま企画の番号か(2026-10-23、利用者の運用「一時ノードでは、名前にポスター番号を明記した」)。
+ * **名前全体が番号の形のときだけ**番号とみなす(「21」「A-3」は番号、「受付」「ゴミ箱」「21 たこ焼き」は違う)。**純粋関数**
+ */
+function km_map_project_number_from_name(string $name): ?string
+{
+    $name = trim($name);
+    return $name === '' ? null : km_map_project_number($name);
+}
+
+/**
+ * 臨時の地点(km_map_event_overlay の pois)を、番号ごとにまとめる。**純粋関数**
+ *
+ * @param list<array<string, mixed>> $pois
+ * @return array<string, list<int>> 番号 => 臨時の地点の id
+ */
+function km_map_project_pois(array $pois): array
+{
+    $byNumber = [];
+    foreach ($pois as $poi) {
+        $number = km_map_project_number_from_name((string) ($poi['name'] ?? ''));
+        if ($number !== null) {
+            $byNumber[$number][] = (int) ($poi['id'] ?? 0);
+        }
+    }
+    ksort($byNumber, SORT_NATURAL);
+    return $byNumber;
+}
+
+/**
+ * 管理画面用: 全部のイベントの臨時の地点のうち、名前が番号のもの(番号 => [{id, name, floor, event}])。表が無ければ空
+ *
+ * @return array<string, list<array{id:int, floor:string, event:string}>>
+ */
+function km_map_project_pois_all(PDO $pdo): array
+{
+    try {
+        $rows = $pdo->query(
+            'SELECT p.id, p.name, p.floor_id AS floor, e.name AS event
+             FROM km_map_event_pois p JOIN km_map_events e ON e.id = p.event_id ORDER BY p.id'
+        )->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $exception) {
+        return [];
+    }
+    $byNumber = [];
+    foreach ($rows as $row) {
+        $number = km_map_project_number_from_name((string) $row['name']);
+        if ($number !== null) {
+            $byNumber[$number][] = ['id' => (int) $row['id'], 'floor' => (string) $row['floor'], 'event' => (string) $row['event']];
+        }
+    }
+    ksort($byNumber, SORT_NATURAL);
+    return $byNumber;
+}

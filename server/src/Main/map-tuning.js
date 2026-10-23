@@ -224,7 +224,8 @@
              * 表示したままになり、「押したのに戻っていない」ように見える。
              */
             Object.keys(style.DEFAULTS).forEach(function (key) {
-                tuning[key] = key === 'types' ? {} : style.DEFAULTS[key];
+                // 種類ごとの既定も、配った既定へ戻す(2026-10-23。map-style.js の defaultTypes)
+                tuning[key] = key === 'types' ? (style.defaultTypes ? style.defaultTypes() : {}) : style.DEFAULTS[key];
             });
             style.save(tuning);
             applyTheme(tuning);

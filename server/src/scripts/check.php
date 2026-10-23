@@ -5095,7 +5095,7 @@ function km_check_hardening(): void
         && str_contains($eventsApi, 'logto_assert_permissions($principal, LOGTO_ADMIN_PERMISSIONS);')
         && str_contains($file('src/lib/map-event-export.php'), 'km_map_event_overlay($pdo, $id, true)')
         && str_contains($eventsLib, '$events = $onlyPreview ? [] : km_map_event_active($pdo);'));
-    check_bool('取り込み: アプリで道へつないだ一時地点は、そのつなぎ先を案内先にする', str_contains($file('src/lib/map-event-import.php'), '$linkedTo[$link->placeUuid] = $toId($link->nodeUuid);'));
+    check_bool('取り込み: アプリで道へつないだ一時地点は、そのつなぎ先を案内先にする', str_contains($file('src/lib/map-event-import.php'), '$linkedTo[$placeUuid] = $toId($nodeUuid);'));
     check_bool('出さない地点の表が無くても重ね合わせ(通行止め)は続ける', (bool) preg_match('/try \{\s*\$stmt = \$pdo->prepare\("SELECT node_id AS nodeId FROM km_map_event_hidden/', $eventsLib));
     $indexPage = $file('src/index.php');
     $appJs = $file('src/Main/app.js');
@@ -7431,7 +7431,7 @@ function km_check_layout(): void
         && str_contains((string) file_get_contents(__DIR__ . '/../admin/api/poster-preview.php'), "require dirname(__DIR__) . '/_inc/guard.php';"));
     check_bool('URL のプレビュー: POST と CSRF を見てから取りに行く', preg_match('/!== \'POST\'.*?km_csrf_verify\(\).*?km_poster_fetch_remote/s', (string) file_get_contents(__DIR__ . '/../admin/api/poster-preview.php')) === 1);
     $mapDataLib = (string) file_get_contents(__DIR__ . '/../lib/map-data.php');
-    check_bool('地図データ: 錠の内側でだけポスターを載せ、地点に URL を付ける', str_contains($mapDataLib, "'posters' => km_posters_public(\$pdo, \$overlay['events'] !== [], \$nodesById, \$shownProjectNodes),")
+    check_bool('地図データ: 錠の内側でだけポスターを載せ、地点に URL を付ける', str_contains($mapDataLib, "'posters' => km_posters_public(\$pdo, \$overlay['events'] !== [], \$nodesById, \$shownProjectNodes, \$projectPois),")
         && strpos($mapDataLib, "'posters' => km_posters_public(") > strpos($mapDataLib, 'if (!$viewUnlocked) {') && str_contains($mapDataLib, "\$node['linkUrl'] = \$nodeLinks[\$id]['url'];"));
     check_bool('公開ページ: ?poster= は数字の形だけ確かめる・🖼️ は出しているポスターがあるときだけ', str_contains($homeCode, "preg_match('/^[1-9]\\d{0,9}\$/', \$posterParam) === 1")
         && str_contains($homeCode, '<?php if ($kmPosterCount > 0): ?>') && str_contains($homeCode, '<meta name="km-focus-poster" content="<?= km_home_e($kmFocusPoster) ?>">'));
@@ -7731,7 +7731,7 @@ function km_check_layout(): void
          km_map_event_node_visible(['type' => 'facility', 'name' => '男子トイレ'], false), km_map_event_node_visible(['type' => 'road'], false),
          km_map_event_node_visible(['type' => 'room', 'name' => '講義室'], false), km_map_event_node_visible(['type' => 'facility', 'name' => '体育館'], false)]);
     check_bool('地図データ: イベントの地点だけを出すのは有効なイベントがあり ON のとき・隠すのは印だけ(経路は通れる)・スケジュールとポスターは出している地点だけ', str_contains($mapDataForEvents, "if (\$overlay['events'] !== [] && (\$overlay['onlyEventNodes'] ?? false) && empty(\$node['hidden'])")
-        && str_contains($mapDataForEvents, "'schedule' => km_event_schedule_public(\$pdo, \$shownProjectNodes),")
+        && str_contains($mapDataForEvents, "'schedule' => km_event_schedule_public(\$pdo, \$shownProjectNodes, \$projectPois),")
         && str_contains($mapDataForEvents, "km_map_project_nodes(\$projectsById, array_filter(\$nodesById, static fn (array \$n): bool => empty(\$n['hidden'])))")
         && strpos($mapDataForEvents, "'schedule' =>") > strpos($mapDataForEvents, 'if (!$viewUnlocked) {'));
     $eventsLib = (string) file_get_contents(__DIR__ . '/../lib/map-events.php');
@@ -7746,6 +7746,46 @@ function km_check_layout(): void
     check_bool('管理画面: スケジュールは guard の内側・CSRF・記録に文言・サイドバー', str_contains($schedulePage, "require __DIR__ . '/_inc/guard.php';") && str_contains($schedulePage, 'km_csrf_verify()')
         && isset(KM_ADMIN_LOG_ACTION_LABELS['schedule.create'], KM_ADMIN_LOG_ACTION_LABELS['schedule.update'], KM_ADMIN_LOG_ACTION_LABELS['schedule.delete'], KM_ADMIN_LOG_ACTION_LABELS['schedule.public'])
         && str_contains((string) file_get_contents(__DIR__ . '/../admin/_inc/partials/sidebar.php'), "./schedule.php"));
+    /*
+     * 一時地点の経路と番号(2026-10-23、利用者の報告「一時ノードのルート案内がうまく動作しない」。kosenmap_map+event.json を調べた)。
+     * 版 22 のアプリは一時地点の接続を a / b の名前で書き出していた(R8)。読めずに一番近い地点へつなぎ、トイレや体育館の出入口が案内先になっていた
+     */
+    km_check_heading('一時地点: 接続の古い名前・道を先に・名前の番号・表示調整の既定を Web へ(2026-10-23)');
+    require_once __DIR__ . '/../lib/map-event-import.php';
+    $importNodes = [
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' => ['floor' => '1', 'type' => 'room', 'x' => 10.0, 'y' => 10.0],
+        'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' => ['floor' => '1', 'type' => 'road', 'x' => 40.0, 'y' => 10.0],
+        'cccccccccccccccccccccccccccccccc' => ['floor' => '1', 'type' => 'road', 'x' => 90.0, 'y' => 10.0],
+    ];
+    $importEvent = json_decode('{"uuid":"ev","name":"祭","places":[
+        {"uuid":"p1","name":"21","floor":"1F","x":12,"y":1190,"category":"模擬店","note":"","staffOnly":false},
+        {"uuid":"p2","name":"ゴミ箱","floor":"1F","x":12,"y":1190,"category":"","note":"","staffOnly":false}],
+        "placeLinks":[{"a":"p1","b":"cccccccc-cccc-cccc-cccc-cccccccccccc"}]}');
+    $importConverted = km_map_event_from_app($importEvent, $importNodes);
+    check('取り込み: 版 22 の a / b の接続を読む・つないでいない地点は部屋より道を先に選ぶ', ['cccccccccccccccccccccccccccccccc', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'],
+        array_column($importConverted['pois'], 'anchorNodeId'));
+    check_bool('取り込み: Website で作って渡したイベント(web-event-<番号>)は、その番号のイベントを更新する', str_contains((string) file_get_contents(__DIR__ . '/../lib/map-event-import.php'), "if (\$found === false && \$webEventId !== null) {"));
+    check('一時地点の名前が番号なら企画の番号(名前全体のときだけ)', ['21', 'A-3', null, null, null],
+        [km_map_project_number_from_name(' 21 '), km_map_project_number_from_name('a-3'), km_map_project_number_from_name('受付'), km_map_project_number_from_name('21 たこ焼き'), km_map_project_number_from_name('')]);
+    check('番号ごとの臨時の地点', ['21' => [7, 9], 'A-3' => [8]], km_map_project_pois([['id' => 7, 'name' => '21'], ['id' => 8, 'name' => 'A-3'], ['id' => 9, 'name' => '２１'], ['id' => 10, 'name' => 'ゴミ箱']]));
+    check('スケジュール: 番号の一時地点も場所にする', [7], km_event_schedule_public_rows([['id' => 1, 'projectNo' => '21', 'title' => 'a', 'organizer' => '', 'description' => '', 'startsAt' => 'x', 'endsAt' => null, 'isPublic' => true]], [], ['21' => [7]])[0]['poiIds']);
+    $appJsForPoi = (string) file_get_contents(__DIR__ . '/../Main/app.js');
+    check_bool('公開の地図: 一時地点は部屋と同じ吹き出し・名前はポスターの見出し(7 文字以上は 6 文字 + …)・備考はポスターの説明', str_contains($appJsForPoi, 'marker.bindPopup(poiDetailHtml(poi, shown));')
+        && str_contains($appJsForPoi, "return chars.length >= 7 ? chars.slice(0, 6).join('') + '…' : chars.join('');")
+        && str_contains($appJsForPoi, "note: poster && poster.description ? poster.description : String(poi.note || ''),"));
+    require_once __DIR__ . '/../lib/display-defaults.php';
+    check('表示調整の既定を Web の形に(対応する項目だけ)', [
+        'nodeSize' => 120, 'labelSize' => 110, 'labelMode' => 'text_only', 'roomNames' => true, 'accessPoints' => false, 'roadGraph' => true,
+        'types' => ['room' => ['shape' => 'star', 'size' => 90, 'label' => false, 'showScale' => 1.5, 'visible' => true], 'facility' => ['visible' => false],
+            'stairs' => ['visible' => true], 'road' => ['visible' => false], 'entrance' => ['visible' => false], 'wall' => ['visible' => false], 'wifi_router' => ['visible' => false]],
+    ], km_display_defaults_for_web([
+        'map_node_size_percent' => 120, 'map_label_size_percent' => 110, 'map_node_label_mode' => 'text', 'map_display_layers' => ['layer_room_names'],
+        'map_show_road_graph' => true, 'map_node_shape_room' => 'star', 'map_node_size_room' => 90, 'map_node_label_room' => false, 'map_node_zoom_room' => '1.5',
+        'map_visible_node_types' => ['room', 'stairs'], 'map_color_areas' => true, 'map_node_color_room' => '#FF0000',
+    ]));
+    check_bool('公開ページ: 配った表示調整の既定を置き、map-style.js がそれを既定にする(「既定に戻す」も)', str_contains((string) file_get_contents(__DIR__ . '/../index.php'), '<script type="application/json" id="km-display-defaults"<?= km_csp_nonce_attr() ?>>')
+        && str_contains((string) file_get_contents(__DIR__ . '/../Main/map-style.js'), "document.getElementById('km-display-defaults')")
+        && str_contains((string) file_get_contents(__DIR__ . '/../Main/map-tuning.js'), 'style.defaultTypes()'));
     km_check_heading('posters: 広告(重み 10%・必ず 1 件)・数・チュートリアルの終わりの知らせ(2026-10-21)');
     check('広告の重みは 10%(利用者の指示。全部同じ)', 10, KM_POSTER_AD_WEIGHT);
     check('広告が 1 件なら 100%・2 件なら 50%・10 件なら 10%・無ければ 0(表示しないわけではない)', [1.0, 0.5, 0.1, 0.0],

@@ -150,6 +150,40 @@
         types: {},          // { room: { shape, visible, label, showScale } }
     };
 
+    /*
+     * 管理アプリで配った表示調整の既定(2026-10-23、利用者の指示「表示調整が Website に配られ、既定になっているか」)。
+     * index.php が <script type="application/json" id="km-display-defaults"> に置く(lib/display-defaults.php の km_display_defaults_for_web)。
+     * **上の DEFAULTS を書き換える** —— 閲覧者が自分で変えていない項目と、「既定に戻す」がこの値になる。読めなければ今までの既定のまま
+     */
+    const DISTRIBUTED_TYPES = {};
+    (function applyDistributedDefaults() {
+        try {
+            const el = document.getElementById('km-display-defaults');
+            if (!el) return;
+            const distributed = JSON.parse(el.textContent || '{}');
+            if (!distributed || typeof distributed !== 'object') return;
+            Object.keys(DEFAULTS).forEach(function (key) {
+                if (key !== 'types' && typeof distributed[key] === typeof DEFAULTS[key]) DEFAULTS[key] = distributed[key];
+            });
+            if (distributed.types && typeof distributed.types === 'object') {
+                Object.keys(COLORS).forEach(function (type) {
+                    const entry = distributed.types[type];
+                    if (entry && typeof entry === 'object') DISTRIBUTED_TYPES[type] = entry;
+                });
+            }
+        } catch (e) {
+            // 読めないだけ。今までの既定で出す
+        }
+    })();
+
+    /** 種類ごとの既定(配ったもの)の写し。読み出しと「既定に戻す」で使う */
+    function defaultTypes() {
+        const types = {};
+        Object.keys(DISTRIBUTED_TYPES).forEach(function (type) {
+            types[type] = Object.assign({}, DISTRIBUTED_TYPES[type]);
+        });
+        return types;
+    }
     /**
      * 読み出す。**壊れていたら既定に戻す。**
      *
@@ -157,7 +191,7 @@
      * そこで落ちると**地図が真っ白になる**ので、読めなければ黙って既定へ倒す。
      */
     function load() {
-        const tuning = Object.assign({}, DEFAULTS, { types: {} });
+        const tuning = Object.assign({}, DEFAULTS, { types: defaultTypes() });
         try {
             const raw = window.localStorage.getItem(STORAGE_KEY);
             if (!raw) return tuning;
@@ -170,7 +204,8 @@
             if (stored.types && typeof stored.types === 'object') {
                 Object.keys(COLORS).forEach(function (type) {
                     const entry = stored.types[type];
-                    if (entry && typeof entry === 'object') tuning.types[type] = entry;
+                    // 自分で変えた種類は、その値を配った既定の上に重ねる
+                    if (entry && typeof entry === 'object') tuning.types[type] = Object.assign({}, DISTRIBUTED_TYPES[type] || {}, entry);
                 });
             }
         } catch (e) {
@@ -246,6 +281,7 @@
         DEFAULT_SHAPES: DEFAULT_SHAPES,
         DEFAULT_SIZES: DEFAULT_SIZES,
         DEFAULTS: DEFAULTS,
+        defaultTypes: defaultTypes,
         MEDIUM_SCALE: MEDIUM_SCALE,
         HIGH_SCALE: HIGH_SCALE,
         scaleForZoom: scaleForZoom,

@@ -22,6 +22,7 @@ $errors = [];
 $dbError = null;
 $rows = [];
 $projectNodes = [];
+$projectPois = [];
 $nodeNames = [];
 $editing = null;
 $form = null;
@@ -77,6 +78,8 @@ try {
 
     $rows = km_event_schedule_all($pdo);
     $projectNodes = km_map_project_nodes(km_map_projects_by_node_id($pdo));
+    // 名前が番号の一時地点(臨時の地点。2026-10-23)。全部のイベントの分
+    $projectPois = km_map_project_pois_all($pdo);
     foreach (km_poster_node_options($pdo) as $option) {
         $nodeNames[$option['id']] = $option['name'] . '(' . km_poster_floor_label($option['floor']) . ')';
     }
@@ -104,13 +107,21 @@ $value = static function (string $key, string $default = '') use ($form, $editin
     return $editing[$key] ?? $default;
 };
 $datetimeValue = static fn (?string $value): string => $value === null || $value === '' ? '' : substr(str_replace(' ', 'T', $value), 0, 16);
-$placeLabel = static function (?string $projectNo) use ($projectNodes, $nodeNames): string {
+$poiFloor = static fn (string $floor): string => $floor === 'outside' ? '外' : (preg_match('/^\d+$/', $floor) === 1 ? $floor . 'F' : $floor);
+$placeLabel = static function (?string $projectNo) use ($projectNodes, $projectPois, $nodeNames, $poiFloor): string {
     if ($projectNo === null || $projectNo === '') {
         return '';
     }
     $ids = $projectNodes[$projectNo] ?? [];
-    return implode('、', array_map(static fn (string $id): string => $nodeNames[$id] ?? $id, $ids));
+    $labels = array_map(static fn (string $id): string => $nodeNames[$id] ?? $id, $ids);
+    foreach ($projectPois[$projectNo] ?? [] as $poi) {
+        $labels[] = '一時地点(' . $poiFloor($poi['floor']) . '・' . $poi['event'] . ')';
+    }
+    return implode('、', $labels);
 };
+// 番号の一覧は、地点と一時地点の両方から
+$allNumbers = array_unique(array_merge(array_keys($projectNodes), array_keys($projectPois)));
+sort($allNumbers, SORT_NATURAL);
 $formatTime = static fn (string $start, ?string $end): string => substr($start, 0, 16) . ($end !== null ? ' 〜 ' . (substr($end, 0, 10) === substr($start, 0, 10) ? substr($end, 11, 5) : substr($end, 0, 16)) : '');
 $isPublicChecked = $form !== null ? (bool) $form['isPublic'] : ($editing === null || $editing['isPublic']);
 
@@ -221,24 +232,24 @@ require __DIR__ . '/_inc/partials/page-header.php';
 
                 <div class="card mb-4" id="project-numbers">
                   <div class="card-header">
-                    <h3 class="card-title">企画の番号と地点(<?= count($projectNodes) ?> 件)</h3>
+                    <h3 class="card-title">企画の番号と地点(<?= count($allNumbers) ?> 件)</h3>
                   </div>
                   <div class="card-body">
                     <p class="text-body-secondary fs-7 mb-2">
-                      管理アプリで地点に振った番号です(地図を取り込むと入れ替わります)。1 つの地点に番号がいくつも、1 つの番号に地点がいくつも付けられます。
+                      管理アプリで地点に振った番号と、名前が番号の一時地点(イベントの臨時の地点)です(地図・イベントを取り込むと入れ替わります)。1 つの地点に番号がいくつも、1 つの番号に地点がいくつも付けられます。
                       ポスターは「ポスター・広告」で番号を選ぶと、その番号の地点に出ます。
                     </p>
-                    <?php if ($projectNodes === []): ?>
+                    <?php if ($allNumbers === []): ?>
                       <p class="mb-0">まだありません。管理アプリの地点の編集で「企画の番号」を入れ、地図を取り込んでください。</p>
                     <?php else: ?>
                       <div class="table-responsive">
                         <table class="table table-sm align-middle mb-0">
                           <thead><tr><th>番号</th><th>地点</th><th>スケジュール</th></tr></thead>
                           <tbody>
-                            <?php foreach ($projectNodes as $number => $ids): ?>
+                            <?php foreach ($allNumbers as $number): ?>
                               <tr>
                                 <td><span class="badge text-bg-info"><?= km_e((string) $number) ?></span></td>
-                                <td class="fs-7"><?= km_e(implode('、', array_map(static fn (string $id): string => $nodeNames[$id] ?? $id, $ids))) ?></td>
+                                <td class="fs-7"><?= km_e($placeLabel((string) $number)) ?></td>
                                 <td><?= (int) ($scheduleCount[(string) $number] ?? 0) ?> 件</td>
                               </tr>
                             <?php endforeach; ?>
@@ -272,7 +283,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
                         <div class="mb-3">
                           <label class="form-label" for="km-schedule-project">企画の番号(場所)</label>
                           <input class="form-control" type="text" id="km-schedule-project" name="project_no" maxlength="<?= KM_MAP_PROJECT_NUMBER_MAX_LENGTH ?>" placeholder="例: A-1" list="km-schedule-numbers" value="<?= km_e((string) $value('projectNo')) ?>">
-                          <datalist id="km-schedule-numbers"><?php foreach (array_keys($projectNodes) as $number): ?><option value="<?= km_e((string) $number) ?>"><?= km_e($placeLabel((string) $number)) ?></option><?php endforeach; ?></datalist>
+                          <datalist id="km-schedule-numbers"><?php foreach ($allNumbers as $number): ?><option value="<?= km_e((string) $number) ?>"><?= km_e($placeLabel((string) $number)) ?></option><?php endforeach; ?></datalist>
                           <div class="form-text">空なら場所なし(一覧にだけ出ます)。番号の地点がいくつあれば、全部に出ます。</div>
                         </div>
                         <div class="mb-3">

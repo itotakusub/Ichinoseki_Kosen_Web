@@ -190,7 +190,7 @@ function km_event_schedule_set_public(PDO $pdo, int $id, bool $public): void
  * @param array<string, list<string>> $projectNodes 番号 => 地点の id(km_map_project_nodes。出している地点だけ)
  * @return list<array{id:int, projectNo:?string, title:string, organizer:string, description:string, startsAt:string, endsAt:?string, nodeIds:list<string>}>
  */
-function km_event_schedule_public(PDO $pdo, array $projectNodes): array
+function km_event_schedule_public(PDO $pdo, array $projectNodes, array $projectPois = []): array
 {
     try {
         $rows = $pdo->query(
@@ -202,7 +202,7 @@ function km_event_schedule_public(PDO $pdo, array $projectNodes): array
         // 表がまだ無い(管理画面の「スケジュール」をまだ開いていない)
         return [];
     }
-    return km_event_schedule_public_rows(array_map('km_event_schedule_row', $rows), $projectNodes);
+    return km_event_schedule_public_rows(array_map('km_event_schedule_row', $rows), $projectNodes, $projectPois);
 }
 
 /**
@@ -210,9 +210,10 @@ function km_event_schedule_public(PDO $pdo, array $projectNodes): array
  *
  * @param list<array<string, mixed>> $rows km_event_schedule_row の形
  * @param array<string, list<string>> $projectNodes
+ * @param array<string, list<int>> $projectPois 番号 => 臨時の地点の id(名前が番号の一時地点。2026-10-23)
  * @return list<array<string, mixed>>
  */
-function km_event_schedule_public_rows(array $rows, array $projectNodes): array
+function km_event_schedule_public_rows(array $rows, array $projectNodes, array $projectPois = []): array
 {
     $public = [];
     foreach ($rows as $row) {
@@ -221,6 +222,7 @@ function km_event_schedule_public_rows(array $rows, array $projectNodes): array
         }
         unset($row['isPublic']);
         $row['nodeIds'] = $row['projectNo'] !== null ? ($projectNodes[$row['projectNo']] ?? []) : [];
+        $row['poiIds'] = $row['projectNo'] !== null ? ($projectPois[$row['projectNo']] ?? []) : [];
         $public[] = $row;
     }
     return $public;

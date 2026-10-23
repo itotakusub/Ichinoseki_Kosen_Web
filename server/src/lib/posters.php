@@ -656,7 +656,7 @@ function km_poster_public_image_url(array $poster): string
  *        番号を付けたポスターは、その番号を振った地点**全部**に出す(nodeIds)。番号の地点が無ければどこにも置かない(広告にもしない)
  * @return array<int, array{id:int, title:string, description:string, linkUrl:string, nodeId:string, nodeIds:list<string>, projectNo:string, imageUrl:string, width:int, height:int}>
  */
-function km_posters_public(PDO $pdo, bool $eventActive, array $nodes, array $projectNodes = []): array
+function km_posters_public(PDO $pdo, bool $eventActive, array $nodes, array $projectNodes = [], array $projectPois = []): array
 {
     if (!km_poster_mode_shows(km_poster_mode($pdo), $eventActive)) {
         return [];
@@ -692,6 +692,8 @@ function km_posters_public(PDO $pdo, bool $eventActive, array $nodes, array $pro
             'linkUrl' => (string) ($row['linkUrl'] ?? ''),
             'nodeId' => $nodeId,
             'nodeIds' => $nodeIds,
+            // 名前が番号の一時地点(2026-10-23)。地図はその臨時の地点の吹き出しに出す
+            'poiIds' => $projectNo !== '' ? ($projectPois[$projectNo] ?? []) : [],
             'projectNo' => $projectNo,
             /*
              * 広告か(**管理画面で地点に置いていない**もの)。上で外した地点(イベントで出さない・地図に無い)の

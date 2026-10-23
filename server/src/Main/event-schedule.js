@@ -77,6 +77,19 @@
                 });
                 item.appendChild(go);
             });
+            // 名前が番号の一時地点(臨時の地点。2026-10-23)
+            const pois = (window.graphData && window.graphData.eventPois) || [];
+            (entry.poiIds || []).forEach(function (poiId) {
+                const poi = pois.find(function (p) { return Number(p.id) === Number(poiId); });
+                if (!poi) return;
+                const go = el('button', 'secondary-btn km-schedule-go', '地図で見る: ' + ((window.kmShortPoiName || String)(poi.name || '')) + (String(poi.floor) === 'outside' ? '(外)' : '(' + poi.floor + 'F)'));
+                go.type = 'button';
+                go.addEventListener('click', function () {
+                    closePanel();
+                    if (typeof window.kmOpenPoi === 'function') window.kmOpenPoi(poi.id);
+                });
+                item.appendChild(go);
+            });
             list.appendChild(item);
         });
         document.body.appendChild(panel);

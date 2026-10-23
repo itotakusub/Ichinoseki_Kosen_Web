@@ -235,6 +235,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (!postersByNode.has(nodeId)) postersByNode.set(nodeId, []);
             postersByNode.get(nodeId).push(poster);
         });
+        // 名前が番号の一時地点(臨時の地点)にも出す。鍵は 'poi:<番号>'(2026-10-23)
+        (poster.poiIds || []).forEach(function (poiId) {
+            const key = 'poi:' + poiId;
+            if (!postersByNode.has(key)) postersByNode.set(key, []);
+            postersByNode.get(key).push(poster);
+        });
     });
 
     /*
@@ -247,6 +253,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         (entry.nodeIds || []).forEach(function (nodeId) {
             if (!scheduleByNode.has(nodeId)) scheduleByNode.set(nodeId, []);
             scheduleByNode.get(nodeId).push(entry);
+        });
+        (entry.poiIds || []).forEach(function (poiId) {
+            const key = 'poi:' + poiId;
+            if (!scheduleByNode.has(key)) scheduleByNode.set(key, []);
+            scheduleByNode.get(key).push(entry);
         });
     });
     const focusPosterMeta = document.querySelector('meta[name="km-focus-poster"]');
@@ -2331,7 +2342,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         const poi = (graphData.eventPois || []).find(p => {
             if (!p.anchorNodeId) return false;
             const floorLabel = String(p.floor) === "outside" ? "外" : `${p.floor}F`;
-            return `[${floorLabel}] ${p.name}` === text;
+            // 名前が番号の一時地点はポスターの見出しで探せる(2026-10-23。poiDisplay)
+            return `[${floorLabel}] ${poiDisplay(p).name}` === text;
         });
 
         return poi && graphData.nodes[poi.anchorNodeId] ? poi.anchorNodeId : undefined;
@@ -2357,7 +2369,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             const anchor = graphData.nodes[poi.anchorNodeId];
             if (!anchor) return;
             const floorLabel = String(poi.floor) === "outside" ? "外" : `${poi.floor}F`;
-            labels.push(`[${floorLabel}] ${poi.name}`);
+            labels.push(`[${floorLabel}] ${poiDisplay(poi).name}`);
         });
 
         labels.sort((a, b) => a.localeCompare(b, 'ja'));
@@ -2437,11 +2449,70 @@ document.addEventListener('DOMContentLoaded', async () => {
         firstaid: '🚑', toilet: '🚻', stage: '🎤', other: '📍',
     };
 
-    let eventLayers = [];
+    /** 臨時の地点の種類の言葉(Website の値。lib/map-events.php の KM_MAP_EVENT_POI_CATEGORIES) */
+    const KM_POI_LABELS = {
+        food: '模擬店', exhibit: '展示', reception: '受付',
+        firstaid: '救護', toilet: 'トイレ', stage: 'ステージ', other: '臨時の地点',
+    };
+
+    /**
+     * 臨時の地点に出す名前と備考(2026-10-23、利用者の指示「名前はポスターに対応した名前、備考には説明」)。
+     * 名前が企画の番号の一時地点で、その番号のポスターがあれば、ポスターの見出しと説明。無ければ地点の名前とメモ
+     */
+    function poiDisplay(poi) {
+        const poster = (postersByNode.get('poi:' + poi.id) || [])[0];
+        const number = /^[0-9A-Za-z][0-9A-Za-z_-]{0,15}$/.test(String(poi.name || '').trim()) ? String(poi.name).trim().toUpperCase() : null;
+        return {
+            name: poster ? poster.title : String(poi.name || ''),
+            note: poster && poster.description ? poster.description : String(poi.note || ''),
+            number: number,
+        };
+    }
+
+    /** 札の名前。**7 文字以上なら 6 文字 + …**(文字は見た目の 1 文字で数える。絵文字や合成文字を割らない) */
+    function shortPoiName(name) {
+        const chars = Array.from(String(name || ''));
+        return chars.length >= 7 ? chars.slice(0, 6).join('') + '…' : chars.join('');
+    }
+    window.kmShortPoiName = shortPoiName;
+
+    /** 臨時の地点の吹き出し。部屋の詳細(nodeDetailHtml)と同じ形 */
+    function poiDetailHtml(poi, shown) {
+        const floorLabel = String(poi.floor) === 'outside' ? '外' : `${poi.floor}F`;
+        let rows = '';
+        if (shown.number) {
+            rows += `<div class="km-detail-row"><span>企画</span><b>${escapeHtml(shown.number)}</b></div>`;
+        }
+        if (shown.note) {
+            rows += `<div class="km-detail-row"><span>備考</span><b>${escapeHtml(shown.note)}</b></div>`;
+        }
+        // ボタンは onclick を書かない(CSP)。data 属性 + 委譲で拾う。案内先(つなぎ先)が無ければ出さない
+        const actions = poi.anchorNodeId && graphData.nodes[poi.anchorNodeId]
+            ? `<button class="popup-btn" data-km-pick="start" data-km-node="${escapeHtml(poi.anchorNodeId)}">ここを出発地にする</button>
+               <button class="popup-btn secondary" data-km-pick="end" data-km-node="${escapeHtml(poi.anchorNodeId)}">ここを目的地にする</button>`
+            : '<p class="km-detail-note">この地点はまだ道につながっていないので、案内できません。</p>';
+        return `
+            <div class="popup-content km-detail">
+                <span class="popup-title">${escapeHtml(shown.name)}</span>
+                <div class="km-detail-meta">
+                    <span class="km-detail-chip km-chip-poi">${escapeHtml(KM_POI_LABELS[poi.category] || KM_POI_LABELS.other)}</span>
+                    <span class="km-detail-floor">${escapeHtml(floorLabel)}</span>
+                </div>
+                ${rows}
+                ${scheduleListHtml('poi:' + poi.id)}
+                ${posterListHtml('poi:' + poi.id)}
+                ${actions}
+            </div>
+        `;
+    }
+
+    let eventLayers = [];    // 今の階の臨時の地点のマーカー(id → marker)。「予定」の一覧から開くため(2026-10-23)
+    const poiMarkers = new Map();
 
     function renderEventOverlay() {
         eventLayers.forEach(layer => window.map.removeLayer(layer));
         eventLayers = [];
+        poiMarkers.clear();
 
         const floor = String(window.currentFloor);
 
@@ -2492,19 +2563,17 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }),
             }).addTo(window.map);
 
-            // ポップアップのボタンは onclick を書かない(CSP)。data 属性 + 委譲で拾う
-            const anchorButtons = poi.anchorNodeId
-                ? `<div class="popup-actions">
-                     <button class="popup-btn" data-km-pick="start" data-km-node="${escapeHtml(poi.anchorNodeId)}">出発地に設定</button>
-                     <button class="popup-btn" data-km-pick="end" data-km-node="${escapeHtml(poi.anchorNodeId)}">目的地に設定</button>
-                   </div>`
-                : '';
-            marker.bindPopup(
-                `<b>${escapeHtml(poi.name)}</b>`
-                + (poi.note ? `<br>${escapeHtml(poi.note)}` : '')
-                + anchorButtons
-            );
-            marker.bindTooltip(escapeHtml(poi.name), { permanent: false, direction: 'top' });
+            // 部屋と同じ吹き出し(km-detail)にする(2026-10-23、利用者の指示)。名前はポスターの見出し・備考はポスターの説明
+            const shown = poiDisplay(poi);
+            marker.bindPopup(poiDetailHtml(poi, shown));
+            poiMarkers.set(Number(poi.id), marker);
+            // 地図の札は 7 文字以上なら縮める(部屋の札と同じ形)
+            marker.bindTooltip(escapeHtml(shortPoiName(shown.name)), {
+                permanent: true,
+                direction: 'top',
+                offset: [0, -14],
+                className: 'km-label km-label-poi',
+            });
             eventLayers.push(marker);
         });
     }
@@ -3202,6 +3271,29 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
         box.appendChild(list);
     }
+
+    /**
+     * 臨時の地点を開く(2026-10-23。Main/event-schedule.js の「地図で見る」)。その階へ移り、寄せてから吹き出しを開く。
+     * 移動が終わってから開く(openNodeFromList と同じ理由)
+     */
+    window.kmOpenPoi = function (id) {
+        const poi = (graphData.eventPois || []).find(p => Number(p.id) === Number(id));
+        if (!poi) return;
+        if (window.innerWidth <= 768 && searchPanel) setSearchPanelCollapsed(true);
+        if (String(poi.floor) !== String(window.currentFloor)) changeFloor(poi.floor);
+        setTimeout(() => {
+            let opened = false;
+            const openWhenReady = () => {
+                if (opened) return;
+                opened = true;
+                const marker = poiMarkers.get(Number(poi.id));
+                if (marker) marker.openPopup();
+            };
+            window.map.once('moveend', openWhenReady);
+            window.setTimeout(openWhenReady, 600);
+            window.map.setView([poi.y, poi.x], 2);
+        }, 300);
+    };
 
     // 履歴とブックマークの一覧から開く(2026-10-23。Main/user-history.js)
     window.kmOpenNode = function (id) {

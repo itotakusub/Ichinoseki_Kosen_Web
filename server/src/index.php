@@ -242,6 +242,24 @@ try {
 }
 
 /*
+ * 管理アプリで配った表示調整の既定(2026-10-23、利用者の指示「表示調整が Website に配られ、既定になっているか」。lib/display-defaults.php)。
+ * Main/map-style.js が読み、閲覧者が自分で変えていない項目の既定にする。配っていなければ出さない。読めなくても地図は出す
+ */
+$kmDisplayDefaults = null;
+try {
+    require_once __DIR__ . '/lib/display-defaults.php';
+    $storedDefaults = km_display_defaults_stored(km_db());
+    if ($storedDefaults !== null) {
+        $webDefaults = km_display_defaults_for_web($storedDefaults);
+        if ($webDefaults !== []) {
+            $kmDisplayDefaults = json_encode($webDefaults, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_THROW_ON_ERROR);
+        }
+    }
+} catch (Throwable $exception) {
+    error_log('KosenMap home: display defaults: ' . $exception->getMessage());
+}
+
+/*
  * イベント中の来場者の記録(2026-10-15、利用者の指示。lib/test-mode.php)。
  * **ログインしている・していないに関わらず**、最初の画面で「情報の収集を許可します」(チェック済み)を出す。
  * 誰の記録かは残さない(アカウント欄は event:<イベントの番号>)。テスト用アカウントのときは出さない(あちらが記録する)。
@@ -886,6 +904,11 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
             <button id="km-welcome-ok" type="button" class="primary-btn km-welcome-ok">はじめる</button>
         </div>
     </div>
+
+    <?php if ($kmDisplayDefaults !== null): ?>
+        <?php /* 配った表示調整の既定(Main/map-style.js が読む。**map-style.js より前**に置く。nonce は km-map-data と同じ理由) */ ?>
+        <script type="application/json" id="km-display-defaults"<?= km_csp_nonce_attr() ?>><?= $kmDisplayDefaults ?></script>
+    <?php endif; ?>
 
     <?php if ($inlineMapData !== null): ?>
         <?php

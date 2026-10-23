@@ -372,6 +372,8 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
     // 企画の番号 → 出している地点(ポスターとスケジュールの場所。隠した地点は入れない)
     require_once __DIR__ . '/event-schedule.php';
     $shownProjectNodes = km_map_project_nodes($projectsById, array_filter($nodesById, static fn (array $n): bool => empty($n['hidden'])));
+    // 一時地点(臨時の地点)の名前が番号なら、その地点にも付ける(2026-10-23、利用者の運用「一時ノードの名前にポスター番号を明記」)
+    $projectPois = km_map_project_pois($overlay['pois']);
 
     $viewUnlocked = $forAdmin || km_map_view_unlocked($config);
     if (!$viewUnlocked) {
@@ -403,12 +405,12 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
          * 出さないときは空。地点は上の一覧に在って出しているものだけ指す(錠・イベントで隠した地点を漏らさない)。
          * 錠が掛かっているときは上で返しているので、ここへは来ない。
          */
-        'posters' => km_posters_public($pdo, $overlay['events'] !== [], $nodesById, $shownProjectNodes),
+        'posters' => km_posters_public($pdo, $overlay['events'] !== [], $nodesById, $shownProjectNodes, $projectPois),
         /*
          * 企画のスケジュール(2026-10-23。lib/event-schedule.php)。一般に出す印の行だけ。場所は企画の番号から引き、
          * 出している地点だけを指す(錠・イベントで隠した地点の場所を漏らさない)
          */
-        'schedule' => km_event_schedule_public($pdo, $shownProjectNodes),
+        'schedule' => km_event_schedule_public($pdo, $shownProjectNodes, $projectPois),
         'buildings' => km_map_building_overlays($pdo),
         /*
          * 建物の階(2026-09-24。lib/building-floors.php)。**平面図 1 枚が 1 つの階。**

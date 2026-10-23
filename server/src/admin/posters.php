@@ -172,6 +172,8 @@ try {
     // 企画の番号 → 地点(2026-10-23。管理アプリで振った番号。lib/map-node-projects.php)
     require_once __DIR__ . '/../lib/map-node-projects.php';
     $projectNodes = km_map_project_nodes(km_map_projects_by_node_id($pdo));
+    // 名前が番号の一時地点(2026-10-23)
+    $projectPois = km_map_project_pois_all($pdo);
     $tutorialEnd = km_tutorial_end_config($pdo);
     $stats = km_poster_stats_totals($pdo);
     km_node_likes_ensure_table($pdo);
@@ -186,6 +188,7 @@ try {
     $links = [];
     $nodeOptions = [];
     $projectNodes = [];
+    $projectPois = [];
     $tutorialEnd = ['text' => KM_TUTORIAL_END_TEXT_DEFAULT, 'ownSurveyUrl' => '', 'surveyUrl' => '', 'phoneQr' => true];
     $stats = [];
     $likeTotals = [];
@@ -348,7 +351,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
                                 <td>
                                   <div class="fw-bold"><?= km_e($poster['title']) ?></div>
                                   <?php if ($poster['projectNo'] !== ''): ?>
-                                    <div class="fs-7"><span class="badge text-bg-info">企画 <?= km_e($poster['projectNo']) ?></span> <?= km_e(implode('、', array_map($nodeLabel, $projectNodes[$poster['projectNo']] ?? []))) ?: '<span class="text-danger">この番号の地点が地図にありません(管理アプリで番号を振って取り込んでください)</span>' ?></div>
+                                    <div class="fs-7"><span class="badge text-bg-info">企画 <?= km_e($poster['projectNo']) ?></span> <?= km_e(implode('、', array_merge(array_map($nodeLabel, $projectNodes[$poster['projectNo']] ?? []), array_map(static fn (array $poi): string => '一時地点(' . $poi['event'] . ')', $projectPois[$poster['projectNo']] ?? [])))) ?: '<span class="text-danger">この番号の地点が地図にありません(管理アプリで番号を振るか、一時地点の名前を番号にして取り込んでください)</span>' ?></div>
                                   <?php elseif ($poster['nodeId'] === ''): ?>
                                     <div class="fs-7"><span class="badge text-bg-warning">広告</span> チュートリアルの終わりに<?= $poster['isEnabled'] && $adShare > 0 ? ' ' . $adShare . '%' : '' ?></div>
                                   <?php else: ?>
@@ -469,7 +472,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
                     <div class="mb-3">
                       <label class="form-label" for="km-poster-project">企画の番号(任意)</label>
                       <input class="form-control" type="text" id="km-poster-project" name="project_no" maxlength="<?= KM_MAP_PROJECT_NUMBER_MAX_LENGTH ?>" placeholder="例: A-1" value="<?= km_e((string) $value('projectNo')) ?>" list="km-project-numbers">
-                      <datalist id="km-project-numbers"><?php foreach (array_keys($projectNodes) as $number): ?><option value="<?= km_e((string) $number) ?>"><?php endforeach; ?></datalist>
+                      <datalist id="km-project-numbers"><?php foreach (array_unique(array_merge(array_keys($projectNodes), array_keys($projectPois))) as $number): ?><option value="<?= km_e((string) $number) ?>"><?php endforeach; ?></datalist>
                       <div class="form-text">管理アプリで地点に振った番号です。入れると、<strong>その番号の地点(いくつあっても全部)</strong>にポスターが出ます(上の「地点」より先)。</div>
                     </div>
                     <div class="row g-2 mb-3 align-items-end">

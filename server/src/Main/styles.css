@@ -2964,3 +2964,7 @@ a.icon-btn { text-decoration: none; color: inherit; }
     padding: 0;
     margin: 4px 0 8px;
 }
+
+/* 臨時の地点(一時地点)の札と吹き出しの種類(2026-10-23。部屋と同じ形。色は Android の一時地点と同じ桃色) */
+.km-label-poi { border-color: #EC4899 !important; --km-lead-color: #EC4899; }
+.km-chip-poi { background: #EC4899; }
