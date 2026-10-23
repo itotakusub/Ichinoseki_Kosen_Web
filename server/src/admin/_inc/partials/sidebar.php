@@ -42,6 +42,8 @@ $openMenus = [
     'profile' => 'extra',
     // FAQ は見本ページではなく、編集して公開する実コンテンツになった(フェーズ14)
     'faq' => 'content',
+    // QR のリンク集(2026-10-24、lib/qr-links.php)
+    'qrLinks' => 'content',
     // 規約とポリシーへ足す章。本文はコードのまま(admin/legal.php の説明を参照)
     'legal' => 'content',
     'calendar' => 'extra',
@@ -291,6 +293,13 @@ $parentLink = static fn(string $id): string => 'nav-link' . ($openMenu === $id ?
                     <a href="./faq.php" class="<?= $link('faq') ?>">
                       <i class="nav-icon bi bi-question-circle"></i>
                       <p data-i18n="side.faq">FAQ</p>
+                    </a>
+                  </li>
+                  <?php // QR のリンク集(2026-10-24。公開ページ /qr.php に並べるリンク) ?>
+                  <li class="nav-item">
+                    <a href="./qr-links.php" class="<?= $link('qrLinks') ?>">
+                      <i class="nav-icon bi bi-qr-code"></i>
+                      <p data-i18n="side.qrLinks">QR のリンク集</p>
                     </a>
                   </li>
                   <li class="nav-item">

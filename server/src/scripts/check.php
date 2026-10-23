@@ -7899,6 +7899,38 @@ function km_check_layout(): void
     check_bool('ポスターから結びつけた場所へ(地図の引き出し・一覧のページ)', str_contains($gmApp, "head.textContent = poster.projectNo ? `企画 \${poster.projectNo} の場所` : '場所';")
         && str_contains((string) file_get_contents(__DIR__ . '/../posters.php'), "foreach (\$poster['poiIds'] ?? [] as \$poiId) {"));
 
+    km_check_heading('QR のリンク集: /qr.php に並べるリンクを管理画面で決める(2026-10-24)');
+    require_once __DIR__ . '/../lib/qr-links.php';
+    check('URL: https とサイトの中の道だけ(javascript:・よそへの //・空白は断る)', [true, true, true, false, false, false, false],
+        [km_qr_link_url_valid('https://example.com/a?b=1'), km_qr_link_url_valid('/posters.php'), km_qr_link_url_valid('/'), km_qr_link_url_valid('javascript:alert(1)'),
+            km_qr_link_url_valid('//evil.example/'), km_qr_link_url_valid('/a b'), km_qr_link_url_valid('')]);
+    check('入力: 前後の空白を落とす・説明は空なら null・名前と URL は要る', ['title' => 'ポスター', 'url' => '/posters.php', 'description' => null, 'isEnabled' => true],
+        km_qr_link_validate(['title' => ' ポスター ', 'url' => ' /posters.php ', 'description' => '  ', 'isEnabled' => true]));
+    $qrRefused = [];
+    foreach ([['title' => '', 'url' => '/'], ['title' => 'x', 'url' => 'javascript:x'], ['title' => str_repeat('あ', KM_QR_LINK_TITLE_MAX + 1), 'url' => '/']] as $bad) {
+        try {
+            km_qr_link_validate($bad);
+            $qrRefused[] = false;
+        } catch (InvalidArgumentException $exception) {
+            $qrRefused[] = true;
+        }
+    }
+    check('入力: 名前が空・形の違う URL・長すぎる名前を断る', [true, true, true], $qrRefused);
+    if (extension_loaded('pdo_sqlite')) {
+        $qrDb = new PDO('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+        check('公開ページ: 表が無ければ空(作らない)', [], km_qr_links_public($qrDb));
+        $qrDb->exec('CREATE TABLE km_qr_links (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, url TEXT, description TEXT, is_enabled INT, sort_order INT, created_at TEXT, updated_at TEXT)');
+        $qrDb->exec("INSERT INTO km_qr_links (title, url, description, is_enabled, sort_order) VALUES ('A', '/a', NULL, 1, 20), ('B', 'https://b.example/', 'x', 0, 10), ('C', 'javascript:x', NULL, 1, 5), ('D', '/d', NULL, 1, 30)");
+        check('公開ページ: 出すものだけ・並び順・あとで通らなくなった URL は出さない', ['A', 'D'], array_column(km_qr_links_public($qrDb), 'title'));
+    }
+    $qrPage = (string) file_get_contents(__DIR__ . '/../qr.php');
+    check_bool('公開ページ: 先頭はいつも地図・DB が止まっても出す・よそのサイトは新しいタブで行き先を見せる', str_contains($qrPage, '<a class="km-qr-link" href="/">')
+        && str_contains($qrPage, "error_log('qr.php (public) failed (fail open): '") && str_contains($qrPage, ' target="_blank" rel="noopener noreferrer"'));
+    $qrAdmin = (string) file_get_contents(__DIR__ . '/../admin/qr-links.php');
+    check_bool('管理画面: guard の内側・CSRF を見てから書く・記録に残す・左の一覧にある', str_contains($qrAdmin, "require __DIR__ . '/_inc/guard.php';")
+        && strpos($qrAdmin, 'km_csrf_verify()') < strpos($qrAdmin, 'km_qr_link_save(') && str_contains($qrAdmin, "'qr_link.create'")
+        && str_contains((string) file_get_contents(__DIR__ . '/../admin/_inc/partials/sidebar.php'), 'href="./qr-links.php"'));
+
     km_check_heading('お知らせ: 最初の画面に PHP の脆弱性の報告(2026-10-24)');
     require_once __DIR__ . '/../lib/notices.php';
     $phpNotice = km_notice_find('php-rce-2026-10');
