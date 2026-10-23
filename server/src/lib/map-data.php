@@ -231,7 +231,7 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
     $nodeLinks = km_node_links_for_map($pdo);
     // 企画の番号(2026-10-23。lib/map-node-projects.php。管理アプリで振る)。表が無ければ空
     require_once __DIR__ . '/map-node-projects.php';
-    $projectsById = km_map_projects_by_node_id($pdo);
+    $projectsById = km_map_projects_with_aliases(km_map_projects_by_node_id($pdo), $overlay['aliases']);
     $nodesById = [];
     $nodeTypes = [];
     foreach ($nodeStmt->fetchAll() as $node) {

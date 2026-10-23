@@ -193,6 +193,25 @@ function km_map_project_number_from_name(string $name): ?string
 }
 
 /**
+ * イベント中の名前が、名前全体で企画の番号なら、その地点の番号に足す(2026-10-23。一時地点と同じ運用 ——
+ * 教室にイベント中の名前「32」を付けても、番号 32 のポスターとスケジュールが付く)。**純粋関数**
+ *
+ * @param array<string, list<string>> $projectsById id => 番号
+ * @param array<string, string> $aliases id => イベント中の名前(km_map_event_overlay の aliases)
+ * @return array<string, list<string>>
+ */
+function km_map_projects_with_aliases(array $projectsById, array $aliases): array
+{
+    foreach ($aliases as $id => $alias) {
+        $number = km_map_project_number_from_name((string) $alias);
+        if ($number !== null && !in_array($number, $projectsById[(string) $id] ?? [], true)) {
+            $projectsById[(string) $id][] = $number;
+        }
+    }
+    return $projectsById;
+}
+
+/**
  * 臨時の地点(km_map_event_overlay の pois)を、番号ごとにまとめる。**純粋関数**
  *
  * @param list<array<string, mixed>> $pois

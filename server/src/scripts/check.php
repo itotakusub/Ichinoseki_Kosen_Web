@@ -7475,6 +7475,15 @@ function km_check_layout(): void
             [array_column($roomPosters, 'id'), isset($roomPosters[0]['nodeId']) || isset($roomPosters[0]['isAd']), substr((string) ($roomPosters[0]['imageUrl'] ?? ''), 0, 29)]);
         check('写真: 教員室・研究室の地点の写真は出さない(Web の一般向けと同じ)・Web の地図に無い地点も出さない', [[], []],
             [km_node_extras_posters($extrasDb, km_node_extras_find_node($extrasDb, 'uuid-staff-1'), true), km_node_extras_posters($extrasDb, null, true)]);
+        // 企画の番号で置いたポスター(2026-10-23。それまでアプリには出なかった)
+        $extrasDb->exec("INSERT INTO km_posters VALUES (5, '企画', NULL, NULL, NULL, 't.png', NULL, 10, 20, 2, 1, '', '2026-10-22 10:00:00'), (6, 'ほかの企画', NULL, NULL, NULL, 'u.png', NULL, 10, 20, 3, 1, '', '2026-10-22 10:00:00')");
+        $extrasDb->exec('CREATE TABLE km_poster_projects (poster_id INTEGER PRIMARY KEY, project_no TEXT)');
+        $extrasDb->exec("INSERT INTO km_poster_projects VALUES (5, '22'), (6, '99')");
+        $extrasDb->exec('CREATE TABLE km_map_node_projects (node_uuid TEXT, project_no TEXT, sort_order INT, PRIMARY KEY (node_uuid, project_no))');
+        $extrasDb->exec("INSERT INTO km_map_node_projects VALUES ('uuid-room-1', '22', 0)");
+        $projectPosters = km_node_extras_posters($extrasDb, $room, false);
+        check('写真: 企画の番号で置いたポスターも出す(ほかの番号のものは出さない)・nodeIds と poiIds は返さない', [[1, 5], false],
+            [array_column($projectPosters, 'id'), isset($projectPosters[1]['nodeIds']) || isset($projectPosters[1]['poiIds'])]);
 
         $extrasDb->exec('CREATE TABLE km_node_likes (node_uuid TEXT NOT NULL, voter_hash TEXT NOT NULL, source_hash TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (node_uuid, voter_hash))');
         $voterA = km_app_keyed_hash(str_repeat('k', 32), 'node-like-voter', str_repeat('a', 32));
@@ -7773,6 +7782,14 @@ function km_check_layout(): void
     check_bool('公開の地図: 一時地点は部屋と同じ吹き出し・名前はポスターの見出し(7 文字以上は 6 文字 + …)・備考はポスターの説明', str_contains($appJsForPoi, 'marker.bindPopup(poiDetailHtml(poi, shown));')
         && str_contains($appJsForPoi, "return chars.length >= 7 ? chars.slice(0, 6).join('') + '…' : chars.join('');")
         && str_contains($appJsForPoi, "note: poster && poster.description ? poster.description : String(poi.note || ''),"));
+    check('教室のイベント中の名前が番号なら、その番号も付ける(二重にしない・番号でない名前は足さない)', ['n1' => ['22', '32'], 'n2' => ['33']],
+        km_map_projects_with_aliases(['n1' => ['22'], 'n2' => ['33']], ['n1' => '32', 'n2' => '33', 'n3' => 'たこ焼き']));
+    check_bool('公開の地図: 番号で置いたポスターとスケジュールの場所に、イベント中の名前の番号も入る', str_contains((string) file_get_contents(__DIR__ . '/../lib/map-data.php'), "\$projectsById = km_map_projects_with_aliases(km_map_projects_by_node_id(\$pdo), \$overlay['aliases']);"));
+    check_bool('公開の地図: 企画の教室はイベント中、札と吹き出しの名前がポスターの見出し(札は縮める)・備考がポスターの説明・ポスターが無ければ番号を前に付ける',
+        str_contains($appJsForPoi, 'escapeHtml(project ? shortPoiName(project.name) : displayNameFor(node));')
+        && str_contains($appJsForPoi, 'const title = project ? project.name : (node.alias || node.name);')
+        && str_contains($appJsForPoi, "if (!graphData.event || numbers.length === 0) return null;")
+        && str_contains($appJsForPoi, "return { name: prefix ? `\${prefix} \${base}` : base, note: '', fromPoster: false };"));
     require_once __DIR__ . '/../lib/display-defaults.php';
     check('表示調整の既定を Web の形に(対応する項目だけ)', [
         'nodeSize' => 120, 'labelSize' => 110, 'labelMode' => 'text_only', 'roomNames' => true, 'accessPoints' => false, 'roadGraph' => true,

@@ -833,8 +833,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
 
         // ツールチップは html: true で描くので、DB 由来の文字列は必ずエスケープする
+        // 企画の地点はイベント中、一時地点と同じく番号のポスターの見出しを出す(7 文字以上なら縮める。2026-10-23)
+        const project = projectDisplayFor(id, node);
         let tooltipContent = (hasPoster ? '<span class="km-label-poster" aria-hidden="true">🖼️</span>' : '')
-            + escapeHtml(displayNameFor(node));
+            + escapeHtml(project ? shortPoiName(project.name) : displayNameFor(node));
         if (window.isAdmin) {
             /*
              * **`style="…"` を書かない。** CSP に `'unsafe-inline'` が無く、
@@ -1024,10 +1026,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         const floorLabel = String(node.floor) === 'outside' ? '外' : `${node.floor}F`;
         const typeLabel = mapStyle.LABELS[type] || type;
         // イベント中の名前は**置き換える**(2026-10-14、利用者の判断)。普段の名前は下に小さく残す
-        const title = node.alias || node.name;
+        // 企画の地点はイベント中、ポスターの見出しを名前に・説明を備考に(一時地点の吹き出しと同じ。2026-10-23)
+        const project = projectDisplayFor(id, node);
+        const title = project ? project.name : (node.alias || node.name);
 
         let rows = '';
-        if (node.alias) {
+        if ((project && project.fromPoster) || node.alias) {
             rows += `<div class="km-detail-row"><span>普段の名前</span><b>${escapeHtml(node.name)}</b></div>`;
         }
         if (node.subtitle) {
@@ -1054,6 +1058,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 企画の番号(2026-10-23。管理アプリで振る)
         if (Array.isArray(node.projects) && node.projects.length > 0) {
             rows += `<div class="km-detail-row"><span>企画</span><b>${node.projects.map(escapeHtml).join('・')}</b></div>`;
+        }
+        if (project && project.note) {
+            rows += `<div class="km-detail-row"><span>備考</span><b>${escapeHtml(project.note)}</b></div>`;
         }
         const posters = posterListHtml(id);
         const schedule = scheduleListHtml(id);
@@ -2314,10 +2321,37 @@ document.addEventListener('DOMContentLoaded', async () => {
         return node.occupantName ? `${node.name} ${node.occupantName}` : node.name;
     }
 
+    /**
+     * 企画の番号がある地点(教室など)の、イベント中の名前と備考(2026-10-23、利用者の指摘「教室に企画番号を設定したが、うまく表示されない」)。
+     * 一時地点(poiDisplay)と同じ見せ方 —— 番号のポスターがあれば、名前はポスターの見出し・備考はポスターの説明。
+     * ポスターが無ければ、番号を名前の前に付ける。**イベント中だけ**(普段は部屋の名前のまま)。当たらなければ null
+     */
+    function projectDisplayFor(id, node) {
+        const numbers = Array.isArray(node.projects) ? node.projects : [];
+        if (!graphData.event || numbers.length === 0) return null;
+        const base = node.alias || node.name;
+        const posters = (postersByNode.get(id) || []).filter(p => p.projectNo && numbers.indexOf(p.projectNo) >= 0);
+        if (posters.length === 0) {
+            // イベント中の名前そのものが番号(「32」)なら、二重に出さない
+            const prefix = numbers.filter(n => n !== String(base || '').trim().toUpperCase()).join('・');
+            return { name: prefix ? `${prefix} ${base}` : base, note: '', fromPoster: false };
+        }
+        return {
+            name: posters.map(p => p.title).join('・'),
+            note: posters.map(p => p.description).filter(Boolean).join(' / '),
+            fromPoster: true,
+        };
+    }
+
     function getLabelForNode(id, node) {
         const floorLabel = String(node.floor) === "outside" ? "外" : `${node.floor}F`;
         // 臨時名称があるときは、その名前で引く(2026-10-14 から置き換え。displayNameFor と同じ)
         const name = node.alias || node.name;
+        // 企画の地点はポスターの見出しでも探せる(部屋の名前も残す。2026-10-23)
+        const project = projectDisplayFor(id, node);
+        if (project) {
+            return project.fromPoster ? `[${floorLabel}] ${project.name}(${name})` : `[${floorLabel}] ${project.name}`;
+        }
         return `[${floorLabel}] ${name}`;
     }
 

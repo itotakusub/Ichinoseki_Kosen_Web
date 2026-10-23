@@ -69,7 +69,7 @@ function km_node_like_source(PDO $pdo, ?string $ip = null): string
 /**
  * Web の地図の地点(uuid で引く)。無ければ null。
  *
- * @return array{id:string, name:string, type2:string}|null
+ * @return array{id:string, uuid:string, name:string, type2:string}|null
  */
 function km_node_extras_find_node(PDO $pdo, string $uuid): ?array
 {
@@ -80,7 +80,7 @@ function km_node_extras_find_node(PDO $pdo, string $uuid): ?array
         return null;
     }
 
-    return ['id' => (string) $row['id'], 'name' => (string) ($row['name'] ?? ''), 'type2' => (string) ($row['type2'] ?? '')];
+    return ['id' => (string) $row['id'], 'uuid' => $uuid, 'name' => (string) ($row['name'] ?? ''), 'type2' => (string) ($row['type2'] ?? '')];
 }
 
 /**
@@ -94,16 +94,41 @@ function km_node_extras_posters(PDO $pdo, ?array $node, bool $eventActive): arra
     if ($node === null || km_map_node_is_restricted($node)) {
         return [];
     }
+    /*
+     * 企画の番号で置いたポスターも出す(2026-10-23。それまで地点に直接置いたものだけで、番号で置いたものがアプリに出なかった)。
+     * 番号は Web の地図と同じ —— 管理アプリで振った番号と、イベント中の名前が番号のもの
+     */
+    $projectNodes = [];
+    foreach (km_node_extras_project_numbers($pdo, $node) as $number) {
+        $projectNodes[$number] = [$node['id']];
+    }
     $posters = [];
-    foreach (km_posters_public($pdo, $eventActive, [$node['id'] => ['name' => $node['name']]]) as $poster) {
-        if ($poster['nodeId'] !== $node['id']) {
+    foreach (km_posters_public($pdo, $eventActive, [$node['id'] => ['name' => $node['name']]], $projectNodes) as $poster) {
+        if (!in_array($node['id'], $poster['nodeIds'], true)) {
             continue;
         }
-        unset($poster['nodeId'], $poster['isAd']);
+        unset($poster['nodeId'], $poster['nodeIds'], $poster['poiIds'], $poster['isAd']);
         $posters[] = $poster;
     }
 
     return $posters;
+}
+
+/**
+ * その地点の企画の番号(管理アプリで振った番号 + イベント中の名前が番号のもの)。表が無ければ空。
+ *
+ * @param array{id:string, uuid?:string} $node
+ * @return list<string>
+ */
+function km_node_extras_project_numbers(PDO $pdo, array $node): array
+{
+    require_once __DIR__ . '/map-node-projects.php';
+    require_once __DIR__ . '/map-events.php';
+    $numbers = km_map_node_projects_all($pdo)[(string) ($node['uuid'] ?? '')] ?? [];
+    $aliases = km_map_event_overlay($pdo)['aliases'];
+    $alias = isset($aliases[$node['id']]) ? [$node['id'] => $aliases[$node['id']]] : [];
+
+    return km_map_projects_with_aliases([$node['id'] => $numbers], $alias)[$node['id']];
 }
 
 /**
