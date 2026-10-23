@@ -146,10 +146,12 @@ try {
          *
          * どの操作も event_id を要求する。**どのイベントに対する変更なのかが
          * 曖昧なまま保存されると、あとから外せなくなる**ため。
+         *
+         * 管理アプリから取り込んだイベントも直せる(2026-10-23)。直した時刻を残し、取り込み直す前に知らせる(km_map_event_touch_web_edit)
          */
         case 'event.closure.toggle': {
             $eventId = $int('eventId');
-            km_map_event_assert_editable($pdo, $eventId);
+            km_map_event_touch_web_edit($pdo, $eventId);
             $reason = $str('reason');
             if ($str('target') === 'node') {
                 $nodeId = $str('node');
@@ -167,7 +169,7 @@ try {
         case 'event.poi.create':
         case 'event.poi.update': {
             $eventId = $int('eventId');
-            km_map_event_assert_editable($pdo, $eventId);
+            km_map_event_touch_web_edit($pdo, $eventId);
             $poiId = $action === 'event.poi.update' ? $int('poiId') : null;
             $saved = km_map_event_poi_save($pdo, $eventId, $poiId, [
                 'floor' => $str('floor'),
@@ -184,7 +186,7 @@ try {
 
         case 'event.poi.delete': {
             $eventId = $int('eventId');
-            km_map_event_assert_editable($pdo, $eventId);
+            km_map_event_touch_web_edit($pdo, $eventId);
             $poiId = $int('poiId');
             km_map_event_poi_delete($pdo, $eventId, $poiId);
             km_admin_log_record('content', 'map.event_poi', "削除 #{$poiId}");
@@ -193,7 +195,7 @@ try {
 
         case 'event.alias.set': {
             $eventId = $int('eventId');
-            km_map_event_assert_editable($pdo, $eventId);
+            km_map_event_touch_web_edit($pdo, $eventId);
             $nodeId = $str('node');
             $alias = $str('alias');
             km_map_event_alias_set($pdo, $eventId, $nodeId, $alias);
@@ -203,6 +205,19 @@ try {
                 $alias === '' ? "解除 {$nodeId}" : "{$nodeId} → {$alias}"
             );
             km_map_edit_respond(['success' => true, 'alias' => $alias]);
+        }
+
+        /*
+         * イベント中に出さない地点(2026-10-23、利用者の指示。今まではアプリでだけ付けられた)。
+         * 出さないだけで経路は通れる(通さないのは通行止め)
+         */
+        case 'event.hidden.toggle': {
+            $eventId = $int('eventId');
+            km_map_event_touch_web_edit($pdo, $eventId);
+            $nodeId = $str('node');
+            $hidden = km_map_event_hidden_toggle($pdo, $eventId, $nodeId);
+            km_admin_log_record('content', 'map.event_hidden', ($hidden ? '出さない ' : '出す ') . $nodeId);
+            km_map_edit_respond(['success' => true, 'hidden' => $hidden]);
         }
 
         default:

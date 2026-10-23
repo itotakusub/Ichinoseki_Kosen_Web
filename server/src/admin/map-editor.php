@@ -147,7 +147,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
                 <div class="flex-grow-1">
                   <strong>イベント「<?= km_e($kmEditEvent['name']) ?>」の重ね合わせを編集しています。</strong>
                   <div class="fs-7" data-i18n="page.mapEditor.eventNotice">
-                    ここでの通行止め・臨時の地点・臨時の名前は、このイベント専用です。
+                    ここでの通行止め・臨時の地点・臨時の名前・表示しない地点は、このイベント専用です。
                     地図そのもの(場所や経路)は変わりません。
                   </div>
                 </div>
@@ -216,6 +216,11 @@ require __DIR__ . '/_inc/partials/page-header.php';
                       <button type="button" class="btn btn-outline-warning btn-sm km-mode" data-km-mode="event-alias">
                         <i class="bi bi-tag me-1" aria-hidden="true"></i>
                         <span data-i18n="page.mapEditor.modeEventAlias">臨時の名前</span>
+                      </button>
+                      <?php // イベント中に出さない地点(2026-10-23。今まではアプリでだけ付けられた) ?>
+                      <button type="button" class="btn btn-outline-secondary btn-sm km-mode" data-km-mode="event-hidden">
+                        <i class="bi bi-eye-slash me-1" aria-hidden="true"></i>
+                        <span>表示しない</span>
                       </button>
                     <?php endif; ?>
                   </div>

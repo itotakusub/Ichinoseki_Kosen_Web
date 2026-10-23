@@ -4260,7 +4260,7 @@ function km_check_hardening(): void
     check_bool('proxy-web.conf に proxy_read_timeout を書かない(location で重複すると起動しない)', !str_contains((string) preg_replace('/^\s*#.*$/m', '', $file('nginx/km/proxy-web.conf')), 'proxy_read_timeout'));
     // 2 つ目は Soketi の WebSocket(/ws/app/。2026-10-19 に 6001 番から移した。1 本を長く張る)
     check('443 で 300s を許すのは downloads.php と /ws/app/ だけ', 2, substr_count($https, 'proxy_read_timeout 300s;'));
-    check_bool('未認証で重い口を km_api で絞る(メソッドを問わない)', str_contains($https, 'location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update|positioning-params|learning|poster-image|poster-event|table|node-extras|display-defaults|user-map-data)|logto_me)\.php$ {') && str_contains($https, 'limit_req zone=km_api burst=120 nodelay;'));
+    check_bool('未認証で重い口を km_api で絞る(メソッドを問わない)', str_contains($https, 'location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update|positioning-params|learning|poster-image|poster-event|table|node-extras|display-defaults|user-map-data|map-events)|logto_me)\.php$ {') && str_contains($https, 'limit_req zone=km_api burst=120 nodelay;'));
     check_bool('アプリの地図は km_appmap で絞る', preg_match('#location = /api/app-map\.php \{\s*limit_req zone=km_appmap burst=30 nodelay;#', $https) === 1);
     check_bool('callback.php は認可コードをログに残さない', preg_match('#location = /callback\.php \{\s*access_log [^;]+ km_no_query;#', $https) === 1);
     /*
@@ -5071,7 +5071,31 @@ function km_check_hardening(): void
     check_bool('取り込み: 新しいイベントは無効のまま・印は別表(ALTER を使わない)・中身は丸ごと入れ替える', str_contains($file('src/lib/map-event-import.php'), 'VALUES (?, ?, ?, 0, 1, NULL, NULL, NOW(), NOW())')
         && str_contains($eventsLib, 'CREATE TABLE IF NOT EXISTS km_map_event_sources') && !preg_match('/ALTER\s+TABLE/i', $eventsLib)
         && str_contains($file('src/lib/map-event-import.php'), 'foreach (KM_MAP_EVENT_CHILD_TABLES as $table) {'));
-    check_bool('アプリから取り込んだイベントは Website の地図編集で変えさせない(4 つの操作すべて)', substr_count($file('src/admin/api/map-edit.php'), 'km_map_event_assert_editable($pdo, $eventId);') === 4);
+    // 2026-10-23 から、アプリから取り込んだイベントも Website で直せる(利用者の指示)。直した時刻を残し、取り込み直す前に知らせる
+    check_bool('イベントを直す 5 つの操作すべてで、Website で直した時刻を残す・取り込み直すと消える', substr_count($file('src/admin/api/map-edit.php'), 'km_map_event_touch_web_edit($pdo, $eventId);') === 5
+        && in_array('km_map_event_web_edits', KM_MAP_EVENT_CHILD_TABLES, true)
+        && str_contains($file('src/admin/map-events.php'), "if (\$existing !== null && (\$existing['webEditedAt'] ?? null) !== null) {"));
+    check_bool('Website の地図編集で「表示しない」を切り替えられる・記録に文言', str_contains($file('src/admin/api/map-edit.php'), "case 'event.hidden.toggle': {")
+        && str_contains($file('src/admin/assets/js/map-editor.js'), "action: 'event.hidden.toggle'") && isset(KM_ADMIN_LOG_ACTION_LABELS['map.event_hidden']));
+    require_once __DIR__ . '/../lib/app-map-convert.php';
+    $webEventMap = json_decode('{"nodes":[{"uuid":"9d1cebb3-9aa6-4fca-8f08-9ca965237b9e","floor":"1F"},{"uuid":"0f8fad5b-d9cb-469f-a165-70867728950e","floor":"1F"}]}');
+    $webEvent = km_app_map_events_from_web([
+        'events' => [['id' => 1, 'name' => '祭', 'endsAt' => null]],
+        'closedNodes' => [], 'closedEdges' => [],
+        'aliases' => ['9d1cebb39aa64fca8f089ca965237b9e' => '受付'],
+        'hiddenNodes' => ['0f8fad5bd9cb469fa16570867728950e' => true],
+        'pois' => [['id' => 7, 'floor' => '1', 'name' => 'たこ焼き', 'category' => 'food', 'x' => 10, 'y' => 20, 'anchorNodeId' => '9d1cebb39aa64fca8f089ca965237b9e', 'note' => '']],
+        'onlyEventNodes' => false,
+    ], $webEventMap)['events'][0];
+    check('Web → アプリ: 臨時の名前・出さない地点・イベントの地点だけ・一時地点の接続も渡す',
+        [['9d1cebb3-9aa6-4fca-8f08-9ca965237b9e' => '受付'], ['0f8fad5b-d9cb-469f-a165-70867728950e'], false, [['placeUuid' => 'web-poi-7', 'nodeUuid' => '9d1cebb3-9aa6-4fca-8f08-9ca965237b9e']]],
+        [(array) $webEvent['nameOverrides'], $webEvent['hiddenNodeUuids'], $webEvent['onlyEventNodes'], $webEvent['placeLinks']]);
+    $eventsApi = $file('src/api/map-events.php');
+    check_bool('イベントを管理アプリへ渡す口は管理者だけ・GET だけ・1 イベントずつ(有効かは問わない)', str_contains($eventsApi, "require_method('GET');")
+        && str_contains($eventsApi, 'logto_assert_permissions($principal, LOGTO_ADMIN_PERMISSIONS);')
+        && str_contains($file('src/lib/map-event-export.php'), 'km_map_event_overlay($pdo, $id, true)')
+        && str_contains($eventsLib, '$events = $onlyPreview ? [] : km_map_event_active($pdo);'));
+    check_bool('取り込み: アプリで道へつないだ一時地点は、そのつなぎ先を案内先にする', str_contains($file('src/lib/map-event-import.php'), '$linkedTo[$link->placeUuid] = $toId($link->nodeUuid);'));
     check_bool('出さない地点の表が無くても重ね合わせ(通行止め)は続ける', (bool) preg_match('/try \{\s*\$stmt = \$pdo->prepare\("SELECT node_id AS nodeId FROM km_map_event_hidden/', $eventsLib));
     $indexPage = $file('src/index.php');
     $appJs = $file('src/Main/app.js');

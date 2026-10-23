@@ -1830,6 +1830,9 @@ body.km-map-unavailable .km-route-bar {
 .km-admin-tip { text-align: center; line-height: 1.2; }
 .km-admin-tip-id { font-size: 0.85em; opacity: 0.7; }
 .km-admin-tip-xy { font-size: 0.85em; font-weight: bold; }
+/* 企画の番号と、イベント中に出さない印(2026-10-23。地図編集) */
+.km-admin-tip-project { font-size: 0.85em; color: #0369a1; }
+.km-admin-tip-hidden { font-size: 0.85em; color: #b45309; font-weight: bold; }
 
 /* 地点の詳細。アプリのボトムシートに合わせ、担当者名を独立した行にする */
 .km-detail-meta { display: flex; gap: 0.4rem; align-items: center; margin: 0.35rem 0 0.5rem; }

@@ -192,6 +192,19 @@
       : t('page.mapEditor.savedAlias', '臨時の名前を設定しました'));
   };
 
+  // イベント中に出さない地点の入り切り(2026-10-23)。出さないだけで、経路は通れる
+  const toggleNodeHidden = async (id) => {
+    const body = await send({ action: 'event.hidden.toggle', eventId, node: id });
+    const node = window.graphData.nodes[id];
+    if (body.hidden) {
+      node.hidden = true;
+    } else {
+      delete node.hidden;
+    }
+    redraw();
+    setStatus(body.hidden ? 'イベント中は出さないにしました(経路は通れます)' : 'イベント中も出すにしました');
+  };
+
   const createPoi = async (x, y) => {
     const name = window.prompt(t('page.mapEditor.promptPoiName', '臨時の地点の名前(例: たこ焼き)'), '');
     if (name === null || name.trim() === '') return;
@@ -253,6 +266,7 @@
     ],
     'event-poi': ['page.mapEditor.hintEventPoi', '地図をクリックすると、そこに臨時の地点を置きます。'],
     'event-alias': ['page.mapEditor.hintEventAlias', '臨時の名前を付けたい地点をクリックします。'],
+    'event-hidden': ['page.mapEditor.hintEventHidden', 'イベント中に出さない地点をクリックします(もう一度で戻します)。札に「イベント中は出さない」と付きます。'],
   };
 
   const setMode = (next) => {
@@ -294,6 +308,11 @@
     try {
       if (mode === 'event-alias') {
         await setNodeAlias(id);
+        return;
+      }
+
+      if (mode === 'event-hidden') {
+        await toggleNodeHidden(id);
         return;
       }
 
@@ -388,7 +407,7 @@
 
   /** 地図のクリック。追加系と、移動の2クリック目。 */
   const onMapClick = async (event) => {
-    const noMapClick = ['none', 'edit', 'delete', 'align', 'edge', 'event-closure', 'event-alias'];
+    const noMapClick = ['none', 'edit', 'delete', 'align', 'edge', 'event-closure', 'event-alias', 'event-hidden'];
     if (noMapClick.includes(mode)) {
       return;
     }

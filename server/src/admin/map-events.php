@@ -345,6 +345,7 @@ $fmt = static fn (?string $value): string => $value === null || $value === ''
                   管理アプリで作ったイベント(部屋の名前・表示しない地点・通行止め・一時地点)を入れます。
                   アプリの「地図の書き出し」で作ったファイルを上げてください。
                   同じイベントを取り込み直すと、中身は丸ごと入れ替わります。<strong>新しいイベントは無効のまま入る</strong>ので、期間と案内の文を確かめてから有効にしてください。
+                  取り込んだイベントも「地図編集」で直せます。直した内容は、管理アプリの設定のイベントの「Website から取り込む」でアプリへ戻せます。
                 </p>
                 <form method="post" enctype="multipart/form-data" class="row g-2 align-items-end">
                   <?= km_csrf_field() ?>
@@ -401,6 +402,10 @@ $fmt = static fn (?string $value): string => $value === null || $value === ''
                             }
                             if ($skip['badLineKey'] > 0) {
                                 $notes[] = "読めない通行止めの線 {$skip['badLineKey']} 件";
+                            }
+                            // Website で直した内容がある(2026-10-23。取り込むとアプリの中身で置き換わる)
+                            if ($existing !== null && ($existing['webEditedAt'] ?? null) !== null) {
+                                $notes[] = 'Website で直した内容(' . $fmt($existing['webEditedAt']) . ')は、取り込むとアプリの中身で置き換わります。先に管理アプリの「Website から取り込む」で戻してください';
                             }
                             $closures = count($c['closedEdges']) + count($c['closedNodes']);
                           ?>
@@ -477,7 +482,10 @@ $fmt = static fn (?string $value): string => $value === null || $value === ''
                                 <span class="badge text-bg-info fs-8" title="期間中はイベントの地点だけを出す">イベントの地点だけ</span>
                               <?php endif; ?>
                               <?php if (($event['appUuid'] ?? null) !== null): ?>
-                                <span class="badge text-bg-primary fs-8" title="中身は管理アプリで直して取り込み直します">アプリから(<?= km_e($fmt($event['importedAt'] ?? null)) ?>)</span>
+                                <span class="badge text-bg-primary fs-8" title="管理アプリから取り込んだイベント。Website でも直せます">アプリから(<?= km_e($fmt($event['importedAt'] ?? null)) ?>)</span>
+                                <?php if (($event['webEditedAt'] ?? null) !== null): ?>
+                                  <span class="badge text-bg-warning fs-8" title="Website で直した内容があります。管理アプリの「Website から取り込む」でアプリへ戻せます">Web で直した(<?= km_e($fmt($event['webEditedAt'])) ?>)</span>
+                                <?php endif; ?>
                               <?php endif; ?>
                             </td>
                             <td class="fs-7">

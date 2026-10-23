@@ -151,6 +151,18 @@ function km_map_events_ensure_tables(PDO $pdo): void
             only_event_nodes TINYINT(1) NOT NULL DEFAULT 1
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         SQL);
+
+    /*
+     * Website で中身を直した時刻(2026-10-23、利用者の指示「アプリのイベントを Web でも直す」)。
+     * 管理アプリから取り込んだイベントも Web で直せるようにした。次にアプリから取り込むと Web で直した分は置き換わるので、
+     * 取り込みの前に「Web で直した内容があります」と知らせるために持つ。取り込むと消す
+     */
+    $pdo->exec(<<<'SQL'
+        CREATE TABLE IF NOT EXISTS km_map_event_web_edits (
+            event_id INT NOT NULL PRIMARY KEY,
+            edited_at DATETIME NOT NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        SQL);
 }
 
 /** 重ね合わせの子の表。イベントを消すとき・取り込み直すときに、ここに並べたものを消す。 */
@@ -160,22 +172,60 @@ const KM_MAP_EVENT_CHILD_TABLES = [
     'km_map_event_aliases',
     'km_map_event_hidden',
     'km_map_event_options',
+    // Web で直した時刻(2026-10-23)。アプリから取り込み直したら消える(アプリの中身に戻るため)
+    'km_map_event_web_edits',
 ];
 
 /**
- * 管理アプリから取り込んだイベントなら、Website の地図編集では変えさせない。
- * 中身はアプリが正本で、次の取り込みで丸ごと入れ替わる —— ここで直しても黙って消える。
+ * Website の地図編集でイベントの中身を直したことを記録する(2026-10-23)。
+ *
+ * 以前は管理アプリから取り込んだイベントを Web では直させなかった(次の取り込みで黙って消えるため)。
+ * 利用者の指示で**どちらでも直せる**ようにした。代わりに、直した時刻を覚えておき、
+ * アプリから取り込み直すときに「Web で直した内容は置き換わります」と知らせる(admin/map-events.php)。
+ * アプリへは、管理アプリの「Website から取り込む」(api/map-events.php)で戻せる。
  */
-function km_map_event_assert_editable(PDO $pdo, int $eventId): void
+function km_map_event_touch_web_edit(PDO $pdo, int $eventId): void
 {
     km_map_events_ensure_tables($pdo);
-    $stmt = $pdo->prepare('SELECT 1 FROM km_map_event_sources WHERE event_id = ?');
-    $stmt->execute([$eventId]);
-    if ($stmt->fetchColumn() !== false) {
-        throw new InvalidArgumentException(
-            'このイベントは管理アプリから取り込んだものです。アプリで直してから、もう一度取り込んでください。'
-        );
+    if (km_map_event_find($pdo, $eventId) === null) {
+        throw new InvalidArgumentException('そのイベントは見つかりません。');
     }
+    $pdo->prepare('DELETE FROM km_map_event_web_edits WHERE event_id = ?')->execute([$eventId]);
+    $pdo->prepare('INSERT INTO km_map_event_web_edits (event_id, edited_at) VALUES (?, NOW())')->execute([$eventId]);
+}
+
+/** Website で直した時刻(event_id => 'Y-m-d H:i:s')。表が無ければ空 */
+function km_map_event_web_edits(PDO $pdo): array
+{
+    try {
+        $rows = $pdo->query('SELECT event_id, edited_at FROM km_map_event_web_edits')->fetchAll();
+    } catch (Throwable $exception) {
+        return [];
+    }
+    $edits = [];
+    foreach ($rows as $row) {
+        $edits[(int) $row['event_id']] = (string) $row['edited_at'];
+    }
+    return $edits;
+}
+
+/**
+ * イベント中に出さない地点を入り切りする(2026-10-23。Website の地図編集の「表示しない」)。出さないにしたら true
+ */
+function km_map_event_hidden_toggle(PDO $pdo, int $eventId, string $nodeId): bool
+{
+    km_map_events_ensure_tables($pdo);
+    if (preg_match('/^[0-9A-Za-z_-]{1,32}$/', $nodeId) !== 1) {
+        throw new InvalidArgumentException('地点の指定が正しくありません。');
+    }
+    $stmt = $pdo->prepare('SELECT 1 FROM km_map_event_hidden WHERE event_id = ? AND node_id = ?');
+    $stmt->execute([$eventId, $nodeId]);
+    if ($stmt->fetchColumn() !== false) {
+        $pdo->prepare('DELETE FROM km_map_event_hidden WHERE event_id = ? AND node_id = ?')->execute([$eventId, $nodeId]);
+        return false;
+    }
+    $pdo->prepare('INSERT INTO km_map_event_hidden (event_id, node_id) VALUES (?, ?)')->execute([$eventId, $nodeId]);
+    return true;
 }
 
 /**
@@ -234,7 +284,7 @@ function km_map_event_active(PDO $pdo): array
  *   onlyEventNodes: bool                  // イベントの地点だけを出す(有効なイベントのどれかが ON。2026-10-23)
  * }
  */
-function km_map_event_overlay(PDO $pdo, ?int $previewEventId = null): array
+function km_map_event_overlay(PDO $pdo, ?int $previewEventId = null, bool $onlyPreview = false): array
 {
     $empty = [
         'events' => [],
@@ -248,7 +298,8 @@ function km_map_event_overlay(PDO $pdo, ?int $previewEventId = null): array
     ];
 
     try {
-        $events = km_map_event_active($pdo);
+        // $onlyPreview: そのイベント 1 つだけ(管理アプリへ渡すとき。api/map-events.php)。有効かどうかは問わない
+        $events = $onlyPreview ? [] : km_map_event_active($pdo);
 
         if ($previewEventId !== null && !in_array($previewEventId, array_column($events, 'id'), true)) {
             $stmt = $pdo->prepare(
@@ -429,8 +480,10 @@ function km_map_events_all(PDO $pdo): array
     )->fetchAll();
 
     $options = km_map_event_options_read($pdo, array_map('intval', array_column($rows, 'id')));
+    $webEdits = km_map_event_web_edits($pdo);
     foreach ($rows as &$row) {
         $row['onlyEventNodes'] = $options[(int) $row['id']] ?? true;
+        $row['webEditedAt'] = $webEdits[(int) $row['id']] ?? null;
         foreach (['id', 'closureCount', 'poiCount', 'aliasCount', 'hiddenCount'] as $intKey) {
             $row[$intKey] = (int) $row[$intKey];
         }

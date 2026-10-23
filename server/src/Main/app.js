@@ -839,6 +839,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             tooltipContent = '<div class="km-admin-tip">'
                 + (prefs.id ? `<span class="km-admin-tip-id">${escapeHtml(id)}</span><br>` : '')
                 + escapeHtml(name)
+                // 企画の番号(管理アプリで振る)と、イベント中に出さない印(2026-10-23。地図編集で見分けるため)
+                + (Array.isArray(node.projects) && node.projects.length > 0
+                    ? `<br><span class="km-admin-tip-project">企画 ${node.projects.map(escapeHtml).join('・')}</span>` : '')
+                + (node.hidden ? '<br><span class="km-admin-tip-hidden">イベント中は出さない</span>' : '')
                 + (prefs.xy ? `<br><span class="km-admin-tip-xy">(${node.x}, ${node.y})</span>` : '')
                 + '</div>';
         }

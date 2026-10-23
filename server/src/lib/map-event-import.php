@@ -281,6 +281,13 @@ function km_map_event_from_app(stdClass $event, array $knownNodes): array
     }
 
     // --- 一時地点 → 臨時の地点 ---
+    // アプリで道へつないだ線(2026-10-23。MapEvent.placeLinks)。あれば、それを案内先(つなぎ先)にする
+    $linkedTo = [];
+    foreach (is_array($event->placeLinks ?? null) ? $event->placeLinks : [] as $link) {
+        if ($link instanceof stdClass && is_string($link->placeUuid ?? null) && is_string($link->nodeUuid ?? null) && !isset($linkedTo[$link->placeUuid])) {
+            $linkedTo[$link->placeUuid] = $toId($link->nodeUuid);
+        }
+    }
     $pois = [];
     foreach (is_array($event->places ?? null) ? $event->places : [] as $place) {
         if (!($place instanceof stdClass)) {
@@ -319,7 +326,10 @@ function km_map_event_from_app(stdClass $event, array $knownNodes): array
             'category' => $category,
             'x' => (int) round($x),
             'y' => (int) round($y),
-            'anchorNodeId' => km_map_event_import_anchor($knownNodes, $webFloor, $x, $y),
+            // つないだ先が同じ階にあればそれ、無ければ同じ階の一番近い通れる地点
+            'anchorNodeId' => ($linked = $linkedTo[(string) ($place->uuid ?? '')] ?? null) !== null && ($knownNodes[$linked]['floor'] ?? null) === $webFloor
+                ? $linked
+                : km_map_event_import_anchor($knownNodes, $webFloor, $x, $y),
             'note' => mb_substr($note, 0, 255),
         ];
     }

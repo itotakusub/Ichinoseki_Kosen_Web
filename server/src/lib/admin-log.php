@@ -208,6 +208,7 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     'map.event_closure' => 'がイベントの通行止めを変更しました',
     'map.event_poi' => 'がイベントの臨時地点を変更しました',
     'map.event_alias' => 'がイベントの臨時名称を変更しました',
+    'map.event_hidden' => 'がイベント中に出さない地点を切り替えました',
     'map.event_import' => 'が管理アプリのイベントを取り込みました',
     'test.mark' => 'がアカウントにテスト用の印を付けました',
     'test.unmark' => 'がアカウントのテスト用の印を外しました',

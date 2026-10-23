@@ -950,8 +950,29 @@ function km_app_map_events_from_web(array $overlay, stdClass $map): array
         $closedLineKeys[$from['floor'] . ':' . $endpoints[0] . ':' . $endpoints[1]] = true;
     }
 
+    // --- 臨時の名前・出さない地点(2026-10-23。アプリの nameOverrides / hiddenNodeUuids) ---
+    $nameOverrides = [];
+    foreach (($overlay['aliases'] ?? []) as $shortId => $alias) {
+        $found = $byShortId[(string) $shortId] ?? null;
+        if ($found === null) {
+            $skipped['unknownNode']++;
+            continue;
+        }
+        $nameOverrides[$found['uuid']] = (string) $alias;
+    }
+    $hiddenNodeUuids = [];
+    foreach (array_keys($overlay['hiddenNodes'] ?? []) as $shortId) {
+        $found = $byShortId[(string) $shortId] ?? null;
+        if ($found === null) {
+            $skipped['unknownNode']++;
+            continue;
+        }
+        $hiddenNodeUuids[$found['uuid']] = true;
+    }
+
     // --- 臨時の地点 ---
     $places = [];
+    $placeLinks = [];
     foreach (($overlay['pois'] ?? []) as $poi) {
         if (!is_array($poi)) {
             continue;
@@ -962,9 +983,15 @@ function km_app_map_events_from_web(array $overlay, stdClass $map): array
             continue;
         }
         $category = (string) ($poi['category'] ?? 'other');
+        $placeUuid = 'web-poi-' . (int) ($poi['id'] ?? 0);
+        // 案内先(つなぎ先)はアプリの「一時地点を道へつなぐ線」になる(2026-10-23。同じ階のときだけ)
+        $anchor = $byShortId[(string) ($poi['anchorNodeId'] ?? '')] ?? null;
+        if ($anchor !== null && $anchor['floor'] === $appFloor) {
+            $placeLinks[] = ['placeUuid' => $placeUuid, 'nodeUuid' => $anchor['uuid']];
+        }
         $places[] = [
             // ノードの UUID とぶつからない形にする。ぶつかると描画も経路も壊れる
-            'uuid' => 'web-poi-' . (int) ($poi['id'] ?? 0),
+            'uuid' => $placeUuid,
             'name' => (string) ($poi['name'] ?? ''),
             'floor' => $appFloor,
             'x' => (float) ($poi['x'] ?? 0),
@@ -1015,6 +1042,11 @@ function km_app_map_events_from_web(array $overlay, stdClass $map): array
         // Website 側に「階ごとの立入禁止」が無い。線とノードで表す
         'closedFloors' => [],
         'places' => $places,
+        // 2026-10-23: 名前の上書き・出さない地点・イベントの地点だけ・一時地点の接続もアプリへ渡す
+        'nameOverrides' => (object) $nameOverrides,
+        'hiddenNodeUuids' => array_keys($hiddenNodeUuids),
+        'onlyEventNodes' => (bool) ($overlay['onlyEventNodes'] ?? true),
+        'placeLinks' => $placeLinks,
     ];
 
     return [
