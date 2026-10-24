@@ -1,7 +1,7 @@
 """模型を選ぶための測り(自宅 PC。2026-10-24、2026-10-25 に門番越しに直した)。
 
-動いている門番 server.py(127.0.0.1)越しに Unsloth の API へ、案内でよく来そうな質問 20 件を、Website と同じ
-「分ける」頼み方で送り、1 件ごとの時間と返事を出す。Unsloth で読む模型(Gemma4 E4B / 12B QAT / Qwen3.5-9B / GPT-OSS-20B)を
+動いている門番 server.py(127.0.0.1)越しに Bionic の API へ、案内でよく来そうな質問 20 件を、Website と同じ
+「分ける」頼み方で送り、1 件ごとの時間と返事を出す。Bionic で読む模型(Gemma4 E4B / 12B QAT / Qwen3.5-9B / GPT-OSS-20B)を
 入れ替えて走らせ、**速さ(中央値)と、返事が JSON として読めた数**で比べる。日本語の出来は、出した返事を目で見て決める。
 
     pwsh -File start-guide-llm.ps1 -Bench   # 結果は bench-<時刻>.json にも残す(質問は下の決まった文だけ。利用者の質問は使わない)
@@ -70,6 +70,7 @@ def main() -> None:
     times = [r["seconds"] for r in results]
     summary = {
         "model": os.environ.get("GUIDE_LLM_MODEL", ""),
+        "family": os.environ.get("GUIDE_LLM_FAMILY", ""),
         "median_seconds": round(statistics.median(times), 2),
         "max_seconds": round(max(times), 2),
         "json_ok": sum(1 for r in results if r["json"]),

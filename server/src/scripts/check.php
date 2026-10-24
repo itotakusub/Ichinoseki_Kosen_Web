@@ -1711,7 +1711,7 @@ function km_check_app_map_web_events(): void
 
 /**
  * 案内チャット(2026-10-24、利用者の企画書「模擬店案内・会場内ルート案内システム」。lib/guide-chat.php)。
- * LLM は差し替えて試す(自宅 PC の Unsloth は要らない)。
+ * LLM は差し替えて試す(自宅 PC の Bionic は要らない)。
  */
 function km_check_guide_chat(): void
 {
@@ -1846,12 +1846,18 @@ function km_check_guide_chat(): void
     $serverPy = (string) @file_get_contents($llmDir . '/server.py');
     /*
      * 2026-10-25 に作り直した(利用者の指示「WSL は使わない」「Unsloth に API リクエストする」)。
-     * 自宅 PC の server.py は模型を読まず、利用者が動かしている Unsloth の API へ渡す**門番**(標準ライブラリだけ)
+     * 同じ日に、頼む先を Bionic に替えた(利用者「Unsloth にバグが報告されていて使えないので Bionic に代替」)。
+     * 自宅 PC の server.py は模型を読まず、利用者が動かしている Bionic の API へ渡す**門番**(標準ライブラリだけ)
      */
-    check_bool('自宅 PC: 門番は 127.0.0.1 だけ・鍵は定数時間で比べる・4 つの模型だけ・Unsloth はこの PC の中だけ', str_contains($serverPy, 'ThreadingHTTPServer(("127.0.0.1", PORT), Handler)')
+    check_bool('自宅 PC: 門番は 127.0.0.1 だけ・鍵は定数時間で比べる・4 つの模型だけ・Bionic はこの PC の中だけ', str_contains($serverPy, 'ThreadingHTTPServer(("127.0.0.1", PORT), Handler)')
         && str_contains($serverPy, 'secrets.compare_digest(') && str_contains($serverPy, '"gpt-oss-20b": re.compile(') && str_contains($serverPy, '"qwen3.5-9b": re.compile(')
         && str_contains($serverPy, 'parts.hostname in ("127.0.0.1", "localhost", "::1")')
+        && str_contains($serverPy, 'UPSTREAM = os.environ.get("LLM_API_URL", "")')
         && !preg_match('/^\s*(import|from)\s+(fastapi|uvicorn|unsloth|torch)\b/m', $serverPy));
+    // Bionic の識別名(3885219b… のような文字列)は名前から 4 つのどれか分からない。GUIDE_LLM_FAMILY で言い切り、/v1/models にあるかを起こすときに確かめる
+    check_bool('自宅 PC: 識別名の模型は GUIDE_LLM_FAMILY で 4 つのどれかを言い切る・読み込まれているかを確かめる', str_contains($serverPy, 'family = resolve_family(MODEL_NAME, MODEL_FAMILY)')
+        && str_contains($serverPy, 'if declared not in ALLOWED_FAMILIES or (by_name is not None and by_name != declared):')
+        && str_contains($serverPy, 'elif MODEL_NAME not in listed:'));
     check_bool('自宅 PC: 模型の名前と出す字数は門番が決める・余計な項目は渡さない', str_contains($serverPy, '"model": MODEL_NAME,') && str_contains($serverPy, '"max_tokens": min(max_tokens, MAX_NEW_TOKENS_CAP),'));
     check_bool('自宅 PC: 本文をログに書かない', str_contains($serverPy, '# **本文は書かない**。時間と字数だけ') && !preg_match('/LOG\.\w+\([^)]*(messages|text|body)\b/', $serverPy)
         && str_contains($serverPy, 'def log_message(self, format: str, *args: Any) -> None:'));
@@ -1863,7 +1869,7 @@ function km_check_guide_chat(): void
     $exampleEnv = (string) @file_get_contents($llmDir . '/guide-llm.env.example');
     check_bool('自宅 PC: guide-llm.env は git に入れない・見本の鍵とドメインは空', str_contains((string) @file_get_contents($llmDir . '/.gitignore'), 'guide-llm.env')
         && preg_match('/^KM_GUIDE_LLM_KEY=\s*$/m', $exampleEnv) === 1 && preg_match('/^NGROK_DOMAIN=\s*$/m', $exampleEnv) === 1
-        && preg_match('/^UNSLOTH_API_KEY=\s*$/m', $exampleEnv) === 1);
+        && preg_match('/^LLM_API_KEY=\s*$/m', $exampleEnv) === 1 && preg_match('/^GUIDE_LLM_MODEL=\s*$/m', $exampleEnv) === 1);
 }
 
 /**

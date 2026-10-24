@@ -15,7 +15,7 @@ require_once dirname(__DIR__) . '/lib/admin-log.php';
  * - ON/OFF(既定 OFF)
  * - 使える人: テスト用アカウント(管理画面「テストモード」で印を付けた Logto のアカウント)から 1 つ(企画書 §8「テストユーザー1のみ」)
  * - 1 日の上限(企画書 §8「LLM の API を無制限に呼び出せないようにする」)
- * - LLM に届くかの確かめ(自宅 PC の Unsloth + ngrok。URL と鍵は環境変数で、ここには出さない)
+ * - LLM に届くかの確かめ(自宅 PC の Bionic + ngrok。URL と鍵は環境変数で、ここには出さない)
  * - 日ごとの回数(質問と答えの本文は残していない)
  */
 
@@ -166,7 +166,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
 
               <div class="col-12 col-xl-6">
                 <div class="card mb-4">
-                  <div class="card-header"><h3 class="card-title mb-0">LLM(自宅 PC の Unsloth + ngrok)</h3></div>
+                  <div class="card-header"><h3 class="card-title mb-0">LLM(自宅 PC の Bionic + ngrok)</h3></div>
                   <div class="card-body">
                     <dl class="row fs-7 mb-2">
                       <dt class="col-4 fw-normal text-body-secondary">つなぎ先</dt>
