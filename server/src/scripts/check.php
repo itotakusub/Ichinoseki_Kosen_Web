@@ -1851,6 +1851,28 @@ function km_check_guide_chat(): void
     $melon = km_guide_answer($densan, 'メロンパンはどこ', $throwing);
     check_bool('言い換えがつまずいても答えは止めない(LLM なしに倒さない)・カードは出ない', $melon['fallback'] === false && $melon['cards'] === []);
 
+    // テスト用アカウントの出発地(2026-10-25、利用者「テストユーザーのみ、出発点を Let's Play Densan に」)
+    km_check_heading('guide-chat: テスト用アカウントの出発地');
+    $toGym = ['intent' => 'route', 'keywords' => [], 'category' => null, 'from' => null, 'to' => '体育館'];
+    $herePlan = km_guide_plan($densan, $toGym, null, 'r1');
+    check('出発地を言わなければ展示の場所から', ['r1', 'g1'], [$herePlan['route']['from']['nodeId'] ?? null, $herePlan['route']['to']['nodeId'] ?? null]);
+    check_bool('LLM には「いまいる場所」として見出しと部屋の名前で伝える', str_contains($herePlan['situation'], "いま利用者がいる「Let's play Densan!(第二実習室 管-105)」"));
+    check('言った出発地のほうが先', 'g1', km_guide_plan($densan, ['from' => '体育館', 'to' => '第二実習室'] + $toGym, null, 'r1')['route']['from']['nodeId'] ?? null);
+    check('設定が無ければ今までどおり(出発地は地図で選ぶ)', null, km_guide_plan($densan, $toGym)['route']['from'] ?? null);
+    check('目的地が展示の場所そのものなら入れない', null, km_guide_plan($densan, ['to' => '第二実習室'] + $toGym, null, 'r1')['route']['from'] ?? null);
+    check_bool('既定は第二実習室 管-105 の地点 id・形を確かめる', KM_TEST_START_DEFAULT === '2735e277ed554b74963e82baa0b6a641'
+        && km_test_start_node_valid('') && km_test_start_node_valid(KM_TEST_START_DEFAULT) && !km_test_start_node_valid('a"b') && !km_test_start_node_valid(str_repeat('a', 65)));
+    $startIndex = (string) file_get_contents(__DIR__ . '/../index.php');
+    $startApp = (string) file_get_contents(__DIR__ . '/../Main/app.js');
+    $startAdmin = (string) file_get_contents(__DIR__ . '/../admin/test-mode.php');
+    check_bool('地図: 出発地の印はテスト用アカウントのときだけ・目的地を選んで出発地が空なら入れる',
+        preg_match('/<\?php if \(\$kmTestMode !== null\): \?>.*?<meta name="km-test-start" content="<\?= km_home_e\(\$kmTestMode\[\'startNode\'\]\) \?>">.*?<\?php elseif/s', $startIndex) === 1
+        && str_contains($startApp, 'if (!routeStartId) applyTestStart(nodeId);')
+        && str_contains($startApp, "if (!node || startId === endId || !isRoutableNode(node)) return;"));
+    check_bool('口: 案内チャットに出発地を渡す・管理画面で選ぶ(一覧の地点だけ)', str_contains((string) file_get_contents(__DIR__ . '/../api/guide-chat.php'), '$result = km_guide_answer($catalog, $question, $llm, $startNodeId);')
+        && str_contains($startAdmin, "if (\$startNode !== '' && !in_array(\$startNode, array_column(km_poster_node_options(\$pdo), 'id'), true)) {")
+        && str_contains($startAdmin, 'km_setting_set($pdo, KM_TEST_START_SETTING, $startNode);'));
+
     km_check_heading('guide-chat: 質問と答えを残す・評価(2026-10-25)');
     check('メールアドレスと電話番号らしい文字は伏せる(部屋番号・年は残す)', '[メール] か [電話番号] / [電話番号] に 1-209 と 2026 年',
         km_guide_mask_personal('taro.k@example.com か 090-1234-5678 / ０３（１２３４）５６７８ に 1-209 と 2026 年'));

@@ -134,6 +134,8 @@ if ($loggedIn && isset($claims->sub)) {
                 'guide' => km_test_guide_lines(km_test_guide_text($testPdo)),
                 // 触られないまま過ぎたら自動で「始めから」(分。0 は使わない)
                 'idleMinutes' => km_test_idle_minutes($testPdo),
+                // 経路の出発地が空なら入れる地点(2026-10-25、利用者「テストユーザーのみ、出発点を Let's Play Densan に」。空なら入れない)
+                'startNode' => km_test_start_node($testPdo),
             ];
         }
     } catch (Throwable $exception) {
@@ -378,6 +380,10 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
         <?php /* テスト用アカウントの印と、自動で「始めから」にするまでの分(Main/test-mode.js が読む。一般の人には出さない) */ ?>
         <meta name="km-test-mode" content="1">
         <meta name="km-test-idle" content="<?= (int) $kmTestMode['idleMinutes'] ?>">
+        <?php if ($kmTestMode['startNode'] !== ''): ?>
+            <?php /* 経路の出発地が空なら入れる地点(展示の PC の場所。Main/app.js の setAsLocation が読む) */ ?>
+            <meta name="km-test-start" content="<?= km_home_e($kmTestMode['startNode']) ?>">
+        <?php endif; ?>
     <?php elseif ($kmEventCollect !== null): ?>
         <?php /* イベント中の来場者の記録。値は許可の覚え(localStorage)をイベントごとに分けるための名前 */ ?>
         <meta name="km-event-collect" content="<?= km_home_e($kmEventCollect['key']) ?>">

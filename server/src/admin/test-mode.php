@@ -8,6 +8,7 @@ require_once dirname(__DIR__) . '/lib/db.php';
 require_once dirname(__DIR__) . '/lib/test-mode.php';
 require_once dirname(__DIR__) . '/lib/admin-log.php';
 require_once dirname(__DIR__) . '/lib/logto-management.php';
+require_once dirname(__DIR__) . '/lib/posters.php';
 
 /**
  * テスト用アカウント(展示の PC。2026-10-15、利用者の指示。lib/test-mode.php)。
@@ -68,7 +69,10 @@ try {
             $guide = str_replace("\r\n", "\n", trim((string) ($_POST['guide'] ?? '')));
             $idle = trim((string) ($_POST['idle_minutes'] ?? ''));
             $collect = isset($_POST['event_collect']) ? '1' : '0';
-            if (!km_test_survey_url_valid($survey)) {
+            $startNode = trim((string) ($_POST['start_node'] ?? ''));
+            if ($startNode !== '' && !in_array($startNode, array_column(km_poster_node_options($pdo), 'id'), true)) {
+                $errors[] = '出発地は一覧の地点から選んでください。';
+            } elseif (!km_test_survey_url_valid($survey)) {
                 $errors[] = 'アンケートの URL は https:// で始まる 255 字までの URL にしてください(空にすると出しません)。';
             } elseif (mb_strlen($guide) > 2000) {
                 $errors[] = '操作方法は 2000 字までにしてください。';
@@ -78,6 +82,7 @@ try {
                 km_setting_set($pdo, KM_TEST_SURVEY_SETTING, $survey);
                 km_setting_set($pdo, KM_TEST_IDLE_SETTING, (string) (int) $idle);
                 km_setting_set($pdo, KM_EVENT_COLLECT_SETTING, $collect);
+                km_setting_set($pdo, KM_TEST_START_SETTING, $startNode);
                 km_test_guide_set($pdo, $guide === '' ? KM_TEST_GUIDE_DEFAULT : $guide);
                 km_admin_log_record('settings', 'test.settings');
                 header('Location: ./test-mode.php?saved=1', true, 303);
@@ -130,6 +135,8 @@ try {
     $guideText = km_test_guide_text($pdo);
     $idleMinutes = km_test_idle_minutes($pdo);
     $eventCollect = km_event_collect_enabled($pdo);
+    $startNodeId = km_test_start_node($pdo);
+    $startOptions = km_poster_node_options($pdo);
     $signoutPinSet = km_test_signout_pin_hash($pdo) !== '';
     $summary = km_test_events_summary($pdo, $source);
     $recent = km_test_events_recent($pdo, 100, $source);
@@ -148,6 +155,8 @@ try {
     $guideText = KM_TEST_GUIDE_DEFAULT;
     $idleMinutes = KM_TEST_IDLE_DEFAULT;
     $eventCollect = true;
+    $startNodeId = '';
+    $startOptions = [];
     $signoutPinSet = false;
     $summary = null;
     $recent = [];
@@ -296,6 +305,19 @@ require __DIR__ . '/_inc/partials/page-header.php';
                           </div>
                         </div></div>
                         <div class="form-text">0 にすると自動では戻しません。戻す前に 15 秒の知らせ(「このまま使う」で取り消せる)が出ます。1 度も触られていない画面は戻しません。</div>
+                      </div>
+                      <div class="mb-3">
+                        <?php /* 2026-10-25、利用者「テストユーザーのみ、出発点を Let's Play Densan に」。既定は第二実習室 管-105(lib/test-mode.php) */ ?>
+                        <label for="start-node" class="form-label">出発地(展示の PC を置く場所)</label>
+                        <select id="start-node" name="start_node" class="form-select">
+                          <option value="">入れない(毎回選んでもらう)</option>
+                          <?php foreach ($startOptions as $option): ?>
+                            <option value="<?= km_e($option['id']) ?>"<?= $option['id'] === $startNodeId ? ' selected' : '' ?>>
+                              <?= km_e(km_poster_floor_label($option['floor']) . ' ' . $option['name']) ?>
+                            </option>
+                          <?php endforeach; ?>
+                        </select>
+                        <div class="form-text">テスト用アカウントで開いたときだけ、経路の出発地が空ならここを入れます(地図の経路と案内チャット)。</div>
                       </div>
                       <div class="form-check mb-3">
                         <input class="form-check-input" type="checkbox" id="event-collect" name="event_collect" value="1" <?= $eventCollect ? 'checked' : '' ?>>

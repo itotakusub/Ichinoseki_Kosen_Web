@@ -574,12 +574,15 @@ function km_guide_classify_messages(string $question): array
         ['role' => 'system', 'content' => "あなたは学校祭の会場案内の受付です。利用者の質問を分類し、次の形の JSON だけを返してください。説明や前置きは書かないでください。\n"
             . "{\"intent\":\"shop|route|place|other\",\"keywords\":[\"探す言葉\"],\"category\":\"種類か null\",\"from\":\"出発地の言葉か null\",\"to\":\"目的地の言葉か null\"}\n"
             . "- shop: 店・企画・展示・食べ物を探している\n- route: ある場所からある場所への行き方・道順を聞いている\n- place: ある場所がどこにあるかを聞いている\n- other: それ以外\n"
-            . "- keywords は質問の中の名詞を短く(「の店」「どこ」などは入れない。最大 3 つ)\n"
+            // 2026-10-25: 名前を区切らせない。「レッツプレイ電算はどこ？」で keywords が ["電算"] だけになり(3 回とも)、見つからなかった
+            . "- keywords は探す名前や言葉。店・企画・場所の名前は**区切らず、書かれたとおりに 1 つ**にしてください(カタカナの英語・打ち間違いもそのまま直さない)。「の店」「どこ」などは入れない。最大 3 つ\n"
             . "- category は次のどれかか null: {$categories}"],
         ['role' => 'user', 'content' => '食べ物の模擬店を教えて'],
         ['role' => 'assistant', 'content' => '{"intent":"shop","keywords":[],"category":"food","from":null,"to":null}'],
         ['role' => 'user', 'content' => '第二実習室から図書館への行き方'],
         ['role' => 'assistant', 'content' => '{"intent":"route","keywords":[],"category":null,"from":"第二実習室","to":"図書館"}'],
+        ['role' => 'user', 'content' => 'ハッピーカフェ3Aはどこ?'],
+        ['role' => 'assistant', 'content' => '{"intent":"place","keywords":["ハッピーカフェ3A"],"category":null,"from":null,"to":null}'],
         ['role' => 'user', 'content' => $question],
     ];
 }
@@ -746,10 +749,13 @@ function km_guide_fallback_words(string $question): array
  * $resolve は、言葉で当たらなかったときだけ呼ぶ(km_guide_answer が LLM で一覧から選ばせるものを渡す)。
  * 戻すのは渡した $items の中の 1 件か null。null なら今までどおり「見つかりませんでした」
  *
+ * $startNodeId は、出発地を言わなかったときに使う地点(テスト用アカウントの展示の場所。2026-10-25、利用者
+ * 「テストユーザーのみ、出発点を Let's Play Densan に」。lib/test-mode.php の km_test_start_node)。
+ *
  * @param null|callable(list<array> $items, string $word): ?array $resolve
  * @return array{cards:list<array>, records:list<array>, route:?array, situation:string}
  */
-function km_guide_plan(array $catalog, array $classification, ?callable $resolve = null): array
+function km_guide_plan(array $catalog, array $classification, ?callable $resolve = null, string $startNodeId = ''): array
 {
     $intent = $classification['intent'];
     $route = null;
@@ -779,6 +785,17 @@ function km_guide_plan(array $catalog, array $classification, ?callable $resolve
     if ($intent === 'route') {
         $to = $place($classification['to']);
         $from = $place($classification['from']);
+        $here = false;
+        // 出発地を言わなかったら、展示の場所から(テスト用アカウントだけ。目的地が見つかったときだけ)
+        if ($from === null && $classification['from'] === null && $startNodeId !== '' && $to !== null) {
+            foreach ($catalog['places'] as $item) {
+                if ($item['kind'] === 'node' && $item['nodeId'] === $startNodeId && $item['nodeId'] !== $to['nodeId']) {
+                    $from = $item;
+                    $here = true;
+                    break;
+                }
+            }
+        }
         $end = static fn (?array $item): ?array => $item === null ? null : ['nodeId' => $item['nodeId'], 'poiId' => $item['poiId'], 'name' => $item['name']];
         if ($to !== null) {
             $route = ['from' => $end($from), 'to' => $end($to)];
@@ -795,7 +812,10 @@ function km_guide_plan(array $catalog, array $classification, ?callable $resolve
             ? '目的地が登録されている場所の中に見つかりませんでした'
             : ($from === null
                 ? "目的地は「{$to['name']}」です。出発地は利用者に地図で選んでもらいます"
-                : "出発地「{$from['name']}」から目的地「{$to['name']}」への経路を地図に出します");
+                : ($here
+                    ? '出発地は、いま利用者がいる「' . ((string) ($from['title'] ?? '') !== '' ? "{$from['title']}({$from['name']})" : $from['name'])
+                        . "」です。そこから目的地「{$to['name']}」への経路を地図に出します"
+                    : "出発地「{$from['name']}」から目的地「{$to['name']}」への経路を地図に出します"));
     } elseif ($intent === 'shop') {
         $found = km_guide_search($catalog['shops'], $classification['keywords'], $classification['category']);
         // 言葉で当たらなければ、LLM に一覧から選ばせる(読み方・書き方の違い)。それでも無ければ種類だけで探し直す
@@ -906,9 +926,10 @@ function km_guide_llm_chat(array $config, array $messages, int $maxTokens, int $
  * 質問 1 つに答える。LLM が止まっていても、言葉で探した結果は返す(企画書 §8)。
  *
  * @param callable(array $messages, int $maxTokens): string $llm LLM を呼ぶもの(試験では差し替える)。null なら LLM なし
+ * @param string $startNodeId 出発地を言わなかったときの地点(テスト用アカウントの展示の場所。km_guide_plan)
  * @return array{answer:string, cards:list<array>, route:?array, fallback:bool}
  */
-function km_guide_answer(array $catalog, string $question, ?callable $llm): array
+function km_guide_answer(array $catalog, string $question, ?callable $llm, string $startNodeId = ''): array
 {
     $fallback = static function () use ($catalog, $question): array {
         $found = km_guide_search($catalog['shops'], km_guide_fallback_words($question));
@@ -954,7 +975,7 @@ function km_guide_answer(array $catalog, string $question, ?callable $llm): arra
             }
             return $index === null ? null : $items[$index];
         };
-        $plan = km_guide_plan($catalog, $classification, $resolve);
+        $plan = km_guide_plan($catalog, $classification, $resolve, $startNodeId);
         $answer = $llm(km_guide_answer_messages($question, $plan['records'], $plan['situation']), 300);
         return [
             // 長すぎる答えは切る(画面に入る長さ)

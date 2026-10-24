@@ -115,7 +115,14 @@ $llm = $llmConfig === null ? null : static function (array $messages, int $maxTo
     }
     return km_guide_llm_chat($llmConfig, $messages, $maxTokens, (int) min($maxTokens <= 160 ? 20 : 30, floor($left)));
 };
-$result = km_guide_answer($catalog, $question, $llm);
+// 出発地を言わなかった経路は、展示の場所から(テスト用アカウントの設定。2026-10-25、利用者「テストユーザーのみ、出発点を Let's Play Densan に」)
+try {
+    $startNodeId = km_test_start_node($pdo);
+} catch (Throwable $exception) {
+    error_log('api/guide-chat.php start node failed: ' . $exception->getMessage());
+    $startNodeId = '';
+}
+$result = km_guide_answer($catalog, $question, $llm, $startNodeId);
 
 // 質問と答えを残す(2026-10-25、利用者「機能改善のために保存」)。誰が聞いたかは入れない。残せなくても答えは返す。
 // 評価の合言葉は画面に返し、ここにはハッシュだけを残す(残せなかったときは評価のボタンを出さない)

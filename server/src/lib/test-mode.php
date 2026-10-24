@@ -240,6 +240,29 @@ function km_event_collect_enabled(PDO $pdo): bool
     return km_setting_get($pdo, KM_EVENT_COLLECT_SETTING, '1') === '1';
 }
 
+// ---- 出発地(2026-10-25、利用者「テストユーザーのみ、出発点を Let's Play Densan にしてください」) ----
+/*
+ * 展示の PC は Let's play Densan!(電子計算機部。第二実習室 管-105)に置く。テスト用アカウントで開いたときだけ、
+ * 経路の出発地が空ならここを入れる(地図の経路 = Main/app.js の setAsLocation、案内チャット = lib/guide-chat.php の km_guide_plan)。
+ * 管理画面「テスト用アカウント」で変えられる。空にすると入れない。
+ * 既定はポスターの見出しではなく**地点の id** で持つ(見出しを書き換えても外れない)
+ */
+const KM_TEST_START_SETTING = 'test_mode_start_node';
+/** 第二実習室 管-105(Let's play Densan! のポスターが付いている地点) */
+const KM_TEST_START_DEFAULT = '2735e277ed554b74963e82baa0b6a641';
+
+function km_test_start_node_valid(string $id): bool
+{
+    return $id === '' || preg_match('/^[A-Za-z0-9_-]{1,64}$/', $id) === 1;
+}
+
+/** テスト用アカウントの出発地の地点 id。空なら入れない */
+function km_test_start_node(PDO $pdo): string
+{
+    $value = km_setting_get($pdo, KM_TEST_START_SETTING, KM_TEST_START_DEFAULT);
+    return km_test_start_node_valid($value) ? $value : '';
+}
+
 // ---- ログアウトの合言葉(2026-10-19、利用者の指示「テストユーザーのときは簡単にログアウトできないように」) ----
 /*
  * 展示の PC では来場者が代わる代わる触る。ログアウトを押されると「テスト中」が外れて記録も止まり、
