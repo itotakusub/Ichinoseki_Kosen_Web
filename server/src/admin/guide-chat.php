@@ -16,7 +16,9 @@ require_once dirname(__DIR__) . '/lib/admin-log.php';
  * - 使える人: テスト用アカウント(管理画面「テストモード」で印を付けた Logto のアカウント)から 1 つ(企画書 §8「テストユーザー1のみ」)
  * - 1 日の上限(企画書 §8「LLM の API を無制限に呼び出せないようにする」)
  * - LLM に届くかの確かめ(自宅 PC の Bionic + ngrok。URL と鍵は環境変数で、ここには出さない)
- * - 日ごとの回数(質問と答えの本文は残していない)
+ * - 日ごとの回数
+ * - 質問と答えと評価の一覧(2026-10-25、利用者「機能改善のために保存」「評価も付けられるようにし、BAD だったら理由を聞く」。
+ *   消さずに残す。誰が聞いたかは残していない)。BAD だけに絞れる。まとめて消せる(記録に残す)
  */
 
 $KM_PAGE = [
@@ -38,6 +40,11 @@ $accounts = [];
 $usage = [];
 $probe = null;
 $llmConfig = km_guide_llm_config();
+$logs = [];
+$logCount = ['total' => 0, 'good' => 0, 'bad' => 0];
+$logPerPage = 50;
+$logPage = max(1, (int) ($_GET['page'] ?? 1));
+$logBadOnly = ($_GET['rating'] ?? '') === 'bad';
 
 try {
     $pdo = km_db();
@@ -80,18 +87,34 @@ try {
                     $probe = ['ok' => false, 'message' => $exception->getMessage() . '(' . number_format(microtime(true) - $started, 1) . ' 秒)'];
                 }
             }
+        } elseif ($formAction === 'clear_log') {
+            // 残した質問と答えをまとめて消す(確かめの言葉を打ってもらう)
+            if (trim((string) ($_POST['confirm'] ?? '')) !== '消す') {
+                $errors[] = '消すときは、欄に「消す」と入れてください。';
+            } else {
+                $removed = km_guide_log_clear($pdo);
+                km_admin_log_record('content', 'guide.log_clear', $removed . ' 件');
+                header('Location: ./guide-chat.php?cleared=' . $removed, true, 303);
+                exit;
+            }
         }
     }
 
     $settings = km_guide_settings($pdo);
     $accounts = km_test_accounts_all($pdo);
     $usage = km_guide_usage_recent($pdo, 7);
+    $logCount = km_guide_log_count($pdo);
+    $logs = km_guide_log_recent($pdo, $logPerPage, ($logPage - 1) * $logPerPage, $logBadOnly);
 } catch (Throwable $exception) {
     error_log('admin/guide-chat.php: ' . $exception->getMessage());
     $dbError = km_admin_error_message($exception, '詳しくはサーバーのログを照合してください。');
 }
 
 $saved = isset($_GET['saved']);
+$cleared = isset($_GET['cleared']) ? max(0, (int) $_GET['cleared']) : null;
+$logTotalShown = $logBadOnly ? $logCount['bad'] : $logCount['total'];
+$logPages = max(1, (int) ceil($logTotalShown / $logPerPage));
+$intentLabels = ['shop' => '店', 'route' => '経路', 'place' => '場所', 'other' => 'その他', '' => '—'];
 // 印の付いていないアカウントが選ばれたまま(印を外した)なら知らせる
 $subMissing = $settings['sub'] !== '' && !in_array($settings['sub'], array_column($accounts, 'sub'), true);
 
@@ -112,6 +135,9 @@ require __DIR__ . '/_inc/partials/page-header.php';
             <?php if ($saved): ?>
               <div class="alert alert-success" role="alert">保存しました。</div>
             <?php endif; ?>
+            <?php if ($cleared !== null): ?>
+              <div class="alert alert-success" role="alert">質問と答えを <?= (int) $cleared ?> 件消しました。</div>
+            <?php endif; ?>
             <?php if ($subMissing): ?>
               <div class="alert alert-warning" role="alert">選んでいたアカウントのテストモードの印が外れています。いまは誰も使えません。</div>
             <?php endif; ?>
@@ -120,7 +146,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
               <i class="bi bi-chat-dots me-2 mt-1" aria-hidden="true"></i>
               <div>
                 公開の地図に「💬 案内」を出し、模擬店や場所を言葉で聞けるようにします。答えに出す店と場所は、地図に登録されているものだけです(LLM には探した記録だけを渡し、カードは登録から作ります)。
-                経路は地図の案内と同じ計算で出します。質問と答えの本文は残しません。
+                経路は地図の案内と同じ計算で出します。質問と答えと評価は、案内をよくするために下の一覧に残します(誰が聞いたかは残しません。メールアドレスと電話番号らしい文字は伏せます)。
                 使えるのは、下で選んだテスト用アカウントで公開の地図を開いたときだけです。
               </div>
             </div>
@@ -154,7 +180,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
                       <div class="mb-3">
                         <label class="form-label" for="guide-limit">1 日の上限(回)</label>
                         <input class="form-control" type="number" id="guide-limit" name="daily_limit" min="1" max="<?= KM_GUIDE_DAILY_MAX ?>" value="<?= (int) $settings['dailyLimit'] ?>">
-                        <div class="form-text">1 回の質問で自宅 PC の LLM を 2 回呼びます。ほかに、1 分に <?= KM_GUIDE_PER_MINUTE ?> 回までに絞っています。</div>
+                        <div class="form-text">1 回の質問で自宅 PC の LLM を 2 回(言葉で当たらないときは 3〜6 回)呼びます。ほかに、1 分に <?= KM_GUIDE_PER_MINUTE ?> 回までに絞っています。</div>
                       </div>
                     </div>
                     <div class="card-footer text-end">
@@ -208,6 +234,79 @@ require __DIR__ . '/_inc/partials/page-header.php';
                     <?php endif; ?>
                   </div>
                 </div>
+              </div>
+            </div>
+
+            <div class="card mb-4" id="guide-log">
+              <div class="card-header d-flex flex-wrap align-items-center gap-2">
+                <h3 class="card-title mb-0 me-auto">質問と答え</h3>
+                <span class="fs-7 text-body-secondary">
+                  全 <?= (int) $logCount['total'] ?> 件 · 👍 <?= (int) $logCount['good'] ?> · 👎 <?= (int) $logCount['bad'] ?>
+                </span>
+                <div class="btn-group btn-group-sm" role="group" aria-label="絞り込み">
+                  <a class="btn <?= $logBadOnly ? 'btn-outline-secondary' : 'btn-secondary' ?>" href="./guide-chat.php#guide-log">すべて</a>
+                  <a class="btn <?= $logBadOnly ? 'btn-secondary' : 'btn-outline-secondary' ?>" href="./guide-chat.php?rating=bad#guide-log">👎 だけ</a>
+                </div>
+              </div>
+              <div class="card-body p-0">
+                <?php if ($logs === []): ?>
+                  <p class="text-body-secondary text-center my-3"><?= $logBadOnly ? '👎 の付いた答えはありません。' : 'まだ質問がありません。' ?></p>
+                <?php else: ?>
+                  <div class="table-responsive">
+                    <table class="table table-sm align-top mb-0">
+                      <thead>
+                        <tr><th class="text-nowrap">日時</th><th>質問</th><th>答え</th><th class="text-nowrap">カード・経路</th><th class="text-nowrap">評価</th></tr>
+                      </thead>
+                      <tbody>
+                        <?php foreach ($logs as $row): ?>
+                          <tr>
+                            <td class="text-nowrap fs-7">
+                              <?= km_e($row['askedAt']) ?><br>
+                              <span class="text-body-secondary"><?= km_e($intentLabels[$row['intent']] ?? '—') ?> · <?= number_format($row['elapsedMs'] / 1000, 1) ?> 秒<?= $row['fallback'] ? ' · LLM なし' : '' ?></span>
+                            </td>
+                            <td class="km-guide-log-q"><?= km_e($row['question']) ?></td>
+                            <td class="fs-7 km-guide-log-a"><?= km_e($row['answer']) ?></td>
+                            <td class="fs-7 km-guide-log-cards">
+                              <?= km_e(implode('、', array_map('strval', $row['cards'])) ?: '—') ?>
+                              <?php if ($row['route'] !== ''): ?><br><span class="text-body-secondary">経路: <?= km_e($row['route']) ?></span><?php endif; ?>
+                            </td>
+                            <td class="fs-7 km-guide-log-rate">
+                              <?php if ($row['rating'] === 'good'): ?>
+                                👍
+                              <?php elseif ($row['rating'] === 'bad'): ?>
+                                👎 <?= km_e(KM_GUIDE_BAD_REASONS[$row['badReason']] ?? $row['badReason']) ?>
+                                <?php if ($row['badNote'] !== ''): ?><br><span class="text-body-secondary"><?= km_e($row['badNote']) ?></span><?php endif; ?>
+                              <?php else: ?>
+                                <span class="text-body-secondary">—</span>
+                              <?php endif; ?>
+                            </td>
+                          </tr>
+                        <?php endforeach; ?>
+                      </tbody>
+                    </table>
+                  </div>
+                <?php endif; ?>
+              </div>
+              <div class="card-footer d-flex flex-wrap align-items-center gap-2">
+                <?php if ($logPages > 1): ?>
+                  <nav aria-label="質問と答えのページ" class="me-auto">
+                    <ul class="pagination pagination-sm mb-0">
+                      <?php $logQuery = $logBadOnly ? '&rating=bad' : ''; ?>
+                      <li class="page-item<?= $logPage <= 1 ? ' disabled' : '' ?>"><a class="page-link" href="./guide-chat.php?page=<?= max(1, $logPage - 1) . $logQuery ?>#guide-log">新しい方へ</a></li>
+                      <li class="page-item disabled"><span class="page-link"><?= $logPage ?> / <?= $logPages ?></span></li>
+                      <li class="page-item<?= $logPage >= $logPages ? ' disabled' : '' ?>"><a class="page-link" href="./guide-chat.php?page=<?= min($logPages, $logPage + 1) . $logQuery ?>#guide-log">古い方へ</a></li>
+                    </ul>
+                  </nav>
+                <?php else: ?>
+                  <span class="me-auto"></span>
+                <?php endif; ?>
+                <form method="post" action="./guide-chat.php" class="d-flex align-items-center gap-2">
+                  <?= km_csrf_field() ?>
+                  <input type="hidden" name="form_action" value="clear_log">
+                  <label class="visually-hidden" for="guide-log-confirm">確かめの言葉</label>
+                  <input class="form-control form-control-sm km-guide-log-confirm" type="text" id="guide-log-confirm" name="confirm" placeholder="「消す」と入力" autocomplete="off">
+                  <button type="submit" class="btn btn-outline-danger btn-sm"<?= $logCount['total'] === 0 ? ' disabled' : '' ?>>まとめて消す</button>
+                </form>
               </div>
             </div>
           </div>

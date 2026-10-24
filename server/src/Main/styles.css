@@ -3499,14 +3499,16 @@ body.km-route-panel-open .km-searchbox-route { background: var(--primary); color
 .km-guide-card-actions { display: flex; gap: 6px; margin-top: 6px; }
 .km-guide-card-actions > * { flex: 1 1 auto; min-height: 40px; }
 .km-guide-route { align-self: flex-start; min-height: 40px; }
-.km-guide-form {
+.km-guide-foot {
     position: sticky;
     bottom: 0;
     display: flex;
-    gap: 6px;
+    flex-direction: column;
+    gap: 4px;
     padding-top: 6px;
     background: var(--glass-heavy);
 }
+.km-guide-form { display: flex; gap: 6px; }
 .km-guide-input {
     flex: 1 1 auto;
     min-width: 0;
@@ -3519,6 +3521,35 @@ body.km-route-panel-open .km-searchbox-route { background: var(--primary); color
     font-size: 1rem;   /* 16px 未満だと iOS が入力のたびに拡大する */
 }
 .km-guide-send { flex: 0 0 auto; }
+/* 2026-10-25、利用者「AI は間違えることがありますと表示」。入力欄の下にいつも出す */
+.km-guide-note { margin: 0; font-size: 0.75rem; line-height: 1.5; color: var(--secondary); }
+/* 評価(2026-10-25、利用者「評価も付けられるようにし、BAD だったら理由を聞く」) */
+.km-guide-rate { display: flex; flex-direction: column; gap: 6px; align-self: stretch; }
+.km-guide-rate-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.km-guide-rate-label { font-size: 0.8rem; color: var(--secondary); margin-right: 2px; }
+.km-guide-rate-btn { min-height: 36px; padding: 0 0.75rem; font-size: 0.85rem; }
+.km-guide-rate-btn[aria-pressed="true"] { border-color: var(--danger, #dc2626); color: var(--danger, #dc2626); }
+.km-guide-rate-status { font-size: 0.8rem; color: var(--secondary); }
+.km-guide-rate-status:empty { display: none; }
+.km-guide-rate-form { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 12px; }
+.km-guide-rate-form[hidden] { display: none; }
+.km-guide-rate-reasons { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; border: 0; }
+.km-guide-rate-reasons legend { font-size: 0.85rem; font-weight: 600; margin-bottom: 4px; padding: 0; }
+.km-guide-rate-reason { display: flex; align-items: center; gap: 8px; min-height: 36px; font-size: 0.9rem; cursor: pointer; }
+.km-guide-rate-reason input { width: 18px; height: 18px; margin: 0; flex: 0 0 auto; }
+.km-guide-rate-note {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 6px 10px;
+    border-radius: 10px;
+    border: 1px solid var(--border-strong);
+    background: var(--glass-heavy);
+    color: var(--text);
+    font: inherit;
+    font-size: 1rem;   /* 16px 未満だと iOS が入力のたびに拡大する */
+    resize: vertical;
+}
+.km-guide-rate-send { align-self: flex-end; min-height: 40px; }
 
 /* 右の階の列: 経路が通る階に赤い輪。畳んでいるときは取っ手に赤い点(経路を出している印) */
 .floor-nav .floor-btn.is-on-route { box-shadow: inset 0 0 0 3px #ef4444; }

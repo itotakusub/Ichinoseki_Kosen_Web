@@ -61,8 +61,8 @@ UPSTREAM = os.environ.get("LLM_API_URL", "").strip().rstrip("/")
 UPSTREAM_KEY = os.environ.get("LLM_API_KEY", "").strip()
 # 1 回に出す字数(トークン)の上限。PHP は 160 と 300 を頼む
 MAX_NEW_TOKENS_CAP = 512
-# 受ける本文の上限。PHP が送るのは記録 5 件ぶんの短い JSON
-MAX_BODY_BYTES = 32 * 1024
+# 受ける本文の上限。PHP が送るのは記録 5 件ぶんの短い JSON か、言葉で当たらなかったときの名前の一覧(300 件まで。約 20KB)
+MAX_BODY_BYTES = 64 * 1024
 MAX_MESSAGES = 20
 # Bionic の返事を待つ時間(PHP は 20 秒・30 秒で切るので、それより少し長く)
 UPSTREAM_TIMEOUT = 40

@@ -1784,6 +1784,91 @@ function km_check_guide_chat(): void
     $plan = km_guide_plan($catalog, ['intent' => 'route', 'keywords' => [], 'category' => null, 'from' => 'お化け屋敷', 'to' => 'たこ焼き']);
     check('経路の端は地点の id と一時地点の番号', [['nodeId' => 'n1', 'poiId' => null, 'name' => 'お化け屋敷'], ['nodeId' => 'n2', 'poiId' => 3, 'name' => 'たこ焼き']],
         [$plan['route']['from'], $plan['route']['to']]);
+    /*
+     * 2026-10-25、利用者「第二実習室から体育館への行き方」でトレーニングルームへ行った。「体育館」は多くの地点に途中で当たって
+     * 同じ点数になり、名前の字の順でカタカナの「ト」が先だった。名前の短い方(言葉をよく言い当てている方)を先にする
+     */
+    $gym = km_guide_catalog(['event' => null, 'eventPois' => [], 'posters' => [
+        ['id' => 1, 'title' => '筋トレ体験', 'description' => '', 'nodeIds' => ['g3'], 'poiIds' => [], 'likes' => 5, 'isAd' => false],
+    ], 'nodes' => [
+        'r1' => ['type' => 'room', 'name' => '第二実習室 管-105', 'floor' => '1'],
+        'g3' => ['type' => 'room', 'name' => 'トレーニングルーム 第一体育館', 'floor' => 'bldg_gym1'],
+        'g4' => ['type' => 'room', 'name' => '男WC 第一体育館', 'floor' => 'bldg_gym1'],
+        'g5' => ['type' => 'entrance', 'name' => '第一体育館 出入り口', 'floor' => 'outside'],
+        'g2' => ['type' => 'facility', 'name' => '第二体育館', 'floor' => 'outside'],
+        'g1' => ['type' => 'facility', 'name' => '第一体育館', 'floor' => 'outside'],
+    ]]);
+    $gymPlan = km_guide_plan($gym, ['intent' => 'route', 'keywords' => [], 'category' => null, 'from' => '第二実習室', 'to' => '体育館']);
+    check('経路: 「体育館」は建物そのもの(名前の短い方。♡ のある部屋より先)', 'g1', $gymPlan['route']['to']['nodeId'] ?? null);
+    check('場所: 「体育館はどこ」も建物そのものが先', ['第一体育館', '第二体育館'],
+        array_slice(array_column(km_guide_plan($gym, ['intent' => 'place', 'keywords' => ['体育館'], 'category' => null, 'from' => null, 'to' => null])['cards'], 'name'), 0, 2));
+    check('経路: LLM には役目(出発地・目的地)を付けて渡す', [['出発地', '第二実習室 管-105'], ['目的地', '第一体育館']],
+        array_map(static fn (array $r): array => [$r['役目'], $r['名前']], $gymPlan['records']));
+
+    /*
+     * 読み方・書き方の違い(2026-10-25、利用者「レッツプレイ電算 → Let's play densan! このようなタイポにも対応」)。
+     * 言葉で当たらなかったときだけ、1 段目は LLM の言い換えをいつもの検索で、2 段目は一覧の番号で選ばせる
+     */
+    km_check_heading('guide-chat: 読み方・書き方の違い(言い換え → 一覧から選ぶ)');
+    $densan = km_guide_catalog(['event' => null, 'eventPois' => [], 'posters' => [
+        ['id' => 1, 'title' => "Let's play Densan!", 'description' => '電子計算機部', 'nodeIds' => ['r1'], 'poiIds' => [], 'likes' => 0, 'isAd' => false],
+    ], 'nodes' => [
+        'r1' => ['type' => 'room', 'name' => '第二実習室 管-105', 'floor' => '1'],
+        'g1' => ['type' => 'facility', 'name' => '第一体育館', 'floor' => 'outside'],
+    ]]);
+    check('一覧の名前はポスターの見出しも並べる(id は入れない)', ['第二実習室 管-105 / Let\'s play Densan!', '第一体育館'], km_guide_match_names($densan['places']));
+    check('言い換えは 4 つまで・元の言葉と同じものは捨てる', ["Let's play 電算", '体育館'],
+        km_guide_parse_variants('{"variants":["レッツプレイ電算","Let\'s play 電算","","体育館","体育館"]}', 'レッツプレイ電算'));
+    check('一覧の番号は範囲だけ通す(0 から数えた位置で返す)', [1, null, null, null, 0],
+        [km_guide_parse_match('{"number": 2}', 2), km_guide_parse_match('{"number": 3}', 2), km_guide_parse_match('{"number": null}', 2), km_guide_parse_match('わかりません', 2), km_guide_parse_match('1', 2)]);
+    // 言い換えで当たらなければ一覧から選ばせる。LLM は差し替える
+    $asked = [];
+    $fakeLlm = static function (array $messages, int $maxTokens) use (&$asked): string {
+        $asked[] = $maxTokens;
+        $system = $messages[0]['content'];
+        if (str_contains($system, '分類し')) {
+            return '{"intent":"route","keywords":[],"category":null,"from":"レッツプレイ電算","to":"たいいくかん"}';
+        }
+        if (str_contains($system, '別の書き方')) {
+            return str_contains($messages[1]['content'], 'たいいくかん') ? '{"variants":["体育館"]}' : '{"variants":["Let\'s play 電算"]}';
+        }
+        if (str_contains($system, 'どれを指しているか')) {
+            return '{"number": 1}';
+        }
+        return '経路を出します。';
+    };
+    $densanAnswer = km_guide_answer($densan, 'レッツプレイ電算からたいいくかんへの行き方', $fakeLlm);
+    check('言い換え(たいいくかん → 体育館)と一覧(レッツプレイ電算 → 第二実習室)で経路の両端が決まる', ['r1', 'g1'],
+        [$densanAnswer['route']['from']['nodeId'] ?? null, $densanAnswer['route']['to']['nodeId'] ?? null]);
+    check('答えの結果に質問の種類が付く(残すため。画面へは返さない)', 'route', $densanAnswer['intent'] ?? null);
+    check_bool('言い換え・一覧の頼みは決まった字数(口が時間切れで断れるように)', in_array(KM_GUIDE_RESOLVE_TOKENS, $asked, true));
+    $throwing = static function (array $messages, int $maxTokens): string {
+        if ($maxTokens === KM_GUIDE_RESOLVE_TOKENS) {
+            throw new RuntimeException('時間切れ');
+        }
+        return str_contains($messages[0]['content'], '分類し') ? '{"intent":"place","keywords":["メロンパン"]}' : '見つかりませんでした。';
+    };
+    $melon = km_guide_answer($densan, 'メロンパンはどこ', $throwing);
+    check_bool('言い換えがつまずいても答えは止めない(LLM なしに倒さない)・カードは出ない', $melon['fallback'] === false && $melon['cards'] === []);
+
+    km_check_heading('guide-chat: 質問と答えを残す・評価(2026-10-25)');
+    check('メールアドレスと電話番号らしい文字は伏せる(部屋番号・年は残す)', '[メール] か [電話番号] / [電話番号] に 1-209 と 2026 年',
+        km_guide_mask_personal('taro.k@example.com か 090-1234-5678 / ０３（１２３４）５６７８ に 1-209 と 2026 年'));
+    $logRow = km_guide_log_row('090-1111-2222 です。たこ焼き', ['answer' => 'あります', 'cards' => [['name' => 'たこ焼き']], 'route' => ['from' => null, 'to' => ['name' => '図書館']], 'fallback' => false, 'intent' => 'route'], 2345, '2026-10-25 10:00:00', str_repeat('a', 32));
+    check('残す欄は決まったものだけ(誰が聞いたかは入れない)', ['rate_hash', 'asked_at', 'question', 'answer', 'intent', 'cards', 'route', 'fallback', 'elapsed_ms'], array_keys($logRow));
+    check('残す中身: 伏せた質問・カードの名前・経路の名前・合言葉はハッシュ', ['[電話番号] です。たこ焼き', '["たこ焼き"]', '(出発地は地図で選ぶ) → 図書館', hash('sha256', str_repeat('a', 32))],
+        [$logRow['question'], $logRow['cards'], $logRow['route'], $logRow['rate_hash']]);
+    $token = str_repeat('0f', 16);
+    check('評価: GOOD は理由を捨てる', ['rating' => 1, 'reason' => '', 'note' => ''],
+        array_intersect_key(km_guide_rating_input(['token' => $token, 'rating' => 'good', 'reason' => 'place', 'note' => 'x']) ?? [], ['rating' => 1, 'reason' => 1, 'note' => 1]));
+    check('評価: BAD は理由とひとこと(伏せる)', ['rating' => -1, 'reason' => 'route', 'note' => '[メール] に連絡'],
+        array_intersect_key(km_guide_rating_input(['token' => $token, 'rating' => 'bad', 'reason' => 'route', 'note' => ' a@b.jp に連絡 ']) ?? [], ['rating' => 1, 'reason' => 1, 'note' => 1]));
+    check_bool('評価: BAD で理由が無い・知らない理由・長すぎるひとこと・合言葉の形が違えば断る',
+        km_guide_rating_input(['token' => $token, 'rating' => 'bad']) === null
+        && km_guide_rating_input(['token' => $token, 'rating' => 'bad', 'reason' => 'hack']) === null
+        && km_guide_rating_input(['token' => $token, 'rating' => 'bad', 'reason' => 'other', 'note' => str_repeat('あ', KM_GUIDE_BAD_NOTE_MAX + 1)]) === null
+        && km_guide_rating_input(['token' => 'ZZ', 'rating' => 'good']) === null
+        && km_guide_rating_input(['token' => $token, 'rating' => 'meh']) === null);
     $calls = [];
     $fake = static function (array $messages, int $maxTokens) use (&$calls): string {
         $calls[] = $messages;
@@ -1845,6 +1930,26 @@ function km_check_guide_chat(): void
         && str_contains($guideAdmin, "km_admin_log_record('content', 'guide.settings',")
         && str_contains((string) file_get_contents(__DIR__ . '/../admin/_inc/partials/sidebar.php'), 'href="./guide-chat.php"'));
     check_bool('既定は OFF(管理画面で ON にして人を選んでから)', str_contains($lib, "'enabled' => km_setting_get(\$pdo, KM_GUIDE_ENABLED_SETTING, '0') === '1',"));
+    // 2026-10-25: 質問と答えを残す・評価・時間の枠・チャットを開いたまま・「AI は間違えることがあります」
+    check_bool('口: 評価は質問より前に受ける(回数に数えない)・答えたら残す・質問の種類は画面へ返さない', strpos($api, "if (array_key_exists('rate', \$input)) {") < strpos($api, '$question = ')
+        && str_contains($api, 'km_guide_log_save($pdo, km_guide_log_row(') && str_contains($api, "unset(\$result['intent']);")
+        && str_contains($api, "\$result['rateToken'] = \$rateToken;") && str_contains($api, '$rateToken = bin2hex(random_bytes(16));'));
+    check_bool('口: 全部で 55 秒まで・言い換えは 25 秒を過ぎたら出さない', str_contains($api, '$left = 55 - $elapsed;')
+        && str_contains($api, 'if ($maxTokens === KM_GUIDE_RESOLVE_TOKENS && $elapsed > 25) {'));
+    check_bool('残す表に誰が聞いたかの欄は無い', preg_match('/CREATE TABLE IF NOT EXISTS km_guide_chat_log \((.*?)\) ENGINE/s', $lib, $logTable) === 1
+        && preg_match('/\b(sub|user|session|ip|account)\w*\s+(VARCHAR|CHAR|INT|TEXT)/i', $logTable[1]) !== 1);
+    preg_match('/const BAD_REASONS = \[(.*?)\];/s', $guideJs, $jsReasons);
+    preg_match_all("/\['([a-z]+)', '([^']+)'\]/", $jsReasons[1] ?? '', $jsReasonPairs);
+    check('画面の BAD の理由はサーバーと同じ', KM_GUIDE_BAD_REASONS, array_combine($jsReasonPairs[1], $jsReasonPairs[2]) ?: []);
+    check_bool('画面: 「AIは間違えることがあります」と保存することをいつも出す・チャットは引き出しの土台(開いたまま)',
+        str_contains($guideJs, "'AIは間違えることがあります。") && str_contains($guideJs, '質問と答えは、案内をよくするために保存します')
+        && str_contains($guideJs, "window.KmSheet.setBase({ key: 'guide', title: '💬 案内', content: box });")
+        && str_contains((string) file_get_contents(__DIR__ . '/../Main/km-sheet.js'), 'closeBtn.hidden = entry === base;'));
+    check_bool('管理画面: 質問と答えの一覧・👎 だけに絞る・まとめて消すのは「消す」と打ってから・記録に残す',
+        str_contains($guideAdmin, '$logs = km_guide_log_recent($pdo, $logPerPage, ($logPage - 1) * $logPerPage, $logBadOnly);')
+        && str_contains($guideAdmin, "if (trim((string) (\$_POST['confirm'] ?? '')) !== '消す') {")
+        && str_contains($guideAdmin, "km_admin_log_record('content', 'guide.log_clear',")
+        && str_contains((string) file_get_contents(__DIR__ . '/../lib/admin-log.php'), "'guide.log_clear' =>"));
     $llmDir = $root . '/guide-llm';
     $serverPy = (string) @file_get_contents($llmDir . '/server.py');
     /*

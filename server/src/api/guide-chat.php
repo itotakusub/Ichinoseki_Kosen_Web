@@ -6,7 +6,8 @@ declare(strict_types=1);
  * 模擬店・会場内の案内チャット(2026-10-24、利用者の企画書。中身は lib/guide-chat.php)。
  *
  *   POST {"question":"食べ物の店を教えて"}(X-KM-CSRF)
- *   → {"success":true,"answer":"…","cards":[{kind,name,place,floor,category,detail,likes,times,nodeId,poiId}],"route":{from,to}|null,"fallback":bool}
+ *   → {"success":true,"answer":"…","cards":[{kind,name,place,floor,category,detail,likes,times,nodeId,poiId}],"route":{from,to}|null,"fallback":bool,"rateToken":"…"}
+ *   POST {"rate":{…}} は評価(下)
  *
  * 通す順(企画書 §8「認証、レート制限、入力検証」):
  *   1. 公開ページのセッションの CSRF トークン(ほかのサイトから送らせない)
@@ -15,7 +16,8 @@ declare(strict_types=1);
  *   4. 回数: セッションで 1 分 6 回・1 日の上限(管理画面で決める)。nginx でも IP ごとに絞る(location = /api/guide-chat.php)
  *   5. 自宅 PC の LLM(Bionic + ngrok)を呼ぶ。止まっていても、言葉で探した結果は返す
  *
- * 質問と答えの本文は**どこにも残さない**(数えるのは日ごとの回数だけ)。
+ * 2026-10-25 から、質問と答えを km_guide_chat_log に残す(利用者「機能改善のために保存」。誰が聞いたかは残さない。
+ * メールアドレス・電話番号らしい文字は伏せる)。サーバーのログには本文を書かない。日ごとの回数も数える。
  */
 
 require_once __DIR__ . '/../api_bootstrap.php';
@@ -45,6 +47,30 @@ if (!km_guide_allowed($_SESSION, time(), $settings)) {
 }
 
 $input = km_api_json_body(2048);
+
+/*
+ * 評価(2026-10-25、利用者「評価も付けられるようにし、BAD だったら理由を聞く」)
+ *   POST {"rate":{"token":"…","rating":"good"|"bad","reason":"place|route|missing|wrong|unclear|slow|other","note":"…"}}
+ * token は答えと一緒に返した合言葉(残しているのはハッシュだけ)。質問の回数には数えない(nginx の回数には入る)
+ */
+if (array_key_exists('rate', $input)) {
+    session_write_close();
+    $rating = is_array($input['rate']) ? km_guide_rating_input($input['rate']) : null;
+    if ($rating === null) {
+        respond(['success' => false, 'message' => '理由を選んでください(ひとことは ' . KM_GUIDE_BAD_NOTE_MAX . ' 字まで)。'], 400);
+    }
+    try {
+        $saved = km_guide_log_rate($pdo, $rating, (new DateTimeImmutable('now', new DateTimeZone('Asia/Tokyo')))->format('Y-m-d H:i:s'));
+    } catch (Throwable $exception) {
+        error_log('api/guide-chat.php rate failed: ' . $exception->getMessage());
+        respond(['success' => false, 'message' => '評価を残せませんでした。'], 500);
+    }
+    if (!$saved) {
+        respond(['success' => false, 'message' => 'この答えには評価を付けられません。'], 404);
+    }
+    respond(['success' => true]);
+}
+
 $question = is_string($input['question'] ?? null) ? trim((string) $input['question']) : '';
 if ($question === '' || mb_strlen($question) > KM_GUIDE_QUESTION_MAX || preg_match('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', $question) === 1) {
     respond(['success' => false, 'message' => '質問は ' . KM_GUIDE_QUESTION_MAX . ' 字までで書いてください。'], 400);
@@ -73,16 +99,40 @@ try {
 
 $llmConfig = km_guide_llm_config();
 /*
- * 待つのは分ける 1 回目 20 秒・答える 2 回目 30 秒まで(合わせて 50 秒)。Apache の Timeout 60 秒
- * (docker/php/apache-km.conf)より短くする。nginx はこの口だけ 90 秒まで待つ(default.conf.template)
+ * 待つのは 1 回あたり 20 秒(答えの文は 30 秒)まで、**全部で 55 秒まで**。Apache の Timeout 60 秒
+ * (docker/php/apache-km.conf)より短くする。nginx はこの口だけ 90 秒まで待つ(default.conf.template)。
+ * 言葉で当たらなかったときの言い換え・一覧から選ぶ頼み(2026-10-25)は、始めてから 25 秒を過ぎたら出さない(答えの文の時間を残す)
  */
-$llm = $llmConfig === null ? null : static fn (array $messages, int $maxTokens): string => km_guide_llm_chat(
-    $llmConfig,
-    $messages,
-    $maxTokens,
-    $maxTokens <= 160 ? 20 : 30
-);
+$started = microtime(true);
+$llm = $llmConfig === null ? null : static function (array $messages, int $maxTokens) use ($llmConfig, $started): string {
+    $elapsed = microtime(true) - $started;
+    if ($maxTokens === KM_GUIDE_RESOLVE_TOKENS && $elapsed > 25) {
+        throw new RuntimeException('言い換えの時間切れ');
+    }
+    $left = 55 - $elapsed;
+    if ($left < 3) {
+        throw new RuntimeException('時間切れ');
+    }
+    return km_guide_llm_chat($llmConfig, $messages, $maxTokens, (int) min($maxTokens <= 160 ? 20 : 30, floor($left)));
+};
 $result = km_guide_answer($catalog, $question, $llm);
+
+// 質問と答えを残す(2026-10-25、利用者「機能改善のために保存」)。誰が聞いたかは入れない。残せなくても答えは返す。
+// 評価の合言葉は画面に返し、ここにはハッシュだけを残す(残せなかったときは評価のボタンを出さない)
+$rateToken = bin2hex(random_bytes(16));
+try {
+    km_guide_log_save($pdo, km_guide_log_row(
+        $question,
+        $result,
+        (int) round((microtime(true) - $started) * 1000),
+        (new DateTimeImmutable('now', new DateTimeZone('Asia/Tokyo')))->format('Y-m-d H:i:s'),
+        $rateToken
+    ));
+    $result['rateToken'] = $rateToken;
+} catch (Throwable $exception) {
+    error_log('api/guide-chat.php log save failed: ' . $exception->getMessage());
+}
+unset($result['intent']);
 
 try {
     if ($result['fallback']) {

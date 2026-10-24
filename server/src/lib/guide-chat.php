@@ -25,8 +25,11 @@ declare(strict_types=1);
  * (鍵を確かめて渡すだけ。2026-10-25 に WSL をやめてこの形にした)を置き、ngrok で出す。ここから Bearer の鍵を付けて呼ぶ。URL と鍵は環境変数 KM_GUIDE_LLM_URL / KM_GUIDE_LLM_KEY(.env → compose.yaml)。
  * **鍵はブラウザに出さない**(ブラウザは api/guide-chat.php しか呼ばない)。止まっていても、言葉で探した結果は出す(企画書 §8)。
  *
- * ## 残さないもの(企画書 §8「ログに不要な個人情報や秘密情報を記録しない」)
- * 質問と答えの本文はどこにも残さない。数えるのは日ごとの回数(聞いた・失敗・LLM なしで答えた)だけ。
+ * ## 残すもの・残さないもの(企画書 §8「ログに不要な個人情報や秘密情報を記録しない」)
+ * 2026-10-25 から、利用者の指示「機能改善のために、質問した内容とその解答を保存」で、**質問と答えを km_guide_chat_log に残す**
+ * (消さずに残す。管理画面「案内チャット」で見る・まとめて消す)。**誰が聞いたかは残さない**(アカウント・セッション・IP を持たない)。
+ * メールアドレスと電話番号らしい文字は伏せてから残す。画面には「質問と答えを保存します」と書く。
+ * サーバーのログ(error_log)には今までどおり本文を書かない。日ごとの回数(聞いた・失敗・LLM なしで答えた)も数える。
  */
 
 require_once __DIR__ . '/settings.php';
@@ -43,6 +46,13 @@ const KM_GUIDE_QUESTION_MAX = 200;
 const KM_GUIDE_PER_MINUTE = 6;
 /** 答えに付けるカードの数 */
 const KM_GUIDE_CARD_MAX = 5;
+/** 言葉で当たらなかったとき LLM に見せる名前の数の上限(地図の場所は 2026-10 で約 180・一時地点は約 35。門番の本文 64KB に収まる) */
+const KM_GUIDE_MATCH_MAX = 300;
+/**
+ * 言葉で当たらなかったときの言い換え・一覧から選ぶ頼みの字数(トークン)。api/guide-chat.php はこの字数の頼みを
+ * 「後回しにしてよい頼み」と見て、残り時間が少なければ断る(答えの文の時間を残す)
+ */
+const KM_GUIDE_RESOLVE_TOKENS = 80;
 /** LLM の返事の大きさの上限(バイト) */
 const KM_GUIDE_LLM_MAX_BYTES = 65536;
 /** 一時地点の種類(lib/map-events.php の KM_MAP_EVENT_POI_CATEGORIES と同じ) */
@@ -154,6 +164,170 @@ function km_guide_today(): string
     return (new DateTimeImmutable('now', new DateTimeZone('Asia/Tokyo')))->format('Y-m-d');
 }
 
+// ---------------------------------------------------------------- 質問と答えを残す(2026-10-25、利用者「機能改善のために保存」)
+
+/**
+ * 残す前に伏せる。**純粋関数**。メールアドレスと、0 で始まる 10〜11 桁の番号(電話番号らしいもの)だけ。
+ * 部屋番号(1-209・管-105)や年(2026)は 0 で始まらないので残る
+ */
+function km_guide_mask_personal(string $text): string
+{
+    $text = (string) preg_replace('/[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/u', '[メール]', $text);
+    return (string) preg_replace_callback('/(?<![0-9０-９])[0０][0-9０-９\-‐−ー（）() ]{8,16}[0-9０-９](?![0-9０-９])/u', static function (array $m): string {
+        $digits = preg_match_all('/[0-9０-９]/u', $m[0]);
+        return $digits >= 10 && $digits <= 11 ? '[電話番号]' : $m[0];
+    }, $text);
+}
+
+/**
+ * 残す 1 行を作る。**純粋関数**。**誰が聞いたかは入れない**(アカウント・セッション・IP は持たない)。
+ * カードは名前だけ、経路は「出発地 → 目的地」の名前だけ
+ *
+ * @param array{answer:string, cards:list<array>, route:?array, fallback:bool, intent?:string} $result km_guide_answer の戻り値
+ */
+function km_guide_log_row(string $question, array $result, int $elapsedMs, string $askedAt, string $rateToken = ''): array
+{
+    $route = $result['route'] ?? null;
+    return [
+        // 評価に使う合言葉は、ハッシュだけを残す(画面が持つのは元の値。ほかの答えには評価を付けられない)
+        'rate_hash' => $rateToken === '' ? '' : hash('sha256', $rateToken),
+        'asked_at' => $askedAt,
+        'question' => km_guide_mask_personal(mb_substr($question, 0, KM_GUIDE_QUESTION_MAX)),
+        'answer' => km_guide_mask_personal(mb_substr((string) ($result['answer'] ?? ''), 0, 600)),
+        'intent' => in_array($result['intent'] ?? '', KM_GUIDE_INTENTS, true) ? (string) $result['intent'] : '',
+        'cards' => (string) json_encode(array_values(array_map(static fn (array $card): string => (string) ($card['name'] ?? ''), (array) ($result['cards'] ?? []))), JSON_UNESCAPED_UNICODE),
+        'route' => is_array($route) ? mb_substr((string) ($route['from']['name'] ?? '(出発地は地図で選ぶ)') . ' → ' . (string) ($route['to']['name'] ?? ''), 0, 400) : '',
+        'fallback' => !empty($result['fallback']) ? 1 : 0,
+        'elapsed_ms' => max(0, $elapsedMs),
+    ];
+}
+
+function km_guide_log_ensure_table(PDO $pdo): void
+{
+    static $done = false;
+    if ($done) {
+        return;
+    }
+    $pdo->exec(<<<'SQL'
+        CREATE TABLE IF NOT EXISTS km_guide_chat_log (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            asked_at DATETIME NOT NULL,
+            question TEXT NOT NULL,
+            answer TEXT NOT NULL,
+            intent VARCHAR(16) NOT NULL DEFAULT '',
+            cards TEXT NOT NULL,
+            route VARCHAR(400) NOT NULL DEFAULT '',
+            fallback TINYINT(1) NOT NULL DEFAULT 0,
+            elapsed_ms INT NOT NULL DEFAULT 0,
+            rate_hash CHAR(64) NOT NULL DEFAULT '',
+            rating TINYINT NULL,
+            bad_reason VARCHAR(16) NOT NULL DEFAULT '',
+            bad_note VARCHAR(600) NOT NULL DEFAULT '',
+            rated_at DATETIME NULL,
+            KEY asked_at (asked_at),
+            KEY rate_hash (rate_hash)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        SQL);
+    $done = true;
+}
+
+function km_guide_log_save(PDO $pdo, array $row): void
+{
+    km_guide_log_ensure_table($pdo);
+    $pdo->prepare('INSERT INTO km_guide_chat_log (asked_at, question, answer, intent, cards, route, fallback, elapsed_ms, rate_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        ->execute([$row['asked_at'], $row['question'], $row['answer'], $row['intent'], $row['cards'], $row['route'], $row['fallback'], $row['elapsed_ms'], $row['rate_hash']]);
+}
+
+/** @return list<array> 新しいものから */
+function km_guide_log_recent(PDO $pdo, int $limit = 100, int $offset = 0, bool $badOnly = false): array
+{
+    km_guide_log_ensure_table($pdo);
+    $statement = $pdo->prepare('SELECT id, asked_at, question, answer, intent, cards, route, fallback, elapsed_ms, rating, bad_reason, bad_note FROM km_guide_chat_log'
+        . ($badOnly ? ' WHERE rating < 0' : '') . ' ORDER BY id DESC LIMIT '
+        . max(1, min(500, $limit)) . ' OFFSET ' . max(0, $offset));
+    $statement->execute();
+    return array_map(static function (array $row): array {
+        $cards = json_decode((string) $row['cards'], true);
+        return [
+            'id' => (int) $row['id'], 'askedAt' => (string) $row['asked_at'], 'question' => (string) $row['question'],
+            'answer' => (string) $row['answer'], 'intent' => (string) $row['intent'], 'cards' => is_array($cards) ? $cards : [],
+            'route' => (string) $row['route'], 'fallback' => (int) $row['fallback'] === 1, 'elapsedMs' => (int) $row['elapsed_ms'],
+            'rating' => $row['rating'] === null ? null : ((int) $row['rating'] > 0 ? 'good' : 'bad'),
+            'badReason' => (string) $row['bad_reason'], 'badNote' => (string) $row['bad_note'],
+        ];
+    }, $statement->fetchAll(PDO::FETCH_ASSOC));
+}
+
+/** @return array{total:int, good:int, bad:int} */
+function km_guide_log_count(PDO $pdo): array
+{
+    km_guide_log_ensure_table($pdo);
+    $row = $pdo->query('SELECT COUNT(*) AS total, SUM(rating > 0) AS good, SUM(rating < 0) AS bad FROM km_guide_chat_log')->fetch(PDO::FETCH_ASSOC) ?: [];
+    return ['total' => (int) ($row['total'] ?? 0), 'good' => (int) ($row['good'] ?? 0), 'bad' => (int) ($row['bad'] ?? 0)];
+}
+
+// ---------------------------------------------------------------- 評価(2026-10-25、利用者「評価も付けられるようにし、BAD だったら理由を聞く」)
+
+/** BAD の理由(画面の選びどころと同じ並び) */
+const KM_GUIDE_BAD_REASONS = [
+    'place' => '場所や店が違う',
+    'route' => '経路が違う',
+    'missing' => '探しているものが出てこない',
+    'wrong' => '答えの内容がまちがっている',
+    'unclear' => '答えが分かりにくい',
+    'slow' => '答えが遅い',
+    'other' => 'その他',
+];
+/** BAD のひとことの長さ(字) */
+const KM_GUIDE_BAD_NOTE_MAX = 200;
+
+/**
+ * 評価の入力を確かめる。**純粋関数**。合言葉は 32 字の 16 進。GOOD なら理由とひとことは捨てる。
+ * BAD は理由が要る(決まったものだけ)。ひとことは 200 字まで・伏せてから
+ *
+ * @return array{hash:string, rating:int, reason:string, note:string}|null 形が違えば null
+ */
+function km_guide_rating_input(array $input): ?array
+{
+    $token = is_string($input['token'] ?? null) ? (string) $input['token'] : '';
+    $rating = $input['rating'] ?? null;
+    if (preg_match('/^[0-9a-f]{32}$/', $token) !== 1 || !in_array($rating, ['good', 'bad'], true)) {
+        return null;
+    }
+    if ($rating === 'good') {
+        return ['hash' => hash('sha256', $token), 'rating' => 1, 'reason' => '', 'note' => ''];
+    }
+    $reason = is_string($input['reason'] ?? null) ? (string) $input['reason'] : '';
+    $note = is_string($input['note'] ?? null) ? trim((string) $input['note']) : '';
+    if (!array_key_exists($reason, KM_GUIDE_BAD_REASONS) || mb_strlen($note) > KM_GUIDE_BAD_NOTE_MAX
+        || preg_match('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', $note) === 1) {
+        return null;
+    }
+    return ['hash' => hash('sha256', $token), 'rating' => -1, 'reason' => $reason, 'note' => km_guide_mask_personal($note)];
+}
+
+/** 評価を付ける(付け直しは上書き)。合言葉に当たる答えが無ければ false */
+function km_guide_log_rate(PDO $pdo, array $rating, string $ratedAt): bool
+{
+    km_guide_log_ensure_table($pdo);
+    $statement = $pdo->prepare("UPDATE km_guide_chat_log SET rating = ?, bad_reason = ?, bad_note = ?, rated_at = ? WHERE rate_hash = ? AND rate_hash <> ''");
+    $statement->execute([$rating['rating'], $rating['reason'], $rating['note'], $ratedAt, $rating['hash']]);
+    if ($statement->rowCount() > 0) {
+        return true;
+    }
+    // 同じ値で付け直したときは rowCount が 0 になる(MySQL)。答えがあるかで見分ける
+    $exists = $pdo->prepare('SELECT 1 FROM km_guide_chat_log WHERE rate_hash = ? LIMIT 1');
+    $exists->execute([$rating['hash']]);
+    return $exists->fetchColumn() !== false;
+}
+
+/** 全部消す(管理画面から。消した数を返す) */
+function km_guide_log_clear(PDO $pdo): int
+{
+    km_guide_log_ensure_table($pdo);
+    return (int) $pdo->exec('DELETE FROM km_guide_chat_log');
+}
+
 // ---------------------------------------------------------------- 探す(Main/search-rank.js と同じ考え方)
 
 /** 比べるための形: 全角半角・大文字小文字・カタカナ/ひらがな・空白と区切りの記号をそろえる */
@@ -206,12 +380,17 @@ function km_guide_item_score(array $item, array $words): int
 }
 
 /**
- * 記録を探して並べる。**純粋関数**。並びは 点数 → ♡ の数(登録されている数)→ 名前。
+ * 記録を探して並べる。**純粋関数**。並びは 点数 → ♡ の数(登録されている数)→ 名前の短さ → 名前。
+ * 場所を探すとき($byLikes = false。経路の端・「どこ」)は ♡ を見ない(ポスターのある部屋が建物そのものより先に来ないように)。
+ *
+ * 名前の短さ: 「体育館」は「第一体育館」にも「トレーニングルーム 第一体育館」「男WC 第一体育館」にも途中で当たって同じ点数になる。
+ * 短い方が言葉をよく言い当てているので先にする(2026-10-25、利用者「第二実習室から体育館への行き方」でトレーニングルームへ行った。
+ * それまでは名前の字の順で、カタカナの「ト」が漢字の「第」より先だった)
  *
  * @param list<array> $items km_guide_catalog の shops か places
  * @return list<array>
  */
-function km_guide_search(array $items, array $words, ?string $category = null, int $limit = KM_GUIDE_CARD_MAX): array
+function km_guide_search(array $items, array $words, ?string $category = null, int $limit = KM_GUIDE_CARD_MAX, bool $byLikes = true): array
 {
     $scored = [];
     foreach ($items as $index => $item) {
@@ -220,11 +399,13 @@ function km_guide_search(array $items, array $words, ?string $category = null, i
         }
         $score = km_guide_item_score($item, $words);
         if ($score > 0) {
-            $scored[] = [$score, (int) ($item['likes'] ?? 0), (string) ($item['name'] ?? ''), $index, $item];
+            $name = (string) ($item['name'] ?? '');
+            $likes = $byLikes ? (int) ($item['likes'] ?? 0) : 0;
+            $scored[] = [$score, $likes, mb_strlen(km_guide_normalize($name)), $name, $index, $item];
         }
     }
-    usort($scored, static fn (array $a, array $b): int => [$b[0], $b[1], $a[2], $a[3]] <=> [$a[0], $a[1], $b[2], $b[3]]);
-    return array_map(static fn (array $row): array => $row[4], array_slice($scored, 0, max(0, $limit)));
+    usort($scored, static fn (array $a, array $b): int => [$b[0], $b[1], $a[2], $a[3], $a[4]] <=> [$a[0], $a[1], $b[2], $b[3], $b[4]]);
+    return array_map(static fn (array $row): array => $row[5], array_slice($scored, 0, max(0, $limit)));
 }
 
 /**
@@ -461,6 +642,96 @@ function km_guide_parse_classification(string $text): ?array
     ];
 }
 
+/**
+ * 言葉で当たらなかったときに LLM に見せる名前の一覧(記録と同じ並び)。ポスターの見出しが名前と違えば並べて書く。
+ * id は入れない(LLM には一覧の番号で答えさせ、こちらで記録に戻す)
+ *
+ * @return list<string>
+ */
+function km_guide_match_names(array $items): array
+{
+    return array_map(static function (array $item): string {
+        $name = (string) ($item['name'] ?? '');
+        $title = (string) ($item['title'] ?? '');
+        return $title !== '' && $title !== $name ? $name . ' / ' . $title : $name;
+    }, array_slice(array_values($items), 0, KM_GUIDE_MATCH_MAX));
+}
+
+/**
+ * 3 回目(言葉で当たらなかったときだけ): 利用者の言葉が一覧のどれのことかを、番号で選ばせる。
+ * 2026-10-25、利用者「レッツプレイ電算 → Let's play densan! このようなタイポにも対応してほしい」。
+ * カタカナと英語・漢字とローマ字の違いは、文字をそろえるだけでは当たらない(「電算」を densan と読むには辞書が要る)
+ */
+function km_guide_match_messages(string $word, array $names): array
+{
+    $lines = [];
+    foreach (array_values($names) as $i => $name) {
+        $lines[] = ($i + 1) . '. ' . $name;
+    }
+    return [
+        ['role' => 'system', 'content' => "利用者が探している言葉が、下の一覧のどれを指しているかを選んでください。\n"
+            . "- 読み方・書き方の違い(カタカナと英語、漢字とローマ字、ひらがな)や打ち間違いも同じものと考えてください\n"
+            . "- 同じものだと言えるときだけ選んでください。似ているだけ・種類が同じだけなら null にしてください\n"
+            . '- 次の形の JSON だけを返してください: {"number": 一覧の番号か null}'],
+        ['role' => 'user', 'content' => "探している言葉: {$word}\n一覧:\n" . implode("\n", $lines)],
+    ];
+}
+
+/**
+ * 言葉で当たらなかったときの 1 段目: 別の書き方(英語のつづり・漢字・数字の書き方)を出させ、いつもの検索で探す。
+ * 選ぶのは検索なので、LLM が一覧に無いものを作っても当たらない(2026-10-25 に本物の Bionic で、たいいくかん → 体育館、
+ * としょかん → 図書館、第2実習室 → 第二実習室 が当たった。一覧から選ばせる形はこれらを「なし」にした)
+ */
+function km_guide_variant_messages(string $word): array
+{
+    return [
+        ['role' => 'system', 'content' => "学校祭の会場案内で、利用者が打った言葉を、地図に登録されていそうな別の書き方に直してください。\n"
+            . "- 英語の読みのカタカナは英語のつづりに(例: レッツプレイ → Let's play)、ローマ字・ひらがなは漢字に(例: でんさん → 電算、たいいくかん → 体育館)\n"
+            . "- 数字の書き方(2 と 二)、打ち間違いも直してください\n"
+            . "- 意味の違う言葉に置き換えないでください(メロンパン をクレープにしない)\n"
+            . '- 次の形の JSON だけを返してください: {"variants":["書き方1","書き方2","書き方3"]}(最大 4 つ)'],
+        ['role' => 'user', 'content' => $word],
+    ];
+}
+
+/** 1 段目の返事を読む。**純粋関数**。4 つまで・30 字まで・元の言葉と同じものは捨てる */
+function km_guide_parse_variants(string $text, string $word): array
+{
+    $start = strpos($text, '{');
+    $end = strrpos($text, '}');
+    if ($start === false || $end === false || $end <= $start) {
+        return [];
+    }
+    $decoded = json_decode(substr($text, $start, $end - $start + 1), true);
+    $variants = [];
+    foreach (is_array($decoded['variants'] ?? null) ? $decoded['variants'] : [] as $variant) {
+        if (!is_string($variant) || ($variant = trim($variant)) === '' || mb_strlen($variant) > 30
+            || km_guide_normalize($variant) === km_guide_normalize($word) || in_array($variant, $variants, true)) {
+            continue;
+        }
+        $variants[] = $variant;
+    }
+    return array_slice($variants, 0, 4);
+}
+
+/** 3 回目の返事を読む。**純粋関数**。一覧の範囲の番号なら 0 から数えた位置、それ以外は null(LLM の番号を信じきらない) */
+function km_guide_parse_match(string $text, int $count): ?int
+{
+    $start = strpos($text, '{');
+    $end = strrpos($text, '}');
+    $number = null;
+    if ($start !== false && $end !== false && $end > $start) {
+        $decoded = json_decode(substr($text, $start, $end - $start + 1), true);
+        $number = is_array($decoded) ? ($decoded['number'] ?? null) : null;
+    } elseif (preg_match('/^\s*(\d+)\s*$/', $text, $m) === 1) {
+        $number = (int) $m[1];
+    }
+    if (is_string($number) && ctype_digit($number)) {
+        $number = (int) $number;
+    }
+    return is_int($number) && $number >= 1 && $number <= $count ? $number - 1 : null;
+}
+
 /** LLM が使えないときの言葉: 質問を区切りで分けた言葉(短すぎるものは捨てる) */
 function km_guide_fallback_words(string $question): array
 {
@@ -472,40 +743,88 @@ function km_guide_fallback_words(string $question): array
 /**
  * 分けた結果から、探してカードと経路を決める。**純粋関数**(LLM は呼ばない)。
  *
+ * $resolve は、言葉で当たらなかったときだけ呼ぶ(km_guide_answer が LLM で一覧から選ばせるものを渡す)。
+ * 戻すのは渡した $items の中の 1 件か null。null なら今までどおり「見つかりませんでした」
+ *
+ * @param null|callable(list<array> $items, string $word): ?array $resolve
  * @return array{cards:list<array>, records:list<array>, route:?array, situation:string}
  */
-function km_guide_plan(array $catalog, array $classification): array
+function km_guide_plan(array $catalog, array $classification, ?callable $resolve = null): array
 {
     $intent = $classification['intent'];
     $route = null;
     $found = [];
+    $records = null;
+    // 言葉と、LLM がそれだと選んだ名前(答えの文で「◯◯のことですね」と言えるように)
+    $guessed = [];
+    $guess = static function (array $items, string $word) use ($resolve, &$guessed): ?array {
+        $item = $resolve === null || trim($word) === '' ? null : $resolve($items, $word);
+        if ($item !== null) {
+            $guessed[] = "利用者の言う「{$word}」は、登録されている「" . ((string) ($item['title'] ?? '') !== '' ? $item['title'] : $item['name'])
+                . '」と同じものです(書き方の違い)。「登録されていない」「見つからない」とは言わないでください';
+        }
+        return $item;
+    };
+    // 分けた言葉をつなげ直す(「レッツプレイ電算」が「レッツプレイ」「電算」に分かれると、どちらの書き方にも当たらない)。英字どうしは空白でつなぐ
+    $joined = static function (array $words): string {
+        $out = '';
+        foreach ($words as $word) {
+            $out .= ($out !== '' && preg_match('/[A-Za-z0-9]$/', $out) === 1 && preg_match('/^[A-Za-z0-9]/', $word) === 1 ? ' ' : '') . $word;
+        }
+        return $out;
+    };
+    $place = static fn (?string $word): ?array => $word === null
+        ? null
+        : (km_guide_search($catalog['places'], [$word], null, 1, false)[0] ?? $guess($catalog['places'], $word));
     if ($intent === 'route') {
-        $to = $classification['to'] !== null ? (km_guide_search($catalog['places'], [$classification['to']], null, 1)[0] ?? null) : null;
-        $from = $classification['from'] !== null ? (km_guide_search($catalog['places'], [$classification['from']], null, 1)[0] ?? null) : null;
+        $to = $place($classification['to']);
+        $from = $place($classification['from']);
         $end = static fn (?array $item): ?array => $item === null ? null : ['nodeId' => $item['nodeId'], 'poiId' => $item['poiId'], 'name' => $item['name']];
         if ($to !== null) {
             $route = ['from' => $end($from), 'to' => $end($to)];
         }
-        $found = array_values(array_filter([$from, $to]));
+        // 経路のカードは場所の名前で出す(ポスターの見出しだと、どこへ行くのか分からない)。LLM には役目を付けて渡す
+        $found = array_map(static fn (array $item): array => ['title' => ''] + $item, array_values(array_filter([$from, $to])));
+        $records = [];
+        foreach (['出発地' => $from, '目的地' => $to] as $role => $item) {
+            if ($item !== null) {
+                $records[] = ['役目' => $role] + km_guide_record_for_llm(['title' => ''] + $item);
+            }
+        }
         $situation = $to === null
             ? '目的地が登録されている場所の中に見つかりませんでした'
-            : ($from === null ? '目的地は見つかりました。出発地は利用者に地図で選んでもらいます' : '出発地と目的地が見つかったので、地図に経路を出します');
+            : ($from === null
+                ? "目的地は「{$to['name']}」です。出発地は利用者に地図で選んでもらいます"
+                : "出発地「{$from['name']}」から目的地「{$to['name']}」への経路を地図に出します");
     } elseif ($intent === 'shop') {
         $found = km_guide_search($catalog['shops'], $classification['keywords'], $classification['category']);
-        // 言葉で当たらなければ、種類だけで探し直す
+        // 言葉で当たらなければ、LLM に一覧から選ばせる(読み方・書き方の違い)。それでも無ければ種類だけで探し直す
+        $situation = '登録されている店・企画から探しました(並びは一致の度合いと♡の数)';
+        if ($found === [] && $classification['keywords'] !== []) {
+            $found = array_values(array_filter([$guess($catalog['shops'], $joined($classification['keywords']))]));
+        }
         if ($found === [] && $classification['category'] !== null && $classification['keywords'] !== []) {
             $found = km_guide_search($catalog['shops'], [], $classification['category']);
+            $situation = '「' . implode('・', $classification['keywords']) . '」に当たる店・企画は登録されていません。代わりに同じ種類の店・企画を出しています(代わりだと分かるように言ってください)';
         }
-        $situation = $found === [] ? '登録されている店・企画の中に当たるものがありませんでした' : '登録されている店・企画から探しました(並びは一致の度合いと♡の数)';
+        if ($found === []) {
+            $situation = '登録されている店・企画の中に当たるものがありませんでした';
+        }
     } elseif ($intent === 'place') {
-        $found = km_guide_search($catalog['places'], $classification['keywords'], null, 3);
-        $situation = $found === [] ? '登録されている場所の中に見つかりませんでした' : '登録されている場所から探しました';
+        $found = km_guide_search($catalog['places'], $classification['keywords'], null, 3, false);
+        if ($found === [] && $classification['keywords'] !== []) {
+            $found = array_values(array_filter([$guess($catalog['places'], $joined($classification['keywords']))]));
+        }
+        $situation = $found === [] ? '登録されている場所の中に見つかりませんでした' : '登録されている場所から探しました。カードの「地図で見る」で場所を、「経路」で行き方を出せます(まだ経路は出していません)';
     } else {
         $situation = '店・場所・経路の質問ではありませんでした。地図の案内でできることを短く伝えてください';
     }
+    if ($guessed !== []) {
+        $situation .= '。' . implode('。', $guessed) . '(違っていたら言い直してもらうよう、ひとこと添えてください)';
+    }
     return [
         'cards' => array_map('km_guide_card', $found),
-        'records' => array_map('km_guide_record_for_llm', $found),
+        'records' => $records ?? array_map('km_guide_record_for_llm', $found),
         'route' => $route,
         'situation' => $situation,
     ];
@@ -594,7 +913,7 @@ function km_guide_answer(array $catalog, string $question, ?callable $llm): arra
     $fallback = static function () use ($catalog, $question): array {
         $found = km_guide_search($catalog['shops'], km_guide_fallback_words($question));
         if ($found === []) {
-            $found = km_guide_search($catalog['places'], km_guide_fallback_words($question), null, 3);
+            $found = km_guide_search($catalog['places'], km_guide_fallback_words($question), null, 3, false);
         }
         return [
             'answer' => $found === []
@@ -613,7 +932,29 @@ function km_guide_answer(array $catalog, string $question, ?callable $llm): arra
         if ($classification === null) {
             return $fallback();
         }
-        $plan = km_guide_plan($catalog, $classification);
+        // 言葉で当たらなかったときだけ: 1 段目は別の書き方で探す。2 段目は一覧の番号で選ばせる(id は渡さない。番号は範囲を確かめて記録に戻す)
+        // ここでつまずいても(時間切れ・返事が読めない)答えは止めない。見つからなかったことにする
+        $resolve = static function (array $items, string $word) use ($llm): ?array {
+            $items = array_values($items);
+            try {
+                foreach (km_guide_parse_variants($llm(km_guide_variant_messages($word), KM_GUIDE_RESOLVE_TOKENS), $word) as $variant) {
+                    $hit = km_guide_search($items, [$variant], null, 1, false)[0] ?? null;
+                    if ($hit !== null) {
+                        return $hit;
+                    }
+                }
+                $names = km_guide_match_names($items);
+                if ($names === []) {
+                    return null;
+                }
+                $index = km_guide_parse_match($llm(km_guide_match_messages($word, $names), KM_GUIDE_RESOLVE_TOKENS), count($names));
+            } catch (RuntimeException $exception) {
+                error_log('km_guide_answer: resolve skipped: ' . $exception->getMessage());
+                return null;
+            }
+            return $index === null ? null : $items[$index];
+        };
+        $plan = km_guide_plan($catalog, $classification, $resolve);
         $answer = $llm(km_guide_answer_messages($question, $plan['records'], $plan['situation']), 300);
         return [
             // 長すぎる答えは切る(画面に入る長さ)
@@ -621,6 +962,7 @@ function km_guide_answer(array $catalog, string $question, ?callable $llm): arra
             'cards' => $plan['cards'],
             'route' => $plan['route'],
             'fallback' => false,
+            'intent' => $classification['intent'],
         ];
     } catch (RuntimeException $exception) {
         error_log('km_guide_answer: LLM failed (falling back to keyword search): ' . $exception->getMessage());
