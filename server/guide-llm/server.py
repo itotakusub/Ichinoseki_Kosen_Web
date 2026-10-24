@@ -63,6 +63,11 @@ MODEL_NAME = os.environ.get("GUIDE_LLM_MODEL", "").strip()
 MODEL_FAMILY = os.environ.get("GUIDE_LLM_FAMILY", "").strip().lower()
 # 考えを止める指定を上書きする(空なら模型ごとの既定。off は付けない)
 EFFORT_OVERRIDE = os.environ.get("GUIDE_LLM_REASONING_EFFORT", "").strip().lower()
+# 模型が考えを止められるか(start-guide-llm.ps1 が Bionic の一覧から入れる。yes / no / 空 = 分からない)。
+# no の模型に Website から none(考える OFF)が来たら low に置き換える(止めると本文が空になる)
+REASONING_OFF_OK = os.environ.get("GUIDE_LLM_REASONING_OFF_OK", "").strip().lower()
+# Website(管理画面「案内チャット」の「考える」)から受ける指定
+REQUESTABLE_EFFORTS = ("none", "low", "medium", "high")
 API_KEY = os.environ.get("KM_GUIDE_LLM_KEY", "").strip()
 PORT = int(os.environ.get("GUIDE_LLM_PORT", "8888"))
 UPSTREAM = os.environ.get("LLM_API_URL", "").strip().rstrip("/")
@@ -129,6 +134,17 @@ def authorized(header: str) -> bool:
     return bool(API_KEY) and secrets.compare_digest(token.encode(), API_KEY.encode())
 
 
+def choose_effort(requested: Any) -> str:
+    """考える指定を決める。Website からの指定(2026-10-25、利用者「Website 側で考えるの ON-OFF」)→ guide-llm.env → 模型ごとの既定。
+    止められない模型に none が来たら low にする。空・off は付けない"""
+    effort = EFFORT_OVERRIDE or REASONING_EFFORT.get(resolve_family(MODEL_NAME, MODEL_FAMILY) or "", "")
+    if isinstance(requested, str) and requested in REQUESTABLE_EFFORTS:
+        effort = requested
+    if effort == "none" and REASONING_OFF_OK == "no":
+        effort = "low"
+    return effort
+
+
 def build_upstream_request(payload: Any) -> dict[str, Any]:
     """受けた頼みを確かめ、Bionic へ渡す形に作り直す(余計な項目は渡さない)"""
     if not isinstance(payload, dict):
@@ -149,7 +165,7 @@ def build_upstream_request(payload: Any) -> dict[str, Any]:
     temperature = payload.get("temperature", 0.2)
     if not isinstance(temperature, (int, float)) or isinstance(temperature, bool) or not 0 <= temperature <= 1.5:
         temperature = 0.2
-    effort = EFFORT_OVERRIDE or REASONING_EFFORT.get(resolve_family(MODEL_NAME, MODEL_FAMILY) or "", "")
+    effort = choose_effort(payload.get("reasoning_effort"))
     body: dict[str, Any] = {
         "model": MODEL_NAME,
         "messages": messages,

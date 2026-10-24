@@ -35,7 +35,7 @@ $KM_PAGE = [
 
 $errors = [];
 $dbError = null;
-$settings = ['enabled' => false, 'sub' => '', 'dailyLimit' => KM_GUIDE_DAILY_DEFAULT];
+$settings = ['enabled' => false, 'sub' => '', 'dailyLimit' => KM_GUIDE_DAILY_DEFAULT, 'reasoning' => 'auto'];
 $accounts = [];
 $usage = [];
 $probe = null;
@@ -58,6 +58,7 @@ try {
             $enabled = isset($_POST['enabled']);
             $sub = trim((string) ($_POST['sub'] ?? ''));
             $limit = (int) ($_POST['daily_limit'] ?? 0);
+            $reasoning = (string) ($_POST['reasoning'] ?? 'auto');
             // 選べるのは印の付いたテスト用アカウントだけ
             $known = array_column(km_test_accounts_all($pdo), 'sub');
             if ($sub !== '' && !in_array($sub, $known, true)) {
@@ -66,11 +67,14 @@ try {
                 $errors[] = '1 日の上限は 1〜' . KM_GUIDE_DAILY_MAX . ' 回にしてください。';
             } elseif ($enabled && $sub === '') {
                 $errors[] = 'ON にするときは、使う人(テスト用アカウント)を選んでください。';
+            } elseif (!array_key_exists($reasoning, KM_GUIDE_REASONING_CHOICES)) {
+                $errors[] = '「考える」は一覧から選んでください。';
             } else {
                 km_setting_set($pdo, KM_GUIDE_ENABLED_SETTING, $enabled ? '1' : '0');
                 km_setting_set($pdo, KM_GUIDE_SUB_SETTING, $sub);
                 km_setting_set($pdo, KM_GUIDE_DAILY_SETTING, (string) $limit);
-                km_admin_log_record('content', 'guide.settings', ($enabled ? 'ON' : 'OFF') . '・1 日 ' . $limit . ' 回');
+                km_setting_set($pdo, KM_GUIDE_REASONING_SETTING, $reasoning);
+                km_admin_log_record('content', 'guide.settings', ($enabled ? 'ON' : 'OFF') . '・1 日 ' . $limit . ' 回・考える ' . KM_GUIDE_REASONING_CHOICES[$reasoning]);
                 header('Location: ./guide-chat.php?saved=1', true, 303);
                 exit;
             }
@@ -80,6 +84,8 @@ try {
                 $probe = ['ok' => false, 'message' => 'KM_GUIDE_LLM_URL と KM_GUIDE_LLM_KEY が入っていません(.env → 配備)。'];
             } else {
                 $started = microtime(true);
+                // 確かめも、いまの「考える」の設定で送る(ON のときにどれだけ待つかが分かる)
+                $llmConfig['reasoning'] = km_guide_settings($pdo)['reasoning'];
                 try {
                     $reply = km_guide_llm_chat($llmConfig, [['role' => 'user', 'content' => '「OK」とだけ答えてください。']], 8, 20);
                     $probe = ['ok' => true, 'message' => '届きました(' . number_format(microtime(true) - $started, 1) . ' 秒)。返事: ' . mb_substr($reply, 0, 40)];
@@ -181,6 +187,19 @@ require __DIR__ . '/_inc/partials/page-header.php';
                         <label class="form-label" for="guide-limit">1 日の上限(回)</label>
                         <input class="form-control" type="number" id="guide-limit" name="daily_limit" min="1" max="<?= KM_GUIDE_DAILY_MAX ?>" value="<?= (int) $settings['dailyLimit'] ?>">
                         <div class="form-text">1 回の質問で自宅 PC の LLM を 2 回(言葉で当たらないときは 3〜6 回)呼びます。ほかに、1 分に <?= KM_GUIDE_PER_MINUTE ?> 回までに絞っています。</div>
+                      </div>
+                      <div class="mb-3">
+                        <?php /* 2026-10-25、利用者「Website 側で、考えるの ON-OFF はできませんか」 */ ?>
+                        <label class="form-label" for="guide-reasoning">考える(推論)</label>
+                        <select class="form-select" id="guide-reasoning" name="reasoning">
+                          <?php foreach (KM_GUIDE_REASONING_CHOICES as $value => $label): ?>
+                            <option value="<?= km_e($value) ?>"<?= $value === $settings['reasoning'] ? ' selected' : '' ?>><?= km_e($label) ?></option>
+                          <?php endforeach; ?>
+                        </select>
+                        <div class="form-text">
+                          ON にすると答える前に考えるので、名前の取り違えは減るかもしれませんが、1 回の答えが遅くなります(数秒 → 10〜30 秒)。
+                          GPT-OSS のように考えを止められない模型では、OFF でも「少し」考えます。「模型に任せる」は自宅 PC の設定のままです。
+                        </div>
                       </div>
                     </div>
                     <div class="card-footer text-end">

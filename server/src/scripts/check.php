@@ -1957,7 +1957,7 @@ function km_check_guide_chat(): void
         && str_contains($api, 'km_guide_log_save($pdo, km_guide_log_row(') && str_contains($api, "unset(\$result['intent']);")
         && str_contains($api, "\$result['rateToken'] = \$rateToken;") && str_contains($api, '$rateToken = bin2hex(random_bytes(16));'));
     check_bool('口: 全部で 55 秒まで・言い換えは 25 秒を過ぎたら出さない', str_contains($api, '$left = 55 - $elapsed;')
-        && str_contains($api, 'if ($maxTokens === KM_GUIDE_RESOLVE_TOKENS && $elapsed > 25) {'));
+        && str_contains($api, 'if ($maxTokens === KM_GUIDE_RESOLVE_TOKENS && $elapsed > ($thinking ? 15 : 25)) {'));
     check_bool('残す表に誰が聞いたかの欄は無い', preg_match('/CREATE TABLE IF NOT EXISTS km_guide_chat_log \((.*?)\) ENGINE/s', $lib, $logTable) === 1
         && preg_match('/\b(sub|user|session|ip|account)\w*\s+(VARCHAR|CHAR|INT|TEXT)/i', $logTable[1]) !== 1);
     preg_match('/const BAD_REASONS = \[(.*?)\];/s', $guideJs, $jsReasons);
@@ -1991,6 +1991,16 @@ function km_check_guide_chat(): void
     // Bionic は chat_template_kwargs を聞かない。reasoning_effort で考えを止めないと Qwen3.5 の本文が空になる(2026-10-25 のベンチで 20 件中 19 件)
     check_bool('自宅 PC: 考えは reasoning_effort で止める(Qwen・custom は none)・空の答えは 502', str_contains($serverPy, 'REASONING_EFFORT = {"qwen3.5-9b": "none", "gpt-oss-20b": "low", "custom": "none"}')
         && str_contains($serverPy, 'body["reasoning_effort"] = effort') && str_contains($serverPy, 'raise BadRequest(502, "upstream empty")'));
+    // 2026-10-25、利用者「Website 側で、考えるの ON-OFF はできませんか」: 管理画面で選び、頼みのたびに reasoning_effort で伝える
+    $llmBody = static fn (string $reasoning): array => km_guide_llm_body(['model' => 'm', 'reasoning' => $reasoning], [['role' => 'user', 'content' => 'x']], 160);
+    check('考える: auto は付けない・off は none・ON は low/medium/high・知らない値は付けない', [null, 'none', 'low', 'high', null],
+        [$llmBody('auto')['reasoning_effort'] ?? null, $llmBody('off')['reasoning_effort'] ?? null, $llmBody('low')['reasoning_effort'] ?? null,
+         $llmBody('high')['reasoning_effort'] ?? null, $llmBody('max')['reasoning_effort'] ?? null]);
+    check_bool('考える: 管理画面で選ぶ(一覧の値だけ)・ON の間は口が長く待つ', str_contains($guideAdmin, 'km_setting_set($pdo, KM_GUIDE_REASONING_SETTING, $reasoning);')
+        && str_contains($guideAdmin, '} elseif (!array_key_exists($reasoning, KM_GUIDE_REASONING_CHOICES)) {')
+        && str_contains($api, "\$llmConfig['reasoning'] = \$settings['reasoning'];") && str_contains($api, '$perCall = $thinking ? 40 : ($maxTokens <= 160 ? 20 : 30);'));
+    check_bool('自宅 PC: Website の指定を受ける・止められない模型の OFF は low にする', str_contains($serverPy, 'REQUESTABLE_EFFORTS = ("none", "low", "medium", "high")')
+        && str_contains($serverPy, 'if effort == "none" and REASONING_OFF_OK == "no":') && str_contains($serverPy, 'effort = choose_effort(payload.get("reasoning_effort"))'));
     // 2026-10-25、利用者「GUIDE_LLM_FAMILY を custom にして、API 識別子のみ変更でロード」「既にロードされていたらアンロードからロード」
     check_bool('自宅 PC: custom なら 4 つの決まりを外す・起動のたびにアンロードしてからロード', str_contains($serverPy, "if declared == CUSTOM_FAMILY:\n        return CUSTOM_FAMILY")
         && preg_match('/foreach \(\$instance in @\(\$entry\.loaded_instances\)\).*?\/api\/v1\/models\/unload.*?\/api\/v1\/models\/load/s', (string) @file_get_contents($llmDir . '/start-guide-llm.ps1')) === 1);

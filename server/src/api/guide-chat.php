@@ -104,16 +104,22 @@ $llmConfig = km_guide_llm_config();
  * 言葉で当たらなかったときの言い換え・一覧から選ぶ頼み(2026-10-25)は、始めてから 25 秒を過ぎたら出さない(答えの文の時間を残す)
  */
 $started = microtime(true);
-$llm = $llmConfig === null ? null : static function (array $messages, int $maxTokens) use ($llmConfig, $started): string {
+// 考える(管理画面の設定)。ON の間は 1 回の返事が遅いので、1 回あたり 40 秒まで待ち、言い換えは 15 秒を過ぎたら出さない
+if ($llmConfig !== null) {
+    $llmConfig['reasoning'] = $settings['reasoning'];
+}
+$thinking = $llmConfig !== null && km_guide_reasoning_on($llmConfig);
+$llm = $llmConfig === null ? null : static function (array $messages, int $maxTokens) use ($llmConfig, $started, $thinking): string {
     $elapsed = microtime(true) - $started;
-    if ($maxTokens === KM_GUIDE_RESOLVE_TOKENS && $elapsed > 25) {
+    if ($maxTokens === KM_GUIDE_RESOLVE_TOKENS && $elapsed > ($thinking ? 15 : 25)) {
         throw new RuntimeException('言い換えの時間切れ');
     }
     $left = 55 - $elapsed;
     if ($left < 3) {
         throw new RuntimeException('時間切れ');
     }
-    return km_guide_llm_chat($llmConfig, $messages, $maxTokens, (int) min($maxTokens <= 160 ? 20 : 30, floor($left)));
+    $perCall = $thinking ? 40 : ($maxTokens <= 160 ? 20 : 30);
+    return km_guide_llm_chat($llmConfig, $messages, $maxTokens, (int) min($perCall, floor($left)));
 };
 // 出発地を言わなかった経路は、展示の場所から(テスト用アカウントの設定。2026-10-25、利用者「テストユーザーのみ、出発点を Let's Play Densan に」)
 try {

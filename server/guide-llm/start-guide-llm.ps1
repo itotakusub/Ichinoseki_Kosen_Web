@@ -143,8 +143,10 @@ if ($null -eq $catalog -or $null -eq $catalog.models) {
     Write-Host "ロードしました: $($entry.display_name)($($loaded.load_time_seconds) 秒)" -ForegroundColor Green
     # 考えを止める指定を決めていなければ、模型の性質から決める: 「off」が選べる模型(Qwen・Gemma)は none、
     # 選べない模型(GPT-OSS などいつも考える模型)は low(門番が考える分の字数を上乗せする)
+    $options = @($entry.capabilities.reasoning.allowed_options | Where-Object { $_ })
+    # 門番が Website の「考える OFF」を、止められない模型では low に置き換えるために使う
+    $env:GUIDE_LLM_REASONING_OFF_OK = if ($options -contains 'off') { 'yes' } else { 'no' }
     if (-not $conf['GUIDE_LLM_REASONING_EFFORT']) {
-        $options = @($entry.capabilities.reasoning.allowed_options)
         $conf['GUIDE_LLM_REASONING_EFFORT'] = if ($options -contains 'off') { 'none' } else { 'low' }
         Write-Host "考えを止める指定: $($conf['GUIDE_LLM_REASONING_EFFORT'])(模型が選べるもの: $(if ($options.Count) { $options -join '/' } else { 'なし' }))"
     }

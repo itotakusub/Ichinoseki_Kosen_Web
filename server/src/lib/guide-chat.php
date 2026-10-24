@@ -38,6 +38,19 @@ require_once __DIR__ . '/test-mode.php';
 const KM_GUIDE_ENABLED_SETTING = 'guide_chat_enabled';
 const KM_GUIDE_SUB_SETTING = 'guide_chat_sub';
 const KM_GUIDE_DAILY_SETTING = 'guide_chat_daily_limit';
+/**
+ * 考える(推論)の ON/OFF(2026-10-25、利用者「Website 側で、考えるの ON-OFF はできませんか」)。
+ * auto は自宅 PC の門番に任せる(模型の性質から決める)。ほかは頼みのたびに reasoning_effort で伝える
+ * (off は none。考えを止められない模型では門番が low に置き換える)
+ */
+const KM_GUIDE_REASONING_SETTING = 'guide_chat_reasoning';
+const KM_GUIDE_REASONING_CHOICES = [
+    'auto' => '模型に任せる(自宅 PC の設定)',
+    'off' => 'OFF(考えない。速い)',
+    'low' => 'ON・少し',
+    'medium' => 'ON・ふつう',
+    'high' => 'ON・しっかり(遅い)',
+];
 const KM_GUIDE_DAILY_DEFAULT = 100;
 const KM_GUIDE_DAILY_MAX = 1000;
 /** 1 回の質問の長さ(字)。本文(JSON)の上限は api/guide-chat.php が 2KB で切る */
@@ -66,12 +79,14 @@ const KM_GUIDE_INTENTS = ['shop', 'route', 'place', 'other'];
 // ---------------------------------------------------------------- 設定と使える人
 
 /**
- * @return array{enabled:bool, sub:string, dailyLimit:int}
+ * @return array{enabled:bool, sub:string, dailyLimit:int, reasoning:string}
  */
 function km_guide_settings(PDO $pdo): array
 {
     $limit = (int) km_setting_get($pdo, KM_GUIDE_DAILY_SETTING, (string) KM_GUIDE_DAILY_DEFAULT);
+    $reasoning = km_setting_get($pdo, KM_GUIDE_REASONING_SETTING, 'auto');
     return [
+        'reasoning' => array_key_exists($reasoning, KM_GUIDE_REASONING_CHOICES) ? $reasoning : 'auto',
         // **既定は OFF**(管理画面で ON にして、使う人を選んでから)
         'enabled' => km_setting_get($pdo, KM_GUIDE_ENABLED_SETTING, '0') === '1',
         'sub' => km_setting_get($pdo, KM_GUIDE_SUB_SETTING, ''),
@@ -866,17 +881,37 @@ function km_guide_llm_config(): ?array
 }
 
 /**
+ * 自宅 PC へ送る本文。**純粋関数**。考える(reasoning)は管理画面の設定が auto 以外のときだけ付ける
+ * (off は none。門番が模型に合わせて字数を上乗せする・止められない模型では low に置き換える)
+ */
+function km_guide_llm_body(array $config, array $messages, int $maxTokens): array
+{
+    $body = [
+        'model' => $config['model'],
+        'messages' => $messages,
+        'max_tokens' => $maxTokens,
+        'temperature' => 0.2,
+    ];
+    $reasoning = (string) ($config['reasoning'] ?? 'auto');
+    if ($reasoning !== 'auto' && array_key_exists($reasoning, KM_GUIDE_REASONING_CHOICES)) {
+        $body['reasoning_effort'] = $reasoning === 'off' ? 'none' : $reasoning;
+    }
+    return $body;
+}
+
+/** 考えるを ON にしているか(ON の間は 1 回の返事が遅いので、口の待ち時間を延ばす) */
+function km_guide_reasoning_on(array $config): bool
+{
+    return in_array($config['reasoning'] ?? 'auto', ['low', 'medium', 'high'], true);
+}
+
+/**
  * /v1/chat/completions の形で 1 回呼んで、文を返す。失敗は RuntimeException(本文はログに出さない)。
  * 手本は lib/logto-management.php の km_logto_management_get(TLS を確かめる・転送しない・時間を切る)
  */
 function km_guide_llm_chat(array $config, array $messages, int $maxTokens, int $timeoutSeconds = 30): string
 {
-    $body = json_encode([
-        'model' => $config['model'],
-        'messages' => $messages,
-        'max_tokens' => $maxTokens,
-        'temperature' => 0.2,
-    ], JSON_UNESCAPED_UNICODE);
+    $body = json_encode(km_guide_llm_body($config, $messages, $maxTokens), JSON_UNESCAPED_UNICODE);
     $received = '';
     $tooLarge = false;
     $curl = curl_init($config['url'] . '/v1/chat/completions');
