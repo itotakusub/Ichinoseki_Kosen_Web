@@ -581,6 +581,38 @@ function km_check_app_map(): string
     check_bool('空文字も指定なし', km_app_map_active_event_status($events, '  ', $eventNow) === null);
 
     /*
+     * **中身の件数も出す**(2026-10-24、利用者の指摘「一般向けアプリで臨時の名前になっていない」)。
+     * 「イベントは載っているのに名前が置き換わらない」とき、載っているのが**空のイベント**なのかどうかが
+     * 画面から分からなかった。nameOverrides は JSON ではオブジェクト、ほかは配列なので、どちらも数える
+     */
+    check('件数: 空のイベントは全部 0', [0, 0, 0, 0], [
+        $running['nameCount'], $running['placeCount'], $running['closureCount'], $running['hiddenCount'],
+    ]);
+    $filled = [json_decode(json_encode([
+        'uuid' => 'ev-1',
+        'name' => '高専祭',
+        'nameOverrides' => (object) ['uuid-a' => '32', 'uuid-b' => '受付'],
+        'places' => [['uuid' => 'web-poi-1'], ['uuid' => 'web-poi-2'], ['uuid' => 'web-poi-3']],
+        'closedNodeUuids' => ['uuid-c'],
+        'closedLineKeys' => ['1F:a:b', '1F:b:c'],
+        'hiddenNodeUuids' => ['uuid-d'],
+    ]))];
+    $filledStatus = km_app_map_active_event_status($filled, 'ev-1', $eventNow);
+    check('件数: 臨時の名前はオブジェクトでも数える', 2, $filledStatus['nameCount']);
+    check('件数: 臨時の地点', 3, $filledStatus['placeCount']);
+    check('件数: 通行止めは地点と線の合計', 3, $filledStatus['closureCount']);
+    check('件数: 出さない地点', 1, $filledStatus['hiddenCount']);
+    check('件数: 無い UUID のときも 0 で揃える', 0, $missing['nameCount']);
+    // 臨時の名前が 0 件なら、管理画面「ダウンロード」で配信し直しを促す
+    check_bool('臨時の名前 0 件を知らせる', str_contains((string) file_get_contents(__DIR__ . '/../admin/downloads.php'), 'page.downloads.mapReleaseEventEmpty'));
+    foreach (['ja', 'en'] as $lang) {
+        $i18n = (string) file_get_contents(__DIR__ . '/../admin/assets/i18n/' . $lang . '.js');
+        foreach (['mapReleaseEventEmpty', 'mapReleaseEventNames', 'mapReleaseEventPlaces', 'mapReleaseEventClosures', 'mapReleaseEventHidden'] as $key) {
+            check_bool("i18n: {$key} ({$lang})", str_contains($i18n, 'page.downloads.' . $key));
+        }
+    }
+
+    /*
      * アクセスコード。**照合の正本は今までどおり `hash`。**
      *
      * 平文(`code`)は管理画面に出すためだけに持ち回る。ここが崩れると

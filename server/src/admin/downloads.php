@@ -587,6 +587,30 @@ require __DIR__ . '/_inc/partials/page-header.php';
                               </span>
                             <?php endif; ?>
                           </p>
+                          <?php
+                          /*
+                           * 中身の件数(2026-10-24、利用者の指摘「一般向けアプリで臨時の名前になっていない」)。
+                           * 「イベントは載っているのに名前が置き換わらない」とき、**載っているのが空のイベント**なのかどうかを
+                           * ここで言い切る。臨時の名前が 0 なら、配信し直せば入る
+                           */
+                          ?>
+                          <p class="fs-7 mb-0 text-body-secondary">
+                            <span data-i18n="page.downloads.mapReleaseEventNames">臨時の名前</span>
+                            <?= (int) $event['nameCount'] ?> /
+                            <span data-i18n="page.downloads.mapReleaseEventPlaces">臨時の地点</span>
+                            <?= (int) $event['placeCount'] ?> /
+                            <span data-i18n="page.downloads.mapReleaseEventClosures">通行止め</span>
+                            <?= (int) $event['closureCount'] ?> /
+                            <span data-i18n="page.downloads.mapReleaseEventHidden">出さない地点</span>
+                            <?= (int) $event['hiddenCount'] ?>
+                          </p>
+                          <?php if ((int) $event['nameCount'] === 0 && $mapEventWindow !== null): ?>
+                            <p class="text-danger-emphasis fs-7 mb-0">
+                              <span data-i18n="page.downloads.mapReleaseEventEmpty">
+                                配信に載っているイベントに臨時の名前が 1 件も入っていません。配信し直してください。
+                              </span>
+                            </p>
+                          <?php endif; ?>
                         <?php endif; ?>
                       </div>
 
