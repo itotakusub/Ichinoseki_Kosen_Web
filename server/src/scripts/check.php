@@ -1777,6 +1777,9 @@ function km_check_guide_chat(): void
         km_guide_parse_classification("はい。\n{\"intent\":\"shop\",\"keywords\":[\"たこ焼き\",\"\"],\"category\":\"burger\"}"));
     check_bool('JSON でなければ null', km_guide_parse_classification('わかりません') === null);
     check('知らない intent は other', 'other', km_guide_parse_classification('{"intent":"hack"}')['intent'] ?? null);
+    // Bionic の Qwen3.5-9B は空を文字の "null" で返すことがある(2026-10-25 のベンチ)
+    check('文字の "null" は空として読む(出発地・目的地・言葉)', ['keywords' => ['道'], 'from' => null, 'to' => '図書館'],
+        array_intersect_key(km_guide_parse_classification('{"intent":"route","keywords":["null","道"],"from":"null","to":"図書館"}') ?? [], ['from' => 1, 'to' => 1, 'keywords' => 1]));
     // 経路: 言葉から地点を決めるだけ。経路そのものはブラウザの dijkstra.js
     $plan = km_guide_plan($catalog, ['intent' => 'route', 'keywords' => [], 'category' => null, 'from' => 'お化け屋敷', 'to' => 'たこ焼き']);
     check('経路の端は地点の id と一時地点の番号', [['nodeId' => 'n1', 'poiId' => null, 'name' => 'お化け屋敷'], ['nodeId' => 'n2', 'poiId' => 3, 'name' => 'たこ焼き']],
@@ -1858,6 +1861,9 @@ function km_check_guide_chat(): void
     check_bool('自宅 PC: 識別名の模型は GUIDE_LLM_FAMILY で 4 つのどれかを言い切る・読み込まれているかを確かめる', str_contains($serverPy, 'family = resolve_family(MODEL_NAME, MODEL_FAMILY)')
         && str_contains($serverPy, 'if declared not in ALLOWED_FAMILIES or (by_name is not None and by_name != declared):')
         && str_contains($serverPy, 'elif MODEL_NAME not in listed:'));
+    // Bionic は chat_template_kwargs を聞かない。reasoning_effort で考えを止めないと Qwen3.5 の本文が空になる(2026-10-25 のベンチで 20 件中 19 件)
+    check_bool('自宅 PC: 考えは reasoning_effort で止める(Qwen は none)・空の答えは 502', str_contains($serverPy, 'REASONING_EFFORT = {"qwen3.5-9b": "none", "gpt-oss-20b": "low"}')
+        && str_contains($serverPy, 'body["reasoning_effort"] = effort') && str_contains($serverPy, 'raise BadRequest(502, "upstream empty")'));
     check_bool('自宅 PC: 模型の名前と出す字数は門番が決める・余計な項目は渡さない', str_contains($serverPy, '"model": MODEL_NAME,') && str_contains($serverPy, '"max_tokens": min(max_tokens, MAX_NEW_TOKENS_CAP),'));
     check_bool('自宅 PC: 本文をログに書かない', str_contains($serverPy, '# **本文は書かない**。時間と字数だけ') && !preg_match('/LOG\.\w+\([^)]*(messages|text|body)\b/', $serverPy)
         && str_contains($serverPy, 'def log_message(self, format: str, *args: Any) -> None:'));

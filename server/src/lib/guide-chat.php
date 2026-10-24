@@ -439,6 +439,10 @@ function km_guide_parse_classification(string $text): ?array
             return null;
         }
         $value = trim($value);
+        // 模型は空を文字の "null" で返すことがある(2026-10-25、Bionic の Qwen3.5-9B で測った)
+        if (in_array(strtolower($value), ['null', 'none', 'undefined'], true) || $value === 'なし') {
+            return null;
+        }
         return $value === '' || mb_strlen($value) > 30 ? null : $value;
     };
     $keywords = [];

@@ -46,6 +46,13 @@ ALLOWED_FAMILIES = {
     "gpt-oss-20b": re.compile(r"gpt-oss.*20b", re.IGNORECASE),
 }
 
+# 考えを止める指定(模型ごと)。Bionic は chat_template_kwargs を聞かず、reasoning_effort だけを聞く
+# (2026-10-25 に測った。Qwen3.5-9B は無いと 160 字を考えに使い切り、本文が空になる。none で考え 0 字・2.4 秒)。
+# GPT-OSS は none を持たないので low
+REASONING_EFFORT = {"qwen3.5-9b": "none", "gpt-oss-20b": "low"}
+# 知らない項目を断る API には、これを外して頼み直す
+OPTIONAL_KEYS = ("chat_template_kwargs", "reasoning_effort")
+
 MODEL_NAME = os.environ.get("GUIDE_LLM_MODEL", "").strip()
 MODEL_FAMILY = os.environ.get("GUIDE_LLM_FAMILY", "").strip().lower()
 API_KEY = os.environ.get("KM_GUIDE_LLM_KEY", "").strip()
@@ -129,15 +136,19 @@ def build_upstream_request(payload: Any) -> dict[str, Any]:
     temperature = payload.get("temperature", 0.2)
     if not isinstance(temperature, (int, float)) or isinstance(temperature, bool) or not 0 <= temperature <= 1.5:
         temperature = 0.2
-    return {
+    body: dict[str, Any] = {
         "model": MODEL_NAME,
         "messages": messages,
         "max_tokens": min(max_tokens, MAX_NEW_TOKENS_CAP),
         "temperature": float(temperature),
         "stream": False,
-        # Qwen は考えを出さない(対応していない API は無視する)
+        # Qwen は考えを出さない(llama.cpp などの書き方。Bionic は聞かないので下の reasoning_effort も付ける)
         "chat_template_kwargs": {"enable_thinking": False},
     }
+    effort = REASONING_EFFORT.get(resolve_family(MODEL_NAME, MODEL_FAMILY) or "")
+    if effort:
+        body["reasoning_effort"] = effort
+    return body
 
 
 def upstream_headers() -> dict[str, str]:
@@ -160,18 +171,25 @@ def call_upstream(body: dict[str, Any]) -> dict[str, Any]:
         try:
             data = post_upstream(body)
         except urllib.error.HTTPError as error:
-            # 知らない項目を断る API がある。1 度だけ chat_template_kwargs を外して頼み直す
-            if error.code not in (400, 422) or "chat_template_kwargs" not in body:
+            # 知らない項目を断る API がある。1 度だけ考えを止める指定を外して頼み直す
+            if error.code not in (400, 422) or not any(key in body for key in OPTIONAL_KEYS):
                 raise
-            data = post_upstream({k: v for k, v in body.items() if k != "chat_template_kwargs"})
+            data = post_upstream({k: v for k, v in body.items() if k not in OPTIONAL_KEYS})
     if len(data) > MAX_UPSTREAM_BYTES:
         raise BadRequest(502, "upstream too large")
     decoded = json.loads(data)
-    text = decoded["choices"][0]["message"]["content"]
+    choice = decoded["choices"][0]
+    text = choice["message"]["content"]
     if not isinstance(text, str):
         raise BadRequest(502, "upstream content")
     usage = decoded.get("usage") if isinstance(decoded.get("usage"), dict) else {}
-    return {"text": clean_output(text), "usage": usage}
+    text = clean_output(text)
+    if not text:
+        # 考えに字数を使い切ると本文が空になる。空の答えを「答えた」にしない(PHP は言葉で探した結果を出す)
+        details = usage.get("completion_tokens_details") if isinstance(usage.get("completion_tokens_details"), dict) else {}
+        LOG.warning("empty answer (finish %s, reasoning %s tokens)", choice.get("finish_reason"), details.get("reasoning_tokens", "?"))
+        raise BadRequest(502, "upstream empty")
+    return {"text": text, "usage": usage}
 
 
 def listed_models() -> list[str] | None:
