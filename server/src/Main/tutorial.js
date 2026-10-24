@@ -267,16 +267,13 @@
         const fitsBelow = r.bottom + PAD + gap + ch <= maxBottom;
         const fitsAbove = r.top - PAD - gap - ch >= minTop;
         /*
-         * **スマホで検索の欄の中を指すときは上に置く**(2026-10-19)。下に置くと、次に押す欄(目的地・案内開始)を覆い、
-         * 欄を押して出るキーボードの裏にも隠れた。上は欄の見出しと地図なので、覆っても困らない。
+         * 置く向きは「下に入るなら下」。**スマホで経路の欄の中を指すときだけは下に固定する**(2026-10-24)。
+         * 欄は画面の**上いっぱい**に出るようになった(キーボードに隠れないようにするため)ので、上には何も置けない ——
+         * それまでは上に寄せていた(欄が下から出るシートで、下に置くと次の欄とキーボードに隠れたため)。
+         * 下に入りきらなくても、吹き出しは必ず見える範囲に収める(clampTop)
          */
-        const preferAbove = narrowScreen() && el.closest && el.closest('#search-panel') !== null;
-        let placeAbove;
-        if (preferAbove) {
-            placeAbove = fitsAbove || !fitsBelow;
-        } else {
-            placeAbove = !fitsBelow && fitsAbove;
-        }
+        const inRoutePanel = narrowScreen() && el.closest && el.closest('#search-panel') !== null;
+        const placeAbove = !inRoutePanel && !fitsBelow && fitsAbove;
         let left = Math.min(Math.max(box.left + 12, r.left + r.width / 2 - cw / 2), box.left + box.width - cw - 12);
         let top = placeAbove ? r.top - PAD - gap - ch : r.bottom + PAD + gap;
         card.classList.toggle('is-below', !placeAbove);
@@ -368,7 +365,11 @@
 
     function startWhenReady() {
         if (seen()) return;
-        if (document.querySelector('meta[name="km-focus-room"]')) return;   // QR から来た人
+        /*
+         * 共有のリンク(部屋の QR・場所・経路)から来た人には出さない(2026-10-24、利用者の指示)。印は index.php の
+         * <meta name="km-from-share">。見たことにはしないので、あとで普通に開いたときには出る。広告は tutorial-end.js の kmShowAd が出す
+         */
+        if (document.querySelector('meta[name="km-from-share"]')) return;
         const welcome = byId('km-welcome');
         const begin = function () {
             if (welcome && !welcome.hidden) {

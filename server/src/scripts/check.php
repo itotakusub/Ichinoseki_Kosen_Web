@@ -581,6 +581,38 @@ function km_check_app_map(): string
     check_bool('空文字も指定なし', km_app_map_active_event_status($events, '  ', $eventNow) === null);
 
     /*
+     * **中身の件数も出す**(2026-10-24、利用者の指摘「一般向けアプリで臨時の名前になっていない」)。
+     * 「イベントは載っているのに名前が置き換わらない」とき、載っているのが**空のイベント**なのかどうかが
+     * 画面から分からなかった。nameOverrides は JSON ではオブジェクト、ほかは配列なので、どちらも数える
+     */
+    check('件数: 空のイベントは全部 0', [0, 0, 0, 0], [
+        $running['nameCount'], $running['placeCount'], $running['closureCount'], $running['hiddenCount'],
+    ]);
+    $filled = [json_decode(json_encode([
+        'uuid' => 'ev-1',
+        'name' => '高専祭',
+        'nameOverrides' => (object) ['uuid-a' => '32', 'uuid-b' => '受付'],
+        'places' => [['uuid' => 'web-poi-1'], ['uuid' => 'web-poi-2'], ['uuid' => 'web-poi-3']],
+        'closedNodeUuids' => ['uuid-c'],
+        'closedLineKeys' => ['1F:a:b', '1F:b:c'],
+        'hiddenNodeUuids' => ['uuid-d'],
+    ]))];
+    $filledStatus = km_app_map_active_event_status($filled, 'ev-1', $eventNow);
+    check('件数: 臨時の名前はオブジェクトでも数える', 2, $filledStatus['nameCount']);
+    check('件数: 臨時の地点', 3, $filledStatus['placeCount']);
+    check('件数: 通行止めは地点と線の合計', 3, $filledStatus['closureCount']);
+    check('件数: 出さない地点', 1, $filledStatus['hiddenCount']);
+    check('件数: 無い UUID のときも 0 で揃える', 0, $missing['nameCount']);
+    // 臨時の名前が 0 件なら、管理画面「ダウンロード」で配信し直しを促す
+    check_bool('臨時の名前 0 件を知らせる', str_contains((string) file_get_contents(__DIR__ . '/../admin/downloads.php'), 'page.downloads.mapReleaseEventEmpty'));
+    foreach (['ja', 'en'] as $lang) {
+        $i18n = (string) file_get_contents(__DIR__ . '/../admin/assets/i18n/' . $lang . '.js');
+        foreach (['mapReleaseEventEmpty', 'mapReleaseEventNames', 'mapReleaseEventPlaces', 'mapReleaseEventClosures', 'mapReleaseEventHidden'] as $key) {
+            check_bool("i18n: {$key} ({$lang})", str_contains($i18n, 'page.downloads.' . $key));
+        }
+    }
+
+    /*
      * アクセスコード。**照合の正本は今までどおり `hash`。**
      *
      * 平文(`code`)は管理画面に出すためだけに持ち回る。ここが崩れると
@@ -1581,8 +1613,21 @@ function km_check_app_map_web_events(): void
         strtotime('2026-09-02 09:00:00') * 1000,
         $event['endAtMillis']
     );
-    // **開始は入れない。** Website 側で「いま有効」と判定済みのものだけが来る
+    // **いま有効な会期なら開始は入れない。** Website 側で判定済みのものだけが来る
     check_bool('開始は入れない', $event['startAtMillis'] === null);
+    /*
+     * **まだ始まっていない会期を焼いたときは開始を入れる**(2026-10-24、利用者の指摘
+     * 「一般向けアプリでイベントが丸ごと効いていない」)。入れないと、配信した瞬間から
+     * 通行止めと臨時の地点が効いてしまう。アプリは activeMapEvent() でこの時刻から効かせる
+     */
+    $pending = km_app_map_events_from_web($overlay, $map, '2026-11-01 09:00:00');
+    check(
+        '会期前なら開始を入れる',
+        strtotime('2026-11-01 09:00:00') * 1000,
+        $pending['events'][0]['startAtMillis']
+    );
+    check_bool('渡さなければ今までどおり null', km_app_map_events_from_web($overlay, $map, null)['events'][0]['startAtMillis'] === null);
+    check_bool('読めない時刻は入れない', km_app_map_events_from_web($overlay, $map, 'いつか')['events'][0]['startAtMillis'] === null);
 
     check('通行止めの地点', [$uuidB], $event['closedNodeUuids']);
     // 両方向が畳まれ、階をまたぐものと知らない地点は落ちて、残るのは1本
@@ -1614,6 +1659,54 @@ function km_check_app_map_web_events(): void
     $none = km_app_map_events_from_web(['events' => []], $map);
     check('有効なイベントが無ければ空', [], $none['events']);
     check_bool('指し先も null', $none['activeEventUuid'] === null);
+
+    /*
+     * ======== 配信に焼くのは「次に効く会期」(2026-10-24) ========
+     *
+     * 利用者の指摘「Android 側の一般向けで、イベント時にイベントの名前で表示されていない」。
+     * 一般向けビルドは**配信に載っているイベントしか効かせない**(resolveEventSelection。
+     * 管理ビルドは自分で選べるので、同じ地図でも効いて見える)。配信は焼き付けた写しなので、
+     * 「いま有効」なものだけを焼くと、**会期の前に配信した地図にはイベントが 1 件も入らない**。
+     *
+     * DB は使わずに、配信の 2 か所が「次に効く会期」を使っていることと、
+     * 選び方(いま有効 → それ / 無ければ一番早い会期)を、コードの形で見る
+     */
+    km_check_heading('app-map: 配信に焼くのは「次に効く会期」(2026-10-24)');
+    $publishLib = (string) file_get_contents(__DIR__ . '/../lib/app-map-publish.php');
+    $eventsLib = (string) file_get_contents(__DIR__ . '/../lib/map-events.php');
+    check_bool('Website の正本は次に効く会期を焼く', str_contains($publishLib, '$window = km_map_event_overlay_for_app($pdo);')
+        && str_contains($publishLib, "km_app_map_events_from_web(\$overlay, \$map, \$window['startsAt'])"));
+    check_bool('イベント用の地図の折り込みも同じ', str_contains($publishLib, "km_app_map_events_from_web(\$window['overlay'], \$map, \$window['startsAt'])"));
+    check_bool('公開ページは今までどおり「いま有効」だけ', str_contains($eventsLib, '$events = $onlyPreview ? [] : km_map_event_active($pdo);')
+        && !str_contains($eventsLib, 'km_map_event_overlay_for_app($pdo)'));
+    // 配信の画面は**実際に焼かれるもの**を見せる(「いま有効」だけを見せると、会期前に空に見えるのに中身は入る)
+    $publishPage = (string) file_get_contents(__DIR__ . '/../admin/map-publish.php');
+    check_bool('配信の画面は焼かれる会期を見せる', str_contains($publishPage, '$publishWindow = km_map_event_overlay_for_app(km_db());')
+        && str_contains($publishPage, 'page.mapPublish.eventPending'));
+    foreach (['ja', 'en'] as $lang) {
+        check_bool(
+            "i18n: mapPublish.eventPending ($lang)",
+            str_contains((string) file_get_contents(__DIR__ . '/../admin/assets/i18n/' . $lang . '.js'), 'page.mapPublish.eventPending')
+        );
+    }
+    // 終わっていないもの(いま有効 + これから)を取り、有効かどうかは **DB の NOW()** で見る
+    check_bool('終わっていないイベントを取る', str_contains($eventsLib, 'WHERE is_enabled = 1 AND (ends_at IS NULL OR ends_at > NOW())')
+        && str_contains($eventsLib, '(starts_at IS NULL OR starts_at <= NOW()) AS isActive'));
+    // **会期をまたいで混ぜない。** 工事(長期)と高専祭(翌週)を 1 つに畳むと、通行止めが今日から効く
+    check_bool('いま有効なものがあればそれだけ', str_contains($eventsLib, "return ['overlay' => km_map_event_overlay_build(\$pdo, \$active), 'startsAt' => null];"));
+    check_bool('無ければ一番早い会期だけ', str_contains($eventsLib, "static fn (array \$row): bool => (string) (\$row['startsAt'] ?? '') === \$startsAt"));
+    // イベントの不調で配信そのものを止めない(表がまだ無いときも地図は配れる)
+    check_bool('不調なら「イベント無し」に倒す', str_contains($eventsLib, "error_log('km_map_event_overlay_for_app failed (publishing without events): '"));
+    // 配信し直し忘れに気づける場所(管理画面「ダウンロード」)
+    $downloadsPage = (string) file_get_contents(__DIR__ . '/../admin/downloads.php');
+    check_bool('配信に載っていなければ管理画面で知らせる', str_contains($downloadsPage, 'page.downloads.mapReleaseEventStale')
+        && str_contains($downloadsPage, '$mapEventWindow'));
+    foreach (['ja', 'en'] as $lang) {
+        check_bool(
+            "i18n: mapReleaseEventStale ($lang)",
+            str_contains((string) file_get_contents(__DIR__ . '/../admin/assets/i18n/' . $lang . '.js'), 'page.downloads.mapReleaseEventStale')
+        );
+    }
 }
 
 /**
@@ -7208,6 +7301,66 @@ function km_check_layout(): void
     // 状態を2つ持たない。同じ関数を通すので、閉じるとピルの顔も一緒に戻る
     check_bool('閉じる的も同じ関数を通す', str_contains($appJs, "getElementById('search-close')"));
 
+    km_check_heading('layout: 経路の欄はスマホで上いっぱい・キーボードに隠れない(2026-10-24)');
+    /*
+     * 利用者の指摘:「経路を調べるを開いた時、キーボードの影響で、検索バーが隠れてしまいます。
+     * また、前面と背面の調整がうまくいっていない」。
+     *
+     *   - 欄は**上いっぱい**に出し、検索の窓とチップの場所に入れ替わる(下から出すと、出発地を押した
+     *     ときのキーボードの裏に入力欄が入り、ブラウザがページごと上へ送って窓が画面の外へ出た)
+     *   - 階の好みと雨の日は「経路の設定」に畳み、キーボードが出ても入力欄と案内開始が見える高さにする
+     *   - 重ね順を決める(決めていなかったので、あとに書いた左下の操作と階の列が欄の上に出ていた)
+     */
+    check_bool(
+        'スマホの経路の欄は上いっぱい',
+        preg_match('/@media \(max-width: 768px\).*?\.search-panel \{\s*top: var\(--km-edge\);\s*left: var\(--km-edge\);\s*right: var\(--km-edge\);/s', $css) === 1
+    );
+    check_bool('下から出すときの置き場所は残っていない', !str_contains($css, 'body.km-route-active .search-panel'));
+    check_bool('畳むときは上へ逃がす', preg_match('/\.search-panel\.collapsed \{\s*transform: translateY\(calc\(-100% - 40px\)\);/s', $css) === 1);
+    check_bool('欄を開いている間は検索の窓とチップを出さない', preg_match('/body\.km-route-panel-open \.km-searchbox,\s*body\.km-route-panel-open \.km-chips \{ visibility: hidden; \}/', $css) === 1);
+    check_bool('候補はキーボードの上に収まる長さで止める', str_contains($css, '.search-panel .km-search-results { max-height: 34vh; }'));
+    check_bool('収まりの計算はスマホでは欄の下から数える', preg_match('/\/\/ デスクトップでは左に立つ縦長のカード、モバイルでは上いっぱいの欄.*?top = Math\.max\(top, rect\.bottom \+ PANEL_GAP\);/s', $appJs) === 1);
+    // 重ね順: 経路の欄(1150) > 階の列・左下の操作(900)。左の引き出し(1200)と検索の窓(1300)より下
+    check_bool('経路の欄の重ね順を決めている', preg_match('/\.search-panel \{ overflow: visible; z-index: 1150; \}/', $css) === 1);
+    check_bool('階の列の重ね順を決めている', preg_match('/\.floor-nav \{[^}]*z-index: 900;/s', $css) === 1);
+    check_bool('階の好みと雨の日は畳む', str_contains($index, '<details class="km-route-options">') && str_contains($index, 'id="km-route-options-state"'));
+    check_bool('畳んでいても効いている設定を見出しに出す', str_contains($appJs, 'function updateRouteOptionsState()') && str_contains($appJs, "parts.push('雨の日')"));
+    // display: flex にすると既定の ▶ が消えるブラウザがある。開き閉じの印は自分で出す
+    check_bool('開き閉じの印を出す', preg_match("/\.km-route-options > summary::before \{\s*content: '▸';/", $css) === 1
+        && str_contains($css, ".km-route-options[open] > summary::before { content: '▾'; }"));
+    /*
+     * ページごと送られたままにしない。html にも overflow: hidden を掛け(地図のページだけ。文書のページは送れること)、
+     * 高さは見えている範囲(dvh)にする。100vh は URL の欄を畳んだときの高さで、見えている範囲より長い
+     */
+    check_bool('地図のページは送らない', preg_match('/html:has\(#ui-layer\) \{\s*height: 100%;\s*overflow: hidden;\s*\}/', $css) === 1);
+    check_bool('高さは見えている範囲で測る', preg_match('/body \{[^}]*height: 100vh;\s*height: 100dvh;/s', $css) === 1);
+    check_bool('入力欄から離れたら送りを戻す', str_contains($appJs, 'function resetPageScroll()')
+        && str_contains($appJs, "document.addEventListener('focusout', () => window.setTimeout(resetPageScroll, 150));")
+        && str_contains($appJs, "window.visualViewport.addEventListener('resize', () => window.setTimeout(resetPageScroll, 150));"));
+    // 打っている最中に戻すと、ブラウザが入力欄を見せようとした位置と喧嘩する
+    check_bool('打っている最中は戻さない', preg_match("/function resetPageScroll\(\)\s*\{\s*const active = document\.activeElement;\s*if \(active && \(active\.tagName === 'INPUT'/s", $appJs) === 1);
+
+    km_check_heading('layout: 種類のチップはスマホで 1 列・横に送る(2026-10-24)');
+    /*
+     * 利用者の指示:「トイレや教室などは、１列にし横スクロールが出来るようにしてください」。
+     * 前日に折り返す形にしたが、2 行で地図の上を広く覆っていた。帯は画面の端から端まで取り、内側に余白を置く
+     * (端で切れて見えるので、まだ右に続くと分かる)
+     */
+    $chipsMobile = '';
+    // 行の先頭から始まる方だけを見る(同じ媒体の問い合わせに body.km-route-panel-open .km-chips もある)
+    if (preg_match('/@media \(max-width: 768px\).*?\n    \.km-chips \{(.*?)\}/s', $css, $m)) {
+        $chipsMobile = $m[1];
+    }
+    check_bool('1 列で折り返さない', str_contains($chipsMobile, 'flex-wrap: nowrap;'));
+    check_bool('横に送れる', str_contains($chipsMobile, 'overflow-x: auto;') && str_contains($chipsMobile, '-webkit-overflow-scrolling: touch;'));
+    check_bool('送りが地図やページへ漏れない', str_contains($chipsMobile, 'overscroll-behavior-x: contain;'));
+    check_bool('端まで使い、内側に余白を置く', str_contains($chipsMobile, 'left: 0;') && str_contains($chipsMobile, 'padding: 0 var(--km-edge);'));
+    // 下の部品の位置は 1 行ぶん(44px)。2 行ぶん(78px)のままだと、チップの下に空きができる
+    check_bool(
+        '下の部品の位置は 1 行ぶん',
+        preg_match('/@media \(max-width: 768px\).*?--km-top-offset: calc\(var\(--km-edge\) \+ var\(--km-searchbox-height\) \+ 8px \+ 44px \+ 8px\)/s', $css) === 1
+    );
+
     km_check_heading('layout: ルート案内の帯(2026-09-25)');
     /*
      * 下から出るシート(guidance-panel)は、案内を始めた途端に画面の半分以上を埋めていた。
@@ -7242,7 +7395,9 @@ function km_check_layout(): void
      */
     // 置き場所は帯と候補を積む入れ物(.km-route-dock)が決める。帯は問いかけで 2 行に伸びるので、候補と別々に置くと重なる
     check_bool('帯は階のレールを避ける', preg_match('/\.km-route-dock\s*\{[^}]*var\(--km-rail-width\)/s', $css) === 1);
-    check_bool('帯は操作ピルの上', preg_match('/\.km-route-dock\s*\{[^}]*bottom:\s*calc\(var\(--km-bottom\) \+ var\(--km-touch\)/s', $css) === 1);
+    // 2026-10-24 から、操作の帯の**実際の高さ**の上(スマホでは操作が 2 行に折り返し、1 行ぶんの決め打ちでは重なった)
+    check_bool('帯は操作ピルの上', preg_match('/\.km-route-dock\s*\{[^}]*bottom:\s*calc\(var\(--km-bottom\) \+ var\(--km-action-bar-height, var\(--km-touch\)\) \+ 8px\)/s', $css) === 1
+        && str_contains($appJs, "document.documentElement.style.setProperty('--km-action-bar-height', `\${actionBarEl.offsetHeight}px`);"));
     check_bool('候補は帯と同じ入れ物に積む', preg_match('/class="km-route-dock">\s*<div id="km-route-pick"/', $index) === 1);
     check_bool('表示調整は帯の上へ逃げる', str_contains($css, '.km-tuning { margin-bottom: var(--km-route-lift); }'));
     check_bool('収まりの計算が帯を数える', str_contains($appJs, "getElementById('km-route-bar')"));
@@ -7276,8 +7431,8 @@ function km_check_layout(): void
     // 覚えられない環境(プライベートウィンドウ)で落ちないこと
     check_bool('保存の失敗で止まらない', substr_count($welcomeJs, 'try {') >= 2);
     check_bool('設定から読み直せる', str_contains($index, 'data-km-welcome-open'));
-    // QR(/?room=)から来た人には出さない(2026-10-14)。出すと開いた部屋の詳細が幕の下に隠れる
-    check_bool('QR から来た人には出さない', str_contains($welcomeJs, 'meta[name="km-focus-room"]') && str_contains($welcomeJs, 'if (!seen() && !fromRoomQr) open();'));
+    // 共有のリンク(部屋の QR・場所・経路)から来た人には出さない(2026-10-14 に QR、2026-10-24 に共有全部)。出すと開いた所が幕の下に隠れる
+    check_bool('共有のリンクから来た人には出さない', str_contains($welcomeJs, 'meta[name="km-from-share"]') && str_contains($welcomeJs, 'if ((!seen() || unreadNotices().length > 0) && !fromShare) open();'));
 
     km_check_heading('tutorial: 初回の操作案内(2026-10-15)');
     $tutorialJs = (string) file_get_contents(__DIR__ . '/../Main/tutorial.js');
@@ -7288,11 +7443,13 @@ function km_check_layout(): void
     check_bool('tutorial: 検索の欄の中の所が見えなければ「検索」を指して開いてもらう', str_contains($tutorialJs, "el.closest('#search-panel') && toggle && visible(toggle)"));
     check_bool('tutorial: 吹き出しは必ず見える範囲に収める・キーボードの出し入れで置き直す', str_contains($tutorialJs, 'top = clampTop(top, ch);')
         && str_contains($tutorialJs, "window.visualViewport.addEventListener('resize', place);") && str_contains($tutorialJs, "window.visualViewport.removeEventListener('resize', place);"));
-    check_bool('tutorial: スマホで検索の欄の中を指すときは上に置く(次の欄とキーボードを覆わない)', str_contains($tutorialJs, "const preferAbove = narrowScreen() && el.closest && el.closest('#search-panel') !== null;"));
+    // 経路の欄が上いっぱいになった(2026-10-24)ので、欄の中を指すときは**下**に固定する。上には何も置けない
+    check_bool('tutorial: スマホで経路の欄の中を指すときは下に置く', str_contains($tutorialJs, "const inRoutePanel = narrowScreen() && el.closest && el.closest('#search-panel') !== null;")
+        && str_contains($tutorialJs, 'const placeAbove = !inRoutePanel && !fitsBelow && fitsAbove;'));
     check_bool('tutorial.js を welcome.js のあとに読む', ($tw = strpos($index, "Main/welcome.js')")) !== false && $tw < (int) strpos($index, "Main/tutorial.js')"));
     check_bool('「はじめに」を閉じてから始める', str_contains($welcomeJs, "new CustomEvent('km-welcome-closed')") && str_contains($tutorialJs, "'km-welcome-closed'"));
     check_bool('地図が出てから始める', str_contains($appJs, "new CustomEvent('km-map-ready')") && str_contains($tutorialJs, "'km-map-ready'"));
-    check_bool('QR から来た人と錠のときは出さない', str_contains($tutorialJs, 'meta[name="km-focus-room"]') && str_contains($tutorialJs, "classList.contains('km-map-unavailable')"));
+    check_bool('共有のリンクから来た人と錠のときは出さない', str_contains($tutorialJs, 'meta[name="km-from-share"]') && str_contains($tutorialJs, "classList.contains('km-map-unavailable')"));
     check_bool('最初の手順は場所の検索(2026-10-23 から Google マップ風。選ぶと次へ)', str_contains($tutorialJs, "return [byId('km-place-input'), 'km-place-chosen'];") && str_contains($appJs, "placeInput.dispatchEvent(new CustomEvent('km-place-chosen'));"));
     check_bool('幕は見た目だけ(案内の上からも押せる)', preg_match('/\.km-tour \{[^}]*pointer-events: none/', $css) === 1);
     check_bool('テスト用アカウントは来場者ごとに出す', str_contains($tutorialJs, "SEEN_KEY + ':visit:'"));
@@ -7820,14 +7977,16 @@ function km_check_layout(): void
         && str_contains((string) file_get_contents(__DIR__ . '/../admin/schedule.php'), '$projectNodes = km_map_project_nodes(km_map_projects_for_admin($pdo));'));
     check_bool('公開の地図: 番号で置いたポスターとスケジュールの場所に、イベント中の名前の番号も入る', str_contains((string) file_get_contents(__DIR__ . '/../lib/map-data.php'), "\$projectsById = km_map_projects_with_aliases(km_map_projects_by_node_id(\$pdo), \$overlay['aliases']);"));
     check_bool('公開の地図: 企画の教室はイベント中、札と吹き出しの名前がポスターの見出し(札は縮める)・備考がポスターの説明・ポスターが無ければ番号を前に付ける',
-        str_contains($appJsForPoi, 'escapeHtml(project ? (project.fromPoster ? shortPoiName(project.name) : project.name) : displayNameFor(node));')
+        // 2026-10-24 から、札はすべて 7 文字以上なら「6 文字 + …」(ポスターの見出しだけでなく)
+        str_contains($appJsForPoi, 'escapeHtml(shortPoiName(project ? project.name : displayNameFor(node)));')
         && str_contains($appJsForPoi, 'const title = project ? project.name : (node.alias || node.name);')
         && str_contains($appJsForPoi, "if (!graphData.event || numbers.length === 0) return null;")
         && str_contains($appJsForPoi, "return { name: prefix ? `\${prefix} \${base}` : base, note: '', fromPoster: false };"));
     check_bool('公開の地図: 一時地点は部屋の地点と同じに描く(外も部屋。2026-10-23 に建物から戻した)・同じ種類の束に入れて出し入れと札の間引きも同じ・編集画面は今までの印',
         preg_match("/function poiNodeType\(poi\) \{[^}]*return 'room';\s*\}/", $appJsForPoi) === 1
         && str_contains($appJsForPoi, 'const marker = createPoiMarker(poi, type);')
-        && str_contains($appJsForPoi, "className: 'km-node km-node-' + type + (hasPoster ? ' km-node-has-poster' : ''),")
+        // 2026-10-24 から、イベントの地点の印(km-node-event)も付ける
+        && str_contains($appJsForPoi, "className: 'km-node km-node-' + type + (hasPoster ? ' km-node-has-poster' : '') + (role ? ' km-node-' + role : ''),")
         && str_contains($appJsForPoi, 'poiMarkers.forEach(fn);')
         && str_contains($appJsForPoi, 'if (!window.isAdmin) return;'));
     require_once __DIR__ . '/../lib/display-defaults.php';
@@ -7898,6 +8057,190 @@ function km_check_layout(): void
         && str_contains((string) json_encode(km_legal_privacy(), JSON_UNESCAPED_UNICODE), 'ポスターの ♡'));
     check_bool('ポスターから結びつけた場所へ(地図の引き出し・一覧のページ)', str_contains($gmApp, "head.textContent = poster.projectNo ? `企画 \${poster.projectNo} の場所` : '場所';")
         && str_contains((string) file_get_contents(__DIR__ . '/../posters.php'), "foreach (\$poster['poiIds'] ?? [] as \$poiId) {"));
+
+    km_check_heading('QR のリンク集: /qr.php に並べるリンクを管理画面で決める(2026-10-24)');
+    require_once __DIR__ . '/../lib/qr-links.php';
+    check('URL: https とサイトの中の道だけ(javascript:・よそへの //・空白は断る)', [true, true, true, false, false, false, false],
+        [km_qr_link_url_valid('https://example.com/a?b=1'), km_qr_link_url_valid('/posters.php'), km_qr_link_url_valid('/'), km_qr_link_url_valid('javascript:alert(1)'),
+            km_qr_link_url_valid('//evil.example/'), km_qr_link_url_valid('/a b'), km_qr_link_url_valid('')]);
+    check('入力: 前後の空白を落とす・説明は空なら null・名前と URL は要る', ['title' => 'ポスター', 'url' => '/posters.php', 'description' => null, 'isEnabled' => true],
+        km_qr_link_validate(['title' => ' ポスター ', 'url' => ' /posters.php ', 'description' => '  ', 'isEnabled' => true]));
+    $qrRefused = [];
+    foreach ([['title' => '', 'url' => '/'], ['title' => 'x', 'url' => 'javascript:x'], ['title' => str_repeat('あ', KM_QR_LINK_TITLE_MAX + 1), 'url' => '/']] as $bad) {
+        try {
+            km_qr_link_validate($bad);
+            $qrRefused[] = false;
+        } catch (InvalidArgumentException $exception) {
+            $qrRefused[] = true;
+        }
+    }
+    check('入力: 名前が空・形の違う URL・長すぎる名前を断る', [true, true, true], $qrRefused);
+    if (extension_loaded('pdo_sqlite')) {
+        $qrDb = new PDO('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+        check('公開ページ: 表が無ければ空(作らない)', [], km_qr_links_public($qrDb));
+        $qrDb->exec('CREATE TABLE km_qr_links (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, url TEXT, description TEXT, is_enabled INT, sort_order INT, created_at TEXT, updated_at TEXT)');
+        $qrDb->exec("INSERT INTO km_qr_links (title, url, description, is_enabled, sort_order) VALUES ('A', '/a', NULL, 1, 20), ('B', 'https://b.example/', 'x', 0, 10), ('C', 'javascript:x', NULL, 1, 5), ('D', '/d', NULL, 1, 30)");
+        check('公開ページ: 出すものだけ・並び順・あとで通らなくなった URL は出さない', ['A', 'D'], array_column(km_qr_links_public($qrDb), 'title'));
+    }
+    $qrPage = (string) file_get_contents(__DIR__ . '/../qr.php');
+    check_bool('公開ページ: 先頭はいつも地図・DB が止まっても出す・よそのサイトは新しいタブで行き先を見せる', str_contains($qrPage, '<a class="km-qr-link" href="/">')
+        && str_contains($qrPage, "error_log('qr.php (public) failed (fail open): '") && str_contains($qrPage, ' target="_blank" rel="noopener noreferrer"'));
+    $qrAdmin = (string) file_get_contents(__DIR__ . '/../admin/qr-links.php');
+    check_bool('管理画面: guard の内側・CSRF を見てから書く・記録に残す・左の一覧にある', str_contains($qrAdmin, "require __DIR__ . '/_inc/guard.php';")
+        && strpos($qrAdmin, 'km_csrf_verify()') < strpos($qrAdmin, 'km_qr_link_save(') && str_contains($qrAdmin, "'qr_link.create'")
+        && str_contains((string) file_get_contents(__DIR__ . '/../admin/_inc/partials/sidebar.php'), 'href="./qr-links.php"'));
+
+    km_check_heading('お知らせ: 管理画面で書く・最初の画面と詳しいページ・プレビュー(2026-10-24)');
+    require_once __DIR__ . '/../lib/notices.php';
+    check('本文: 「## 」の行が見出し・空行で段落・見出しより前の段落も残す', [
+        ['heading' => null, 'paragraphs' => ['はじめの段落']],
+        ['heading' => '何があったか', 'paragraphs' => ["一行目\n二行目", '次の段落']],
+        ['heading' => '空の節', 'paragraphs' => []],
+    ], km_notice_parse_body("はじめの段落\n\n## 何があったか\n一行目\n二行目\n\n\n次の段落\n## 空の節\n"));
+    check('入力: 整える・最後の日は空なら null', ['title' => '題', 'summary' => '短い', 'body' => '', 'publishedOn' => '2026-10-24', 'showOnWelcome' => true, 'showUntil' => null, 'isPublished' => false],
+        km_notice_validate(['title' => ' 題 ', 'summary' => ' 短い ', 'body' => '', 'publishedOn' => '2026-10-24', 'showOnWelcome' => true, 'showUntil' => '']));
+    $noticeRefused = [];
+    foreach ([['title' => '', 'summary' => 'x', 'publishedOn' => '2026-10-24'], ['title' => 'x', 'summary' => '', 'publishedOn' => '2026-10-24'],
+        ['title' => 'x', 'summary' => 'x', 'publishedOn' => '2026-02-30'], ['title' => 'x', 'summary' => 'x', 'publishedOn' => '2026-10-24', 'showUntil' => '2026-10-01']] as $bad) {
+        try {
+            km_notice_validate($bad);
+            $noticeRefused[] = false;
+        } catch (InvalidArgumentException $exception) {
+            $noticeRefused[] = true;
+        }
+    }
+    check('入力: 題・短い文が空・無い日付・最後の日が日付より前を断る', [true, true, true, true], $noticeRefused);
+    $noticeSample = [
+        ['id' => 1, 'date' => '2026-10-01', 'until' => '2026-10-31', 'showOnWelcome' => true],
+        ['id' => 2, 'date' => '2026-10-20', 'until' => null, 'showOnWelcome' => true],
+        ['id' => 3, 'date' => '2026-10-20', 'until' => null, 'showOnWelcome' => false],
+        ['id' => 4, 'date' => '2026-12-01', 'until' => '2026-12-31', 'showOnWelcome' => true],
+    ];
+    check('最初の画面: 「最初の画面に出す」が付いていて、出す期間の中のものだけ(最後の日が空なら終わりなし)', [[1, 2], [2], []],
+        [array_column(km_notices_current('2026-10-24', $noticeSample), 'id'), array_column(km_notices_current('2026-11-05', $noticeSample), 'id'), array_column(km_notices_current('2026-09-01', $noticeSample), 'id')]);
+    check('id は数字だけ・日付の書き方', [true, false, false, '2026年10月24日'], [km_notice_id_valid('12'), km_notice_id_valid('../x'), km_notice_id_valid('0'), km_notice_date_label('2026-10-24')]);
+    $noticeHtml = km_notice_detail_html(['date' => '2026-10-24', 'summary' => '<b>x</b>', 'sections' => [['heading' => '<script>', 'paragraphs' => ['a & b']]]]);
+    check_bool('くわしいページの中身は全部エスケープする(HTML は書かせない)', str_contains($noticeHtml, '&lt;b&gt;x&lt;/b&gt;') && str_contains($noticeHtml, '<h2>&lt;script&gt;</h2>') && str_contains($noticeHtml, 'a &amp; b'));
+    if (extension_loaded('pdo_sqlite')) {
+        $noticeDb = new PDO('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+        check('公開: 表が無ければ空(公開ページからは作らない)', [], km_notices_public($noticeDb, '2026-10-24'));
+        $noticeDb->exec('CREATE TABLE km_notices (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, summary TEXT, body TEXT, published_on TEXT, show_on_welcome INT, show_until TEXT, is_published INT, created_at TEXT, updated_at TEXT)');
+        $noticeDb->exec("INSERT INTO km_notices (title, summary, body, published_on, show_on_welcome, show_until, is_published) VALUES
+            ('公開', 's', '## 見出し\n本文', '2026-10-24', 1, NULL, 1), ('下書き', 's', '', '2026-10-24', 1, NULL, 0), ('先の日付', 's', '', '2026-12-01', 1, NULL, 1)");
+        $noticePublic = km_notices_public($noticeDb, '2026-10-24');
+        check('公開: 公開の印があり日付が来たものだけ(下書き・先の日付は出さない)・本文を節に分ける', [['公開'], '見出し'],
+            [array_column($noticePublic, 'title'), $noticePublic[0]['sections'][0]['heading'] ?? null]);
+    }
+    $noticeLib = (string) file_get_contents(__DIR__ . '/../lib/notices.php');
+    check_bool('1 件目は PHP の脆弱性の報告(表を作ったときだけ。CVE・修正版・跡は見つからなかった・操作は要らない)', str_contains($noticeLib, 'if ($created) {')
+        && str_contains($noticeLib, 'CVE-2026-109618') && str_contains($noticeLib, '8.4.27') && str_contains($noticeLib, '不正に使われた跡は見つかっていません') && str_contains($noticeLib, '行っていただく操作はありません'));
+    $noticeIndex = (string) file_get_contents(__DIR__ . '/../index.php');
+    $noticeWelcome = (string) file_get_contents(__DIR__ . '/../Main/welcome.js');
+    check_bool('「はじめに」の先頭にお知らせ(読めなければ出さない)・読んでいないお知らせがあれば読んだ人にも出す・設定から一覧へ', str_contains($noticeIndex, '$kmNotices = km_notices_current(km_notice_today(), km_notices_public(km_db(), km_notice_today()));')
+        && str_contains($noticeIndex, 'data-notices="<?= km_home_e(implode(\',\', array_column($kmNotices, \'id\'))) ?>"') && str_contains($noticeIndex, '<a href="/notice.php" class="secondary-btn">お知らせ</a>')
+        && str_contains($noticeWelcome, 'if ((!seen() || unreadNotices().length > 0) && !fromShare) open();'));
+    $noticePage = (string) file_get_contents(__DIR__ . '/../notice.php');
+    check_bool('くわしいページ: 公開しているものだけ・知らなければ 404 と一覧・DB が止まっても出す・中身はプレビューと同じ組み立て', str_contains($noticePage, '$all = km_notices_public($pdo, km_notice_today());')
+        && str_contains($noticePage, 'http_response_code(404);') && str_contains($noticePage, "error_log('notice.php (public) failed (fail open): '") && str_contains($noticePage, '<?= km_notice_detail_html($notice) ?>'));
+    $noticeAdmin = (string) file_get_contents(__DIR__ . '/../admin/notices.php');
+    check_bool('管理画面: guard の内側・CSRF を見てから書く・プレビューは保存しない(公開ページと同じ組み立て)・記録に残す・左の一覧にある', str_contains($noticeAdmin, "require __DIR__ . '/_inc/guard.php';")
+        && strpos($noticeAdmin, 'km_csrf_verify()') < strpos($noticeAdmin, 'km_notice_save(') && str_contains($noticeAdmin, "if (\$formAction === 'preview') {")
+        && str_contains($noticeAdmin, '<?= km_notice_detail_html($preview) ?>') && str_contains($noticeAdmin, "'notice.create'")
+        && str_contains((string) file_get_contents(__DIR__ . '/../admin/_inc/partials/sidebar.php'), 'href="./notices.php"'));
+    /*
+     * ======== 地図の 6 つの直し(2026-10-24、利用者の指示) ========
+     *   1. 共有から開いたときは、チュートリアル・前回の経路を出さない(広告は出す)
+     *   2. 札はすべて 6 文字 + …
+     *   3. 経路の線が地点や札に重なる所は透かす・イベントで関係ない地点は透かす
+     *   4. イベントの地点は太い赤い縁
+     *   5. チュートリアルとお知らせを機能ごと ON/OFF
+     *   6. 経路が使う階をいつも見せる
+     */
+    km_check_heading('地図: 共有のリンクから開いたとき(2026-10-24)');
+    $shareIndex = (string) file_get_contents(__DIR__ . '/../index.php');
+    $shareTutorial = (string) file_get_contents(__DIR__ . '/../Main/tutorial.js');
+    $shareHistory = (string) file_get_contents(__DIR__ . '/../Main/user-history.js');
+    $shareEnd = (string) file_get_contents(__DIR__ . '/../Main/tutorial-end.js');
+    $shareApp = (string) file_get_contents(__DIR__ . '/../Main/app.js');
+    // 印は 1 つ。部屋の QR・場所・経路(両端そろったときだけ)のどれでも立つ
+    check_bool('共有の印は部屋・場所・経路のどれでも立つ', str_contains($shareIndex, '$kmFromShare = $kmFocusRoom !== null')
+        && str_contains($shareIndex, '|| $kmFocusPoi !== null')
+        && str_contains($shareIndex, '|| (($kmFocusFrom !== null || $kmFocusFromPoi !== null) && ($kmFocusTo !== null || $kmFocusToPoi !== null));')
+        && str_contains($shareIndex, '<meta name="km-from-share" content="1">'));
+    check_bool('チュートリアルは共有の印を見て出さない', str_contains($shareTutorial, "if (document.querySelector('meta[name=\"km-from-share\"]')) return;"));
+    // 前回の経路は聞かない(同期の答えも決めない。決まっている人の同期は続ける)
+    check_bool('前回の経路は共有の印を見て聞かない', preg_match("/if \(document\.querySelector\('meta\[name=\"km-from-share\"\]'\)\) \{\s*try \{ window\.sessionStorage\.setItem\('km-route-resume-asked', '1'\);/", $shareHistory) === 1
+        && strpos($shareHistory, 'meta[name="km-from-share"]') < strpos($shareHistory, "ask('前回の経路'"));
+    // 広告は出す。チュートリアルを通らない入口。セッションで 1 回だけ・選び方と数え方はチュートリアルの終わりと同じ
+    check_bool('広告だけを出す入口(セッションで 1 回・同じ選び方と数え方)', str_contains($shareEnd, 'window.kmShowAd = function () {')
+        && str_contains($shareEnd, "const AD_SESSION_KEY = 'km-ad-shown';")
+        && str_contains($shareEnd, 'showAd(pickAd(list), function () {'));
+    check_bool('共有から来たら、開いた所を出したあとで広告', str_contains($shareApp, "if (document.querySelector('meta[name=\"km-from-share\"]')) {")
+        && str_contains($shareApp, 'if (typeof window.kmShowAd === \'function\') window.kmShowAd();')
+        && str_contains($shareApp, 'const SHARE_AD_DELAY_MS = 1500;'));
+
+    km_check_heading('地図: 札は 6 文字 + …・イベントの地点の見分け・経路の線(2026-10-24)');
+    $viewCss = (string) file_get_contents(__DIR__ . '/../Main/styles.css');
+    check_bool('札はすべて縮める(地点・一時地点)', str_contains($shareApp, 'escapeHtml(shortPoiName(project ? project.name : displayNameFor(node)));')
+        && str_contains($shareApp, 'escapeHtml(shortPoiName(shown.name))'));
+    check_bool('縮め方は 7 文字以上を 6 文字 + …', str_contains($shareApp, "return chars.length >= 7 ? chars.slice(0, 6).join('') + '…' : chars.join('');"));
+    // イベントの地点 = 臨時の名前・企画の番号・ポスターのどれか(+ 一時地点)。イベント中・公開の地図だけ
+    check_bool('イベントの地点の決め方', str_contains($shareApp, "if (window.isAdmin || !graphData.event) return '';")
+        && str_contains($shareApp, "return node.alias || hasProject || hasPoster ? 'event' : 'unrelated';")
+        && str_contains($shareApp, "const role = window.isAdmin ? '' : 'event';"));
+    check_bool('印と札の両方に付ける', str_contains($shareApp, "(role ? ' km-node-' + role : '')") && str_contains($shareApp, "(role ? ' km-label-' + role : '')"));
+    check_bool('イベントの地点は太い赤い縁(印と札)', preg_match('/\.km-node-event \.km-node-shape path \{\s*stroke: #dc2626;\s*stroke-width: 3\.5px;/', $viewCss) === 1
+        && str_contains($viewCss, 'border: 3px solid #dc2626 !important;'));
+    // 50% 以上透かす。札は Leaflet が opacity を要素に直接書くので !important
+    check_bool('関係ない地点は 50% 以上透かす', str_contains($viewCss, '.km-node-unrelated { opacity: 0.45; }')
+        && str_contains($viewCss, '.km-label.km-label-unrelated { opacity: 0.45 !important; }'));
+    // 60〜80% 透かす(0.3 = 70%)。重なりは画面の座標で、出している印と札の箱
+    check_bool('線が重なる所は 70% 透かす', str_contains($shareApp, 'const ROUTE_OVERLAP_OPACITY = 0.3;')
+        && str_contains($shareApp, 'view.splitRouteByObstacles(points, routeObstacleRects(), ROUTE_OVERLAP_PAD)')
+        && str_contains($shareApp, "container.querySelectorAll('.leaflet-marker-pane .km-node, .leaflet-tooltip-pane .km-label')"));
+    check_bool('動き終えたら塗り直す・経路を消したら忘れる', str_contains($shareApp, "window.map.on('moveend', refreshRouteOverlap);")
+        && preg_match('/function clearRoute\(\) \{[^}]*routeLineRuns = \[\];/s', $shareApp) === 1);
+    check_bool('route-view.js を app.js より先に読む', ($rv = strpos($shareIndex, "Main/route-view.js')")) !== false
+        && $rv < (int) strpos($shareIndex, "<script defer src=\"<?= km_home_e(km_public_asset('Main/app.js'))"));
+
+    km_check_heading('地図: 経路が使う階をいつも見せる(2026-10-24)');
+    check_bool('帯の上に階の列', str_contains($shareIndex, '<div id="km-route-floors" class="km-route-floors" role="group" aria-label="この経路が使う階" hidden></div>'));
+    check_bool('並びは routeFloorSequence(続けて同じ階は畳む)・押すとその階へ', str_contains($shareApp, 'view.routeFloorSequence(currentRoutePath.map(')
+        && str_contains($shareApp, "chip.addEventListener('click', () => changeFloor(String(floor)));"));
+    check_bool('帯を書くたびに出し直す・階を移ったら塗り直す', str_contains($shareApp, 'renderRouteFloors(active);')
+        && str_contains($shareApp, 'if (window.kmRenderRouteFloors) window.kmRenderRouteFloors();'));
+    check_bool('右の階の列にも印', str_contains($shareApp, "btn.classList.toggle('is-on-route', onRoute.has(btn.dataset.floor));")
+        && str_contains($viewCss, '.floor-nav .floor-btn.is-on-route { box-shadow: inset 0 0 0 3px #ef4444; }'));
+
+    km_check_heading('地図: 共有のリンクを一般向けアプリで開く(App Links。2026-10-24)');
+    $linkNginx = (string) @file_get_contents(km_check_repo_root() . '/nginx/default.conf.template');
+    // Android が確かめる。一般向けだけ(管理アプリを載せると、同じリンクで選ぶ画面が出る)。リダイレクトさせず JSON で返す
+    check_bool('assetlinks.json を返す(一般向けのパッケージ・リリースの鍵・JSON)', str_contains($linkNginx, 'location = /.well-known/assetlinks.json {')
+        && str_contains($linkNginx, '"package_name":"com.ito.kosenmap",')
+        && str_contains($linkNginx, '"sha256_cert_fingerprints":["D7:1F:BF:0A:0D:92:FA:EE:D8:67:CD:88:F0:E7:B3:3C:3D:D9:A7:49:66:90:0B:B0:2A:19:F1:E4:3C:2A:93:AF"]')
+        && !str_contains($linkNginx, '"package_name":"com.ito.kosenmap.admin"')
+        && preg_match('/location = \/\.well-known\/assetlinks\.json \{\s*default_type application\/json;/', $linkNginx) === 1);
+
+    km_check_heading('地図: チュートリアルとお知らせの ON/OFF(2026-10-24)');
+    require_once __DIR__ . '/../lib/map-switches.php';
+    check('保存の値: \'0\' だけが OFF(空や知らない値は既定の ON)', [false, true, true, true],
+        [km_map_switch_value('0'), km_map_switch_value('1'), km_map_switch_value(''), km_map_switch_value('yes')]);
+    check_bool('スイッチは読めなければ ON(今までどおり出す)', str_contains($shareIndex, "\$kmSwitches = ['tutorial' => true, 'notices' => true];"));
+    check_bool('チュートリアル OFF: tutorial.js を読まない・「操作の案内」を出さない', preg_match("/<\?php if \(\\\$kmSwitches\['tutorial'\]\): \?>\s*<script defer src=\"<\?= km_home_e\(km_public_asset\('Main\/tutorial\.js'\)\) \?>\"><\/script>/", $shareIndex) === 1
+        && preg_match("/<\?php if \(\\\$kmSwitches\['tutorial'\]\): \?>\s*<button type=\"button\" class=\"secondary-btn\" data-km-tutorial-open>/", $shareIndex) === 1);
+    // 広告はチュートリアルの終わりから出していた。止めたら「はじめに」を閉じたときに出す
+    check_bool('チュートリアル OFF でも広告は出す(「はじめに」を閉じたとき)', str_contains($shareIndex, "<?= \$kmSwitches['tutorial'] ? '' : ' data-tutorial=\"off\"' ?>")
+        && str_contains((string) file_get_contents(__DIR__ . '/../Main/welcome.js'), "if (dialog.dataset.tutorial === 'off' && typeof window.kmShowAd === 'function') {"));
+    check_bool('お知らせ OFF: 最初の画面に出さない・一覧へのボタンを出さない', str_contains($shareIndex, "if (\$kmSwitches['notices']) {")
+        && preg_match("/<\?php if \(\\\$kmSwitches\['notices'\]\): \?>\s*<a href=\"\/notice\.php\" class=\"secondary-btn\">お知らせ<\/a>/", $shareIndex) === 1);
+    $switchNoticePage = (string) file_get_contents(__DIR__ . '/../notice.php');
+    check_bool('お知らせ OFF: 公開ページは 404(書いたものは消さない)', str_contains($switchNoticePage, "\$noticesOff = !km_map_switches(\$pdo)['notices'];")
+        && preg_match('/if \(\$noticesOff\) \{\s*http_response_code\(404\);/', $switchNoticePage) === 1);
+    $switchAdmin = (string) file_get_contents(__DIR__ . '/../admin/notices.php');
+    check_bool('管理画面「お知らせ」で切り替える(CSRF のあと・記録に残す)', str_contains($switchAdmin, "if (\$formAction === 'switches') {")
+        && strpos($switchAdmin, 'km_csrf_verify()') < strpos($switchAdmin, 'km_map_switches_save(')
+        && str_contains($switchAdmin, "km_admin_log_record('content', 'map.switches',")
+        && str_contains((string) file_get_contents(__DIR__ . '/../lib/admin-log.php'), "'map.switches' =>"));
 
     km_check_heading('posters: 広告(重み 10%・必ず 1 件)・数・チュートリアルの終わりの知らせ(2026-10-21)');
     check('広告の重みは 10%(利用者の指示。全部同じ)', 10, KM_POSTER_AD_WEIGHT);

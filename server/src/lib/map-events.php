@@ -286,16 +286,7 @@ function km_map_event_active(PDO $pdo): array
  */
 function km_map_event_overlay(PDO $pdo, ?int $previewEventId = null, bool $onlyPreview = false): array
 {
-    $empty = [
-        'events' => [],
-        'hideOccupantNames' => false,
-        'closedEdges' => [],
-        'closedNodes' => [],
-        'pois' => [],
-        'aliases' => [],
-        'hiddenNodes' => [],
-        'onlyEventNodes' => false,
-    ];
+    $empty = km_map_event_overlay_empty();
 
     try {
         // $onlyPreview: そのイベント 1 つだけ(管理アプリへ渡すとき。api/map-events.php)。有効かどうかは問わない
@@ -320,88 +311,7 @@ function km_map_event_overlay(PDO $pdo, ?int $previewEventId = null, bool $onlyP
             return $empty;
         }
 
-        $ids = array_column($events, 'id');
-        $in = implode(',', array_fill(0, count($ids), '?'));
-
-        $overlay = $empty;
-        $overlay['events'] = $events;
-        foreach ($events as $event) {
-            if ($event['hideOccupantNames']) {
-                $overlay['hideOccupantNames'] = true;
-            }
-        }
-
-        // --- 通行止め ---
-        $stmt = $pdo->prepare(
-            "SELECT target_type AS targetType, from_node_id AS fromNode, to_node_id AS toNode,
-                    node_id AS nodeId, reason
-             FROM km_map_event_closures WHERE event_id IN ($in)"
-        );
-        $stmt->execute($ids);
-        foreach ($stmt->fetchAll() as $row) {
-            $reason = (string) ($row['reason'] ?? '');
-            if ($row['targetType'] === 'node' && $row['nodeId'] !== null) {
-                $overlay['closedNodes'][(string) $row['nodeId']] = $reason;
-                continue;
-            }
-            if ($row['fromNode'] === null || $row['toNode'] === null) {
-                continue;
-            }
-            // **両方向を入れる。** エッジは無向で、配信時の source/target がどちら向きかは
-            // 保証されない。片方だけだと「閉じたはずの道が通れる」ことになる
-            $overlay['closedEdges'][km_map_event_edge_key((string) $row['fromNode'], (string) $row['toNode'])] = $reason;
-            $overlay['closedEdges'][km_map_event_edge_key((string) $row['toNode'], (string) $row['fromNode'])] = $reason;
-        }
-
-        // --- 臨時の地点 ---
-        $stmt = $pdo->prepare(
-            "SELECT id, event_id AS eventId, floor_id AS floor, name, category, x, y,
-                    anchor_node_id AS anchorNodeId, note
-             FROM km_map_event_pois WHERE event_id IN ($in) ORDER BY id"
-        );
-        $stmt->execute($ids);
-        foreach ($stmt->fetchAll() as $row) {
-            $row['id'] = (int) $row['id'];
-            $row['eventId'] = (int) $row['eventId'];
-            $row['x'] = (int) $row['x'];
-            $row['y'] = (int) $row['y'];
-            $overlay['pois'][] = $row;
-        }
-
-        // --- 臨時名称 ---
-        $stmt = $pdo->prepare(
-            "SELECT node_id AS nodeId, alias FROM km_map_event_aliases WHERE event_id IN ($in)"
-        );
-        $stmt->execute($ids);
-        foreach ($stmt->fetchAll() as $row) {
-            $overlay['aliases'][(string) $row['nodeId']] = (string) $row['alias'];
-        }
-
-        /*
-         * --- 出さない地点(2026-10-14) ---
-         *
-         * **ここだけは失敗しても続ける。** 表は管理画面を開いたときに作られるので、
-         * 配備してから管理画面を開くまでの間は無い。そのせいで通行止めまで消えては困る。
-         */
-        try {
-            $stmt = $pdo->prepare("SELECT node_id AS nodeId FROM km_map_event_hidden WHERE event_id IN ($in)");
-            $stmt->execute($ids);
-            foreach ($stmt->fetchAll() as $row) {
-                $overlay['hiddenNodes'][(string) $row['nodeId']] = true;
-            }
-        } catch (Throwable $exception) {
-            error_log('km_map_event_overlay: km_map_event_hidden is not readable yet: ' . $exception->getMessage());
-        }
-
-        // --- イベントの地点だけを出すか(2026-10-23)。行が無い・表がまだ無いイベントは ON ---
-        $options = km_map_event_options_read($pdo, $ids);
-        foreach ($ids as $eventId) {
-            if ($options[(int) $eventId] ?? true) {
-                $overlay['onlyEventNodes'] = true;
-            }
-        }
-
-        return $overlay;
+        return km_map_event_overlay_build($pdo, $events);
     } catch (Throwable $exception) {
         /*
          * **イベントの不調で地図そのものを落とさない。**
@@ -415,6 +325,209 @@ function km_map_event_overlay(PDO $pdo, ?int $previewEventId = null, bool $onlyP
         );
         return $empty;
     }
+}
+
+/** 重ね合わせの空の形。[km_map_event_overlay] と [km_map_event_overlay_build] で同じものを使う */
+function km_map_event_overlay_empty(): array
+{
+    return [
+        'events' => [],
+        'hideOccupantNames' => false,
+        'closedEdges' => [],
+        'closedNodes' => [],
+        'pois' => [],
+        'aliases' => [],
+        'hiddenNodes' => [],
+        'onlyEventNodes' => false,
+    ];
+}
+
+/**
+ * 渡したイベントの重ね合わせを組み立てる。**どのイベントを選ぶかは呼ぶ側が決める**
+ * (公開ページは「いま有効」なもの、アプリへの配信は「次に効く会期」のもの。[km_map_event_overlay_for_app])。
+ *
+ * **例外を飲み込まない。** 呼ぶ側の try が受け持つ(公開ページは「イベント無し」に倒し、配信は止める)。
+ *
+ * @param array<int, array> $events 空でないこと
+ */
+function km_map_event_overlay_build(PDO $pdo, array $events): array
+{
+    $empty = km_map_event_overlay_empty();
+    if ($events === []) {
+        return $empty;
+    }
+
+    $ids = array_column($events, 'id');
+    $in = implode(',', array_fill(0, count($ids), '?'));
+
+    $overlay = $empty;
+    $overlay['events'] = $events;
+    foreach ($events as $event) {
+        if ($event['hideOccupantNames']) {
+            $overlay['hideOccupantNames'] = true;
+        }
+    }
+
+    // --- 通行止め ---
+    $stmt = $pdo->prepare(
+        "SELECT target_type AS targetType, from_node_id AS fromNode, to_node_id AS toNode,
+                node_id AS nodeId, reason
+         FROM km_map_event_closures WHERE event_id IN ($in)"
+    );
+    $stmt->execute($ids);
+    foreach ($stmt->fetchAll() as $row) {
+        $reason = (string) ($row['reason'] ?? '');
+        if ($row['targetType'] === 'node' && $row['nodeId'] !== null) {
+            $overlay['closedNodes'][(string) $row['nodeId']] = $reason;
+            continue;
+        }
+        if ($row['fromNode'] === null || $row['toNode'] === null) {
+            continue;
+        }
+        // **両方向を入れる。** エッジは無向で、配信時の source/target がどちら向きかは
+        // 保証されない。片方だけだと「閉じたはずの道が通れる」ことになる
+        $overlay['closedEdges'][km_map_event_edge_key((string) $row['fromNode'], (string) $row['toNode'])] = $reason;
+        $overlay['closedEdges'][km_map_event_edge_key((string) $row['toNode'], (string) $row['fromNode'])] = $reason;
+    }
+
+    // --- 臨時の地点 ---
+    $stmt = $pdo->prepare(
+        "SELECT id, event_id AS eventId, floor_id AS floor, name, category, x, y,
+                anchor_node_id AS anchorNodeId, note
+         FROM km_map_event_pois WHERE event_id IN ($in) ORDER BY id"
+    );
+    $stmt->execute($ids);
+    foreach ($stmt->fetchAll() as $row) {
+        $row['id'] = (int) $row['id'];
+        $row['eventId'] = (int) $row['eventId'];
+        $row['x'] = (int) $row['x'];
+        $row['y'] = (int) $row['y'];
+        $overlay['pois'][] = $row;
+    }
+
+    // --- 臨時名称 ---
+    $stmt = $pdo->prepare(
+        "SELECT node_id AS nodeId, alias FROM km_map_event_aliases WHERE event_id IN ($in)"
+    );
+    $stmt->execute($ids);
+    foreach ($stmt->fetchAll() as $row) {
+        $overlay['aliases'][(string) $row['nodeId']] = (string) $row['alias'];
+    }
+
+    /*
+     * --- 出さない地点(2026-10-14) ---
+     *
+     * **ここだけは失敗しても続ける。** 表は管理画面を開いたときに作られるので、
+     * 配備してから管理画面を開くまでの間は無い。そのせいで通行止めまで消えては困る。
+     */
+    try {
+        $stmt = $pdo->prepare("SELECT node_id AS nodeId FROM km_map_event_hidden WHERE event_id IN ($in)");
+        $stmt->execute($ids);
+        foreach ($stmt->fetchAll() as $row) {
+            $overlay['hiddenNodes'][(string) $row['nodeId']] = true;
+        }
+    } catch (Throwable $exception) {
+        error_log('km_map_event_overlay: km_map_event_hidden is not readable yet: ' . $exception->getMessage());
+    }
+
+    // --- イベントの地点だけを出すか(2026-10-23)。行が無い・表がまだ無いイベントは ON ---
+    $options = km_map_event_options_read($pdo, $ids);
+    foreach ($ids as $eventId) {
+        if ($options[(int) $eventId] ?? true) {
+            $overlay['onlyEventNodes'] = true;
+        }
+    }
+
+    return $overlay;
+}
+
+/**
+ * **アプリへ配る分**の重ね合わせ(2026-10-24、利用者の指摘「一般向けアプリでイベントが丸ごと効いていない」)。
+ *
+ * ## なぜ公開ページと別にするのか
+ *
+ * 公開ページは開くたびに「いま有効」を見るが、**アプリに配るのは焼き付けた写し**である。
+ * `km_map_event_overlay()`(= いま有効なものだけ)で焼くと、**会期の前に配信した地図には
+ * イベントが 1 つも入らない** —— 当日になってもアプリ側には何も無く、配信し直すまで
+ * 臨時の地点も臨時名称も通行止めも出ない。これが「一般向けだけ効かない」の正体だった
+ * (管理ビルドは自分でイベントを選べるので、同じ地図でも効いて見える)。
+ *
+ * ## 「次に効く会期」を焼く
+ *
+ * - いま有効なものがあれば、それを重ねる(今までどおり)。始まりは「もう始まっている」
+ * - 1 つも無ければ、**次に始まる会期**を重ねる。始まりはその時刻
+ *
+ * アプリは `activeMapEvent()` で会期を見て、`nextEventBoundaryMillis()` で境目に計算し直す ——
+ * 始まりを渡しておけば、配信し直さなくてもその時刻から効き始める。
+ *
+ * **会期をまたいで混ぜない。** 工事(長期)の最中に高専祭(翌週)が来るとき、
+ * 2 つを 1 つに畳むと高専祭の通行止めが今日から効いてしまう。選ぶのはどちらか一方の会期。
+ *
+ * @return array{overlay:array, startsAt:?string} startsAt は「まだ始まっていない会期」のときだけ入る
+ */
+function km_map_event_overlay_for_app(PDO $pdo): array
+{
+    /*
+     * **イベントの不調で配信そのものを止めない**(km_map_event_overlay と同じ倒し方)。
+     * 表がまだ無いとき(配備してから管理画面を開くまで)も、地図だけは配れる
+     */
+    try {
+        return km_map_event_overlay_for_app_build($pdo);
+    } catch (Throwable $exception) {
+        error_log('km_map_event_overlay_for_app failed (publishing without events): ' . $exception->getMessage());
+        return ['overlay' => km_map_event_overlay_empty(), 'startsAt' => null];
+    }
+}
+
+/** [km_map_event_overlay_for_app] の中身。**例外を飲み込まない**(呼ぶ側の try が受け持つ) */
+function km_map_event_overlay_for_app_build(PDO $pdo): array
+{
+    /*
+     * 終わっていない(= いま有効 + これから)イベント。**判定は DB の NOW() で**
+     * (PHP と DB のタイムゾーンがずれていても食い違わない。KM_MAP_EVENT_ACTIVE_SQL と同じ理由)
+     */
+    $rows = $pdo->query(
+        'SELECT id, name, hide_occupant_names AS hideOccupantNames,
+                banner_text AS bannerText, banner_url AS bannerUrl,
+                starts_at AS startsAt, ends_at AS endsAt,
+                (starts_at IS NULL OR starts_at <= NOW()) AS isActive
+         FROM km_map_events
+         WHERE is_enabled = 1 AND (ends_at IS NULL OR ends_at > NOW())
+         ORDER BY id'
+    )->fetchAll();
+
+    foreach ($rows as &$row) {
+        $row['id'] = (int) $row['id'];
+        $row['hideOccupantNames'] = (bool) $row['hideOccupantNames'];
+        $row['isActive'] = (bool) $row['isActive'];
+    }
+    unset($row);
+
+    $active = array_values(array_filter($rows, static fn (array $row): bool => $row['isActive']));
+    if ($active !== []) {
+        return ['overlay' => km_map_event_overlay_build($pdo, $active), 'startsAt' => null];
+    }
+
+    // これから始まるものだけ。一番早い会期を選ぶ(同じ時刻に始まるものは一緒に重ねる)
+    $startsAt = null;
+    foreach ($rows as $row) {
+        $value = (string) ($row['startsAt'] ?? '');
+        if ($value === '') {
+            continue;
+        }
+        if ($startsAt === null || $value < $startsAt) {
+            $startsAt = $value;
+        }
+    }
+    if ($startsAt === null) {
+        return ['overlay' => km_map_event_overlay_empty(), 'startsAt' => null];
+    }
+    $window = array_values(array_filter(
+        $rows,
+        static fn (array $row): bool => (string) ($row['startsAt'] ?? '') === $startsAt
+    ));
+
+    return ['overlay' => km_map_event_overlay_build($pdo, $window), 'startsAt' => $startsAt];
 }
 
 /**

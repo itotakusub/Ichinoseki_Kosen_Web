@@ -630,7 +630,8 @@ function km_app_map_snapshot_summary(
  *
  * @param array<int, mixed> $events 配信ファイルの events
  * @return array{uuid:string, missing:bool, name:?string, startAt:?string, endAt:?string,
- *               notStarted:bool, ended:bool, active:bool}|null
+ *               notStarted:bool, ended:bool, active:bool, nameCount:int, placeCount:int,
+ *               closureCount:int, hiddenCount:int}|null
  */
 function km_app_map_active_event_status(
     array $events,
@@ -667,6 +668,10 @@ function km_app_map_active_event_status(
             'notStarted' => false,
             'ended' => false,
             'active' => false,
+            'nameCount' => 0,
+            'placeCount' => 0,
+            'closureCount' => 0,
+            'hiddenCount' => 0,
         ];
     }
 
@@ -684,6 +689,18 @@ function km_app_map_active_event_status(
     $notStarted = is_numeric($startMillis) && $nowMillis < (int) $startMillis;
     $ended = is_numeric($endMillis) && $nowMillis > (int) $endMillis;
 
+    /*
+     * **中身の件数も出す**(2026-10-24、利用者の指摘「一般向けアプリで臨時の名前になっていない」)。
+     * 「イベントは載っているのに名前が置き換わらない」とき、載っているのが**空のイベント**なのか、
+     * アプリ側の問題なのかが、画面からは分からなかった。配った地図が持っている数をそのまま出す
+     */
+    $countOf = static function ($value): int {
+        if (is_array($value)) {
+            return count($value);
+        }
+        return $value instanceof stdClass ? count(get_object_vars($value)) : 0;
+    };
+
     return [
         'uuid' => $uuid,
         'missing' => false,
@@ -693,6 +710,11 @@ function km_app_map_active_event_status(
         'notStarted' => $notStarted,
         'ended' => $ended,
         'active' => !$notStarted && !$ended,
+        // 臨時の名前(nameOverrides)・臨時の地点(places)・通行止め・出さない地点
+        'nameCount' => $countOf($found->nameOverrides ?? null),
+        'placeCount' => $countOf($found->places ?? null),
+        'closureCount' => $countOf($found->closedNodeUuids ?? null) + $countOf($found->closedLineKeys ?? null),
+        'hiddenCount' => $countOf($found->hiddenNodeUuids ?? null),
     ];
 }
 

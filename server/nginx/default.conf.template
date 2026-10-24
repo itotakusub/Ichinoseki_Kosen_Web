@@ -420,6 +420,17 @@ server {
     client_max_body_size 3m;
 
     # ---------------------------------------------------------------------
+    # Android の App Links の確かめ(2026-10-24、利用者の指示「共有から開いた時は…」)。
+    # 一般向けアプリ(com.ito.kosenmap)が https://ito4.jp/ の共有のリンクを開いてよいことを、Android がここで確かめる
+    # (アプリ側は src/visitor/AndroidManifest.xml の autoVerify)。中身はパッケージ名とリリースの鍵の SHA-256 だけ ——
+    # **秘密ではない**(APK から誰でも読める)。鍵を作り直したら、ここも書き換えること(apksigner verify --print-certs)。
+    # 管理アプリは載せない(同じリンクで選ぶ画面が出ないように)。リダイレクトさせない・JSON で返す(Android の決まり)
+    location = /.well-known/assetlinks.json {
+        default_type application/json;
+        return 200 '[{"relation":["delegate_permission/common.handle_all_urls"],"target":{"namespace":"android_app","package_name":"com.ito.kosenmap","sha256_cert_fingerprints":["D7:1F:BF:0A:0D:92:FA:EE:D8:67:CD:88:F0:E7:B3:3C:3D:D9:A7:49:66:90:0B:B0:2A:19:F1:E4:3C:2A:93:AF"]}}]';
+    }
+
+    # ---------------------------------------------------------------------
     # **`.php` の後ろにパスを足した URL は通さない**(2026-09-14 の診断で追加。server-authz 0・critic 5)。
     #
     # Apache(mod_php)は既定で `/contact.php/x` を contact.php として実行する。一方ここの守りは
