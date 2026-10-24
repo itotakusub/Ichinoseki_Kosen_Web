@@ -591,8 +591,13 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
                          * 階を移るときの好み(2026-09-22、利用者の要望)。**選ばれなかった方も使う** ——
                          * その建物に片方しか無いときに経路が消えないよう、重くするだけにしてある
                          * (`Main/dijkstra.js` の KM_VERTICAL_PENALTY)。選んだ値は端末に覚える。
+                         *
+                         * 階の好みと C・D は「経路の設定」に畳む(2026-10-24、利用者の指摘)。スマホで欄が高くなり、
+                         * 開いたまま出るキーボードに入力欄と検索の窓が隠れた。畳んでいても、効いている設定は見出しの横に出す(app.js)
                          */
                         ?>
+                        <details class="km-route-options">
+                        <summary>経路の設定 <span id="km-route-options-state" class="km-route-options-state"></span></summary>
                         <div class="km-route-pref">
                             <label for="vertical-pref">階を移るとき</label>
                             <select id="vertical-pref" class="km-route-pref-select">
@@ -612,6 +617,7 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
                             <label class="km-route-check"><input type="checkbox" id="route-fewer-floors"> 階の移動を減らす</label>
                             <label class="km-route-check"><input type="checkbox" id="route-rain"> 雨の日(外をなるべく通らない)</label>
                         </div>
+                        </details>
                         <div class="button-group">
                             <button id="search-btn" class="primary-btn">案内開始</button>
                             <button id="reset-btn" class="secondary-btn">リセット</button>

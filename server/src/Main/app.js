@@ -381,6 +381,21 @@ document.addEventListener('DOMContentLoaded', async () => {
      * **`textContent` で丸ごと書き換えない** —— 中に絵文字と文字の2つの要素があり、
      * 丸ごと入れ替えると次に開いたとき差し替える先が消えている。
      */
+    /*
+     * ページごと送られたままにしない(2026-10-24、利用者の指摘)。スマホでキーボードを出すと、ブラウザが入力欄を見せようとして
+     * ページ全体を上へ送ることがあり、閉じたあとも上の検索の窓が画面の外に残った。このページは送らない作り
+     * (html・body は overflow: hidden)なので、入力欄から離れたときとキーボードが下りたときに元へ戻す
+     */
+    function resetPageScroll() {
+        const active = document.activeElement;
+        if (active && (active.tagName === 'INPUT' || active.tagName === 'SELECT' || active.tagName === 'TEXTAREA')) return;
+        const root = document.scrollingElement || document.documentElement;
+        if (root.scrollTop !== 0 || root.scrollLeft !== 0) window.scrollTo(0, 0);
+        if (document.body.scrollTop !== 0) document.body.scrollTop = 0;
+    }
+    document.addEventListener('focusout', () => window.setTimeout(resetPageScroll, 150));
+    if (window.visualViewport) window.visualViewport.addEventListener('resize', () => window.setTimeout(resetPageScroll, 150));
+
     function setSearchPanelCollapsed(collapsed, refit = true) {
         if (!searchPanel) return;
         searchPanel.classList.toggle('collapsed', collapsed);
@@ -1442,11 +1457,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         const panel = document.getElementById('search-panel');
         if (isPanelVisible(panel)) {
             const rect = panel.getBoundingClientRect();
-            // デスクトップでは左に立つ縦長のカード、モバイルでは下から出るシート
+            // デスクトップでは左に立つ縦長のカード、モバイルでは上いっぱいの欄(2026-10-24 に下から上へ移した)
             if (width > 768) {
                 left = Math.max(left, rect.right + PANEL_GAP);
             } else {
-                bottom = Math.max(bottom, height - rect.top + PANEL_GAP);
+                top = Math.max(top, rect.bottom + PANEL_GAP);
             }
         }
 
@@ -2119,11 +2134,29 @@ document.addEventListener('DOMContentLoaded', async () => {
                 // 保存できなくても、この画面の間は効く
             }
             rebuildDijkstra();
+            updateRouteOptionsState();
             if (currentRoutePath && startInput && endInput && startInput.value && endInput.value) {
                 searchBtn.click();
             }
         });
     });
+
+    /*
+     * 「経路の設定」は畳んである(2026-10-24。スマホで経路の欄を短くし、キーボードに隠れないようにした)。
+     * 畳んでいても効いている設定が分かるよう、見出しの横に出す
+     */
+    const routeOptionsState = document.getElementById('km-route-options-state');
+    function updateRouteOptionsState() {
+        if (!routeOptionsState) return;
+        const parts = [];
+        if (verticalPreference === 'elevator') parts.push('エレベーター優先');
+        if (verticalPreference === 'stairs') parts.push('階段優先');
+        if (routeOptions.fewerFloors) parts.push('階の移動を減らす');
+        if (routeOptions.rain) parts.push('雨の日');
+        routeOptionsState.textContent = parts.join('・');
+    }
+    updateRouteOptionsState();
+    if (verticalSelect) verticalSelect.addEventListener('change', updateRouteOptionsState);
 
     /*
      * テスト用アカウント(展示の PC。2026-10-15)の操作の記録。`window.kmTestLog` は

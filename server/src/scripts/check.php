@@ -7208,6 +7208,66 @@ function km_check_layout(): void
     // 状態を2つ持たない。同じ関数を通すので、閉じるとピルの顔も一緒に戻る
     check_bool('閉じる的も同じ関数を通す', str_contains($appJs, "getElementById('search-close')"));
 
+    km_check_heading('layout: 経路の欄はスマホで上いっぱい・キーボードに隠れない(2026-10-24)');
+    /*
+     * 利用者の指摘:「経路を調べるを開いた時、キーボードの影響で、検索バーが隠れてしまいます。
+     * また、前面と背面の調整がうまくいっていない」。
+     *
+     *   - 欄は**上いっぱい**に出し、検索の窓とチップの場所に入れ替わる(下から出すと、出発地を押した
+     *     ときのキーボードの裏に入力欄が入り、ブラウザがページごと上へ送って窓が画面の外へ出た)
+     *   - 階の好みと雨の日は「経路の設定」に畳み、キーボードが出ても入力欄と案内開始が見える高さにする
+     *   - 重ね順を決める(決めていなかったので、あとに書いた左下の操作と階の列が欄の上に出ていた)
+     */
+    check_bool(
+        'スマホの経路の欄は上いっぱい',
+        preg_match('/@media \(max-width: 768px\).*?\.search-panel \{\s*top: var\(--km-edge\);\s*left: var\(--km-edge\);\s*right: var\(--km-edge\);/s', $css) === 1
+    );
+    check_bool('下から出すときの置き場所は残っていない', !str_contains($css, 'body.km-route-active .search-panel'));
+    check_bool('畳むときは上へ逃がす', preg_match('/\.search-panel\.collapsed \{\s*transform: translateY\(calc\(-100% - 40px\)\);/s', $css) === 1);
+    check_bool('欄を開いている間は検索の窓とチップを出さない', preg_match('/body\.km-route-panel-open \.km-searchbox,\s*body\.km-route-panel-open \.km-chips \{ visibility: hidden; \}/', $css) === 1);
+    check_bool('候補はキーボードの上に収まる長さで止める', str_contains($css, '.search-panel .km-search-results { max-height: 34vh; }'));
+    check_bool('収まりの計算はスマホでは欄の下から数える', preg_match('/\/\/ デスクトップでは左に立つ縦長のカード、モバイルでは上いっぱいの欄.*?top = Math\.max\(top, rect\.bottom \+ PANEL_GAP\);/s', $appJs) === 1);
+    // 重ね順: 経路の欄(1150) > 階の列・左下の操作(900)。左の引き出し(1200)と検索の窓(1300)より下
+    check_bool('経路の欄の重ね順を決めている', preg_match('/\.search-panel \{ overflow: visible; z-index: 1150; \}/', $css) === 1);
+    check_bool('階の列の重ね順を決めている', preg_match('/\.floor-nav \{[^}]*z-index: 900;/s', $css) === 1);
+    check_bool('階の好みと雨の日は畳む', str_contains($index, '<details class="km-route-options">') && str_contains($index, 'id="km-route-options-state"'));
+    check_bool('畳んでいても効いている設定を見出しに出す', str_contains($appJs, 'function updateRouteOptionsState()') && str_contains($appJs, "parts.push('雨の日')"));
+    // display: flex にすると既定の ▶ が消えるブラウザがある。開き閉じの印は自分で出す
+    check_bool('開き閉じの印を出す', preg_match("/\.km-route-options > summary::before \{\s*content: '▸';/", $css) === 1
+        && str_contains($css, ".km-route-options[open] > summary::before { content: '▾'; }"));
+    /*
+     * ページごと送られたままにしない。html にも overflow: hidden を掛け(地図のページだけ。文書のページは送れること)、
+     * 高さは見えている範囲(dvh)にする。100vh は URL の欄を畳んだときの高さで、見えている範囲より長い
+     */
+    check_bool('地図のページは送らない', preg_match('/html:has\(#ui-layer\) \{\s*height: 100%;\s*overflow: hidden;\s*\}/', $css) === 1);
+    check_bool('高さは見えている範囲で測る', preg_match('/body \{[^}]*height: 100vh;\s*height: 100dvh;/s', $css) === 1);
+    check_bool('入力欄から離れたら送りを戻す', str_contains($appJs, 'function resetPageScroll()')
+        && str_contains($appJs, "document.addEventListener('focusout', () => window.setTimeout(resetPageScroll, 150));")
+        && str_contains($appJs, "window.visualViewport.addEventListener('resize', () => window.setTimeout(resetPageScroll, 150));"));
+    // 打っている最中に戻すと、ブラウザが入力欄を見せようとした位置と喧嘩する
+    check_bool('打っている最中は戻さない', preg_match("/function resetPageScroll\(\)\s*\{\s*const active = document\.activeElement;\s*if \(active && \(active\.tagName === 'INPUT'/s", $appJs) === 1);
+
+    km_check_heading('layout: 種類のチップはスマホで 1 列・横に送る(2026-10-24)');
+    /*
+     * 利用者の指示:「トイレや教室などは、１列にし横スクロールが出来るようにしてください」。
+     * 前日に折り返す形にしたが、2 行で地図の上を広く覆っていた。帯は画面の端から端まで取り、内側に余白を置く
+     * (端で切れて見えるので、まだ右に続くと分かる)
+     */
+    $chipsMobile = '';
+    // 行の先頭から始まる方だけを見る(同じ媒体の問い合わせに body.km-route-panel-open .km-chips もある)
+    if (preg_match('/@media \(max-width: 768px\).*?\n    \.km-chips \{(.*?)\}/s', $css, $m)) {
+        $chipsMobile = $m[1];
+    }
+    check_bool('1 列で折り返さない', str_contains($chipsMobile, 'flex-wrap: nowrap;'));
+    check_bool('横に送れる', str_contains($chipsMobile, 'overflow-x: auto;') && str_contains($chipsMobile, '-webkit-overflow-scrolling: touch;'));
+    check_bool('送りが地図やページへ漏れない', str_contains($chipsMobile, 'overscroll-behavior-x: contain;'));
+    check_bool('端まで使い、内側に余白を置く', str_contains($chipsMobile, 'left: 0;') && str_contains($chipsMobile, 'padding: 0 var(--km-edge);'));
+    // 下の部品の位置は 1 行ぶん(44px)。2 行ぶん(78px)のままだと、チップの下に空きができる
+    check_bool(
+        '下の部品の位置は 1 行ぶん',
+        preg_match('/@media \(max-width: 768px\).*?--km-top-offset: calc\(var\(--km-edge\) \+ var\(--km-searchbox-height\) \+ 8px \+ 44px \+ 8px\)/s', $css) === 1
+    );
+
     km_check_heading('layout: ルート案内の帯(2026-09-25)');
     /*
      * 下から出るシート(guidance-panel)は、案内を始めた途端に画面の半分以上を埋めていた。
@@ -7288,7 +7348,9 @@ function km_check_layout(): void
     check_bool('tutorial: 検索の欄の中の所が見えなければ「検索」を指して開いてもらう', str_contains($tutorialJs, "el.closest('#search-panel') && toggle && visible(toggle)"));
     check_bool('tutorial: 吹き出しは必ず見える範囲に収める・キーボードの出し入れで置き直す', str_contains($tutorialJs, 'top = clampTop(top, ch);')
         && str_contains($tutorialJs, "window.visualViewport.addEventListener('resize', place);") && str_contains($tutorialJs, "window.visualViewport.removeEventListener('resize', place);"));
-    check_bool('tutorial: スマホで検索の欄の中を指すときは上に置く(次の欄とキーボードを覆わない)', str_contains($tutorialJs, "const preferAbove = narrowScreen() && el.closest && el.closest('#search-panel') !== null;"));
+    // 経路の欄が上いっぱいになった(2026-10-24)ので、欄の中を指すときは**下**に固定する。上には何も置けない
+    check_bool('tutorial: スマホで経路の欄の中を指すときは下に置く', str_contains($tutorialJs, "const inRoutePanel = narrowScreen() && el.closest && el.closest('#search-panel') !== null;")
+        && str_contains($tutorialJs, 'const placeAbove = !inRoutePanel && !fitsBelow && fitsAbove;'));
     check_bool('tutorial.js を welcome.js のあとに読む', ($tw = strpos($index, "Main/welcome.js')")) !== false && $tw < (int) strpos($index, "Main/tutorial.js')"));
     check_bool('「はじめに」を閉じてから始める', str_contains($welcomeJs, "new CustomEvent('km-welcome-closed')") && str_contains($tutorialJs, "'km-welcome-closed'"));
     check_bool('地図が出てから始める', str_contains($appJs, "new CustomEvent('km-map-ready')") && str_contains($tutorialJs, "'km-map-ready'"));

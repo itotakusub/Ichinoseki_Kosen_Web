@@ -163,12 +163,24 @@
     -webkit-tap-highlight-color: transparent;
 }
 
+/*
+ * ページは送らない(地図と浮いた部品だけ)。html にも overflow: hidden を掛け、高さは見えている範囲(dvh)にする
+ * (2026-10-24、利用者の指摘)。100vh はスマホでは URL の欄を畳んだときの高さで、見えている範囲より長く、
+ * キーボードを出したときにブラウザがページごと上へ送り、上の検索の窓が画面の外へ出た。
+ * このファイルは文書のページ(document.css で送れるようにする)も読むので、html の方は地図のページ(#ui-layer がある)だけ
+ */
+html:has(#ui-layer) {
+    height: 100%;
+    overflow: hidden;
+}
+
 body {
     font-family: 'Inter', 'Noto Sans JP', sans-serif;
     background: var(--bg-map);
     color: var(--text);
     overflow: hidden;
     height: 100vh;
+    height: 100dvh;
     width: 100vw;
 }
 
@@ -932,6 +944,12 @@ input[type="text"] {
     right: var(--km-edge);
     bottom: auto;
     left: auto;
+    /*
+     * 重ね順を決めておく(2026-10-24、利用者の指摘「前面と背面の調整がうまくいっていない」)。
+     * 決めていなかったので、書いた順で左下の操作(900)より手前に出て、経路の欄にも重なっていた。
+     * 操作の帯と同じ 900 にし、経路の欄(1150)・左の引き出し(1200)・検索の窓(1300)より下にする
+     */
+    z-index: 900;
     transform: translateY(-50%);
     padding: 6px;
     border-radius: 999px;
@@ -1167,34 +1185,27 @@ input[type="text"] {
 @media (max-width: 768px) {
 
     /*
-     * 検索は**下から出るシート**にする。左下の操作ピルより上に置き、
-     * 開いている間もピル(「閉じる」に変わる)を押せる状態にしておく ——
-     * シートで隠すと、閉じ方が画面から消える。
+     * 経路の欄は**上いっぱい**に出し、検索の窓とチップの場所に入れ替わる(2026-10-24、利用者の指摘。Google マップと同じ)。
+     * 以前は下から出るシートで、出発地を押すと出るキーボードの裏に入力欄が隠れ、ブラウザがページごと上へ送って
+     * 検索の窓が画面の外へ出た。高さは中身なり(候補が下へはみ出して出るので、中で送らない)。
+     * 階の好みと雨の日は「経路の設定」に畳んで、キーボードが出ても入力欄と案内開始が見える高さにしてある
      */
     .search-panel {
-        top: auto;
-        bottom: calc(var(--km-bottom) + var(--km-touch) + 8px);
+        top: var(--km-edge);
         left: var(--km-edge);
-        /*
-         * **右は階のレールを避ける。**
-         * 画面いっぱいに広げると、入力欄とカテゴリー選択の右端 45px ほどが
-         * レールの下に潜り、そこを押すと階が切り替わる(実測で確認)。
-         * レールは真ん中の高さに立っているので、シートと必ず帯が重なる。
-         *
-         * 22px = レールの内側の余白と枠(6+6+1+1)ぶん 14px + 隙間 8px。
-         * **ちょうどで足すと 2px 重なる**(実測)。
-         */
-        right: calc(var(--km-edge) + var(--km-rail-width) + 8px);
+        right: var(--km-edge);
         width: auto;
         padding: 1rem;
-        max-height: 52vh;
-        overflow-y: auto;
     }
+    body.km-route-panel-open .km-searchbox,
+    body.km-route-panel-open .km-chips { visibility: hidden; }
+    /* 候補はキーボードの上に収まる長さで止める */
+    .search-panel .km-search-results { max-height: 34vh; }
 
-    /* モバイルは下から出るシートなので、畳むときは下へ逃がす(左へ逃がすと不自然) */
+    /* モバイルは上に出るので、畳むときは上へ逃がす */
     .search-panel.collapsed {
-        transform: translateY(150%);
-        opacity: 1;
+        transform: translateY(calc(-100% - 40px));
+        opacity: 0;
     }
 
     /*
@@ -1444,12 +1455,6 @@ body.km-route-active { --km-route-lift: calc(var(--km-touch) + 20px); }
 
 /* 帯が出ている間、左下から出る面は帯の上へ */
 .km-tuning { margin-bottom: var(--km-route-lift); }
-@media (max-width: 768px) {
-    body.km-route-active .search-panel {
-        bottom: calc(var(--km-bottom) + var(--km-touch) + 8px + var(--km-route-lift));
-        max-height: calc(52vh - var(--km-route-lift));
-    }
-}
 
 @media (prefers-reduced-motion: reduce) {
     .km-route-bar { animation: none; }
@@ -3066,8 +3071,40 @@ body.km-route-panel-open .km-searchbox-route { background: var(--primary); color
 }
 .km-chip:hover { background: var(--glass); }
 
-/* 経路の欄(#search-panel)は窓とチップの下。出発地・目的地にも候補が出るので、はみ出しを隠さない */
-.search-panel { overflow: visible; }
+/*
+ * 経路の欄(#search-panel)は窓とチップの下(スマホは上いっぱい)。出発地・目的地にも候補が出るので、はみ出しを隠さない。
+ * **重ね順を決める**(2026-10-24、利用者の指摘「前面と背面の調整がうまくいっていない」)。決めていなかったので、
+ * 後ろに書いた左下の操作(900)と階の列が欄の上に出ていた。操作・階・案内の帯より上、左の引き出し(1200)より下
+ * (引き出しは欄を開いたときに閉じる。欄を開いたまま地図の点を押したときは、引き出しの方を見せる)
+ */
+.search-panel { overflow: visible; z-index: 1150; }
+
+/* 階の好みと雨の日(畳む。index.php)。入力欄とボタンの下の行 */
+.km-route-options {
+    flex: 0 0 100%;
+    order: 3;
+    font-size: 0.85rem;
+    color: var(--text-muted, #64748b);
+}
+/* display: flex にすると既定の ▶ が消えるブラウザがあるので、開き閉じの印は自分で出す */
+.km-route-options > summary {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-height: var(--km-touch);
+    cursor: pointer;
+    font-weight: 700;
+    list-style: none;
+}
+.km-route-options > summary::-webkit-details-marker { display: none; }
+.km-route-options > summary::before {
+    content: '▸';
+    flex: 0 0 auto;
+    font-size: 0.9em;
+}
+.km-route-options[open] > summary::before { content: '▾'; }
+.km-route-options-state { font-weight: 600; color: var(--primary); }
+.km-route-options .km-route-pref { margin-top: 0.25rem; }
 .km-route-inputs { position: relative; padding-right: 44px; }
 .km-route-field { position: relative; }
 .km-route-field input { width: 100%; }
@@ -3281,18 +3318,26 @@ body.km-route-panel-open .km-searchbox-route { background: var(--primary); color
         width: auto;
     }
     /*
-     * スマホは窓が画面の幅いっぱいなので、チップは窓の下。**見切れないように折り返す**(2026-10-23、利用者の指摘。
-     * 横に送る形だと 4 つ目から切れて見えた)。2 行ぶん(36px × 2 + 隙間)を下の部品の位置に足す
+     * スマホは窓が画面の幅いっぱいなので、チップは窓の下。**1 行にして横に送る**(2026-10-24、利用者の指示。
+     * 前日に折り返す形にしたが、2 行で地図の上を広く覆った)。帯は画面の端から端まで取り、内側に余白を置く
+     * (端で切れて見えるので、まだ右に続くと分かる)。1 行ぶん(44px)を下の部品の位置に足す
      */
-    :root { --km-top-offset: calc(var(--km-edge) + var(--km-searchbox-height) + 8px + 78px + 8px); }
+    :root { --km-top-offset: calc(var(--km-edge) + var(--km-searchbox-height) + 8px + 44px + 8px); }
     .km-chips {
         top: calc(var(--km-edge) + var(--km-searchbox-height) + 8px);
-        left: var(--km-edge);
-        right: var(--km-edge);
-        height: auto;
-        flex-wrap: wrap;
-        overflow: visible;
+        left: 0;
+        right: 0;
+        height: 44px;
+        padding: 0 var(--km-edge);
+        scroll-padding: 0 var(--km-edge);
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        overflow-y: hidden;
+        overscroll-behavior-x: contain;
+        -webkit-overflow-scrolling: touch;
     }
+    /* 最後のチップの右にも余白を残す(横に送る帯では右の padding が効かないブラウザがある) */
+    .km-chips::after { content: ''; flex: 0 0 1px; }
     /* 下から出るシート。上のつまみで高さを広げる */
     .km-sheet {
         top: auto;
