@@ -239,15 +239,21 @@ foreach (($config['codes'] ?? []) as $index => $entry) {
 $orphans = km_app_map_orphan_codes($config);
 
 /**
- * いま有効なイベントの名前。**配信する前に見せる。**
+ * 折り込むイベントの名前。**配信する前に見せる。**
  *
  * 何が折り込まれるのかを、押す前に読めるようにする ——
  * 「配信したのに通行止めが効かない/解けない」の相談はここで防げる。
+ *
+ * 見せるのは**実際に焼かれるもの**(= 次に効く会期。[km_map_event_overlay_for_app])。
+ * 「いま有効」だけを見せていると、会期の前に配信したときに空に見えるのに中身は入る、という食い違いになる(2026-10-24)。
  */
 $activeEvents = [];
+$activeEventsStartsAt = null;
 try {
     require_once dirname(__DIR__) . '/lib/map-events.php';
-    foreach (km_map_event_overlay(km_db())['events'] as $event) {
+    $publishWindow = km_map_event_overlay_for_app(km_db());
+    $activeEventsStartsAt = $publishWindow['startsAt'];
+    foreach ($publishWindow['overlay']['events'] as $event) {
         $activeEvents[] = (string) $event['name'];
     }
 } catch (Throwable $exception) {
@@ -697,10 +703,16 @@ $renderCodes = static function (string $slug) use ($codesBySlug, $newCode, $newC
                             </span>
                           <?php else: ?>
                             <?= km_e(implode(' / ', $activeEvents)) ?>
+                            <?php if ($activeEventsStartsAt !== null): ?>
+                              <?php /* まだ始まっていない会期を焼く。アプリはこの時刻から自分で効かせる(2026-10-24) */ ?>
+                              <span class="badge text-bg-secondary ms-1" data-i18n="page.mapPublish.eventPending">会期前</span>
+                              <span class="text-body-secondary"><?= km_e($activeEventsStartsAt) ?> から</span>
+                            <?php endif; ?>
                           <?php endif; ?>
                         </p>
                         <div class="form-text" data-i18n="page.mapPublish.eventHint">
                           「イベント」画面の内容を、配信のときに地図へ折り込みます。
+                          まだ始まっていない会期も折り込み、アプリはその時刻から効かせます。
                           会期が終わっていれば、前回の通行止めは空で上書きされます。
                         </div>
                       </div>

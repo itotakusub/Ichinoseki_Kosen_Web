@@ -130,8 +130,14 @@ function km_app_map_publish(
      * 通行止めも臨時の地点も端末に届かない**状態になっていた。
      */
     require_once __DIR__ . '/map-events.php';
-    $overlay = km_map_event_overlay($pdo);
-    $events = km_app_map_events_from_web($overlay, $map);
+    /*
+     * **「いま有効」ではなく「次に効く会期」を焼く**(2026-10-24、利用者の指摘
+     * 「一般向けアプリでイベントが丸ごと効いていない」)。配信は焼き付けた写しなので、
+     * 会期の前に配信すると端末に何も入らず、当日になっても配信し直すまで効かなかった
+     */
+    $window = km_map_event_overlay_for_app($pdo);
+    $overlay = $window['overlay'];
+    $events = km_app_map_events_from_web($overlay, $map, $window['startsAt']);
     km_app_map_replace_events($map, $events['events']);
 
     $json = json_encode($map, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -321,7 +327,9 @@ function km_app_map_publish_event(
             throw new KmUserError('データベースに接続できないため、Website のイベントを折り込めません。');
         }
         require_once __DIR__ . '/map-events.php';
-        $events = km_app_map_events_from_web(km_map_event_overlay($pdo), $map);
+        // 折り込むのは「次に効く会期」(2026-10-24。km_app_map_publish と同じ)
+        $window = km_map_event_overlay_for_app($pdo);
+        $events = km_app_map_events_from_web($window['overlay'], $map, $window['startsAt']);
         km_app_map_replace_events($map, $events['events']);
         $activeEventUuid = $events['activeEventUuid'];
         $eventSkipped = $events['skipped'];

@@ -40,6 +40,31 @@ try {
     error_log('downloads.php map release status failed: ' . $exception->getMessage());
 }
 
+/*
+ * Website に「次に効く会期」があるか(2026-10-24、利用者の指摘「一般向けアプリでイベントが丸ごと効いていない」)。
+ *
+ * **配信は焼き付けた写し**で、一般向けアプリは配信に載っているイベントしか効かせない(管理ビルドは自分で選べる)。
+ * イベントを作ったあとに配信し直すのを忘れると、当日アプリには何も出ない —— それが画面のどこにも出ていなかった。
+ * 載っていなければ下で「配信し直してください」と出す。DB が無くても画面は出す
+ */
+$mapEventWindow = null;
+try {
+    require_once __DIR__ . '/../lib/map-events.php';
+    $window = km_map_event_overlay_for_app(km_db());
+    $windowEvents = $window['overlay']['events'] ?? [];
+    if ($windowEvents !== []) {
+        $mapEventWindow = [
+            'names' => implode(' / ', array_filter(array_map(
+                static fn (array $row): string => trim((string) ($row['name'] ?? '')),
+                $windowEvents
+            ))),
+            'startsAt' => $window['startsAt'],
+        ];
+    }
+} catch (Throwable $exception) {
+    error_log('downloads.php website event window failed: ' . $exception->getMessage());
+}
+
 if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && !km_csrf_verify()) {
     // 副作用を起こす前に弾く
     $errors[] = 'セッションの有効期限が切れています。ページを再読み込みしてからやり直してください。';
@@ -526,6 +551,15 @@ require __DIR__ . '/_inc/partials/page-header.php';
                             (<span data-i18n="page.downloads.mapReleaseEventCount">地図が持つイベント</span>:
                             <?= (int) $summary['eventCount'] ?>)
                           </p>
+                          <?php if ($mapEventWindow !== null): ?>
+                            <?php /* Website にはイベントがあるのに、配信には載っていない。一般向けアプリでは何も効かない */ ?>
+                            <p class="text-danger-emphasis fs-7 mb-0 mt-1">
+                              <span data-i18n="page.downloads.mapReleaseEventStale">
+                                Website のイベントが配信に載っていません。一般向けアプリでは効きません。配信し直してください。
+                              </span>
+                              <span class="text-body-secondary">(<?= km_e($mapEventWindow['names']) ?>)</span>
+                            </p>
+                          <?php endif; ?>
                         <?php elseif ($event['missing']): ?>
                           <p class="text-danger-emphasis fs-7 mb-0">
                             <span data-i18n="page.downloads.mapReleaseEventMissing">

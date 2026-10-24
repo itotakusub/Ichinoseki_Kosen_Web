@@ -1581,8 +1581,21 @@ function km_check_app_map_web_events(): void
         strtotime('2026-09-02 09:00:00') * 1000,
         $event['endAtMillis']
     );
-    // **開始は入れない。** Website 側で「いま有効」と判定済みのものだけが来る
+    // **いま有効な会期なら開始は入れない。** Website 側で判定済みのものだけが来る
     check_bool('開始は入れない', $event['startAtMillis'] === null);
+    /*
+     * **まだ始まっていない会期を焼いたときは開始を入れる**(2026-10-24、利用者の指摘
+     * 「一般向けアプリでイベントが丸ごと効いていない」)。入れないと、配信した瞬間から
+     * 通行止めと臨時の地点が効いてしまう。アプリは activeMapEvent() でこの時刻から効かせる
+     */
+    $pending = km_app_map_events_from_web($overlay, $map, '2026-11-01 09:00:00');
+    check(
+        '会期前なら開始を入れる',
+        strtotime('2026-11-01 09:00:00') * 1000,
+        $pending['events'][0]['startAtMillis']
+    );
+    check_bool('渡さなければ今までどおり null', km_app_map_events_from_web($overlay, $map, null)['events'][0]['startAtMillis'] === null);
+    check_bool('読めない時刻は入れない', km_app_map_events_from_web($overlay, $map, 'いつか')['events'][0]['startAtMillis'] === null);
 
     check('通行止めの地点', [$uuidB], $event['closedNodeUuids']);
     // 両方向が畳まれ、階をまたぐものと知らない地点は落ちて、残るのは1本
@@ -1614,6 +1627,54 @@ function km_check_app_map_web_events(): void
     $none = km_app_map_events_from_web(['events' => []], $map);
     check('有効なイベントが無ければ空', [], $none['events']);
     check_bool('指し先も null', $none['activeEventUuid'] === null);
+
+    /*
+     * ======== 配信に焼くのは「次に効く会期」(2026-10-24) ========
+     *
+     * 利用者の指摘「Android 側の一般向けで、イベント時にイベントの名前で表示されていない」。
+     * 一般向けビルドは**配信に載っているイベントしか効かせない**(resolveEventSelection。
+     * 管理ビルドは自分で選べるので、同じ地図でも効いて見える)。配信は焼き付けた写しなので、
+     * 「いま有効」なものだけを焼くと、**会期の前に配信した地図にはイベントが 1 件も入らない**。
+     *
+     * DB は使わずに、配信の 2 か所が「次に効く会期」を使っていることと、
+     * 選び方(いま有効 → それ / 無ければ一番早い会期)を、コードの形で見る
+     */
+    km_check_heading('app-map: 配信に焼くのは「次に効く会期」(2026-10-24)');
+    $publishLib = (string) file_get_contents(__DIR__ . '/../lib/app-map-publish.php');
+    $eventsLib = (string) file_get_contents(__DIR__ . '/../lib/map-events.php');
+    check_bool('Website の正本は次に効く会期を焼く', str_contains($publishLib, '$window = km_map_event_overlay_for_app($pdo);')
+        && str_contains($publishLib, "km_app_map_events_from_web(\$overlay, \$map, \$window['startsAt'])"));
+    check_bool('イベント用の地図の折り込みも同じ', str_contains($publishLib, "km_app_map_events_from_web(\$window['overlay'], \$map, \$window['startsAt'])"));
+    check_bool('公開ページは今までどおり「いま有効」だけ', str_contains($eventsLib, '$events = $onlyPreview ? [] : km_map_event_active($pdo);')
+        && !str_contains($eventsLib, 'km_map_event_overlay_for_app($pdo)'));
+    // 配信の画面は**実際に焼かれるもの**を見せる(「いま有効」だけを見せると、会期前に空に見えるのに中身は入る)
+    $publishPage = (string) file_get_contents(__DIR__ . '/../admin/map-publish.php');
+    check_bool('配信の画面は焼かれる会期を見せる', str_contains($publishPage, '$publishWindow = km_map_event_overlay_for_app(km_db());')
+        && str_contains($publishPage, 'page.mapPublish.eventPending'));
+    foreach (['ja', 'en'] as $lang) {
+        check_bool(
+            "i18n: mapPublish.eventPending ($lang)",
+            str_contains((string) file_get_contents(__DIR__ . '/../admin/assets/i18n/' . $lang . '.js'), 'page.mapPublish.eventPending')
+        );
+    }
+    // 終わっていないもの(いま有効 + これから)を取り、有効かどうかは **DB の NOW()** で見る
+    check_bool('終わっていないイベントを取る', str_contains($eventsLib, 'WHERE is_enabled = 1 AND (ends_at IS NULL OR ends_at > NOW())')
+        && str_contains($eventsLib, '(starts_at IS NULL OR starts_at <= NOW()) AS isActive'));
+    // **会期をまたいで混ぜない。** 工事(長期)と高専祭(翌週)を 1 つに畳むと、通行止めが今日から効く
+    check_bool('いま有効なものがあればそれだけ', str_contains($eventsLib, "return ['overlay' => km_map_event_overlay_build(\$pdo, \$active), 'startsAt' => null];"));
+    check_bool('無ければ一番早い会期だけ', str_contains($eventsLib, "static fn (array \$row): bool => (string) (\$row['startsAt'] ?? '') === \$startsAt"));
+    // イベントの不調で配信そのものを止めない(表がまだ無いときも地図は配れる)
+    check_bool('不調なら「イベント無し」に倒す', str_contains($eventsLib, "error_log('km_map_event_overlay_for_app failed (publishing without events): '"));
+    // 配信し直し忘れに気づける場所(管理画面「ダウンロード」)
+    $downloadsPage = (string) file_get_contents(__DIR__ . '/../admin/downloads.php');
+    check_bool('配信に載っていなければ管理画面で知らせる', str_contains($downloadsPage, 'page.downloads.mapReleaseEventStale')
+        && str_contains($downloadsPage, '$mapEventWindow'));
+    foreach (['ja', 'en'] as $lang) {
+        check_bool(
+            "i18n: mapReleaseEventStale ($lang)",
+            str_contains((string) file_get_contents(__DIR__ . '/../admin/assets/i18n/' . $lang . '.js'), 'page.downloads.mapReleaseEventStale')
+        );
+    }
 }
 
 /**

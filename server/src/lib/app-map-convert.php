@@ -865,11 +865,19 @@ const KM_APP_MAP_WEB_EVENT_UUID = 'web-overlay';
  *
  * **黙って落とさない。** ノードを作り直すと Web 側の通行止めの指定が静かに外れる。
  *
+ * ## 会期の始まりは渡された分だけ入れる(2026-10-24)
+ *
+ * 以前はいつも null(= もう始まっている)にしていた。「Website 側で有効と判定されたものだけが来る」前提だったが、
+ * **配信は焼き付けた写し**なので、会期の前に配信すると端末には何も入らなかった(利用者の指摘
+ * 「一般向けアプリでイベントが丸ごと効いていない」)。[km_map_event_overlay_for_app] が「次に効く会期」を
+ * 選んで始まりを渡してくるので、そのときは入れる —— アプリはその時刻から自分で効かせる([activeMapEvent])。
+ *
  * @param array $overlay km_map_event_overlay() の戻り値
  * @param stdClass $map 配信する地図(アプリの MapDataSnapshot)
+ * @param ?string $startsAt 会期の始まり(まだ始まっていない会期のときだけ。DB の DATETIME の文字列)
  * @return array{events:array<int,array>, activeEventUuid:?string, skipped:array}
  */
-function km_app_map_events_from_web(array $overlay, stdClass $map): array
+function km_app_map_events_from_web(array $overlay, stdClass $map, ?string $startsAt = null): array
 {
     $skipped = [
         'unknownNode' => 0,
@@ -1005,6 +1013,13 @@ function km_app_map_events_from_web(array $overlay, stdClass $map): array
     }
 
     // --- 会期 ---
+    $startAtMillis = null;
+    if (is_string($startsAt) && trim($startsAt) !== '') {
+        $parsedStart = strtotime($startsAt);
+        if ($parsedStart !== false) {
+            $startAtMillis = $parsedStart * 1000;
+        }
+    }
     $endAtMillis = null;
     foreach ($webEvents as $event) {
         $endsAt = $event['endsAt'] ?? null;
@@ -1033,9 +1048,12 @@ function km_app_map_events_from_web(array $overlay, stdClass $map): array
         'uuid' => KM_APP_MAP_WEB_EVENT_UUID,
         'name' => $names === [] ? 'イベント' : implode(' / ', $names),
         'note' => '',
-        // 開始は入れない。**Website 側で「いま有効」と判定されたものだけが来る**ので、
-        // 開始を入れると同じ判定を2度することになり、時計のずれで食い違う
-        'startAtMillis' => null,
+        /*
+         * 開始。**いま有効な会期なら入れない**(Website 側で判定済み。入れると同じ判定を 2 度することになり、
+         * 時計のずれで食い違う)。**まだ始まっていない会期を焼いたときだけ入れる**(2026-10-24) ——
+         * 入れないと、配信した瞬間から通行止めと臨時の地点が効いてしまう
+         */
+        'startAtMillis' => $startAtMillis,
         'endAtMillis' => $endAtMillis,
         'closedLineKeys' => array_keys($closedLineKeys),
         'closedNodeUuids' => array_keys($closedNodeUuids),
