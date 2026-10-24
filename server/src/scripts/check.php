@@ -1989,9 +1989,12 @@ function km_check_guide_chat(): void
         && str_contains($serverPy, 'if declared not in ALLOWED_FAMILIES or (by_name is not None and by_name != declared):')
         && str_contains($serverPy, 'elif MODEL_NAME not in listed:'));
     // Bionic は chat_template_kwargs を聞かない。reasoning_effort で考えを止めないと Qwen3.5 の本文が空になる(2026-10-25 のベンチで 20 件中 19 件)
-    check_bool('自宅 PC: 考えは reasoning_effort で止める(Qwen は none)・空の答えは 502', str_contains($serverPy, 'REASONING_EFFORT = {"qwen3.5-9b": "none", "gpt-oss-20b": "low"}')
+    check_bool('自宅 PC: 考えは reasoning_effort で止める(Qwen・custom は none)・空の答えは 502', str_contains($serverPy, 'REASONING_EFFORT = {"qwen3.5-9b": "none", "gpt-oss-20b": "low", "custom": "none"}')
         && str_contains($serverPy, 'body["reasoning_effort"] = effort') && str_contains($serverPy, 'raise BadRequest(502, "upstream empty")'));
-    check_bool('自宅 PC: 模型の名前と出す字数は門番が決める・余計な項目は渡さない', str_contains($serverPy, '"model": MODEL_NAME,') && str_contains($serverPy, '"max_tokens": min(max_tokens, MAX_NEW_TOKENS_CAP),'));
+    // 2026-10-25、利用者「GUIDE_LLM_FAMILY を custom にして、API 識別子のみ変更でロード」「既にロードされていたらアンロードからロード」
+    check_bool('自宅 PC: custom なら 4 つの決まりを外す・起動のたびにアンロードしてからロード', str_contains($serverPy, "if declared == CUSTOM_FAMILY:\n        return CUSTOM_FAMILY")
+        && preg_match('/foreach \(\$instance in @\(\$entry\.loaded_instances\)\).*?\/api\/v1\/models\/unload.*?\/api\/v1\/models\/load/s', (string) @file_get_contents($llmDir . '/start-guide-llm.ps1')) === 1);
+    check_bool('自宅 PC: 模型の名前と出す字数は門番が決める・余計な項目は渡さない', str_contains($serverPy, '"model": MODEL_NAME,') && str_contains($serverPy, '"max_tokens": min(max_tokens, MAX_NEW_TOKENS_CAP) + (REASONING_HEADROOM if effort not in ("", "none") else 0),'));
     check_bool('自宅 PC: 本文をログに書かない', str_contains($serverPy, '# **本文は書かない**。時間と字数だけ') && !preg_match('/LOG\.\w+\([^)]*(messages|text|body)\b/', $serverPy)
         && str_contains($serverPy, 'def log_message(self, format: str, *args: Any) -> None:'));
     $startPs = (string) @file_get_contents($llmDir . '/start-guide-llm.ps1');

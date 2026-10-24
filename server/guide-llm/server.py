@@ -12,7 +12,10 @@
   - 受ける本文・頼みの数(メッセージ)・出す字数に上限を置く。同時に 1 件ずつ渡す(GPU を取り合わない)
   - 模型の名前は**こちらで決めて付け直す**(使ってよい 4 つ: Gemma4 E4B / 12B QAT / Qwen3.5-9B / GPT-OSS-20B だけ)。
     Bionic の模型の識別名(例 3885219b…)は名前から 4 つのどれか分からないので、GUIDE_LLM_FAMILY で言い切る。
-    起こすときに、その識別名が Bionic の /v1/models にあるかも確かめる(違う模型を読んだまま出さない)
+    起こすときに、その識別名が Bionic の /v1/models にあるかも確かめる(違う模型を読んだまま出さない)。
+    2026-10-25、利用者「GUIDE_LLM_FAMILY を custom にして、API 識別子のみ変更でロードできるように」:
+    GUIDE_LLM_FAMILY=custom なら 4 つの決まりを外し、GUIDE_LLM_MODEL の識別子だけで動く(考えを止める指定は
+    GUIDE_LLM_REASONING_EFFORT。既定 none。断られたら外して頼み直す)
   - Qwen の <think>…</think>、GPT-OSS の考えの部分は落として返す
   - **質問と答えの本文はログに書かない**(書くのは時間と字数だけ)
 
@@ -49,18 +52,26 @@ ALLOWED_FAMILIES = {
 # 考えを止める指定(模型ごと)。Bionic は chat_template_kwargs を聞かず、reasoning_effort だけを聞く
 # (2026-10-25 に測った。Qwen3.5-9B は無いと 160 字を考えに使い切り、本文が空になる。none で考え 0 字・2.4 秒)。
 # GPT-OSS は none を持たないので low
-REASONING_EFFORT = {"qwen3.5-9b": "none", "gpt-oss-20b": "low"}
+REASONING_EFFORT = {"qwen3.5-9b": "none", "gpt-oss-20b": "low", "custom": "none"}
+# 4 つの決まりを外す言葉(利用者が模型を識別子だけで選ぶとき)
+CUSTOM_FAMILY = "custom"
+REASONING_EFFORT_CHOICES = ("none", "low", "medium", "high", "off")
 # 知らない項目を断る API には、これを外して頼み直す
 OPTIONAL_KEYS = ("chat_template_kwargs", "reasoning_effort")
 
 MODEL_NAME = os.environ.get("GUIDE_LLM_MODEL", "").strip()
 MODEL_FAMILY = os.environ.get("GUIDE_LLM_FAMILY", "").strip().lower()
+# 考えを止める指定を上書きする(空なら模型ごとの既定。off は付けない)
+EFFORT_OVERRIDE = os.environ.get("GUIDE_LLM_REASONING_EFFORT", "").strip().lower()
 API_KEY = os.environ.get("KM_GUIDE_LLM_KEY", "").strip()
 PORT = int(os.environ.get("GUIDE_LLM_PORT", "8888"))
 UPSTREAM = os.environ.get("LLM_API_URL", "").strip().rstrip("/")
 UPSTREAM_KEY = os.environ.get("LLM_API_KEY", "").strip()
-# 1 回に出す字数(トークン)の上限。PHP は 160 と 300 を頼む
+# 1 回に出す字数(トークン)の上限。PHP は 80・160・300 を頼む
 MAX_NEW_TOKENS_CAP = 512
+# 考えを止められない模型(GPT-OSS など。reasoning_effort が none 以外)は、考える分を上乗せする。
+# 上乗せしないと考えで字数を使い切り、本文が空になる(2026-10-25、GPT-OSS 20B で 160 字のうち 153 字を考えに使った)
+REASONING_HEADROOM = 768
 # 受ける本文の上限。PHP が送るのは記録 5 件ぶんの短い JSON か、言葉で当たらなかったときの名前の一覧(300 件まで。約 20KB)
 MAX_BODY_BYTES = 64 * 1024
 MAX_MESSAGES = 20
@@ -87,6 +98,8 @@ def family_of(name: str) -> str | None:
 
 def resolve_family(name: str, declared: str) -> str | None:
     """模型が 4 つのどれか。言い切った GUIDE_LLM_FAMILY を先に見る。名前からも分かるなら、食い違えば通さない"""
+    if declared == CUSTOM_FAMILY:
+        return CUSTOM_FAMILY
     by_name = family_of(name)
     if not declared:
         return by_name
@@ -136,17 +149,17 @@ def build_upstream_request(payload: Any) -> dict[str, Any]:
     temperature = payload.get("temperature", 0.2)
     if not isinstance(temperature, (int, float)) or isinstance(temperature, bool) or not 0 <= temperature <= 1.5:
         temperature = 0.2
+    effort = EFFORT_OVERRIDE or REASONING_EFFORT.get(resolve_family(MODEL_NAME, MODEL_FAMILY) or "", "")
     body: dict[str, Any] = {
         "model": MODEL_NAME,
         "messages": messages,
-        "max_tokens": min(max_tokens, MAX_NEW_TOKENS_CAP),
+        "max_tokens": min(max_tokens, MAX_NEW_TOKENS_CAP) + (REASONING_HEADROOM if effort not in ("", "none") else 0),
         "temperature": float(temperature),
         "stream": False,
         # Qwen は考えを出さない(llama.cpp などの書き方。Bionic は聞かないので下の reasoning_effort も付ける)
         "chat_template_kwargs": {"enable_thinking": False},
     }
-    effort = REASONING_EFFORT.get(resolve_family(MODEL_NAME, MODEL_FAMILY) or "")
-    if effort:
+    if effort and effort != "off":
         body["reasoning_effort"] = effort
     return body
 
@@ -296,9 +309,11 @@ def main() -> None:
     if family is None:
         raise SystemExit(
             "模型は Gemma4 E4B / 12B QAT / Qwen3.5-9B / GPT-OSS-20B のどれかにしてください。識別名から分からないときは "
-            "GUIDE_LLM_FAMILY に " + " / ".join(ALLOWED_FAMILIES) + " のどれかを入れます: "
+            "GUIDE_LLM_FAMILY に " + " / ".join(ALLOWED_FAMILIES) + " のどれか(決まりを外すなら custom)を入れます: "
             + repr(MODEL_NAME) + " / " + repr(MODEL_FAMILY)
         )
+    if EFFORT_OVERRIDE and EFFORT_OVERRIDE not in REASONING_EFFORT_CHOICES:
+        raise SystemExit("GUIDE_LLM_REASONING_EFFORT は " + " / ".join(REASONING_EFFORT_CHOICES) + " のどれか(空なら既定): " + repr(EFFORT_OVERRIDE))
     if not is_local_url(UPSTREAM):
         raise SystemExit("LLM_API_URL はこの PC の中(http://127.0.0.1:番号 など)にしてください: " + repr(UPSTREAM))
     try:

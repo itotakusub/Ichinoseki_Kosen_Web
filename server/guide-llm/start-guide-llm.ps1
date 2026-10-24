@@ -10,7 +10,11 @@
   VPS の PHP ─ https ─ ngrok ─ 門番 server.py(127.0.0.1:GUIDE_LLM_PORT)─ Bionic の API(LLM_API_URL)
 
   1. guide-llm.env を読む(見本は guide-llm.env.example。鍵は秘密なので guide-llm.env は git に入れない)
-  2. Bionic の API が答えるか確かめる(先に Bionic で模型を読んで、API を出しておくこと)
+  2. Bionic の API が答えるか確かめる(Bionic の API のサーバーを出しておくこと)
+     2026-10-25、利用者「API 識別子のみ変更でロードできるように」「既にロードされていたらアンロードからロード」:
+     GUIDE_LLM_MODEL の識別子の模型を、**ロード済みならアンロードしてから**ロードする(Bionic のモデル管理の口
+     /api/v1/models・/api/v1/models/unload・/api/v1/models/load。LM Studio と同じ形)。識別子が無ければ一覧を出して止まる。
+     読む長さは GUIDE_LLM_CONTEXT_LENGTH(空なら Bionic の既定)
   3. 門番 server.py を起こす(Windows の python。標準ライブラリだけなので入れるものは無い)。
      門番は、GUIDE_LLM_MODEL の識別名が Bionic の /v1/models にあるかを確かめ、無ければ止まる。
      鍵は**コマンドの文字列に載せず**、環境変数で渡す(プロセスの一覧に鍵が出ない)
@@ -26,6 +30,7 @@ Website 側: .env の KM_GUIDE_LLM_URL に https://<NGROK_DOMAIN> を、KM_GUIDE
 模型を選ぶとき: Bionic で読む模型を 4 つ(Gemma4 E4B / 12B QAT / Qwen3.5-9B / GPT-OSS-20B)のどれかにし、
 guide-llm.env の GUIDE_LLM_MODEL(識別名)と GUIDE_LLM_FAMILY(4 つのどれか)を合わせて -Bench で測る
 (bench.py。速さの中央値と、返事が JSON として読めた数を出す)。
+GUIDE_LLM_FAMILY=custom なら 4 つの決まりを外し、GUIDE_LLM_MODEL を替えるだけで別の模型を読む(2026-10-25、利用者の指示)。
 
 .PARAMETER Bench
 門番を起こし、bench.py で 20 件の質問を測ってから止める(ngrok は起こさない)
@@ -98,9 +103,57 @@ try {
 if ($probe.StatusCode -in 401, 403) { throw "Bionic の API が鍵を断りました($($probe.StatusCode))。guide-llm.env の LLM_API_KEY を確かめてください。" }
 Write-Host "Bionic の API が答えました: $upstream" -ForegroundColor Green
 
+# ---- 2b. 模型を読み直す(ロード済みならアンロードしてからロード) ----
+$model = $conf['GUIDE_LLM_MODEL']
+$catalog = $null
+try {
+    $catalog = Invoke-RestMethod -Uri "$upstream/api/v1/models" -Headers $upstreamHeaders -TimeoutSec 10
+} catch {
+    $catalog = $null
+}
+if ($null -eq $catalog -or $null -eq $catalog.models) {
+    Write-Warning 'Bionic にモデル管理の口(/api/v1/models)が無いので、読み直しはしません。先に Bionic で模型を読んでおいてください。'
+} else {
+    $entry = @($catalog.models) | Where-Object { $_.key -eq $model } | Select-Object -First 1
+    if (-not $entry) {
+        $list = (@($catalog.models) | Where-Object { $_.type -eq 'llm' } | ForEach-Object { "  $($_.key)  $($_.display_name)" }) -join "`n"
+        throw "Bionic に GUIDE_LLM_MODEL の識別子がありません: '$model'`n使える識別子:`n$list"
+    }
+    foreach ($instance in @($entry.loaded_instances)) {
+        if ($null -eq $instance) { continue }
+        # 形は { id: … } のはず。違っても読めるように
+        $instanceId = if ($instance -is [string]) { $instance } elseif ($instance.id) { $instance.id } else { $instance.instance_id }
+        Write-Host "読み込み済みなのでアンロードします: $($entry.display_name) ($instanceId)"
+        try {
+            $null = Invoke-RestMethod -Method Post -Uri "$upstream/api/v1/models/unload" -Headers $upstreamHeaders -ContentType 'application/json' `
+                -Body (@{ instance_id = "$instanceId" } | ConvertTo-Json) -TimeoutSec 120
+        } catch {
+            throw "アンロードできませんでした($instanceId): $($_.Exception.Message)"
+        }
+    }
+    $loadBody = @{ model = $model }
+    if ($conf['GUIDE_LLM_CONTEXT_LENGTH']) { $loadBody.context_length = [int]$conf['GUIDE_LLM_CONTEXT_LENGTH'] }
+    Write-Host "ロードします: $($entry.display_name) ($model)。大きい模型は数十秒かかります…"
+    try {
+        $loaded = Invoke-RestMethod -Method Post -Uri "$upstream/api/v1/models/load" -Headers $upstreamHeaders -ContentType 'application/json' `
+            -Body ($loadBody | ConvertTo-Json) -TimeoutSec 600
+    } catch {
+        throw "ロードできませんでした($model): $($_.Exception.Message)"
+    }
+    Write-Host "ロードしました: $($entry.display_name)($($loaded.load_time_seconds) 秒)" -ForegroundColor Green
+    # 考えを止める指定を決めていなければ、模型の性質から決める: 「off」が選べる模型(Qwen・Gemma)は none、
+    # 選べない模型(GPT-OSS などいつも考える模型)は low(門番が考える分の字数を上乗せする)
+    if (-not $conf['GUIDE_LLM_REASONING_EFFORT']) {
+        $options = @($entry.capabilities.reasoning.allowed_options)
+        $conf['GUIDE_LLM_REASONING_EFFORT'] = if ($options -contains 'off') { 'none' } else { 'low' }
+        Write-Host "考えを止める指定: $($conf['GUIDE_LLM_REASONING_EFFORT'])(模型が選べるもの: $(if ($options.Count) { $options -join '/' } else { 'なし' }))"
+    }
+}
+
 # ---- 3. 門番を起こす(鍵は環境変数で渡す) ----
 $env:GUIDE_LLM_MODEL = $conf['GUIDE_LLM_MODEL']
 $env:GUIDE_LLM_FAMILY = $conf['GUIDE_LLM_FAMILY'] ?? ''
+$env:GUIDE_LLM_REASONING_EFFORT = $conf['GUIDE_LLM_REASONING_EFFORT'] ?? ''
 $env:KM_GUIDE_LLM_KEY = $conf['KM_GUIDE_LLM_KEY']
 $env:GUIDE_LLM_PORT = "$port"
 $env:LLM_API_URL = $upstream

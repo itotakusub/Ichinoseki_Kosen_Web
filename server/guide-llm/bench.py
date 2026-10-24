@@ -15,6 +15,7 @@ import json
 import os
 import statistics
 import time
+import urllib.error
 import urllib.request
 
 PORT = int(os.environ.get("GUIDE_LLM_PORT", "8888"))
@@ -64,7 +65,11 @@ def parses(text: str) -> bool:
 def main() -> None:
     results = []
     for question in QUESTIONS:
-        seconds, text = ask(question)
+        try:
+            seconds, text = ask(question)
+        except urllib.error.HTTPError as error:
+            # 門番が断った・空の答え(502)でも止めずに NG として数える
+            seconds, text = 0.0, f"(HTTP {error.code})"
         results.append({"question": question, "seconds": round(seconds, 2), "json": parses(text), "reply": text})
         print(f"{seconds:6.2f}s  {'OK ' if parses(text) else 'NG '} {question} → {text[:80]!r}")
     times = [r["seconds"] for r in results]
