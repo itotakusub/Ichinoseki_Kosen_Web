@@ -1844,13 +1844,26 @@ function km_check_guide_chat(): void
     check_bool('既定は OFF(管理画面で ON にして人を選んでから)', str_contains($lib, "'enabled' => km_setting_get(\$pdo, KM_GUIDE_ENABLED_SETTING, '0') === '1',"));
     $llmDir = $root . '/guide-llm';
     $serverPy = (string) @file_get_contents($llmDir . '/server.py');
-    check_bool('自宅 PC: Unsloth で読む・127.0.0.1 だけ・鍵は定数時間で比べる・4 つの模型だけ', str_contains($serverPy, 'from unsloth import FastLanguageModel')
-        && str_contains($serverPy, 'host="127.0.0.1"') && str_contains($serverPy, 'secrets.compare_digest(')
-        && str_contains($serverPy, '"gpt-oss-20b": re.compile(') && str_contains($serverPy, '"qwen3.5-9b": re.compile('));
-    check_bool('自宅 PC: 本文をログに書かない', str_contains($serverPy, '# **本文は書かない**。時間と字数だけ') && !preg_match('/LOG\.\w+\([^)]*(messages|text)\b/', $serverPy));
-    check_bool('自宅 PC: ngrok で出す・鍵はコマンドに載せない(WSLENV)・鍵の入るファイルは git に入れない', str_contains((string) @file_get_contents($llmDir . '/start-guide-llm.ps1'), '& ngrok http --url=')
-        && str_contains((string) @file_get_contents($llmDir . '/start-guide-llm.ps1'), "\$env:WSLENV = 'GUIDE_LLM_MODEL/u:KM_GUIDE_LLM_KEY/u:")
-        && str_contains((string) @file_get_contents($llmDir . '/.gitignore'), 'guide-llm.env'));
+    /*
+     * 2026-10-25 に作り直した(利用者の指示「WSL は使わない」「Unsloth に API リクエストする」)。
+     * 自宅 PC の server.py は模型を読まず、利用者が動かしている Unsloth の API へ渡す**門番**(標準ライブラリだけ)
+     */
+    check_bool('自宅 PC: 門番は 127.0.0.1 だけ・鍵は定数時間で比べる・4 つの模型だけ・Unsloth はこの PC の中だけ', str_contains($serverPy, 'ThreadingHTTPServer(("127.0.0.1", PORT), Handler)')
+        && str_contains($serverPy, 'secrets.compare_digest(') && str_contains($serverPy, '"gpt-oss-20b": re.compile(') && str_contains($serverPy, '"qwen3.5-9b": re.compile(')
+        && str_contains($serverPy, 'parts.hostname in ("127.0.0.1", "localhost", "::1")')
+        && !preg_match('/^\s*(import|from)\s+(fastapi|uvicorn|unsloth|torch)\b/m', $serverPy));
+    check_bool('自宅 PC: 模型の名前と出す字数は門番が決める・余計な項目は渡さない', str_contains($serverPy, '"model": MODEL_NAME,') && str_contains($serverPy, '"max_tokens": min(max_tokens, MAX_NEW_TOKENS_CAP),'));
+    check_bool('自宅 PC: 本文をログに書かない', str_contains($serverPy, '# **本文は書かない**。時間と字数だけ') && !preg_match('/LOG\.\w+\([^)]*(messages|text|body)\b/', $serverPy)
+        && str_contains($serverPy, 'def log_message(self, format: str, *args: Any) -> None:'));
+    $startPs = (string) @file_get_contents($llmDir . '/start-guide-llm.ps1');
+    // 説明の文の「WSL」ではなく、wsl を呼ぶ形(wsl -d … / Start-Process 'wsl' / WSLENV)を探す
+    check_bool('自宅 PC: WSL を使わない・ngrok で出す・鍵は環境変数で渡す', !preg_match("/\bwsl(\.exe)?\s+-|FilePath\s+'wsl|WSLENV/i", $startPs)
+        && str_contains($startPs, '& ngrok http --url="https://$domain" $port') && str_contains($startPs, "\$env:KM_GUIDE_LLM_KEY = \$conf['KM_GUIDE_LLM_KEY']"));
+    // 鍵の入るファイルは git に入れない。見本(git に入る)には**値を入れない**(2026-10-25、利用者が入れた値を guide-llm.env へ移した)
+    $exampleEnv = (string) @file_get_contents($llmDir . '/guide-llm.env.example');
+    check_bool('自宅 PC: guide-llm.env は git に入れない・見本の鍵とドメインは空', str_contains((string) @file_get_contents($llmDir . '/.gitignore'), 'guide-llm.env')
+        && preg_match('/^KM_GUIDE_LLM_KEY=\s*$/m', $exampleEnv) === 1 && preg_match('/^NGROK_DOMAIN=\s*$/m', $exampleEnv) === 1
+        && preg_match('/^UNSLOTH_API_KEY=\s*$/m', $exampleEnv) === 1);
 }
 
 /**

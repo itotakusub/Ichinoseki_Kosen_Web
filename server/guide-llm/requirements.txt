@@ -1,8 +1,0 @@
-# 案内チャットの LLM(自宅 PC の WSL の Ubuntu。server.py)。
-# 入れ方(start-guide-llm.ps1 -Setup がこの通りに流す):
-#   python3 -m venv .venv && . .venv/bin/activate && pip install -U pip && pip install -r requirements.txt
-# Unsloth は GPU(CUDA)の版に合った torch を自分で引いてくる。合わなければ https://docs.unsloth.ai の入れ方に従う
-unsloth
-fastapi
-uvicorn
-anyio

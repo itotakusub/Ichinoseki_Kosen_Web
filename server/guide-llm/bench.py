@@ -1,12 +1,12 @@
-"""模型を選ぶための測り(自宅 PC。2026-10-24)。
+"""模型を選ぶための測り(自宅 PC。2026-10-24、2026-10-25 に門番越しに直した)。
 
-動いている server.py(127.0.0.1)に、案内でよく来そうな質問 20 件を、Website と同じ「分ける」頼み方で送り、
-1 件ごとの時間と返事を出す。4 つの模型(Gemma4 E4B / 12B QAT / Qwen3.5-9B / GPT-OSS-20B)を順に入れ替えて走らせ、
-**速さ(中央値)と、返事が JSON として読めた数**で比べる。日本語の出来は、出した返事を目で見て決める。
+動いている門番 server.py(127.0.0.1)越しに Unsloth の API へ、案内でよく来そうな質問 20 件を、Website と同じ
+「分ける」頼み方で送り、1 件ごとの時間と返事を出す。Unsloth で読む模型(Gemma4 E4B / 12B QAT / Qwen3.5-9B / GPT-OSS-20B)を
+入れ替えて走らせ、**速さ(中央値)と、返事が JSON として読めた数**で比べる。日本語の出来は、出した返事を目で見て決める。
 
-    python bench.py            # 結果は bench-<時刻>.json にも残す(質問は下の決まった文だけ。利用者の質問は使わない)
+    pwsh -File start-guide-llm.ps1 -Bench   # 結果は bench-<時刻>.json にも残す(質問は下の決まった文だけ。利用者の質問は使わない)
 
-鍵とポートは guide-llm.env と同じ環境変数(start-guide-llm.ps1 -Bench が渡す)。
+鍵とポートは guide-llm.env と同じ環境変数(start-guide-llm.ps1 -Bench が渡す)。標準ライブラリだけで動く。
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import statistics
 import time
 import urllib.request
 
-PORT = int(os.environ.get("GUIDE_LLM_PORT", "8000"))
+PORT = int(os.environ.get("GUIDE_LLM_PORT", "8888"))
 KEY = os.environ.get("KM_GUIDE_LLM_KEY", "")
 
 QUESTIONS = [
