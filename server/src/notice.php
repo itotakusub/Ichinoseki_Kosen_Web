@@ -13,6 +13,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/lib/db.php';
 require_once __DIR__ . '/lib/notices.php';
+require_once __DIR__ . '/lib/map-switches.php';
 require_once __DIR__ . '/lib/assets.php';
 require_once __DIR__ . '/lib/csp.php';
 
@@ -21,11 +22,23 @@ km_csp_send('public');
 $id = is_string($_GET['id'] ?? null) ? (string) $_GET['id'] : '';
 $all = [];
 $unavailable = false;
+/*
+ * お知らせを止めているとき(2026-10-24、管理画面「お知らせ」のスイッチ。lib/map-switches.php)は、
+ * 一覧もくわしいページも「いまお知らせはありません」(404)。書いたものは消さない
+ */
+$noticesOff = false;
 try {
-    $all = km_notices_public(km_db(), km_notice_today());
+    $pdo = km_db();
+    $noticesOff = !km_map_switches($pdo)['notices'];
+    if (!$noticesOff) {
+        $all = km_notices_public($pdo, km_notice_today());
+    }
 } catch (Throwable $exception) {
     error_log('notice.php (public) failed (fail open): ' . $exception->getMessage());
     $unavailable = true;
+}
+if ($noticesOff) {
+    http_response_code(404);
 }
 $notice = null;
 if (km_notice_id_valid($id)) {
@@ -80,7 +93,7 @@ function km_notice_e(?string $value): string
             <?= km_notice_detail_html($notice) ?>
             <p><a class="km-doc-button" href="/contact.php">お問い合わせ</a></p>
         <?php else: ?>
-            <?php if ($id !== ''): ?>
+            <?php if ($id !== '' && !$noticesOff): ?>
                 <p>そのお知らせは見つかりませんでした。</p>
             <?php endif; ?>
             <?php if ($all === []): ?>

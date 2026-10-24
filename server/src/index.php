@@ -230,6 +230,26 @@ if (is_string($poiParam) && preg_match('/^[1-9]\d{0,9}$/', $poiParam) === 1) {
 }
 $kmFocusFromPoi = $kmFocusFrom === null ? $kmPoiParam('fromPoi') : null;
 $kmFocusToPoi = $kmFocusTo === null ? $kmPoiParam('toPoi') : null;
+/*
+ * 共有のリンク(部屋の QR を含む)から開いたか(2026-10-24、利用者の指示「共有から開いた時は、チュートリアル、
+ * 前回の経路を全て無視(広告は無視しない)」)。**読み手はこの 1 つだけを見る**(tutorial.js・welcome.js・user-history.js)。
+ * 以前は部屋の QR(km-focus-room)しか見ておらず、経路や一時地点の共有ではチュートリアルが出て、前回の経路も聞いていた
+ */
+$kmFromShare = $kmFocusRoom !== null
+    || $kmFocusPoi !== null
+    || (($kmFocusFrom !== null || $kmFocusFromPoi !== null) && ($kmFocusTo !== null || $kmFocusToPoi !== null));
+
+/*
+ * チュートリアルとお知らせのスイッチ(2026-10-24、利用者の指示「機能ごと ON/OFF」。lib/map-switches.php)。
+ * 切り替えは管理画面「お知らせ」。**読めなければ ON**(今までどおり出す)
+ */
+require_once __DIR__ . '/lib/map-switches.php';
+$kmSwitches = ['tutorial' => true, 'notices' => true];
+try {
+    $kmSwitches = km_map_switches(km_db());
+} catch (Throwable $exception) {
+    error_log('KosenMap home: switches: ' . $exception->getMessage());
+}
 
 $inlineMapData = null;
 $kmEvent = null;             // イベントモードの案内(バナー)。無ければ null
@@ -336,6 +356,10 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
     <?php endif; ?>
     <?php if ($kmFocusPoi !== null): ?>
         <meta name="km-focus-poi" content="<?= km_home_e($kmFocusPoi) ?>">
+    <?php endif; ?>
+    <?php if ($kmFromShare): ?>
+        <?php /* 共有のリンクから開いた印(上の $kmFromShare)。チュートリアル・はじめに・前回の経路を出さない。広告は出す(Main/tutorial-end.js の kmShowAd) */ ?>
+        <meta name="km-from-share" content="1">
     <?php endif; ?>
     <?php if ($kmTestMode !== null): ?>
         <?php /* テスト用アカウントの印と、自動で「始めから」にするまでの分(Main/test-mode.js が読む。一般の人には出さない) */ ?>
@@ -760,6 +784,8 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
         ?>
         <div class="km-route-dock">
         <div id="km-route-pick" class="km-route-pick" aria-live="polite" hidden></div>
+        <?php /* 経路が使う階(2026-10-24、利用者の指示「ルートを設定したときに、使用する階を常時表示」)。中身は Main/app.js の renderRouteFloors */ ?>
+        <div id="km-route-floors" class="km-route-floors" role="group" aria-label="この経路が使う階" hidden></div>
         <div id="km-route-bar" class="km-route-bar" role="region" aria-label="ルート案内" hidden>
             <button id="km-route-close" type="button" class="km-route-close" title="案内をやめる" aria-label="案内をやめる">&times;</button>
             <button id="km-route-target" type="button" class="km-route-target" title="行き先を地図の真ん中に出す">
@@ -898,10 +924,14 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
                         初めて開いたときに出した案内(利用規約・メールについて)を、もう一度読めます。
                     </p>
                     <button type="button" class="secondary-btn" data-km-welcome-open>はじめにを読む</button>
-                    <?php /* お知らせの一覧(lib/notices.php。2026-10-24) */ ?>
-                    <a href="/notice.php" class="secondary-btn">お知らせ</a>
-                    <?php /* 初回に出す操作の案内(Main/tutorial.js)をもう一度 */ ?>
-                    <button type="button" class="secondary-btn" data-km-tutorial-open>操作の案内を見る</button>
+                    <?php /* お知らせの一覧(lib/notices.php。2026-10-24)。スイッチが OFF なら出さない(lib/map-switches.php) */ ?>
+                    <?php if ($kmSwitches['notices']): ?>
+                        <a href="/notice.php" class="secondary-btn">お知らせ</a>
+                    <?php endif; ?>
+                    <?php /* 初回に出す操作の案内(Main/tutorial.js)をもう一度。スイッチが OFF なら出さない */ ?>
+                    <?php if ($kmSwitches['tutorial']): ?>
+                        <button type="button" class="secondary-btn" data-km-tutorial-open>操作の案内を見る</button>
+                    <?php endif; ?>
                 </div>
             </div>
         </aside>
@@ -929,16 +959,21 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
      */
     require_once __DIR__ . '/lib/notices.php';
     // 中身は管理画面「お知らせ」(admin/notices.php)。日付は日本時間で比べる。読めなければ出さない(地図は出す)
-    try {
-        $kmNotices = km_notices_current(km_notice_today(), km_notices_public(km_db(), km_notice_today()));
-    } catch (Throwable $exception) {
-        error_log('KosenMap home: notices: ' . $exception->getMessage());
-        $kmNotices = [];
+    // スイッチが OFF なら読まない(2026-10-24。lib/map-switches.php)
+    $kmNotices = [];
+    if ($kmSwitches['notices']) {
+        try {
+            $kmNotices = km_notices_current(km_notice_today(), km_notices_public(km_db(), km_notice_today()));
+        } catch (Throwable $exception) {
+            error_log('KosenMap home: notices: ' . $exception->getMessage());
+            $kmNotices = [];
+        }
     }
     $kmMailFrom = getenv('MAIL_FROM');
     $kmMailFrom = is_string($kmMailFrom) && str_contains($kmMailFrom, '@') ? $kmMailFrom : null;
     ?>
-    <div id="km-welcome" class="km-welcome" data-version="<?= km_home_e($kmWelcomeVersion) ?>" data-notices="<?= km_home_e(implode(',', array_column($kmNotices, 'id'))) ?>" hidden>
+    <?php /* data-tutorial="off": チュートリアルを止めているとき、閉じたら広告を出す(Main/welcome.js → kmShowAd。広告はチュートリアルの終わりから出していた) */ ?>
+    <div id="km-welcome" class="km-welcome" data-version="<?= km_home_e($kmWelcomeVersion) ?>" data-notices="<?= km_home_e(implode(',', array_column($kmNotices, 'id'))) ?>"<?= $kmSwitches['tutorial'] ? '' : ' data-tutorial="off"' ?> hidden>
         <div class="km-welcome-card" role="dialog" aria-modal="true" aria-labelledby="km-welcome-title">
             <?php foreach ($kmNotices as $kmNotice): ?>
                 <?php /* お知らせ(lib/notices.php)。くわしくは notice.php */ ?>
@@ -1033,10 +1068,12 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
                     <li><?= km_home_e($line) ?></li>
                 <?php endforeach; ?>
             </ol>
-            <div class="km-test-body">
-                <?php /* 押す所を順に光らせる案内(Main/tutorial.js)。来場者ごとに最初は自動で出る */ ?>
-                <button type="button" class="secondary-btn km-test-tour" data-km-tutorial-open>📍 画面で順に案内する</button>
-            </div>
+            <?php if ($kmSwitches['tutorial']): ?>
+                <div class="km-test-body">
+                    <?php /* 押す所を順に光らせる案内(Main/tutorial.js)。来場者ごとに最初は自動で出る。スイッチが OFF なら出さない */ ?>
+                    <button type="button" class="secondary-btn km-test-tour" data-km-tutorial-open>📍 画面で順に案内する</button>
+                </div>
+            <?php endif; ?>
         </section>
     </div>
     <?php endif; ?>
@@ -1130,6 +1167,8 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
     <?php /* 左の引き出しと、検索の一致率(2026-10-23)。どちらも app.js・map-tuning.js より先に読む */ ?>
     <script defer src="<?= km_home_e(km_public_asset('Main/km-sheet.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/search-rank.js')) ?>"></script>
+    <?php /* 経路の見せ方(2026-10-24。線が地点や札に重なる所・経路が使う階)。app.js より先に読む */ ?>
+    <script defer src="<?= km_home_e(km_public_asset('Main/route-view.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/map-style.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/map-tuning.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/label-layout.js')) ?>"></script>
@@ -1146,8 +1185,10 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
     <script defer src="<?= km_home_e(km_public_asset('Main/event-schedule.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/panel.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/welcome.js')) ?>"></script>
-    <?php /* 初回の操作案内(2026-10-15)。「はじめに」を閉じてから・地図が出てから始める */ ?>
-    <script defer src="<?= km_home_e(km_public_asset('Main/tutorial.js')) ?>"></script>
+    <?php /* 初回の操作案内(2026-10-15)。「はじめに」を閉じてから・地図が出てから始める。スイッチが OFF なら読まない(2026-10-24。lib/map-switches.php) */ ?>
+    <?php if ($kmSwitches['tutorial']): ?>
+        <script defer src="<?= km_home_e(km_public_asset('Main/tutorial.js')) ?>"></script>
+    <?php endif; ?>
     <?php /* チュートリアルの終わりに、広告(確率)と「チュートリアルが終わりました」(2026-10-21) */ ?>
     <?php /* ポスター・広告の表示回数とリンクの人数を数える(2026-10-21)。tutorial-end.js より先に読む(window.kmPosterStat を使う) */ ?>
     <script defer src="<?= km_home_e(km_public_asset('Main/poster-stats.js')) ?>"></script>

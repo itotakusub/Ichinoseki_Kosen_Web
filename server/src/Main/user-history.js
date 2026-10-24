@@ -480,6 +480,16 @@
             await new Promise(function (resolve) { document.addEventListener('km-map-ready', resolve, { once: true }); });
             await new Promise(function (resolve) { window.setTimeout(resolve, 400); });
         }
+        /*
+         * 共有のリンクから来たときは**前回の経路のことは何も尋ねない**(2026-10-24、利用者の指示「共有から開いた時は、
+         * チュートリアル、前回の経路を全て無視」)。開いた場所や経路の上に問いかけが重なるため。
+         * 同期の答え(残す/この端末だけ)もここでは決めない —— 次に普通に開いたときに尋ねる。答えが決まっている人の同期は続ける
+         */
+        if (document.querySelector('meta[name="km-from-share"]')) {
+            try { window.sessionStorage.setItem('km-route-resume-asked', '1'); } catch (e) { /* 覚えられない */ }
+            if (signedIn && routeChoice() !== null) sync();
+            return;
+        }
         // 尋ねるのは、サインインしたときにこの端末に経路の履歴があるときだけ。無ければ「残す」にする(尋ねる中身が無い)
         if (signedIn && routeChoice() === null && doc.routes.length === 0) {
             try { window.localStorage.setItem(choiceKey, 'keep'); } catch (e) { /* 覚えられない */ }

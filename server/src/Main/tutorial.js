@@ -365,7 +365,11 @@
 
     function startWhenReady() {
         if (seen()) return;
-        if (document.querySelector('meta[name="km-focus-room"]')) return;   // QR から来た人
+        /*
+         * 共有のリンク(部屋の QR・場所・経路)から来た人には出さない(2026-10-24、利用者の指示)。印は index.php の
+         * <meta name="km-from-share">。見たことにはしないので、あとで普通に開いたときには出る。広告は tutorial-end.js の kmShowAd が出す
+         */
+        if (document.querySelector('meta[name="km-from-share"]')) return;
         const welcome = byId('km-welcome');
         const begin = function () {
             if (welcome && !welcome.hidden) {

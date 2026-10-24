@@ -1314,7 +1314,12 @@ body.km-route-active { --km-route-lift: calc(var(--km-touch) + 20px); }
 .km-route-dock {
     position: absolute;
     left: var(--km-edge);
-    bottom: calc(var(--km-bottom) + var(--km-touch) + 8px);
+    /*
+     * 左下の操作の帯の**実際の高さ**の上に置く(2026-10-24)。スマホでは操作が 2 行に折り返し、
+     * 1 行ぶん(--km-touch)で決め打ちすると、案内の帯が 1 行目(設定・ポスター・経路)に重なった(実測)。
+     * 高さは Main/app.js が測って --km-action-bar-height に入れる。測れないときは 1 行ぶん
+     */
+    bottom: calc(var(--km-bottom) + var(--km-action-bar-height, var(--km-touch)) + 8px);
     width: min(520px, calc(100% - var(--km-edge) * 2 - var(--km-rail-width) - 8px));
     z-index: 900;
     display: flex;
@@ -3397,3 +3402,81 @@ body.km-route-panel-open .km-searchbox-route { background: var(--primary); color
 .km-welcome-notice-title { display: block; margin-bottom: 0.35rem; font-size: 1rem; }
 .km-welcome-notice-text { margin: 0 0 0.5rem; font-size: 0.9rem; line-height: 1.7; }
 .km-welcome-notice-link { font-size: 0.9rem; font-weight: 700; }
+
+/* ======== イベント中の地点の見分け(2026-10-24、利用者の指示) ========
+ *
+ * 「イベントノードは太い赤い縁をつける」「イベントで関係ないものは透明度を上げる(50%〜)」。
+ * 印は Main/app.js の eventNodeRole(イベント中・公開の地図だけ付ける)。種類ごとの縁の色(.km-label-room など)より後ろに書く。
+ * 経路の線も赤なので、縁は**濃い赤 + 白の外側の線**にして線と見分ける。
+ */
+.km-node-event .km-node-shape path {
+    stroke: #dc2626;
+    stroke-width: 3.5px;
+    paint-order: stroke;
+}
+.km-node-event .km-node-shape {
+    filter: drop-shadow(0 0 1px #ffffff) drop-shadow(0 1px 2px rgba(15, 23, 42, 0.35));
+}
+.km-label.km-label-event {
+    border: 3px solid #dc2626 !important;
+    box-shadow: 0 0 0 1.5px #ffffff, var(--shadow-sm);
+    --km-lead-color: #dc2626;
+}
+/* 関係ない地点は 55% 透かす。Leaflet は札に opacity: 0.9 を要素へ直接書くので !important */
+.km-node-unrelated { opacity: 0.45; }
+.km-label.km-label-unrelated { opacity: 0.45 !important; }
+
+/* ======== 経路が使う階(2026-10-24、利用者の指示「ルートを設定したときに、使用する階を常時表示」) ========
+ * 案内の帯の上の 1 行(index.php の #km-route-floors。中身は Main/app.js の renderRouteFloors)。
+ * 押すとその階へ移る。いまの階は塗る。入りきらなければ横に送る(帯を 2 段にしない)
+ */
+.km-route-floors {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--glass-heavy);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    box-shadow: var(--shadow-sm);
+    color: var(--text);
+    overflow-x: auto;
+    scrollbar-width: none;
+    animation: km-route-in 0.25s ease;
+}
+.km-route-floors::-webkit-scrollbar { display: none; }
+.km-route-floors[hidden] { display: none; }
+.km-route-floors-head { flex: 0 0 auto; font-size: var(--text-label); font-weight: 700; color: var(--secondary); }
+.km-route-floors-arrow { flex: 0 0 auto; color: var(--secondary); }
+.km-route-floor {
+    flex: 0 0 auto;
+    min-width: 40px;
+    min-height: 36px;
+    padding: 0 0.7rem;
+    border-radius: 999px;
+    border: 1.5px solid #ef4444;
+    background: transparent;
+    color: var(--text);
+    font-weight: 800;
+    cursor: pointer;
+}
+.km-route-floor.is-current { background: #ef4444; color: #ffffff; }
+@media (prefers-reduced-motion: reduce) {
+    .km-route-floors { animation: none; }
+}
+/* 右の階の列: 経路が通る階に赤い輪。畳んでいるときは取っ手に赤い点(経路を出している印) */
+.floor-nav .floor-btn.is-on-route { box-shadow: inset 0 0 0 3px #ef4444; }
+.floor-nav.has-route .floor-toggle { position: relative; }
+.floor-nav.has-route .floor-toggle::after {
+    content: '';
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #ef4444;
+    box-shadow: 0 0 0 2px #ffffff;
+}

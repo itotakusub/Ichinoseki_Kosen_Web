@@ -133,6 +133,7 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     'notice.create' => 'がお知らせを足しました',
     'notice.update' => 'がお知らせを直しました',
     'notice.delete' => 'がお知らせを消しました',
+    'map.switches' => 'が地図を開いたときに出すもの(チュートリアル・お知らせ)を切り替えました',
     'qr_link.create' => 'が QR のリンク集にリンクを足しました',
     'qr_link.update' => 'が QR のリンク集のリンクを直しました',
     'qr_link.delete' => 'が QR のリンク集からリンクを消しました',

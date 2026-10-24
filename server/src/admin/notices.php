@@ -6,6 +6,7 @@ define('KM_ADMIN', true);
 require __DIR__ . '/_inc/guard.php';
 require_once dirname(__DIR__) . '/lib/db.php';
 require_once dirname(__DIR__) . '/lib/notices.php';
+require_once dirname(__DIR__) . '/lib/map-switches.php';
 require_once dirname(__DIR__) . '/lib/admin-log.php';
 
 /**
@@ -32,6 +33,7 @@ $KM_PAGE = [
 
 $errors = [];
 $dbError = null;
+$switches = ['tutorial' => true, 'notices' => true];
 $rows = [];
 $editing = null;
 $form = null;
@@ -49,6 +51,18 @@ try {
     } elseif (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         $formAction = (string) ($_POST['form_action'] ?? '');
         $targetId = ctype_digit((string) ($_POST['id'] ?? '')) ? (int) $_POST['id'] : null;
+        /*
+         * 地図を開いたときに出すもののスイッチ(2026-10-24、利用者の指示「チュートリアル・お知らせを機能ごと ON/OFF」。
+         * lib/map-switches.php)。チェックの無いものは OFF
+         */
+        if ($formAction === 'switches') {
+            $tutorialOn = isset($_POST['tutorial_enabled']);
+            $noticesOn = isset($_POST['notices_enabled']);
+            km_map_switches_save($pdo, $tutorialOn, $noticesOn);
+            km_admin_log_record('content', 'map.switches', 'チュートリアル ' . ($tutorialOn ? 'ON' : 'OFF') . '・お知らせ ' . ($noticesOn ? 'ON' : 'OFF'));
+            header('Location: ./notices.php?saved=switches#map-switches', true, 303);
+            exit;
+        }
         if ($formAction === 'delete' && $targetId !== null) {
             $title = km_notice_delete($pdo, $targetId);
             if ($title !== null) {
@@ -98,6 +112,7 @@ try {
     if ($editId !== null) {
         $editing = km_notice_find($pdo, $editId);
     }
+    $switches = km_map_switches($pdo);
 } catch (Throwable $exception) {
     error_log('admin/notices.php: ' . $exception->getMessage());
     $dbError = km_admin_error_message($exception, '詳しくはサーバーのログを照合してください。');
@@ -107,6 +122,7 @@ $notice = [
     'created' => 'お知らせを足しました。',
     'updated' => 'お知らせを保存しました。',
     'deleted' => 'お知らせを消しました。',
+    'switches' => '地図を開いたときに出すものを保存しました。',
 ][(string) ($_GET['saved'] ?? '')] ?? null;
 
 // フォームの中身: 打ち直し・プレビュー > 編集中の行 > 新しく書く(日付は今日・最初の画面に出す)
@@ -184,6 +200,40 @@ require __DIR__ . '/_inc/partials/page-header.php';
 
             <div class="row">
               <div class="col-12 col-xl-5">
+                <?php
+                /*
+                 * 地図を開いたときに出すもの(2026-10-24、利用者の指示「チュートリアル・お知らせを機能ごと ON/OFF」。lib/map-switches.php)。
+                 * 外すと、チュートリアル(初回の操作案内)・お知らせ(「はじめに」の先頭・一覧のページ)をどちらも出さない。
+                 * お知らせを外しても、ここで書いたものは残る(付け直せばそのまま出る)
+                 */
+                ?>
+                <div class="card mb-4" id="map-switches">
+                  <div class="card-header">
+                    <h3 class="card-title mb-0">地図を開いたときに出すもの</h3>
+                  </div>
+                  <form method="post" action="./notices.php">
+                    <?= km_csrf_field() ?>
+                    <input type="hidden" name="form_action" value="switches">
+                    <div class="card-body">
+                      <div class="form-check form-switch mb-2">
+                        <input class="form-check-input" type="checkbox" role="switch" id="switch-tutorial" name="tutorial_enabled" value="1"<?= $switches['tutorial'] ? ' checked' : '' ?>>
+                        <label class="form-check-label" for="switch-tutorial">チュートリアル(初めての人への操作の案内)</label>
+                      </div>
+                      <div class="form-check form-switch mb-2">
+                        <input class="form-check-input" type="checkbox" role="switch" id="switch-notices" name="notices_enabled" value="1"<?= $switches['notices'] ? ' checked' : '' ?>>
+                        <label class="form-check-label" for="switch-notices">お知らせ(「はじめに」の先頭と、お知らせの一覧のページ)</label>
+                      </div>
+                      <div class="form-text">
+                        チュートリアルを止めると、広告はチュートリアルの終わりではなく、「はじめに」を閉じたときに出します。
+                        お知らせを止めても、ここで書いたお知らせは消えません。
+                      </div>
+                    </div>
+                    <div class="card-footer text-end">
+                      <button type="submit" class="btn btn-primary btn-sm">保存</button>
+                    </div>
+                  </form>
+                </div>
+
                 <div class="card mb-4">
                   <div class="card-header d-flex align-items-center">
                     <h3 class="card-title mb-0">お知らせの一覧</h3>

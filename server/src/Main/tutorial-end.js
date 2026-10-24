@@ -155,6 +155,28 @@
         showEnd();
     });
 
+    /*
+     * **チュートリアルを通らずに広告だけを出す入口**(2026-10-24、利用者の指示「共有から開いた時は、チュートリアル、
+     * 前回の経路を全て無視(広告は無視しない)」)。広告はチュートリアルの終わりからしか出なかったので、
+     * 共有のリンクから来た人(Main/app.js の focusFromUrl / focusRoomFromUrl)と、チュートリアルを止めているとき
+     * (Main/welcome.js。管理画面「お知らせ」のスイッチ)はここから出す。選び方と数え方はチュートリアルの終わりと同じ。
+     * **セッションで 1 回だけ**(開き直すたびに出さない)。終わりの知らせは出さない。出したら true
+     */
+    const AD_SESSION_KEY = 'km-ad-shown';
+    window.kmShowAd = function () {
+        try {
+            if (window.sessionStorage.getItem(AD_SESSION_KEY) === '1') return false;
+        } catch (e) { /* 読めなければ出す */ }
+        const list = ads();
+        if (list.length === 0) return false;
+        try { window.sessionStorage.setItem(AD_SESSION_KEY, '1'); } catch (e) { /* 覚えられない */ }
+        const focusBack = document.activeElement;
+        showAd(pickAd(list), function () {
+            if (focusBack && document.contains(focusBack) && typeof focusBack.focus === 'function') focusBack.focus();
+        });
+        return true;
+    };
+
     // 検査・手元の試し用(確率を通さずに出す)。公開しても害は無い(出すのは地図データに載っている広告だけ)
     window.kmShowTutorialEnd = function (withAd) {
         const list = ads();

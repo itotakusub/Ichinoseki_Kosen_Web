@@ -71,6 +71,14 @@
             if (lastFocus && typeof lastFocus.focus === 'function') lastFocus.focus();
             // 初回の操作案内(Main/tutorial.js)は「はじめに」を閉じてから始める
             document.dispatchEvent(new CustomEvent('km-welcome-closed'));
+            /*
+             * チュートリアルを止めているときは、ここで広告を出す(2026-10-24。管理画面「お知らせ」のスイッチ。
+             * 広告はチュートリアルの終わりから出していたので、止めると広告も出なくなっていた)。
+             * 出すのはセッションで 1 回だけ(Main/tutorial-end.js の kmShowAd)
+             */
+            if (dialog.dataset.tutorial === 'off' && typeof window.kmShowAd === 'function') {
+                window.setTimeout(window.kmShowAd, 300);
+            }
         }
 
         ok.addEventListener('click', close);
@@ -108,12 +116,13 @@
         });
 
         /*
-         * **QR(`/?room=<id>`)から来た人には出さない**(2026-10-14、利用者の指示)。
-         * 出すと、開いた部屋の詳細がこの幕の下に隠れる。読んだ印も付けないので、
-         * あとで普通に開いたときには出る。印は index.php の <meta name="km-focus-room">。
+         * **共有のリンク(部屋の QR `/?room=`・場所 `/?poi=`・経路 `/?from=&to=`)から来た人には出さない**
+         * (2026-10-14 に部屋の QR、2026-10-24 に共有のリンク全部へ広げた。利用者の指示)。
+         * 出すと、開いた場所や経路がこの幕の下に隠れる。読んだ印も付けないので、
+         * あとで普通に開いたときには出る。印は index.php の <meta name="km-from-share">。
          */
-        const fromRoomQr = document.querySelector('meta[name="km-focus-room"]') !== null;
-        if ((!seen() || unreadNotices().length > 0) && !fromRoomQr) open();
+        const fromShare = document.querySelector('meta[name="km-from-share"]') !== null;
+        if ((!seen() || unreadNotices().length > 0) && !fromShare) open();
     }
 
     if (document.readyState === 'loading') {

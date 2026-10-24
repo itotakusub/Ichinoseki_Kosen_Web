@@ -876,10 +876,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         const box = nodeBox(type).box;
         // ポスターのある地点。図形に輪を付け、名前に 🖼️ を付ける(styles.css の .km-node-has-poster)
         const hasPoster = postersByNode.has(id);
+        // イベント中の見分け(2026-10-24): イベントの地点は赤い太い縁、関係ない地点は薄く(下の eventNodeRole)
+        const role = eventNodeRole(node, hasPoster);
 
         const marker = L.marker([node.y, node.x], {
             icon: L.divIcon({
-                className: 'km-node km-node-' + type + (hasPoster ? ' km-node-has-poster' : ''),
+                className: 'km-node km-node-' + type + (hasPoster ? ' km-node-has-poster' : '') + (role ? ' km-node-' + role : ''),
                 html: nodeIconHtml(node, type),
                 iconSize: [box, box],
                 iconAnchor: [box / 2, box / 2],
@@ -890,11 +892,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
 
         // ツールチップは html: true で描くので、DB 由来の文字列は必ずエスケープする
-        // 企画の地点はイベント中、一時地点と同じく番号のポスターの見出しを出す(7 文字以上なら縮める。2026-10-23)
+        // 企画の地点はイベント中、一時地点と同じく番号のポスターの見出しを出す(2026-10-23)
         const project = projectDisplayFor(id, node);
         let tooltipContent = (hasPoster ? '<span class="km-label-poster" aria-hidden="true">🖼️</span>' : '')
-            // 縮めるのはポスターの見出しだけ(「28 ファーストペンギンファブ」のように番号を付けた部屋の名前は縮めない)
-            + escapeHtml(project ? (project.fromPoster ? shortPoiName(project.name) : project.name) : displayNameFor(node));
+            /*
+             * **札はすべて 7 文字以上なら「6 文字 + …」**(2026-10-24、利用者の指示「すべてのノードを 6 文字で…にする」)。
+             * それまではポスターの見出しと一時地点だけを縮めていた。詳細・検索の候補・案内の帯は縮めない(読む所)
+             */
+            + escapeHtml(shortPoiName(project ? project.name : displayNameFor(node)));
         if (window.isAdmin) {
             /*
              * **`style="…"` を書かない。** CSP に `'unsafe-inline'` が無く、
@@ -934,7 +939,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 direction: 'top',
                 offset: [0, -box / 2],
                 interactive: true,
-                className: 'km-label km-label-' + type,
+                className: 'km-label km-label-' + type + (role ? ' km-label-' + role : ''),
                 html: true,
             });
         }
@@ -997,9 +1002,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         const box = nodeBox(type).box;
         const hasPoster = postersByNode.has('poi:' + poi.id);
 
+        // 一時地点はイベントの地点(赤い太い縁。2026-10-24)。一時地点はイベント中にしか無い
+        const role = window.isAdmin ? '' : 'event';
+
         const marker = L.marker([poi.y, poi.x], {
             icon: L.divIcon({
-                className: 'km-node km-node-' + type + (hasPoster ? ' km-node-has-poster' : ''),
+                className: 'km-node km-node-' + type + (hasPoster ? ' km-node-has-poster' : '') + (role ? ' km-node-' + role : ''),
                 html: nodeIconHtml({ name: shown.name }, type),
                 iconSize: [box, box],
                 iconAnchor: [box / 2, box / 2],
@@ -1016,7 +1024,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 direction: 'top',
                 offset: [0, -box / 2],
                 interactive: true,
-                className: 'km-label km-label-' + type,
+                className: 'km-label km-label-' + type + (role ? ' km-label-' + role : ''),
                 html: true,
             });
         }
@@ -1423,6 +1431,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const PANEL_GAP = 12; // パネルと地図内容のあいだに置く隙間
     const EDGE_GAP = 20;
+    // 共有のリンクから来た人に広告を出すまでの間(開いた場所・経路を先に見せる。下の「共有のリンクから開いたとき」)
+    const SHARE_AD_DELAY_MS = 1500;
 
     function isPanelVisible(element) {
         if (!element || element.classList.contains('collapsed')) return false;
@@ -2302,6 +2312,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         routeStepIndex = 0;
         currentMarkers.forEach(m => window.map.removeLayer(m));
         currentMarkers = [];
+        routeLineRuns = [];
         renderRouteBar();
     }
 
@@ -2495,6 +2506,19 @@ document.addEventListener('DOMContentLoaded', async () => {
             note: posters.map(p => p.description).filter(Boolean).join(' / '),
             fromPoster: true,
         };
+    }
+
+    /**
+     * イベント中の地点の見分け(2026-10-24、利用者の指示「イベントノードは太い赤い縁」「イベントで関係ないものは透明度を上げる(50%〜)」)。
+     *   'event'     … イベントの地点。臨時の名前(alias)・企画の番号(projects)・ポスターのどれかがある(一時地点は createPoiMarker で 'event')
+     *   'unrelated' … それ以外(階段・出入口・トイレ・道なども。出してはいるが、イベントには関係ない)
+     *   ''          … イベント中でない・管理画面(地図編集では見分けない)
+     * 見た目は styles.css の .km-node-event / .km-node-unrelated(札は .km-label-*)。アプリの eventNodeUuids(MapEvent.kt)と同じ決め方
+     */
+    function eventNodeRole(node, hasPoster) {
+        if (window.isAdmin || !graphData.event) return '';
+        const hasProject = Array.isArray(node.projects) && node.projects.length > 0;
+        return node.alias || hasProject || hasPoster ? 'event' : 'unrelated';
     }
 
     function getLabelForNode(id, node) {
@@ -2992,6 +3016,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (floorImages[floor]) loadFloorImageDynamic(floor);
         // 階が変われば並びも変わる。出すラベルを取り直す(上の「ラベルの重なりをほどく」)
         if (window.kmDeclutterLabels) window.kmDeclutterLabels();
+        // 経路が使う階のチップの「いまの階」を塗り直す(下の renderRouteFloors。宣言より前に呼ばれうるので window 経由)
+        if (window.kmRenderRouteFloors) window.kmRenderRouteFloors();
     }
 
     /**
@@ -3004,19 +3030,84 @@ document.addEventListener('DOMContentLoaded', async () => {
      * 「経路の線を1つ足した」として扱えばよく、消すときも1回で済む。
      */
     function drawRouteLine(latlngs) {
-        // 地点の点より前に描く。線そのものは押せなくする(下の点を押せるように)
-        const base = L.polyline(latlngs, { color: '#ef4444', weight: 7, opacity: 0.9, pane: 'kmRouteLine', interactive: false });
-        const stripe = L.polyline(latlngs, {
-            color: '#ffffff', weight: 2.5, opacity: 0.9, dashArray: '10, 10', pane: 'kmRouteLine', interactive: false,
-        });
-        const group = L.featureGroup([base, stripe]).addTo(window.map);
-
+        const group = L.featureGroup().addTo(window.map);
+        const run = { latlngs: latlngs, group: group };
+        routeLineRuns.push(run);
+        paintRouteRun(run);
         return group;
     }
+
+    /*
+     * ======== 線が地点や札に重なる所は透かす ========(2026-10-24、利用者の指示
+     * 「ルート案内をしたときにルートの線が被っていたら、透明度を上げる(60〜80%)」)
+     *
+     * 経路の線は地点の印より上の層(pane kmRouteLine)に描くので、重なると地点が隠れて読めない。
+     * 画面の座標で、いま出している地点の印と札の箱に**重なる区間だけ** 70% 透かす(Main/route-view.js の splitRouteByObstacles)。
+     * 札の出し入れと位置は拡大・移動で変わるので、動き終わるたびに塗り直す(下の refreshRouteOverlap)。
+     */
+    const ROUTE_LINE_OPACITY = 0.9;
+    const ROUTE_OVERLAP_OPACITY = 0.3;   // 70% 透かす
+    const ROUTE_OVERLAP_PAD = 3;         // 線の太さ(7px)の半分。中心線が箱のふちを通るときも重なりとみなす
+    let routeLineRuns = [];              // [{latlngs, group}] いま描いている経路の線(階ごとの切れ目ごと)
+
+    function paintRouteRun(run) {
+        run.group.clearLayers();
+        routeOverlapPieces(run.latlngs).forEach((piece) => {
+            const opacity = piece.overlap ? ROUTE_OVERLAP_OPACITY : ROUTE_LINE_OPACITY;
+            // 地点の点より前に描く。線そのものは押せなくする(下の点を押せるように)
+            run.group.addLayer(L.polyline(piece.latlngs, {
+                color: '#ef4444', weight: 7, opacity: opacity, pane: 'kmRouteLine', interactive: false,
+            }));
+            run.group.addLayer(L.polyline(piece.latlngs, {
+                color: '#ffffff', weight: 2.5, opacity: opacity, dashArray: '10, 10', pane: 'kmRouteLine', interactive: false,
+            }));
+        });
+    }
+
+    /** 線を「重なる区間」と「重ならない区間」に分ける。分けられないとき(route-view.js が無い等)は 1 本のまま */
+    function routeOverlapPieces(latlngs) {
+        const view = window.KmRouteView;
+        if (!view || !window.map || latlngs.length < 2) return [{ latlngs: latlngs, overlap: false }];
+        const map = window.map;
+        const points = latlngs.map((ll) => {
+            const p = map.latLngToContainerPoint(ll);
+            return { x: p.x, y: p.y };
+        });
+        return view.splitRouteByObstacles(points, routeObstacleRects(), ROUTE_OVERLAP_PAD).map((run) => ({
+            overlap: run.overlap,
+            latlngs: run.points.map((p) => map.containerPointToLatLng([p.x, p.y])),
+        }));
+    }
+
+    /** いま出している地点の印と札の箱(地図の左上を原点にした画面の座標)。隠した札・大きさの無いものは数えない */
+    function routeObstacleRects() {
+        const container = window.map.getContainer();
+        const origin = container.getBoundingClientRect();
+        const rects = [];
+        container.querySelectorAll('.leaflet-marker-pane .km-node, .leaflet-tooltip-pane .km-label').forEach((el) => {
+            if (el.classList.contains('km-label-hidden')) return;
+            const r = el.getBoundingClientRect();
+            if (r.width === 0 || r.height === 0) return;
+            rects.push({ left: r.left - origin.left, top: r.top - origin.top, right: r.right - origin.left, bottom: r.bottom - origin.top });
+        });
+        return rects;
+    }
+
+    // 動き終えたら塗り直す。札の並べ直し(kmDeclutterLabels)が先に済むよう、少し待つ
+    let routeOverlapTimer = null;
+    function refreshRouteOverlap() {
+        if (routeOverlapTimer) window.clearTimeout(routeOverlapTimer);
+        routeOverlapTimer = window.setTimeout(() => {
+            routeOverlapTimer = null;
+            routeLineRuns.forEach(paintRouteRun);
+        }, 250);
+    }
+    window.map.on('moveend', refreshRouteOverlap);
 
     function drawPath(pathNodeIds) {
         currentMarkers.forEach(m => window.map.removeLayer(m));
         currentMarkers = [];
+        routeLineRuns = [];
         let currentFloorLatLngs = [];
         let pathBoundsGroup = new L.FeatureGroup();
         // この階で経路が始まる所(階を移ったとき、拡大率を保ったままここへ動かす)
@@ -3284,11 +3375,70 @@ document.addEventListener('DOMContentLoaded', async () => {
      * 帯が出ている間は body に `km-route-active` を付ける —— 左下から出る表示調整や
      * スマホの検索シートは、帯の高さぶん上へ逃げる(styles.css)。
      */
+    /*
+     * ======== 経路が使う階をいつも見せる ========(2026-10-24、利用者の指示「ルートを設定したときに、使用する階を常時表示」)
+     *
+     * 案内の帯の上に「使う階 1F → 3F → 1F」のチップを並べる(押すとその階へ。いまの階は塗る)。
+     * 右の階の列でも、経路が通る階のボタンに印を付ける(.floor-btn.is-on-route)。
+     * 階の並びは Main/route-view.js の routeFloorSequence(続けて同じ階は畳む。戻る階はもう一度出す)。
+     */
+    /*
+     * 左下の操作の帯の高さを測って CSS へ渡す(styles.css の .km-route-dock が --km-action-bar-height の上に置く)。
+     * スマホでは操作が 2 行に折り返すので、1 行ぶんの決め打ちでは案内の帯と階の列が操作に重なった(2026-10-24、実測)
+     */
+    const actionBarEl = document.getElementById('km-action-bar');
+    if (actionBarEl && typeof ResizeObserver === 'function') {
+        new ResizeObserver(() => {
+            document.documentElement.style.setProperty('--km-action-bar-height', `${actionBarEl.offsetHeight}px`);
+        }).observe(actionBarEl);
+    }
+
+    const routeFloorsEl = document.getElementById('km-route-floors');
+    function renderRouteFloors(active) {
+        const view = window.KmRouteView;
+        const sequence = active && view && currentRoutePath
+            ? view.routeFloorSequence(currentRoutePath.map((id) => (graphData.nodes[id] ? graphData.nodes[id].floor : null)))
+            : [];
+        const onRoute = new Set(sequence);
+        document.querySelectorAll('.floor-nav .floor-btn[data-floor]').forEach((btn) => {
+            btn.classList.toggle('is-on-route', onRoute.has(btn.dataset.floor));
+        });
+        const nav = document.getElementById('floor-nav');
+        if (nav) nav.classList.toggle('has-route', sequence.length > 0);
+        if (!routeFloorsEl) return;
+        routeFloorsEl.hidden = sequence.length === 0;
+        routeFloorsEl.replaceChildren();
+        if (sequence.length === 0) return;
+        const head = document.createElement('span');
+        head.className = 'km-route-floors-head';
+        head.textContent = '使う階';
+        routeFloorsEl.appendChild(head);
+        sequence.forEach((floor, index) => {
+            if (index > 0) {
+                const arrow = document.createElement('span');
+                arrow.className = 'km-route-floors-arrow';
+                arrow.setAttribute('aria-hidden', 'true');
+                arrow.textContent = '→';
+                routeFloorsEl.appendChild(arrow);
+            }
+            const chip = document.createElement('button');
+            chip.type = 'button';
+            chip.className = 'km-route-floor' + (String(floor) === String(window.currentFloor) ? ' is-current' : '');
+            chip.textContent = floorLabelFor(floor);
+            chip.title = `${floorLabelFor(floor)}を見る`;
+            if (String(floor) === String(window.currentFloor)) chip.setAttribute('aria-current', 'true');
+            chip.addEventListener('click', () => changeFloor(String(floor)));
+            routeFloorsEl.appendChild(chip);
+        });
+    }
+    window.kmRenderRouteFloors = () => renderRouteFloors(currentRoutePath !== null && routeSteps.length > 0);
+
     function renderRouteBar() {
         if (!routeBar) return;
         const active = currentRoutePath !== null && routeSteps.length > 0;
         routeBar.hidden = !active;
         document.body.classList.toggle('km-route-active', active);
+        renderRouteFloors(active);
         if (!active) {
             stopPositionPick();
             return;
@@ -4205,4 +4355,18 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (window.kmMapReady) focusFromUrl();
         else document.addEventListener('km-map-ready', () => window.setTimeout(focusFromUrl, 0), { once: true });
     }, 0);
+
+    /*
+     * 共有のリンクから来た人にも**広告は出す**(2026-10-24、利用者の指示「共有から開いた時は、チュートリアル、前回の経路を
+     * 全て無視(広告は無視しない)」)。広告はチュートリアルの終わりから出していたので、チュートリアルを出さない共有では
+     * 出なくなる。開いた場所・経路を出し終えてから(focusFromUrl / focusRoomFromUrl のあと)、セッションで 1 回だけ
+     * (Main/tutorial-end.js の kmShowAd)
+     */
+    if (document.querySelector('meta[name="km-from-share"]')) {
+        const showShareAd = () => window.setTimeout(() => {
+            if (typeof window.kmShowAd === 'function') window.kmShowAd();
+        }, SHARE_AD_DELAY_MS);
+        if (window.kmMapReady) showShareAd();
+        else document.addEventListener('km-map-ready', showShareAd, { once: true });
+    }
 });
