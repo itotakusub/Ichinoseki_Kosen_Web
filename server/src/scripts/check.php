@@ -1710,6 +1710,150 @@ function km_check_app_map_web_events(): void
 }
 
 /**
+ * 案内チャット(2026-10-24、利用者の企画書「模擬店案内・会場内ルート案内システム」。lib/guide-chat.php)。
+ * LLM は差し替えて試す(自宅 PC の Unsloth は要らない)。
+ */
+function km_check_guide_chat(): void
+{
+    require_once __DIR__ . '/../lib/guide-chat.php';
+
+    km_check_heading('guide-chat: 使える人(テストユーザー 1 だけ)');
+    $now = 1_800_000_000;
+    $on = ['enabled' => true, 'sub' => 'testUser1', 'dailyLimit' => 100];
+    $session = [KM_TEST_MODE_SESSION_KEY => ['sub' => 'testUser1', 'until' => $now + 60]];
+    check_bool('選んだテスト用アカウントの印があれば使える', km_guide_allowed($session, $now, $on));
+    check_bool('ほかのテスト用アカウントは使えない', !km_guide_allowed([KM_TEST_MODE_SESSION_KEY => ['sub' => 'testUser2', 'until' => $now + 60]], $now, $on));
+    check_bool('期限の切れた印は使えない', !km_guide_allowed([KM_TEST_MODE_SESSION_KEY => ['sub' => 'testUser1', 'until' => $now - 1]], $now, $on));
+    check_bool('印の無い人(一般の来場者)は使えない', !km_guide_allowed([], $now, $on));
+    check_bool('OFF なら誰も使えない', !km_guide_allowed($session, $now, ['enabled' => false] + $on));
+    check_bool('人を選んでいなければ誰も使えない', !km_guide_allowed($session, $now, ['sub' => ''] + $on));
+    // イベント中の来場者の印(event:…)では使えない(テストモードの印だけを見る)
+    check_bool('イベント中の来場者の印では使えない', !km_guide_allowed([KM_EVENT_COLLECT_SESSION_KEY => ['subject' => 'event:1', 'until' => $now + 60]], $now, $on));
+
+    km_check_heading('guide-chat: 回数(1 分 6 回)');
+    $rate = ['allowed' => true, 'times' => []];
+    for ($i = 0; $i < KM_GUIDE_PER_MINUTE; $i++) {
+        $rate = km_guide_rate_check($rate['times'], $now + $i);
+    }
+    check_bool('6 回目までは通す', $rate['allowed']);
+    check_bool('7 回目は止める', !km_guide_rate_check($rate['times'], $now + 10)['allowed']);
+    check_bool('1 分たてばまた通す', km_guide_rate_check($rate['times'], $now + 70)['allowed']);
+    check('止めたときは数を増やさない', KM_GUIDE_PER_MINUTE, count(km_guide_rate_check($rate['times'], $now + 10)['times']));
+
+    km_check_heading('guide-chat: 探す(地図に登録されているものだけ)');
+    check('文字をそろえる(半角カナ・全角英数・区切り)', ['たこ焼きa1', 'たこやき'], [km_guide_normalize('ﾀｺ焼き Ａ-1'), km_guide_normalize('タコヤキ')]);
+    $mapData = [
+        'event' => ['id' => 1],
+        'nodes' => [
+            'n1' => ['type' => 'room', 'name' => '第二実習室 管-105', 'alias' => 'お化け屋敷', 'floor' => '1', 'projects' => ['22'], 'occupantName' => '架空 太郎'],
+            'n2' => ['type' => 'facility', 'name' => '図書館', 'floor' => 'outside'],
+            'n3' => ['type' => 'room', 'name' => '教員室', 'floor' => '2', 'hidden' => true],
+            'n4' => ['type' => 'road', 'name' => '', 'floor' => '1'],
+        ],
+        'eventPois' => [
+            ['id' => 3, 'name' => 'たこ焼き', 'category' => 'food', 'floor' => 'outside', 'anchorNodeId' => 'n2', 'note' => 'ソース味'],
+            ['id' => 4, 'name' => 'クレープ', 'category' => 'food', 'floor' => 'outside', 'anchorNodeId' => 'n2', 'note' => ''],
+        ],
+        'posters' => [
+            ['id' => 9, 'title' => 'たこ焼き屋 A組', 'description' => '熱々', 'nodeIds' => [], 'poiIds' => [3], 'likes' => 2, 'isAd' => false],
+            ['id' => 10, 'title' => 'クレープ屋', 'description' => '甘い', 'nodeIds' => [], 'poiIds' => [4], 'likes' => 7, 'isAd' => false],
+            ['id' => 11, 'title' => '広告', 'description' => '', 'nodeIds' => ['n1'], 'poiIds' => [], 'likes' => 99, 'isAd' => true],
+        ],
+        'schedule' => [['title' => '上演', 'startsAt' => '10:00', 'endsAt' => '11:00', 'nodeIds' => ['n1'], 'poiIds' => []]],
+    ];
+    $catalog = km_guide_catalog($mapData);
+    check('店: 一時地点 2 つとイベントの地点 1 つ', 3, count($catalog['shops']));
+    check('場所: 出さない地点・道は入れない', ['poi', 'poi', 'node', 'node'], array_column($catalog['places'], 'kind'));
+    check_bool('先生の名前は入れない', !str_contains(json_encode($catalog, JSON_UNESCAPED_UNICODE), '架空'));
+    check_bool('広告のポスターは入れない', !str_contains(json_encode($catalog, JSON_UNESCAPED_UNICODE), '広告'));
+    // 並びは 点数 → ♡ の数(登録されている数)→ 名前。価格・待ち時間は使わない
+    check('種類で探すと ♡ の多い順', ['クレープ', 'たこ焼き'], array_column(km_guide_search($catalog['shops'], [], 'food'), 'name'));
+    check('言葉はポスターの見出しでも当たる', ['たこ焼き'], array_column(km_guide_search($catalog['shops'], ['A組']), 'name'));
+    check('企画の番号でも当たる', ['お化け屋敷'], array_column(km_guide_search($catalog['shops'], ['22']), 'name'));
+    check('当たらなければ空(作らない)', [], km_guide_search($catalog['shops'], ['メロンパン']));
+
+    km_check_heading('guide-chat: LLM の返事を読む・答えを作る');
+    check('JSON の前後の文は捨てる・種類は決まったものだけ', ['intent' => 'shop', 'keywords' => ['たこ焼き'], 'category' => null, 'from' => null, 'to' => null],
+        km_guide_parse_classification("はい。\n{\"intent\":\"shop\",\"keywords\":[\"たこ焼き\",\"\"],\"category\":\"burger\"}"));
+    check_bool('JSON でなければ null', km_guide_parse_classification('わかりません') === null);
+    check('知らない intent は other', 'other', km_guide_parse_classification('{"intent":"hack"}')['intent'] ?? null);
+    // 経路: 言葉から地点を決めるだけ。経路そのものはブラウザの dijkstra.js
+    $plan = km_guide_plan($catalog, ['intent' => 'route', 'keywords' => [], 'category' => null, 'from' => 'お化け屋敷', 'to' => 'たこ焼き']);
+    check('経路の端は地点の id と一時地点の番号', [['nodeId' => 'n1', 'poiId' => null, 'name' => 'お化け屋敷'], ['nodeId' => 'n2', 'poiId' => 3, 'name' => 'たこ焼き']],
+        [$plan['route']['from'], $plan['route']['to']]);
+    $calls = [];
+    $fake = static function (array $messages, int $maxTokens) use (&$calls): string {
+        $calls[] = $messages;
+        return count($calls) === 1
+            ? '{"intent":"shop","keywords":[],"category":"food","from":null,"to":null}'
+            : 'クレープ屋とたこ焼き屋があります。';
+    };
+    $answer = km_guide_answer($catalog, '食べ物の店を教えて', $fake);
+    check('LLM は 2 回(分ける・答える)', 2, count($calls));
+    check('カードは登録から作る(LLM の文からは作らない)', ['クレープ屋', 'たこ焼き屋 A組'], array_column($answer['cards'], 'name'));
+    check_bool('LLM に地点の id を渡さない', !str_contains(json_encode($calls[1], JSON_UNESCAPED_UNICODE), '"n2"') && !str_contains(json_encode($calls[1], JSON_UNESCAPED_UNICODE), 'poiId'));
+    check_bool('LLM には「データに無いものを作らない」と言う', str_contains($calls[1][0]['content'], 'データに無い店・場所・値段・メニュー・待ち時間・順位は言わないでください'));
+    // LLM が止まっていても、言葉で探した結果は出す(企画書 §8)
+    $down = km_guide_answer($catalog, 'クレープの店', static function (): string {
+        throw new RuntimeException('LLM に届きません');
+    });
+    check_bool('LLM が止まっていても言葉で探す', $down['fallback'] === true && array_column($down['cards'], 'place') === ['クレープ']);
+    check_bool('LLM を設定していなければ言葉で探す', km_guide_answer($catalog, 'たこ焼き', null)['fallback'] === true);
+    check_bool('分けた返事が読めなければ言葉で探す', km_guide_answer($catalog, 'たこ焼き', static fn (): string => 'すみません')['fallback'] === true);
+
+    km_check_heading('guide-chat: 口・設定・画面');
+    $api = (string) file_get_contents(__DIR__ . '/../api/guide-chat.php');
+    // 通す順: CSRF → 使える人 → 本文 → 回数 → LLM
+    $order = [strpos($api, 'km_csrf_verify()'), strpos($api, 'km_guide_allowed($_SESSION'), strpos($api, 'km_api_json_body(2048)'), strpos($api, 'km_guide_rate_check('), strpos($api, 'km_guide_answer(')];
+    $sorted = $order;
+    sort($sorted);
+    check_bool('通す順: CSRF → 使える人 → 本文 → 回数 → LLM', !in_array(false, $order, true) && $order === $sorted);
+    check_bool('質問は 200 字まで・制御文字は断る', str_contains($api, 'mb_strlen($question) > KM_GUIDE_QUESTION_MAX') && str_contains($api, '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]'));
+    check_bool('1 日の上限を見る', str_contains($api, "km_guide_asked_today(\$pdo, \$today) >= \$settings['dailyLimit']"));
+    check_bool('LLM を待つ前にセッションを閉じる', strpos($api, 'session_write_close();') < strpos($api, 'km_guide_answer('));
+    // 本文は残さない(企画書 §8)。ログに出すのは失敗の理由だけ
+    check_bool('質問と答えをログに書かない', !preg_match('/error_log\([^;]*\$question/', $api) && !preg_match('/error_log\([^;]*\$question/', (string) file_get_contents(__DIR__ . '/../lib/guide-chat.php')));
+    $lib = (string) file_get_contents(__DIR__ . '/../lib/guide-chat.php');
+    check_bool('LLM は https だけ・転送しない・TLS を確かめる・返事の大きさを切る', str_contains($lib, "str_starts_with(strtolower(\$url), 'https://')")
+        && str_contains($lib, 'CURLOPT_FOLLOWLOCATION => false') && str_contains($lib, 'CURLOPT_SSL_VERIFYPEER => true')
+        && str_contains($lib, 'CURLOPT_PROTOCOLS => CURLPROTO_HTTPS') && str_contains($lib, 'KM_GUIDE_LLM_MAX_BYTES'));
+    check_bool('鍵は環境変数から(ブラウザに出さない)', str_contains($lib, "getenv('KM_GUIDE_LLM_KEY')")
+        && !str_contains((string) file_get_contents(__DIR__ . '/../Main/guide-chat.js'), 'KM_GUIDE_LLM'));
+    $root = km_check_repo_root();
+    $guideNginx = (string) @file_get_contents($root . '/nginx/default.conf.template');
+    check_bool('nginx: 専用の zone で IP ごとに絞る・本文 4k・LLM を待つ 90 秒', str_contains($guideNginx, 'limit_req_zone $binary_remote_addr zone=km_guide:10m rate=10r/m;')
+        && preg_match('/location = \/api\/guide-chat\.php \{\s*client_max_body_size 4k;\s*limit_req zone=km_guide burst=5 nodelay;\s*include \/etc\/nginx\/km\/proxy-web\.conf;\s*proxy_set_header X-Forwarded-Port \$\{KM_APP_PORT\};\s*proxy_read_timeout 90s;/', $guideNginx) === 1);
+    $compose = (string) @file_get_contents($root . '/compose.yaml');
+    $envExample = (string) @file_get_contents($root . '/.env.example');
+    foreach (['KM_GUIDE_LLM_URL', 'KM_GUIDE_LLM_KEY', 'KM_GUIDE_LLM_MODEL'] as $name) {
+        check_bool("compose と .env.example に {$name}", str_contains($compose, "{$name}: \${{$name}:-}") && str_contains($envExample, "{$name}="));
+    }
+    $guideIndex = (string) file_get_contents(__DIR__ . '/../index.php');
+    check_bool('画面は選んだテスト用アカウントだけ(ボタンと guide-chat.js)', str_contains($guideIndex, '$kmGuideChat = km_guide_allowed($_SESSION, time(), km_guide_settings(km_db()));')
+        && preg_match("/<\?php if \(\\\$kmGuideChat\): \?>\s*<\?php \/\* 案内チャット[^*]*\*\/ \?>\s*<button id=\"km-guide-open\"/", $guideIndex) === 1
+        && preg_match("/<\?php if \(\\\$kmGuideChat\): \?>\s*<\?php \/\*[^*]*\*\/ \?>\s*<script defer src=\"<\?= km_home_e\(km_public_asset\('Main\/guide-chat\.js'\)\) \?>\"><\/script>/", $guideIndex) === 1
+        && str_contains($guideIndex, '|| $kmGuideChat): ?>'));
+    $guideJs = (string) file_get_contents(__DIR__ . '/../Main/guide-chat.js');
+    check_bool('画面の文字は textContent で入れる(HTML として読まない)', !str_contains($guideJs, 'innerHTML') && str_contains($guideJs, "'X-KM-CSRF': csrf"));
+    $guideAdmin = (string) file_get_contents(__DIR__ . '/../admin/guide-chat.php');
+    check_bool('管理画面: guard の内側・CSRF のあとで書く・選べるのは印の付いたテスト用アカウントだけ・記録に残す', str_contains($guideAdmin, "require __DIR__ . '/_inc/guard.php';")
+        && strpos($guideAdmin, 'km_csrf_verify()') < strpos($guideAdmin, 'km_setting_set($pdo, KM_GUIDE_ENABLED_SETTING')
+        && str_contains($guideAdmin, "\$known = array_column(km_test_accounts_all(\$pdo), 'sub');")
+        && str_contains($guideAdmin, "km_admin_log_record('content', 'guide.settings',")
+        && str_contains((string) file_get_contents(__DIR__ . '/../admin/_inc/partials/sidebar.php'), 'href="./guide-chat.php"'));
+    check_bool('既定は OFF(管理画面で ON にして人を選んでから)', str_contains($lib, "'enabled' => km_setting_get(\$pdo, KM_GUIDE_ENABLED_SETTING, '0') === '1',"));
+    $llmDir = $root . '/guide-llm';
+    $serverPy = (string) @file_get_contents($llmDir . '/server.py');
+    check_bool('自宅 PC: Unsloth で読む・127.0.0.1 だけ・鍵は定数時間で比べる・4 つの模型だけ', str_contains($serverPy, 'from unsloth import FastLanguageModel')
+        && str_contains($serverPy, 'host="127.0.0.1"') && str_contains($serverPy, 'secrets.compare_digest(')
+        && str_contains($serverPy, '"gpt-oss-20b": re.compile(') && str_contains($serverPy, '"qwen3.5-9b": re.compile('));
+    check_bool('自宅 PC: 本文をログに書かない', str_contains($serverPy, '# **本文は書かない**。時間と字数だけ') && !preg_match('/LOG\.\w+\([^)]*(messages|text)\b/', $serverPy));
+    check_bool('自宅 PC: ngrok で出す・鍵はコマンドに載せない(WSLENV)・鍵の入るファイルは git に入れない', str_contains((string) @file_get_contents($llmDir . '/start-guide-llm.ps1'), '& ngrok http --url=')
+        && str_contains((string) @file_get_contents($llmDir . '/start-guide-llm.ps1'), "\$env:WSLENV = 'GUIDE_LLM_MODEL/u:KM_GUIDE_LLM_KEY/u:")
+        && str_contains((string) @file_get_contents($llmDir . '/.gitignore'), 'guide-llm.env'));
+}
+
+/**
  * 端末の名乗り(User-Agent)。**列は配備利用者が足す**ので、
  * ここで見るのは「切り方」と「畳み方」だけ(DB は要らない)。
  */
@@ -8220,6 +8364,8 @@ function km_check_layout(): void
         && str_contains($linkNginx, '"sha256_cert_fingerprints":["D7:1F:BF:0A:0D:92:FA:EE:D8:67:CD:88:F0:E7:B3:3C:3D:D9:A7:49:66:90:0B:B0:2A:19:F1:E4:3C:2A:93:AF"]')
         && !str_contains($linkNginx, '"package_name":"com.ito.kosenmap.admin"')
         && preg_match('/location = \/\.well-known\/assetlinks\.json \{\s*default_type application\/json;/', $linkNginx) === 1);
+
+    km_check_guide_chat();
 
     km_check_heading('地図: チュートリアルとお知らせの ON/OFF(2026-10-24)');
     require_once __DIR__ . '/../lib/map-switches.php';

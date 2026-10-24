@@ -414,6 +414,11 @@ services:
       # 空なら上の LOGTO_M2M_* に落ちる。片方だけ入れると例外で止まる。
       LOGTO_M2M_READONLY_APP_ID: ${LOGTO_M2M_READONLY_APP_ID:-}
       LOGTO_M2M_READONLY_APP_SECRET: ${LOGTO_M2M_READONLY_APP_SECRET:-}
+      # 案内チャットの LLM(2026-10-24、企画書。lib/guide-chat.php)。自宅 PC の server/guide-llm/server.py を ngrok で出した https の URL と、
+      # その Bearer の鍵(server.py と同じ値)。**鍵は秘密**(ブラウザには出さない)。空なら LLM なしで、言葉で探した結果だけを返す
+      KM_GUIDE_LLM_URL: ${KM_GUIDE_LLM_URL:-}
+      KM_GUIDE_LLM_KEY: ${KM_GUIDE_LLM_KEY:-}
+      KM_GUIDE_LLM_MODEL: ${KM_GUIDE_LLM_MODEL:-}
       # 公開の問い合わせフォーム(src/contact.php)の reCAPTCHA(チェックボックス型)。
       # **クラシック版と Enterprise 版で必要な値が違う**(lib/recaptcha.php が置かれた値で判断する):
       #   Enterprise … SITE_KEY + PROJECT_ID + API_KEY   (assessments API)

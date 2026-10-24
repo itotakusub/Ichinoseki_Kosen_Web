@@ -46,6 +46,8 @@ $openMenus = [
     'qrLinks' => 'content',
     // お知らせ(2026-10-24、lib/notices.php)
     'notices' => 'content',
+    // 案内チャット(2026-10-24、lib/guide-chat.php。企画書の LLM の案内)
+    'guideChat' => 'content',
     // 規約とポリシーへ足す章。本文はコードのまま(admin/legal.php の説明を参照)
     'legal' => 'content',
     'calendar' => 'extra',
@@ -302,6 +304,13 @@ $parentLink = static fn(string $id): string => 'nav-link' . ($openMenu === $id ?
                     <a href="./notices.php" class="<?= $link('notices') ?>">
                       <i class="nav-icon bi bi-megaphone"></i>
                       <p data-i18n="side.notices">お知らせ</p>
+                    </a>
+                  </li>
+                  <?php // 案内チャット(2026-10-24。LLM の模擬店・経路の案内。テスト用アカウント 1 つだけに出す) ?>
+                  <li class="nav-item">
+                    <a href="./guide-chat.php" class="<?= $link('guideChat') ?>">
+                      <i class="nav-icon bi bi-chat-dots"></i>
+                      <p data-i18n="side.guideChat">案内チャット</p>
                     </a>
                   </li>
                   <?php // QR のリンク集(2026-10-24。公開ページ /qr.php に並べるリンク) ?>

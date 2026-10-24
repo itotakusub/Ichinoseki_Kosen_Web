@@ -3287,6 +3287,19 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     };
 
+    /**
+     * 出発地・目的地を空にする(2026-10-24。案内チャット Main/guide-chat.js が新しい経路を出す前に呼ぶ)。
+     * 前の経路の端が残ったまま片方だけ入れると、その古い端で経路を引いてしまう
+     */
+    window.kmClearRouteEnds = function () {
+        routeStartId = null;
+        routeStartPoi = null;
+        routeEndId = null;
+        routeEndPoi = null;
+        if (startInput) startInput.value = '';
+        if (endInput) endInput.value = '';
+    };
+
     /** 臨時の地点の札(検索の候補・経路の欄と同じ)。名前が番号ならポスターの見出し */
     function poiSearchLabel(poi) {
         const floorLabel = String(poi.floor) === 'outside' ? '外' : `${poi.floor}F`;

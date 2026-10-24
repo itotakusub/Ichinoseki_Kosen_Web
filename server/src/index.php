@@ -251,6 +251,19 @@ try {
     error_log('KosenMap home: switches: ' . $exception->getMessage());
 }
 
+/*
+ * 案内チャット(2026-10-24、企画書「模擬店案内・会場内ルート案内システム」。lib/guide-chat.php)。
+ * **管理画面「案内チャット」で選んだテスト用アカウントで開いたときだけ**出す(企画書 §8「テストユーザー1のみ」)。
+ * ほかの人には「💬 案内」も Main/guide-chat.js も出さない。読めなければ出さない(閉じる側に倒す)
+ */
+require_once __DIR__ . '/lib/guide-chat.php';
+$kmGuideChat = false;
+try {
+    $kmGuideChat = km_guide_allowed($_SESSION, time(), km_guide_settings(km_db()));
+} catch (Throwable $exception) {
+    error_log('KosenMap home: guide chat: ' . $exception->getMessage());
+}
+
 $inlineMapData = null;
 $kmEvent = null;             // イベントモードの案内(バナー)。無ければ null
 $kmFirstFloorImage = null;    // 最初に映す階の見取り図。<head> で preload する
@@ -370,8 +383,8 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
         <meta name="km-event-collect" content="<?= km_home_e($kmEventCollect['key']) ?>">
     <?php endif; ?>
     <?php $kmHasPosters = ($kmMapData['posters'] ?? []) !== []; ?>
-    <?php if ($kmTestMode !== null || $kmEventCollect !== null || $kmHasPosters || $kmUserMapKey !== null): ?>
-        <?php /* 記録の送信に使うトークン(api/test-events.php・ポスターの数を数える api/poster-event.php・履歴の同期 api/user-map-data.php が X-KM-CSRF で見る) */ ?>
+    <?php if ($kmTestMode !== null || $kmEventCollect !== null || $kmHasPosters || $kmUserMapKey !== null || $kmGuideChat): ?>
+        <?php /* 記録の送信に使うトークン(api/test-events.php・ポスターの数を数える api/poster-event.php・履歴の同期 api/user-map-data.php・案内チャット api/guide-chat.php が X-KM-CSRF で見る) */ ?>
         <meta name="km-csrf" content="<?= km_home_e(km_csrf_token()) ?>">
     <?php endif; ?>
     <?php if ($kmUserMapKey !== null): ?>
@@ -693,6 +706,13 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
                     <span class="km-action-icon" aria-hidden="true">🖼️</span>
                     <span class="km-action-label">ポスター</span>
                 </a>
+            <?php endif; ?>
+            <?php if ($kmGuideChat): ?>
+                <?php /* 案内チャット(2026-10-24。選んだテスト用アカウントだけ。Main/guide-chat.js が左の引き出しに開く) */ ?>
+                <button id="km-guide-open" type="button" class="km-action-btn" title="模擬店や場所を言葉で聞く" aria-label="案内チャットを開く">
+                    <span class="km-action-icon" aria-hidden="true">💬</span>
+                    <span class="km-action-label">案内</span>
+                </button>
             <?php endif; ?>
             <button
                 id="mobile-search-toggle"
@@ -1193,6 +1213,10 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
     <?php /* ポスター・広告の表示回数とリンクの人数を数える(2026-10-21)。tutorial-end.js より先に読む(window.kmPosterStat を使う) */ ?>
     <script defer src="<?= km_home_e(km_public_asset('Main/poster-stats.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/tutorial-end.js')) ?>"></script>
+    <?php if ($kmGuideChat): ?>
+        <?php /* 案内チャット(2026-10-24。選んだテスト用アカウントのときだけ読む。app.js のあと) */ ?>
+        <script defer src="<?= km_home_e(km_public_asset('Main/guide-chat.js')) ?>"></script>
+    <?php endif; ?>
 
 </body>
 
