@@ -8212,6 +8212,15 @@ function km_check_layout(): void
     check_bool('右の階の列にも印', str_contains($shareApp, "btn.classList.toggle('is-on-route', onRoute.has(btn.dataset.floor));")
         && str_contains($viewCss, '.floor-nav .floor-btn.is-on-route { box-shadow: inset 0 0 0 3px #ef4444; }'));
 
+    km_check_heading('地図: 共有のリンクを一般向けアプリで開く(App Links。2026-10-24)');
+    $linkNginx = (string) @file_get_contents(km_check_repo_root() . '/nginx/default.conf.template');
+    // Android が確かめる。一般向けだけ(管理アプリを載せると、同じリンクで選ぶ画面が出る)。リダイレクトさせず JSON で返す
+    check_bool('assetlinks.json を返す(一般向けのパッケージ・リリースの鍵・JSON)', str_contains($linkNginx, 'location = /.well-known/assetlinks.json {')
+        && str_contains($linkNginx, '"package_name":"com.ito.kosenmap",')
+        && str_contains($linkNginx, '"sha256_cert_fingerprints":["D7:1F:BF:0A:0D:92:FA:EE:D8:67:CD:88:F0:E7:B3:3C:3D:D9:A7:49:66:90:0B:B0:2A:19:F1:E4:3C:2A:93:AF"]')
+        && !str_contains($linkNginx, '"package_name":"com.ito.kosenmap.admin"')
+        && preg_match('/location = \/\.well-known\/assetlinks\.json \{\s*default_type application\/json;/', $linkNginx) === 1);
+
     km_check_heading('地図: チュートリアルとお知らせの ON/OFF(2026-10-24)');
     require_once __DIR__ . '/../lib/map-switches.php';
     check('保存の値: \'0\' だけが OFF(空や知らない値は既定の ON)', [false, true, true, true],
