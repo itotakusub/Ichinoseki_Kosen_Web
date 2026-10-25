@@ -4564,6 +4564,16 @@ function km_check_hardening(): void
         }
     }
     check('99-limits.ini の値', [], $iniMissing);
+    /*
+     * セッションを残す長さ(2026-10-25、利用者「posters.php へ行って ito4.jp へ戻ると、ログインが切れているときがある」)。
+     * 組み込み既定の 24 分で掃除され、Logto のサインインが有効なままログインが切れた。ini と lib を同じ値に
+     * (掃除は /tmp のセッション全部を見るので、短い側がほかの人のセッションまで消す)
+     */
+    require_once __DIR__ . '/../lib/session.php';
+    check_bool('セッションは 12 時間残す(99-limits.ini と lib/session.php が同じ値・開始より前に決める)', KM_SESSION_LIFETIME_SECONDS === 43200
+        && preg_match('/^session\.gc_maxlifetime = ' . KM_SESSION_LIFETIME_SECONDS . '$/m', $limitsIni) === 1
+        && strpos((string) $file('src/lib/session.php'), "ini_set('session.gc_maxlifetime', (string) KM_SESSION_LIFETIME_SECONDS);")
+            < strpos((string) $file('src/lib/session.php'), "    session_start();"));
     check_bool('99-limits.ini は memory_limit を変えない', !str_contains($limitsIni, 'memory_limit'));
     /*
      * 上限はコンテナ全部に。mailserver にだけ no-new-privileges を付けない
