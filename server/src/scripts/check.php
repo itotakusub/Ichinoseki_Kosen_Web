@@ -4570,6 +4570,19 @@ function km_check_hardening(): void
      * (掃除は /tmp のセッション全部を見るので、短い側がほかの人のセッションまで消す)
      */
     require_once __DIR__ . '/../lib/session.php';
+    /*
+     * 戻るボタン(2026-10-25、利用者「posters.php からブラウザの戻るボタンで戻ると、ログインが切れている(ログインボタンですぐ入れる)」)。
+     * ブラウザがメモリから戻した画面(bfcache)が、サインイン前に描いたものだった。メモリから戻ったときだけ聞き、違えば読み直す
+     */
+    $stateApi = (string) $file('src/api/session-state.php');
+    $backJs = (string) $file('src/Main/back-refresh.js');
+    $homeForBack = (string) $file('src/index.php');
+    check_bool('戻るボタン: 描いたときの状態の印・メモリから戻ったときだけ聞いて違えば読み直す', str_contains($homeForBack, '<meta name="km-logged-in" content="<?= $loggedIn ? \'1\' : \'0\' ?>">')
+        && str_contains($homeForBack, "km_public_asset('Main/back-refresh.js')")
+        && str_contains($backJs, 'if (!event.persisted) return;') && str_contains($backJs, 'data.loggedIn !== shown') && str_contains($backJs, 'window.location.reload();'));
+    check_bool('戻るボタン: 状態の口は Logto に問い合わせない・Cookie の無い人にセッションを作らない・真偽だけ返す', !str_contains($stateApi, 'logto-client.php') && !str_contains($stateApi, 'new KmLogtoClient')
+        && strpos($stateApi, 'if (!km_session_cookie_present()) {') < strpos($stateApi, 'km_session_start();')
+        && str_contains($stateApi, "respond(['success' => true, 'loggedIn' => is_string(\$idToken) && \$idToken !== '']);"));
     check_bool('セッションは 12 時間残す(99-limits.ini と lib/session.php が同じ値・開始より前に決める)', KM_SESSION_LIFETIME_SECONDS === 43200
         && preg_match('/^session\.gc_maxlifetime = ' . KM_SESSION_LIFETIME_SECONDS . '$/m', $limitsIni) === 1
         && strpos((string) $file('src/lib/session.php'), "ini_set('session.gc_maxlifetime', (string) KM_SESSION_LIFETIME_SECONDS);")

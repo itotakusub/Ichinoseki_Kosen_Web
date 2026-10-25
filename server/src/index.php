@@ -357,6 +357,8 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <?php /* 描いたときのサインインの状態(2026-10-25)。戻るボタンでメモリから戻ったとき、Main/back-refresh.js が api/session-state.php と比べる */ ?>
+    <meta name="km-logged-in" content="<?= $loggedIn ? '1' : '0' ?>">
     <?php if ($kmFocusRoom !== null): ?>
         <?php /* QR の部屋(上の $kmFocusRoom。32 字の 16 進だけ)。Main/app.js の focusRoomFromUrl が読む */ ?>
         <meta name="km-focus-room" content="<?= km_home_e($kmFocusRoom) ?>">
@@ -1207,6 +1209,8 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
         <script defer src="<?= km_home_e(km_public_asset('Main/test-mode.js')) ?>"></script>
     <?php endif; ?>
     <script defer src="<?= km_home_e(km_public_asset('Main/app.js')) ?>"></script>
+    <?php /* 戻るボタンでメモリから戻った画面のサインインの状態が古ければ読み直す(2026-10-25、利用者「戻るボタンでログインが切れる」) */ ?>
+    <script defer src="<?= km_home_e(km_public_asset('Main/back-refresh.js')) ?>"></script>
     <?php /* 企画のスケジュールの一覧(2026-10-23。lib/event-schedule.php)。一般に出す行があるときだけ「予定」を出す */ ?>
     <script defer src="<?= km_home_e(km_public_asset('Main/event-schedule.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/panel.js')) ?>"></script>
