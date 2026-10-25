@@ -1851,6 +1851,42 @@ function km_check_guide_chat(): void
     $melon = km_guide_answer($densan, 'メロンパンはどこ', $throwing);
     check_bool('言い換えがつまずいても答えは止めない(LLM なしに倒さない)・カードは出ない', $melon['fallback'] === false && $melon['cards'] === []);
 
+    /*
+     * 関係の率で選ぶ(2026-10-25、利用者「ユーザーの問いかけに対して関係のあるものを率として考えてみては？」。案内の 45 件の記録を見て)
+     */
+    km_check_heading('guide-chat: 関係の率で選ぶ');
+    $rateCatalog = km_guide_catalog(['event' => ['id' => 1], 'eventPois' => [
+        ['id' => 1, 'name' => 'ゴミ箱', 'category' => 'other', 'floor' => 'outside', 'anchorNodeId' => 'w1', 'note' => ''],
+        ['id' => 2, 'name' => '8', 'category' => 'food', 'floor' => 'outside', 'anchorNodeId' => 'w1', 'note' => ''],
+    ], 'posters' => [
+        ['id' => 1, 'title' => 'VRお化け屋敷', 'description' => 'こわい体験', 'nodeIds' => ['h1'], 'poiIds' => [], 'likes' => 3, 'isAd' => false],
+    ], 'nodes' => [
+        'h1' => ['type' => 'room', 'name' => 'ファーストペンギンラボ 7-102', 'floor' => '1', 'projects' => ['12']],
+        'w1' => ['type' => 'room', 'name' => '男WC 1号棟', 'floor' => '1'],
+    ]]);
+    $rateItems = km_guide_relevance_items($rateCatalog);
+    check('一覧: 店と場所を合わせて同じものは 1 つ・ゴミ箱は入れない', ['8', 'ファーストペンギンラボ 7-102', '男WC 1号棟'], array_column($rateItems, 'name'));
+    check_bool('一覧の 1 行: 名前 / 見出し・種類と階・説明の頭(id は入れない)', str_contains(km_guide_relevance_messages('怖い店', $rateItems)[0]['content'], '2. ファーストペンギンラボ 7-102 / VRお化け屋敷 (1F) こわい体験')
+        && !str_contains(json_encode(km_guide_relevance_messages('怖い店', $rateItems), JSON_UNESCAPED_UNICODE), 'h1'));
+    check('率の返事: 名前が番号と合うものだけ・ずれた番号は名前で付け替え・名前の無い行と範囲外は捨てる', [1 => 95, 2 => 70],
+        km_guide_parse_relevance('{"items":[{"n":2,"name":"VRお化け屋敷","p":95},{"n":1,"name":"男WC 1号棟","p":70},{"n":1,"p":99},{"n":9,"name":"x","p":80},{"n":3,"name":"関係ない店","p":100}]}', $rateItems));
+    check('率の返事: 途中で切れても書き終わった行は使う・読めなければ null', [[1 => 90], null],
+        [km_guide_parse_relevance('{"items":[{"n":2,"name":"VRお化け屋敷","p":90},{"n":3,"name":"男W', $rateItems), km_guide_parse_relevance('わかりません', $rateItems)]);
+    $ranked = km_guide_rank_by_relevance($rateItems, [0 => 50, 1 => 95, 2 => 70]);
+    check('並べ方: 下限(60%)以上を率の高い順・カードと LLM に率を付ける', [['VRお化け屋敷', 95], ['男WC 1号棟', 70]],
+        array_map(static fn (array $c): array => [$c['name'], $c['relevance']], array_map('km_guide_card', $ranked)));
+    check('LLM には「質問との関係」を渡す', '95%', km_guide_record_for_llm($ranked[0])['質問との関係'] ?? null);
+    $ratePlan = km_guide_plan($rateCatalog, ['intent' => 'other', 'keywords' => ['こわい'], 'category' => null, 'from' => null, 'to' => null], null, '',
+        static fn (array $items): ?array => [1 => 100]);
+    check('その他に分けられても率で選ぶ', ['VRお化け屋敷'], array_column($ratePlan['cards'], 'name'));
+    check('率が付けられなければ(null)今までの言葉の一致', ['男WC 1号棟'],
+        array_column(km_guide_plan($rateCatalog, ['intent' => 'place', 'keywords' => ['WC'], 'category' => null, 'from' => null, 'to' => null], null, '', static fn (array $items): ?array => null)['cards'], 'name'));
+    $chatJs = (string) file_get_contents(__DIR__ . '/../Main/guide-chat.js');
+    check_bool('画面: 例を押すと入力して送る・企画番号の例を先頭(いちばん確実)・苦手な質問を理由と並べる・率をカードに出す',
+        str_contains($chatJs, "{ text: '企画番号 8 の場所を教えて', note: 'いちばん確実' },") && strpos($chatJs, '企画番号 8') < strpos($chatJs, "{ text: '食べ物の店を教えて' }")
+        && str_contains($chatJs, "input.value = example.text;\n                ask(example.text);") && str_contains($chatJs, "'苦手な質問(答えられない・まちがえやすい)'")
+        && str_contains($chatJs, "meta.push('関係 ' + card.relevance + '%');"));
+
     // テスト用アカウントの出発地(2026-10-25、利用者「テストユーザーのみ、出発点を Let's Play Densan に」)
     km_check_heading('guide-chat: テスト用アカウントの出発地');
     $toGym = ['intent' => 'route', 'keywords' => [], 'category' => null, 'from' => null, 'to' => '体育館'];
@@ -1899,10 +1935,12 @@ function km_check_guide_chat(): void
             : 'クレープ屋とたこ焼き屋があります。';
     };
     $answer = km_guide_answer($catalog, '食べ物の店を教えて', $fake);
-    check('LLM は 2 回(分ける・答える)', 2, count($calls));
+    // 2026-10-25 から 3 回(分ける・関係の率・答える)。この差し替えは率に文を返すので、率は読めず言葉の一致に戻る
+    check('LLM は 3 回(分ける・関係の率・答える)', 3, count($calls));
     check('カードは登録から作る(LLM の文からは作らない)', ['クレープ屋', 'たこ焼き屋 A組'], array_column($answer['cards'], 'name'));
-    check_bool('LLM に地点の id を渡さない', !str_contains(json_encode($calls[1], JSON_UNESCAPED_UNICODE), '"n2"') && !str_contains(json_encode($calls[1], JSON_UNESCAPED_UNICODE), 'poiId'));
-    check_bool('LLM には「データに無いものを作らない」と言う', str_contains($calls[1][0]['content'], 'データに無い店・場所・値段・メニュー・待ち時間・順位は言わないでください'));
+    $answerCall = end($calls);
+    check_bool('LLM に地点の id を渡さない', !str_contains(json_encode($calls, JSON_UNESCAPED_UNICODE), '"n2"') && !str_contains(json_encode($calls, JSON_UNESCAPED_UNICODE), 'poiId'));
+    check_bool('LLM には「データに無いものを作らない」と言う', str_contains($answerCall[0]['content'], 'データに無い店・場所・値段・メニュー・待ち時間・順位は言わないでください'));
     // LLM が止まっていても、言葉で探した結果は出す(企画書 §8)
     $down = km_guide_answer($catalog, 'クレープの店', static function (): string {
         throw new RuntimeException('LLM に届きません');

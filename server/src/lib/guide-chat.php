@@ -563,6 +563,8 @@ function km_guide_card(array $item): array
         'times' => array_slice(array_values((array) ($item['times'] ?? [])), 0, 3),
         'nodeId' => $item['nodeId'],
         'poiId' => $item['poiId'],
+        // 質問との関係の率(%)。LLM が付けたときだけ(言葉の一致で選んだときは null)
+        'relevance' => isset($item['relevance']) ? (int) $item['relevance'] : null,
     ];
 }
 
@@ -576,6 +578,7 @@ function km_guide_record_for_llm(array $item): array
         '説明' => $item['detail'],
         '♡の数' => (int) ($item['likes'] ?? 0) > 0 ? (int) $item['likes'] : null,
         '時間' => ($item['times'] ?? []) !== [] ? implode('、', array_slice($item['times'], 0, 3)) : null,
+        '質問との関係' => isset($item['relevance']) ? (int) $item['relevance'] . '%' : null,
     ], static fn ($v): bool => $v !== null && $v !== '');
 }
 
@@ -750,6 +753,199 @@ function km_guide_parse_match(string $text, int $count): ?int
     return is_int($number) && $number >= 1 && $number <= $count ? $number - 1 : null;
 }
 
+// ---------------------------------------------------------------- 関係の率で選ぶ(2026-10-25)
+
+/*
+ * 利用者「現在の状況です。うまく動作しているとは言えません。まず、ユーザーの問いかけに対して関係のあるものを率として考えてみては？」
+ * (案内チャットの 45 件の記録を見て)。言葉の一致だけでは「怖いと感じる店」→ お化け屋敷、「けんけつ」→ 献血、「WC」→ トイレが出ず、
+ * 「え」1 字がエレベーターに当たり、見つからないときの「同じ種類の代わり」が献血・バス・ゴミ箱を出していた。
+ *
+ * 店・場所の一覧を LLM に渡し、質問との**関係の率(0〜100)**を付けさせる。KM_GUIDE_RELEVANCE_MIN 以上だけを率の高い順に出す。
+ * 返させるのは一覧の番号と率だけ(id は渡さない・番号は範囲を確かめる・一覧に無いものは出ない)。
+ * 一覧は system に置き、質問は最後の user に置く(同じ一覧が続くので、Bionic が前の計算を使い回せる)。
+ * LLM が使えない・返事が読めないときは、今までの言葉の一致に戻す。
+ */
+
+/** 出す率の下限(%) */
+const KM_GUIDE_RELEVANCE_MIN = 60;
+/**
+ * 率を付けさせる一覧に入れない名前(行き先にならないもの)。頼みで「選ばない」と言っても、本物の Bionic(Gemma 4 12B QAT)は
+ * 「スイーツが食べられる屋台」にゴミ箱を 80% で選んだ(2026-10-25)
+ */
+const KM_GUIDE_RELEVANCE_SKIP = ['ゴミ箱'];
+/**
+ * 率を付けさせる頼みの字数(トークン)。名前も返させるので 1 件 30〜40 字になる。240 では途中で切れて読めないことがあった
+ * (2026-10-25、「WC」「食べ物の店」で 8 件ぶん書こうとして切れ、言葉の一致に戻った)。頼む件数も 6 件までにした
+ */
+const KM_GUIDE_RELEVANCE_TOKENS = 400;
+
+/**
+ * 率を付けさせる一覧(店と場所を合わせ、同じ地点・一時地点は 1 つに)。**純粋関数**。
+ *
+ * @return list<array>
+ */
+function km_guide_relevance_items(array $catalog): array
+{
+    $items = [];
+    foreach (array_merge($catalog['shops'] ?? [], $catalog['places'] ?? []) as $item) {
+        foreach (KM_GUIDE_RELEVANCE_SKIP as $skip) {
+            if (str_contains((string) $item['name'], $skip) && (string) ($item['title'] ?? '') === '') {
+                continue 2;
+            }
+        }
+        $key = $item['kind'] === 'poi' ? 'p:' . (int) $item['poiId'] : 'n:' . (string) $item['nodeId'];
+        $items[$key] ??= $item;
+    }
+    return array_slice(array_values($items), 0, KM_GUIDE_MATCH_MAX);
+}
+
+/** 一覧の 1 行。名前・見出し・種類・階・説明の頭(id は入れない) */
+function km_guide_relevance_line(array $item): string
+{
+    $name = (string) ($item['name'] ?? '');
+    $title = (string) ($item['title'] ?? '');
+    $parts = [$title !== '' && $title !== $name ? "{$name} / {$title}" : $name];
+    $category = ($item['category'] ?? '') !== '' ? (KM_GUIDE_CATEGORY_LABELS[$item['category']] ?? '') : '';
+    $meta = array_filter([$category, (string) ($item['floor'] ?? '')], static fn (string $s): bool => $s !== '');
+    if ($meta !== []) {
+        $parts[] = '(' . implode('・', $meta) . ')';
+    }
+    $detail = trim((string) ($item['detail'] ?? ''));
+    if ($detail !== '') {
+        $parts[] = mb_substr(preg_replace('/\s+/u', ' ', $detail) ?? $detail, 0, 40);
+    }
+    return implode(' ', $parts);
+}
+
+function km_guide_relevance_messages(string $question, array $items): array
+{
+    $lines = [];
+    foreach (array_values($items) as $i => $item) {
+        $lines[] = ($i + 1) . '. ' . km_guide_relevance_line($item);
+    }
+    return [
+        ['role' => 'system', 'content' => "学校祭の会場案内です。下の一覧(店・企画・展示・場所)の中から、利用者の質問に関係のあるものを選び、"
+            . "それぞれ**関係の率(0〜100)**を付けてください。\n"
+            . "- 100 = 質問がまさにそれを指している。80 = 質問の目的にはっきり合う。50 = 少し関係がある。それ未満は書かない\n"
+            . "- 名前・見出し・説明の**意味**で考えてください(「怖い」→ お化け屋敷、「WC」→ トイレ、ひらがな・カタカナ・英語・打ち間違いも同じものとして)\n"
+            . "- 質問が企画や部活などの**固有の名前**で、一覧にその名前(や読み・略し方)が無いときは、似ているだけのものに 50 以上を付けない"
+            . "(例: 一覧に無い大会の名前を聞かれて、別の展示を 100 にしない)\n"
+            . "- 通路・駐車場のように、質問の目的に合わないものは選ばない\n"
+            . "- 同じ名前が並ぶときは、いちばん合う 1 つだけ\n"
+            . '- 次の形の JSON だけを返してください(率の高い順に最大 6 件。無ければ空)。name には一覧の名前をそのまま写す: '
+            . '{"items":[{"n":一覧の番号,"name":"一覧の名前","p":率}]}' . "\n"
+            . "一覧:\n" . implode("\n", $lines)],
+        ['role' => 'user', 'content' => $question],
+    ];
+}
+
+/**
+ * 番号と一緒に返させた名前が、その番号の記録の名前か。**純粋関数**。名前・見出し・「名前 / 見出し」のどれかと、
+ * そろえた形で同じか、片方がもう片方を含む(2 字以上)
+ */
+function km_guide_relevance_name_matches(array $item, string $name): bool
+{
+    $said = km_guide_normalize($name);
+    if (mb_strlen($said) < 2) {
+        return false;
+    }
+    foreach ([(string) $item['name'], (string) ($item['title'] ?? '')] as $candidate) {
+        $own = km_guide_normalize($candidate);
+        if ($own !== '' && mb_strlen($own) >= 2 && (str_contains($said, $own) || str_contains($own, $said))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * 率の返事を読む。**純粋関数**。一覧の範囲の番号だけ、率は 0〜100 に丸める。同じ番号は高い方。
+ *
+ * **番号だけを信じない**(2026-10-25、本物の Bionic で「プロコン」に関係の無い店を 100% で返した。番号のずれと見られる)。
+ * 返させた名前がその番号の記録と合わなければ、同じ名前の記録を探して付け替え、無ければ捨てる。名前が無い行は捨てる
+ *
+ * @param list<array> $items 頼みに渡した一覧(同じ並び)
+ * @return array<int, int>|null 0 から数えた位置 => 率。JSON として読めなければ null(言葉の一致に戻す)
+ */
+function km_guide_parse_relevance(string $text, array $items): ?array
+{
+    $items = array_values($items);
+    $count = count($items);
+    $start = strpos($text, '{');
+    $end = strrpos($text, '}');
+    $decoded = $start === false || $end === false || $end <= $start ? null : json_decode(substr($text, $start, $end - $start + 1), true);
+    if (is_array($decoded) && is_array($decoded['items'] ?? null)) {
+        $rows = $decoded['items'];
+    } else {
+        // 字数の上限で途中で切れた返事でも、書き終わった行は使う
+        if (preg_match_all('/\{\s*"n"\s*:\s*"?(\d+)"?\s*,\s*"name"\s*:\s*"((?:[^"\\\\]|\\\\.)*)"\s*,\s*"p"\s*:\s*(\d+(?:\.\d+)?)\s*\}/u', $text, $matches, PREG_SET_ORDER) < 1) {
+            return null;
+        }
+        $rows = array_map(static fn (array $m): array => ['n' => (int) $m[1], 'name' => (string) json_decode('"' . $m[2] . '"'), 'p' => (float) $m[3]], $matches);
+    }
+    $scores = [];
+    foreach ($rows as $row) {
+        $n = is_array($row) ? ($row['n'] ?? null) : null;
+        $p = is_array($row) ? ($row['p'] ?? null) : null;
+        if (is_string($n) && ctype_digit($n)) {
+            $n = (int) $n;
+        }
+        $name = is_array($row) && is_string($row['name'] ?? null) ? (string) $row['name'] : '';
+        if (!is_numeric($p) || $name === '') {
+            continue;
+        }
+        $index = is_int($n) && $n >= 1 && $n <= $count && km_guide_relevance_name_matches($items[$n - 1], $name) ? $n - 1 : null;
+        if ($index === null) {
+            // 番号がずれていれば、名前が同じ記録へ付け替える(そろえた形で完全に同じものだけ)
+            foreach ($items as $i => $item) {
+                $said = km_guide_normalize($name);
+                if ($said !== '' && in_array($said, [km_guide_normalize((string) $item['name']), km_guide_normalize((string) ($item['title'] ?? ''))], true)) {
+                    $index = $i;
+                    break;
+                }
+            }
+        }
+        if ($index === null) {
+            continue;
+        }
+        $scores[$index] = max($scores[$index] ?? 0, max(0, min(100, (int) round((float) $p))));
+    }
+    return $scores;
+}
+
+/**
+ * 率で並べて選ぶ。**純粋関数**。下限以上を 率 → ♡ → 名前の短さ の順に、名前が同じものは 1 つだけ。カードに出す率を付ける
+ *
+ * @param array<int, int> $scores km_guide_parse_relevance の戻り値
+ * @return list<array>
+ */
+function km_guide_rank_by_relevance(array $items, array $scores, int $min = KM_GUIDE_RELEVANCE_MIN, int $limit = KM_GUIDE_CARD_MAX): array
+{
+    $items = array_values($items);
+    $rows = [];
+    foreach ($scores as $index => $percent) {
+        if ($percent >= $min && isset($items[$index])) {
+            $rows[] = [$percent, (int) ($items[$index]['likes'] ?? 0), mb_strlen((string) $items[$index]['name']), $index];
+        }
+    }
+    usort($rows, static fn (array $a, array $b): int => [$b[0], $b[1], $a[2], $a[3]] <=> [$a[0], $a[1], $b[2], $b[3]]);
+    $picked = [];
+    $seen = [];
+    foreach ($rows as [$percent, , , $index]) {
+        $item = $items[$index];
+        $label = km_guide_normalize((string) (($item['title'] ?? '') !== '' ? $item['title'] : $item['name']));
+        if (isset($seen[$label])) {
+            continue;
+        }
+        $seen[$label] = true;
+        $picked[] = ['relevance' => $percent] + $item;
+        if (count($picked) >= $limit) {
+            break;
+        }
+    }
+    return $picked;
+}
+
 /** LLM が使えないときの言葉: 質問を区切りで分けた言葉(短すぎるものは捨てる) */
 function km_guide_fallback_words(string $question): array
 {
@@ -767,10 +963,14 @@ function km_guide_fallback_words(string $question): array
  * $startNodeId は、出発地を言わなかったときに使う地点(テスト用アカウントの展示の場所。2026-10-25、利用者
  * 「テストユーザーのみ、出発点を Let's Play Densan に」。lib/test-mode.php の km_test_start_node)。
  *
+ * $rate は、経路でない質問のときに、一覧に関係の率を付けるもの(km_guide_answer が LLM で付けさせる。2026-10-25)。
+ * 戻すのは 位置 => 率 か null。null なら今までの言葉の一致で探す
+ *
  * @param null|callable(list<array> $items, string $word): ?array $resolve
+ * @param null|callable(list<array> $items): ?array $rate
  * @return array{cards:list<array>, records:list<array>, route:?array, situation:string}
  */
-function km_guide_plan(array $catalog, array $classification, ?callable $resolve = null, string $startNodeId = ''): array
+function km_guide_plan(array $catalog, array $classification, ?callable $resolve = null, string $startNodeId = '', ?callable $rate = null): array
 {
     $intent = $classification['intent'];
     $route = null;
@@ -831,6 +1031,17 @@ function km_guide_plan(array $catalog, array $classification, ?callable $resolve
                     ? '出発地は、いま利用者がいる「' . ((string) ($from['title'] ?? '') !== '' ? "{$from['title']}({$from['name']})" : $from['name'])
                         . "」です。そこから目的地「{$to['name']}」への経路を地図に出します"
                     : "出発地「{$from['name']}」から目的地「{$to['name']}」への経路を地図に出します"));
+    } elseif ($rate !== null && ($scores = $rate($relevanceItems = km_guide_relevance_items($catalog))) !== null) {
+        // 関係の率で選ぶ(2026-10-25)。店・場所・その他のどれに分けられても、一覧全体から選ぶ
+        $found = km_guide_rank_by_relevance($relevanceItems, $scores);
+        if ($found !== []) {
+            $situation = '登録されている店・場所の中から、質問と関係のあるものを、関係の率(データの「質問との関係」)の高い順に選びました。'
+                . '率が 80% 未満のものは「関係がありそうなもの」として控えめに紹介してください。カードの「地図で見る」で場所を、「経路」で行き方を出せます(まだ経路は出していません)';
+        } else {
+            $situation = $intent === 'other'
+                ? '店・場所・経路の質問ではないか、登録されている中に関係のあるものがありませんでした。地図の案内でできること(店・場所・行き方を聞ける)を短く伝えてください'
+                : '登録されている店・場所の中に、質問と関係のあるものはありませんでした';
+        }
     } elseif ($intent === 'shop') {
         $found = km_guide_search($catalog['shops'], $classification['keywords'], $classification['category']);
         // 言葉で当たらなければ、LLM に一覧から選ばせる(読み方・書き方の違い)。それでも無ければ種類だけで探し直す
@@ -1010,7 +1221,19 @@ function km_guide_answer(array $catalog, string $question, ?callable $llm, strin
             }
             return $index === null ? null : $items[$index];
         };
-        $plan = km_guide_plan($catalog, $classification, $resolve, $startNodeId);
+        // 関係の率(2026-10-25)。つまずいたら null を返し、言葉の一致に戻す(答えは止めない)
+        $rate = static function (array $items) use ($llm, $question): ?array {
+            if ($items === []) {
+                return [];
+            }
+            try {
+                return km_guide_parse_relevance($llm(km_guide_relevance_messages($question, $items), KM_GUIDE_RELEVANCE_TOKENS), $items);
+            } catch (RuntimeException $exception) {
+                error_log('km_guide_answer: relevance skipped: ' . $exception->getMessage());
+                return null;
+            }
+        };
+        $plan = km_guide_plan($catalog, $classification, $resolve, $startNodeId, $rate);
         $answer = $llm(km_guide_answer_messages($question, $plan['records'], $plan['situation']), 300);
         return [
             // 長すぎる答えは切る(画面に入る長さ)

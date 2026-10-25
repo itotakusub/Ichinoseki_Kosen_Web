@@ -3523,6 +3523,43 @@ body.km-route-panel-open .km-searchbox-route { background: var(--primary); color
 .km-guide-send { flex: 0 0 auto; }
 /* 2026-10-25、利用者「AI は間違えることがありますと表示」。入力欄の下にいつも出す */
 .km-guide-note { margin: 0; font-size: 0.75rem; line-height: 1.5; color: var(--secondary); }
+/* 例(2026-10-25、利用者「例を押せば自動入力して送信」「企画番号の例」「苦手な文も例に」) */
+.km-guide-examples { display: flex; flex-direction: column; gap: 6px; align-self: stretch; }
+.km-guide-examples-head { margin: 0; font-size: 0.8rem; color: var(--secondary); font-weight: 600; }
+.km-guide-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.km-guide-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 36px;
+    padding: 0.3rem 0.8rem;
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    background: var(--glass-heavy);
+    color: var(--text);
+    font: inherit;
+    font-size: 0.85rem;
+    text-align: left;
+    cursor: pointer;
+}
+.km-guide-chip:hover { border-color: var(--primary); }
+.km-guide-chip.is-recommended { border-color: var(--primary); color: var(--primary-dark); font-weight: 700; }
+.km-guide-chip-note {
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: var(--primary);
+    color: var(--on-primary);
+    font-size: 0.7rem;
+    font-weight: 700;
+}
+.km-guide-hard { font-size: 0.8rem; color: var(--secondary); }
+.km-guide-hard > summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; gap: 4px; list-style: none; }
+.km-guide-hard > summary::-webkit-details-marker { display: none; }
+.km-guide-hard > summary::before { content: '▸'; }
+.km-guide-hard[open] > summary::before { content: '▾'; }
+.km-guide-hard-list { margin: 4px 0 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 4px; }
+.km-guide-hard-list b { display: block; color: var(--text); font-weight: 600; }
+
 /* 評価(2026-10-25、利用者「評価も付けられるようにし、BAD だったら理由を聞く」) */
 .km-guide-rate { display: flex; flex-direction: column; gap: 6px; align-self: stretch; }
 .km-guide-rate-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }

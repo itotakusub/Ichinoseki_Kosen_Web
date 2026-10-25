@@ -36,11 +36,62 @@
         return node;
     }
 
+    /*
+     * 例(2026-10-25、利用者「ページに例を上げてそれを押せば自動入力して送信」「企画番号で検索をかけたほうが正答しやすいので例に」
+     * 「苦手・生成しにくい文も例として」)。押せる例は入力して送る。苦手な質問は理由と並べるだけ(押しても送らない)
+     */
+    const EXAMPLES = [
+        { text: '企画番号 8 の場所を教えて', note: 'いちばん確実' },
+        { text: '食べ物の店を教えて' },
+        { text: '怖い企画はどこ？' },
+        { text: 'トイレはどこ？' },
+        { text: '第二実習室から体育館への行き方' },
+        { text: '休憩できる場所は？' },
+    ];
+    const HARD = [
+        ['おすすめ・人気の店は？', '順位の元になるデータ(味・人気)がありません'],
+        ['いちばん空いている店は？', '待ち時間・混み具合のデータがありません'],
+        ['たこ焼きはいくら？', '値段・メニューは、ポスターの説明に書いてあるときだけ答えられます'],
+        ['ロボコンの展示は？', '登録の名前と違う呼び方・略し方は見つけにくいです。企画番号か、ポスターの名前で聞いてください'],
+        ['近くのトイレは？', 'いまいる場所が分かりません。「◯◯から△△への行き方」のように場所の名前を入れてください'],
+        ['「あ」「こんにちは」など', '短すぎる言葉・あいさつには答えられません'],
+    ];
+
+    function examplesBlock() {
+        const wrap = el('div', 'km-guide-examples');
+        wrap.appendChild(el('p', 'km-guide-examples-head', '例(押すと聞けます)'));
+        const list = el('div', 'km-guide-chips');
+        EXAMPLES.forEach((example) => {
+            const chip = el('button', 'km-guide-chip' + (example.note ? ' is-recommended' : ''), example.text);
+            chip.type = 'button';
+            if (example.note) chip.appendChild(el('span', 'km-guide-chip-note', example.note));
+            chip.addEventListener('click', () => {
+                if (busy) return;
+                input.value = example.text;
+                ask(example.text);
+            });
+            list.appendChild(chip);
+        });
+        wrap.appendChild(list);
+        const hard = el('details', 'km-guide-hard');
+        hard.appendChild(el('summary', '', '苦手な質問(答えられない・まちがえやすい)'));
+        const items = el('ul', 'km-guide-hard-list');
+        HARD.forEach(([text, reason]) => {
+            const li = el('li');
+            li.append(el('b', '', text), el('span', '', reason));
+            items.appendChild(li);
+        });
+        hard.appendChild(items);
+        wrap.appendChild(hard);
+        return wrap;
+    }
+
     function build() {
         box = el('div', 'km-guide');
         log = el('div', 'km-guide-log');
         log.setAttribute('aria-live', 'polite');
-        log.appendChild(bubble('bot', '模擬店や場所を聞いてください。例:「食べ物の店を教えて」「第二実習室から体育館への行き方」'));
+        log.appendChild(bubble('bot', '模擬店や場所を聞いてください。企画番号で聞くと、いちばん確実に見つかります。'));
+        log.appendChild(examplesBlock());
 
         const form = el('form', 'km-guide-form');
         input = el('input', 'km-guide-input');
@@ -80,6 +131,8 @@
         node.appendChild(el('span', 'km-guide-card-sub', sub));
         if (card.detail) node.appendChild(el('span', 'km-guide-card-detail', card.detail));
         const meta = [];
+        // 質問との関係の率(2026-10-25。LLM が付けたときだけ)
+        if (typeof card.relevance === 'number') meta.push('関係 ' + card.relevance + '%');
         if (card.likes > 0) meta.push('♡ ' + card.likes);
         if (Array.isArray(card.times) && card.times.length > 0) meta.push(card.times.join('、'));
         if (meta.length > 0) node.appendChild(el('span', 'km-guide-card-meta', meta.join(' · ')));
