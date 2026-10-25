@@ -1903,7 +1903,9 @@ function km_check_guide_chat(): void
     $startAdmin = (string) file_get_contents(__DIR__ . '/../admin/test-mode.php');
     check_bool('地図: 出発地の印はテスト用アカウントのときだけ・目的地を選んで出発地が空なら入れる',
         preg_match('/<\?php if \(\$kmTestMode !== null\): \?>.*?<meta name="km-test-start" content="<\?= km_home_e\(\$kmTestMode\[\'startNode\'\]\) \?>">.*?<\?php elseif/s', $startIndex) === 1
-        && str_contains($startApp, 'if (!routeStartId) applyTestStart(nodeId);')
+        && str_contains($startApp, 'if (!routeStartId && !(opts && opts.noTestStart)) applyTestStart(nodeId);')
+        // 案内チャットの経路では入れない(AI の出発地より先に Densan からの経路を引かない。2026-10-25、利用者の指示)
+        && str_contains((string) file_get_contents(__DIR__ . '/../Main/guide-chat.js'), "window.setAsLocation(route.to.nodeId, 'end', Object.assign(opts(route.to), { noTestStart: true }));")
         && str_contains($startApp, "if (!node || startId === endId || !isRoutableNode(node)) return;"));
     check_bool('口: 案内チャットに出発地を渡す・管理画面で選ぶ(一覧の地点だけ)', str_contains((string) file_get_contents(__DIR__ . '/../api/guide-chat.php'), '$result = km_guide_answer($catalog, $question, $llm, $startNodeId);')
         && str_contains($startAdmin, "if (\$startNode !== '' && !in_array(\$startNode, array_column(km_poster_node_options(\$pdo), 'id'), true)) {")

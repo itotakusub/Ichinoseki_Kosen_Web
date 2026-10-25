@@ -3278,7 +3278,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             routeEndId = nodeId;
             routeEndPoi = poi ? Number(poi.id) : null;
             if (endInput) endInput.value = label;
-            if (!routeStartId) applyTestStart(nodeId);
+            // 呼ぶ側が出発地をこのあと入れるとき(案内チャットの経路。opts.noTestStart)は入れない(2026-10-25)
+            if (!routeStartId && !(opts && opts.noTestStart)) applyTestStart(nodeId);
         }
         window.map.closePopup();
         if (routeStartId && routeEndId) {

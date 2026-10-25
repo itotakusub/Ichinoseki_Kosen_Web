@@ -275,9 +275,15 @@
     function showRoute(route) {
         if (!route || !route.to || !route.to.nodeId || typeof window.setAsLocation !== 'function') return;
         if (typeof window.kmClearRouteEnds === 'function') window.kmClearRouteEnds();
-        const opts = (end) => (end.poiId ? { poiId: end.poiId } : undefined);
-        // 目的地を先に(出発地が無ければ、経路の欄が開いて出発地を選んでもらう)。両方そろえば経路を出す
-        window.setAsLocation(route.to.nodeId, 'end', opts(route.to));
+        const opts = (end) => (end.poiId ? { poiId: end.poiId } : {});
+        /*
+         * 目的地を先に(出発地が無ければ、経路の欄が開いて出発地を選んでもらう)。両方そろえば経路を出す。
+         * **テスト用アカウントの出発地(Let's play Densan。Main/app.js の applyTestStart)はここでは入れない**
+         * —— 入れると、AI が決めた出発地より先に Densan からの経路を引いてしまう(2026-10-25、利用者「～から体育館への行き方などの時に、
+         * 出発点を Let's play densan から外して、AI の経路を出すように」)。出発地を言わなかったときは、サーバーがもう Densan を
+         * route.from に入れて返す(lib/guide-chat.php の km_guide_plan)。言ったのに見つからなかったときは、黙って Densan にせず欄で選んでもらう
+         */
+        window.setAsLocation(route.to.nodeId, 'end', Object.assign(opts(route.to), { noTestStart: true }));
         if (route.from && route.from.nodeId) window.setAsLocation(route.from.nodeId, 'start', opts(route.from));
     }
 
