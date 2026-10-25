@@ -1896,6 +1896,27 @@ function km_check_guide_chat(): void
     check('言った出発地のほうが先', 'g1', km_guide_plan($densan, ['from' => '体育館', 'to' => '第二実習室'] + $toGym, null, 'r1')['route']['from']['nodeId'] ?? null);
     check('設定が無ければ今までどおり(出発地は地図で選ぶ)', null, km_guide_plan($densan, $toGym)['route']['from'] ?? null);
     check('目的地が展示の場所そのものなら入れない', null, km_guide_plan($densan, ['to' => '第二実習室'] + $toGym, null, 'r1')['route']['from'] ?? null);
+    // 現在地(2026-10-25、利用者「現在地はどこですか？や、現在地から～～への行き方。などは lets play densan に」)
+    check('「現在地から」「ここから」は展示の場所から(地図の名前として探さない)', ['r1', 'r1', 'r1'], array_map(
+        static fn (string $word): ?string => km_guide_plan($densan, ['from' => $word] + $toGym, null, 'r1')['route']['from']['nodeId'] ?? null,
+        ['現在地', 'ここ', '今いる場所']
+    ));
+    check('現在地の言葉', [true, true, true, false, false], array_map('km_guide_is_here_word', ['現在地', 'ここ', 'いまいるところ', '第二実習室', null]));
+    // 一時地点の名前が番号だけなら、経路では見出しを名前にする(「ここから献血への行き方」で目的地が「99」と出た)
+    $numbered = km_guide_catalog(['event' => ['id' => 1], 'posters' => [['id' => 5, 'title' => '献血', 'description' => '', 'nodeIds' => [], 'poiIds' => [9], 'likes' => 0, 'isAd' => false]],
+        'eventPois' => [['id' => 9, 'name' => '99', 'category' => 'other', 'floor' => 'outside', 'anchorNodeId' => 'r1', 'note' => '']],
+        'nodes' => ['r1' => ['type' => 'room', 'name' => '第二実習室 管-105', 'floor' => '1']]]);
+    $numberedPlan = km_guide_plan($numbered, ['intent' => 'route', 'keywords' => [], 'category' => null, 'from' => '第二実習室', 'to' => '献血']);
+    check('経路: 名前が番号だけの一時地点は見出しで出す', ['献血', '献血'], [$numberedPlan['route']['to']['name'] ?? null, $numberedPlan['cards'][1]['name'] ?? null]);
+    check('「現在地はどこ？」だけを当てる(「ここのトイレはどこ？」は当てない)', [true, true, true, true, false, false, false],
+        array_map('km_guide_asks_here', ['現在地はどこですか？', 'ここはどこ', '今いる場所を教えて', '現在地', 'ここのトイレはどこ？', '現在地から体育館への行き方', 'ここ']));
+    $hereCalls = 0;
+    $hereAnswer = km_guide_answer($densan, '現在地はどこですか？', static function () use (&$hereCalls): string {
+        $hereCalls++;
+        return '';
+    }, 'r1');
+    check('「現在地はどこ？」は LLM に聞かずに展示の場所を答える', [0, ["Let's play Densan!"], true],
+        [$hereCalls, array_column($hereAnswer['cards'], 'name'), str_contains($hereAnswer['answer'], "いまいる場所は「Let's play Densan!」(第二実習室 管-105・1F)です")]);
     check_bool('既定は第二実習室 管-105 の地点 id・形を確かめる', KM_TEST_START_DEFAULT === '2735e277ed554b74963e82baa0b6a641'
         && km_test_start_node_valid('') && km_test_start_node_valid(KM_TEST_START_DEFAULT) && !km_test_start_node_valid('a"b') && !km_test_start_node_valid(str_repeat('a', 65)));
     $startIndex = (string) file_get_contents(__DIR__ . '/../index.php');

@@ -946,6 +946,35 @@ function km_guide_rank_by_relevance(array $items, array $scores, int $min = KM_G
     return $picked;
 }
 
+// ---------------------------------------------------------------- 現在地(2026-10-25)
+
+/*
+ * 利用者「現在地はどこですか？や、現在地から～～への行き方。などは lets play densan にしてください」。
+ * 現在地 = テスト用アカウントの出発地(展示の PC を置く場所。lib/test-mode.php の km_test_start_node。既定は Let's play Densan! の地点)。
+ * 「現在地」という言葉を地図の名前として探さない(似た名前の場所や、言い換えの LLM が別の場所を選ばないように)
+ */
+
+/** 「現在地」を指す言葉か(経路の出発地・目的地の言葉)。**純粋関数** */
+function km_guide_is_here_word(?string $word): bool
+{
+    if ($word === null) {
+        return false;
+    }
+    return preg_match('/^(現在地|現在位置|ここ|この場所|今|いま|(今|いま)(いる|居る)(場所|ところ)|(自分|私|わたし)の(いる)?(場所|ところ))$/u', km_guide_normalize($word)) === 1;
+}
+
+/**
+ * 質問が「現在地はどこ？」そのものか。**純粋関数**。「ここのトイレはどこ？」のように別のものを聞く文は当てない
+ * (「現在地」系の言葉 +「は」「どこ」「教えて」などだけで終わる文に限る)
+ */
+function km_guide_asks_here(string $question): bool
+{
+    $q = km_guide_normalize($question);
+    return preg_match('/^(現在地|現在位置|ここ|(今|いま)(いる|居る)(場所|ところ)|(自分|私|わたし)の(いる)?(場所|ところ))'
+        . '(は|って|を)?(どこ|何処|どのへん|どの辺|どのあたり)?(教えて|おしえて|知りたい|しりたい)?(ですか|でしょうか|ください|下さい|なの|かな)?$/u', $q) === 1
+        && $q !== 'ここ' && $q !== '今' && $q !== 'いま';
+}
+
 /** LLM が使えないときの言葉: 質問を区切りで分けた言葉(短すぎるものは捨てる) */
 function km_guide_fallback_words(string $question): array
 {
@@ -999,10 +1028,12 @@ function km_guide_plan(array $catalog, array $classification, ?callable $resolve
         : (km_guide_search($catalog['places'], [$word], null, 1, false)[0] ?? $guess($catalog['places'], $word));
     if ($intent === 'route') {
         $to = $place($classification['to']);
-        $from = $place($classification['from']);
+        // 「現在地から」「ここから」は地図の名前として探さない(2026-10-25)
+        $fromIsHere = km_guide_is_here_word($classification['from']);
+        $from = $fromIsHere ? null : $place($classification['from']);
         $here = false;
-        // 出発地を言わなかったら、展示の場所から(テスト用アカウントだけ。目的地が見つかったときだけ)
-        if ($from === null && $classification['from'] === null && $startNodeId !== '' && $to !== null) {
+        // 出発地を言わなかった・現在地と言ったら、展示の場所から(テスト用アカウントだけ。目的地が見つかったときだけ)
+        if ($from === null && ($classification['from'] === null || $fromIsHere) && $startNodeId !== '' && $to !== null) {
             foreach ($catalog['places'] as $item) {
                 if ($item['kind'] === 'node' && $item['nodeId'] === $startNodeId && $item['nodeId'] !== $to['nodeId']) {
                     $from = $item;
@@ -1011,16 +1042,26 @@ function km_guide_plan(array $catalog, array $classification, ?callable $resolve
                 }
             }
         }
+        /*
+         * 経路のカードは場所の名前で出す(ポスターの見出しだと、どこへ行くのか分からない)。LLM には役目を付けて渡す。
+         * ただし一時地点の名前が番号だけ(「99」)なら見出し(「献血」)にする(2026-10-25、「ここから献血への行き方」で目的地が「99」と出た)
+         */
+        // 「いまいる場所」は見出しと部屋の名前で伝える(下で見出しを外す前に作る)
+        $hereLabel = $from === null ? '' : ((string) ($from['title'] ?? '') !== '' ? "{$from['title']}({$from['name']})" : (string) $from['name']);
+        $asPlace = static fn (array $item): array => preg_match('/^\d+$/', (string) $item['name']) === 1 && (string) ($item['title'] ?? '') !== ''
+            ? ['name' => (string) $item['title'], 'title' => ''] + $item
+            : ['title' => ''] + $item;
+        $from = $from === null ? null : $asPlace($from);
+        $to = $to === null ? null : $asPlace($to);
         $end = static fn (?array $item): ?array => $item === null ? null : ['nodeId' => $item['nodeId'], 'poiId' => $item['poiId'], 'name' => $item['name']];
         if ($to !== null) {
             $route = ['from' => $end($from), 'to' => $end($to)];
         }
-        // 経路のカードは場所の名前で出す(ポスターの見出しだと、どこへ行くのか分からない)。LLM には役目を付けて渡す
-        $found = array_map(static fn (array $item): array => ['title' => ''] + $item, array_values(array_filter([$from, $to])));
+        $found = array_values(array_filter([$from, $to]));
         $records = [];
         foreach (['出発地' => $from, '目的地' => $to] as $role => $item) {
             if ($item !== null) {
-                $records[] = ['役目' => $role] + km_guide_record_for_llm(['title' => ''] + $item);
+                $records[] = ['役目' => $role] + km_guide_record_for_llm($item);
             }
         }
         $situation = $to === null
@@ -1028,8 +1069,7 @@ function km_guide_plan(array $catalog, array $classification, ?callable $resolve
             : ($from === null
                 ? "目的地は「{$to['name']}」です。出発地は利用者に地図で選んでもらいます"
                 : ($here
-                    ? '出発地は、いま利用者がいる「' . ((string) ($from['title'] ?? '') !== '' ? "{$from['title']}({$from['name']})" : $from['name'])
-                        . "」です。そこから目的地「{$to['name']}」への経路を地図に出します"
+                    ? "出発地は、いま利用者がいる「{$hereLabel}」です。そこから目的地「{$to['name']}」への経路を地図に出します"
                     : "出発地「{$from['name']}」から目的地「{$to['name']}」への経路を地図に出します"));
     } elseif ($rate !== null && ($scores = $rate($relevanceItems = km_guide_relevance_items($catalog))) !== null) {
         // 関係の率で選ぶ(2026-10-25)。店・場所・その他のどれに分けられても、一覧全体から選ぶ
@@ -1191,6 +1231,24 @@ function km_guide_answer(array $catalog, string $question, ?callable $llm, strin
             'fallback' => true,
         ];
     };
+    /*
+     * 「現在地はどこ？」は LLM に聞かずに答える(2026-10-25、利用者「現在地はどこですか？などは lets play densan に」)。
+     * 現在地は展示の場所(テスト用アカウントの出発地)なので、登録から決まる。自宅 PC が止まっていても答えられる
+     */
+    if ($startNodeId !== '' && km_guide_asks_here($question)) {
+        foreach ($catalog['places'] as $item) {
+            if ($item['kind'] === 'node' && $item['nodeId'] === $startNodeId) {
+                $label = (string) ($item['title'] ?? '') !== '' ? "「{$item['title']}」({$item['name']}・{$item['floor']})" : "「{$item['name']}」({$item['floor']})";
+                return [
+                    'answer' => "いまいる場所は{$label}です。行きたい場所を「◯◯への行き方」のように聞くと、ここからの経路を出します。",
+                    'cards' => [km_guide_card($item)],
+                    'route' => null,
+                    'fallback' => false,
+                    'intent' => 'place',
+                ];
+            }
+        }
+    }
     if ($llm === null) {
         return $fallback();
     }
