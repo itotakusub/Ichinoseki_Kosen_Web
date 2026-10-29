@@ -640,6 +640,9 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
 - **配備でログインを消さない(2026-10-29。フェーズ 0 の 4)**: PHP のセッションが web の /tmp(tmpfs)にあり、配備で web を作り直すたびに全員がログアウトされた。
   - 名前付きのボリューム km_web_sessions を /var/lib/km-sessions に置き、99-limits.ini の session.save_path をそこへ。compose.yaml と compose.vps.yaml(`!override`)の両方に書いた。
     名前付きのボリュームは初め root の持ち物なので、start-with-local-ca.sh が起動のとき www-data・0700 にしてから Apache を起こす(Dockerfile は触らない)。
+  - **同じ日の直し**: 本番で `/var/lib/km-sessions` が無かった(compose の作り直しが届く前に見たか、作り直されていない)。99-limits.ini で
+    save_path を決め打ちにしていると、ボリュームが無いまま ini だけ届いたとき全員がログインできなくなるので、ini からは外し、
+    lib/session.php の km_session_save_path が「在って書けるときだけ」そこへ向ける形にした(無ければ /tmp のまま)。check.php 2433 件。
   - この PC に Docker が無いので、**本番で確かめる**: 配備のあと `docker exec km-php-apache ls -ld /var/lib/km-sessions` が www-data・drwx------、
     ログインしたまま、もう一度配備してもログインが残ること。初回の配備では /tmp のセッションが移らないので、そのときだけ全員が一度ログアウトされる。
 - **共有に経路の選択を載せる(2026-10-29。フェーズ 0 の 3)**: 共有の URL に階段/エレベーター・階の移動を減らす・雨の日が無く、開いた人の端末の設定で別の経路が引かれていた。

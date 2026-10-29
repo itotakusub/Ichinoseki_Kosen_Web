@@ -4675,9 +4675,17 @@ function km_check_hardening(): void
     $baseCompose = (string) $file('compose.yaml');
     $vpsCompose = (string) $file('compose.vps.yaml');
     $webStart = (string) $file('docker/php/start-with-local-ca.sh');
-    check_bool('セッションの置き場は名前付きのボリューム(ini・compose・本番の上書きの 3 か所が同じ)', str_contains($limitsIni, 'session.save_path = "/var/lib/km-sessions"')
+    check_bool('セッションの置き場は名前付きのボリューム(lib・compose・本番の上書きの 3 か所が同じ)', KM_SESSION_DIR === '/var/lib/km-sessions'
         && str_contains($baseCompose, '      - web_sessions:/var/lib/km-sessions') && str_contains($vpsCompose, '      - web_sessions:/var/lib/km-sessions')
         && preg_match('/^  web_sessions:\n    name: km_web_sessions$/m', $baseCompose) === 1);
+    // 同じ日: ini で決め打ちにすると、ボリュームの無いまま ini だけ届いたとき全員がログインできない。在って書けるときだけ使う
+    $sessionTmp = sys_get_temp_dir() . '/km-session-check-' . bin2hex(random_bytes(4));
+    @mkdir($sessionTmp);
+    check('セッションの置き場: 在って書けるときだけ使い、無ければ既定(/tmp)のまま', [$sessionTmp, null],
+        [km_session_save_path($sessionTmp), km_session_save_path($sessionTmp . '/missing')]);
+    @rmdir($sessionTmp);
+    check_bool('セッションの置き場: ini では決め打ちにしない・開始の前に向ける', !preg_match('/^session\.save_path\s*=/m', $limitsIni)
+        && strpos((string) $file('src/lib/session.php'), "ini_set('session.save_path', \$savePath);") < strpos((string) $file('src/lib/session.php'), "    session_start();"));
     check_bool('セッションの置き場は起動のとき www-data・0700 にしてから Apache を起こす', ($own = strpos($webStart, 'chown www-data:www-data "$SESSION_DIR"')) !== false
         && str_contains($webStart, 'chmod 0700 "$SESSION_DIR"') && $own < strpos($webStart, 'exec apache2-foreground'));
     /*
