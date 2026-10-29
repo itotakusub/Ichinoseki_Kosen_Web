@@ -147,6 +147,11 @@
          */
         facilityZoomed: 'faded',
         theme: 'system',    // system / light / dark
+        /*
+         * 暗い配色のとき床の画像も沈めるか(2026-10-29)。**既定は沈めない** —— 振り返りのフェーズ 1 で、暗い配色でも床は明るいままにした
+         * (反転すると線の濃さが崩れた)。まぶしい人向けに残す。明るい配色では効かない
+         */
+        dimFloorImage: false,
         types: {},          // { room: { shape, visible, label, showScale } }
     };
 

@@ -21,7 +21,11 @@
     --secondary: #64748b;
     --success: #10b981;
     --danger: #EF4444;
-    --bg-map: #FDFDFD;
+    /*
+     * 地図の周りは温かい色(2026-10-29、高専祭の振り返り「背景が白くてまぶしい・カーソルが見えない」)。
+     * それまでは #FDFDFD で、白い床の画像と境が無く、Leaflet の既定(#ddd)の灰色も混ざっていた
+     */
+    --bg-map: #F3EBDD;
     --text: #0F172A;
     --glass: rgba(255, 255, 255, 0.8);
     --glass-heavy: rgba(255, 255, 255, 0.95);
@@ -136,7 +140,7 @@
         --glass-heavy: rgba(15, 23, 42, 0.95);
         --border: rgba(148, 163, 184, 0.35);
         --border-strong: rgba(148, 163, 184, 0.45);
-        --map-image-filter: invert(0.9) hue-rotate(180deg) brightness(0.95);
+        --map-image-edge: 0 0 0 1px rgba(148, 163, 184, 0.55);
     }
 }
 
@@ -153,7 +157,20 @@
     --glass-heavy: rgba(15, 23, 42, 0.95);
     --border: rgba(148, 163, 184, 0.35);
     --border-strong: rgba(148, 163, 184, 0.45);
+    --map-image-edge: 0 0 0 1px rgba(148, 163, 184, 0.55);
+}
+
+/*
+ * 暗い配色でも**床の画像は明るいまま**(2026-10-29、振り返りのフェーズ 1)。反転すると線の濃さが崩れ、色分け・経路の赤とも合わなかった。
+ * 暗い周りとの境に薄い縁を付ける。沈めたい人は表示調整の「床の画像を暗く」(data-km-floor-dim。Main/map-tuning.js)
+ */
+:root[data-km-theme="dark"][data-km-floor-dim="1"] {
     --map-image-filter: invert(0.9) hue-rotate(180deg) brightness(0.95);
+}
+@media (prefers-color-scheme: dark) {
+    :root:not([data-km-theme="light"])[data-km-floor-dim="1"] {
+        --map-image-filter: invert(0.9) hue-rotate(180deg) brightness(0.95);
+    }
 }
 
 * {
@@ -184,8 +201,8 @@ body {
     width: 100vw;
 }
 
-/* 見取り図。暗い配色のときだけ沈める(明るいときは `none`) */
-.leaflet-image-layer { filter: var(--map-image-filter); }
+/* 見取り図。沈めるのは暗い配色で「床の画像を暗く」を選んだときだけ(既定は `none`)。暗い配色では周りとの境に薄い縁 */
+.leaflet-image-layer { filter: var(--map-image-filter, none); box-shadow: var(--map-image-edge, none); }
 
 /* ======== Layout Layer ======== */
 #map {
@@ -193,6 +210,12 @@ body {
     inset: 0;
     z-index: 1;
 }
+/* Leaflet の既定の灰色(#ddd)を使わない。ダークモードでも周りが灰色に浮いていた */
+#map.leaflet-container { background: var(--bg-map); }
+/* 地図の上のカーソル。白い縁取りの十字で、明るい床でも暗い床でも見える。押せる印・札は Leaflet の pointer のまま */
+#map.leaflet-container.leaflet-grab { cursor: url('cursor-map.svg') 16 16, grab; }
+#map.leaflet-container.leaflet-dragging .leaflet-grab,
+#map.leaflet-container.leaflet-dragging.leaflet-grab { cursor: grabbing; }
 
 /* ======== 読み込み画面 ========
  *

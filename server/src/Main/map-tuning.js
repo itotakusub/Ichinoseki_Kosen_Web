@@ -65,6 +65,9 @@
             // system。**属性を消す**ことで端末の設定へ戻す
             root.removeAttribute('data-km-theme');
         }
+        // 暗い配色のとき床の画像も沈める(styles.css の data-km-floor-dim。明るい配色では CSS の側で効かない)
+        if (tuning.dimFloorImage) root.setAttribute('data-km-floor-dim', '1');
+        else root.removeAttribute('data-km-floor-dim');
     }
 
     function build(tuning) {
@@ -110,6 +113,7 @@
             input.addEventListener('change', function () {
                 tuning[key] = input.checked;
                 style.save(tuning);
+                if (key === 'dimFloorImage') applyTheme(tuning);
                 notify();
             });
             const label = document.createElement('label');
@@ -148,6 +152,7 @@
             ['light', '明るい'],
             ['dark', '暗い'],
         ]);
+        toggle('暗い配色のとき床の画像も暗く', 'dimFloorImage');
 
         heading('大きさ', 'h3');
         slider('地点', 'nodeSize', 50, 200);

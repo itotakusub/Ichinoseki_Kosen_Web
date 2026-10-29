@@ -8663,6 +8663,16 @@ function km_check_layout(): void
     check_bool('共有: 共有から引いた経路は履歴(前回の経路)に入れない', str_contains($shareApp, 'shared: routeFromShare } }));')
         && str_contains($shareHistory, 'if (d.shared) return;'));
 
+    // 2026-10-29(振り返りのフェーズ 1): 地図の周りは温かい色・カーソルは縁取り・暗い配色でも床は明るいまま(沈めるのは表示調整で選んだときだけ)
+    $lookCss = (string) file_get_contents(__DIR__ . '/../Main/styles.css');
+    check_bool('見やすさ: 周りは温かい色・Leaflet の灰色を使わない・地図の上は縁取りのカーソル', str_contains($lookCss, '--bg-map: #F3EBDD;')
+        && str_contains($lookCss, '#map.leaflet-container { background: var(--bg-map); }')
+        && str_contains($lookCss, "cursor: url('cursor-map.svg') 16 16, grab;") && is_file(__DIR__ . '/../Main/cursor-map.svg'));
+    check_bool('見やすさ: 床の画像を沈めるのは「床の画像も暗く」を選んだ暗い配色だけ', substr_count($lookCss, '--map-image-filter: invert(') === 2
+        && substr_count($lookCss, '[data-km-floor-dim="1"] {') === 2
+        && str_contains((string) file_get_contents(__DIR__ . '/../Main/map-style.js'), 'dimFloorImage: false,')
+        && str_contains((string) file_get_contents(__DIR__ . '/../Main/map-tuning.js'), "if (tuning.dimFloorImage) root.setAttribute('data-km-floor-dim', '1');"));
+
     km_check_heading('地図: 札は 6 文字 + …・イベントの地点の見分け・経路の線(2026-10-24)');
     $viewCss = (string) file_get_contents(__DIR__ . '/../Main/styles.css');
     check_bool('札はすべて縮める(地点・一時地点)', str_contains($shareApp, 'escapeHtml(shortPoiName(project ? project.name : displayNameFor(node)));')
