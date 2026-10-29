@@ -148,7 +148,8 @@ function km_display_defaults_for_web(array $values): array
         $web['nodeSize'] = $v;
     }
     if (($v = $percent($values['map_label_size_percent'] ?? null)) !== null) {
-        $web['labelSize'] = min(200, $v);
+        // Web の「文字」のつまみの上限(Main/map-tuning.js・map-style.js の labelScale。2026-10-30 に 200 → 260)
+        $web['labelSize'] = min(260, $v);
     }
     $labelModes = ['icon' => 'icon_only', 'icon_text' => 'icon_and_text', 'text' => 'text_only'];
     if (isset($labelModes[$values['map_node_label_mode'] ?? ''])) {

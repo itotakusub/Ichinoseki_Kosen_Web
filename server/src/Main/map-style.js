@@ -316,13 +316,13 @@
          * 「文字」のつまみを係数(1 = 等倍)にする。
          *
          * **壊れた値でも倒れないこと。** localStorage は閲覧者の手元にあり、
-         * 古い版の値や手で書き換えた値が入りうる。つまみの範囲(50〜200%)へ
+         * 古い版の値や手で書き換えた値が入りうる。つまみの範囲(50〜260%。2026-10-30 に上を 200 → 260)へ
          * 丸めてから返す —— 0 を書かれると**地図の文字が全部消える**。
          */
         labelScale: function (tuning) {
             const raw = Number(tuning && tuning.labelSize);
             if (!isFinite(raw)) return 1;
-            return Math.min(200, Math.max(50, raw)) / 100;
+            return Math.min(260, Math.max(50, raw)) / 100;
         },
 
         /**

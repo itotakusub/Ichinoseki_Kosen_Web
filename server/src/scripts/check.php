@@ -8673,6 +8673,18 @@ function km_check_layout(): void
         && str_contains((string) file_get_contents(__DIR__ . '/../Main/map-style.js'), 'dimFloorImage: false,')
         && str_contains((string) file_get_contents(__DIR__ . '/../Main/map-tuning.js'), "if (tuning.dimFloorImage) root.setAttribute('data-km-floor-dim', '1');"));
 
+    // 同じフェーズの 2(2026-10-30): ぼかしをやめて透けない面に・押せるものに濃い縁・いまの階は内側の縁(外側だと並びの箱で切れる)
+    check_bool('見やすさ: ぼかし(backdrop-filter の blur)を使わない・面は透けない', !str_contains($lookCss, 'backdrop-filter: blur')
+        && str_contains($lookCss, '--glass-heavy: #FFFFFF;') && substr_count($lookCss, '--glass-heavy: #0F172A;') === 2);
+    check_bool('見やすさ: 地図の上の操作に 2px の濃い縁・いまの階は内側に 3px', preg_match('/\.km-searchbox,\s*\.km-chip,\s*\.km-action-btn,\s*\.floor-nav,\s*\.km-account-summary,\s*\.km-route-bar \{\s*border: 2px solid var\(--km-control-edge\);/', $lookCss) === 1
+        && preg_match('/\.floor-nav \.floor-btn\.active,\s*\.floor-nav\.is-collapsed \.floor-toggle \{\s*border: 3px solid var\(--km-control-edge\);/', $lookCss) === 1);
+    // 同じフェーズの 4: 選んだ場所は赤いピン + 脈打つ輪(先と輪の真ん中を iconAnchor の 48px にそろえる)・到着は赤い面で大きく
+    $lookApp = (string) file_get_contents(__DIR__ . '/../Main/app.js');
+    check_bool('見やすさ: 選んだ場所は赤いピンと輪・到着は大きな赤い吹き出しと輪・動きを減らす設定では輪を止める', str_contains($lookApp, "className: 'km-dest-pin',")
+        && str_contains($lookApp, 'iconAnchor: [22, 48],') && str_contains($lookCss, '.km-dest-pin .km-dest-pulse { left: 50%; top: 48px; }')
+        && str_contains($lookApp, "\${isEnd ? '<span class=\"km-dest-pulse\" aria-hidden=\"true\"></span>' : ''}")
+        && str_contains($lookCss, 'font-size: 17px;') && str_contains($lookCss, '.km-dest-pulse { animation: none;'));
+
     km_check_heading('地図: 札は 6 文字 + …・イベントの地点の見分け・経路の線(2026-10-24)');
     $viewCss = (string) file_get_contents(__DIR__ . '/../Main/styles.css');
     check_bool('札はすべて縮める(地点・一時地点)', str_contains($shareApp, 'escapeHtml(shortPoiName(project ? project.name : displayNameFor(node)));')
@@ -9192,7 +9204,10 @@ function km_check_layout(): void
     check_bool('文字の倍率を CSS へ渡す', str_contains($styleJs, "setProperty('--km-label-scale'"));
     check_bool('CSS に既定の倍率がある', str_contains($css, '--km-label-scale: 1;'));
     // 0 を書かれると地図の字が全部消える。つまみの範囲へ丸めてから使う
-    check_bool('壊れた値はつまみの範囲へ丸める', str_contains($styleJs, 'Math.min(200, Math.max(50, raw))'));
+    // 上限は 260%(2026-10-30、振り返りのフェーズ 1。アプリと同じ)。つまみ・丸め・配った既定の 3 か所をそろえる
+    check_bool('壊れた値はつまみの範囲へ丸める(50〜260%。つまみ・配った既定と同じ)', str_contains($styleJs, 'Math.min(260, Math.max(50, raw))')
+        && str_contains((string) file_get_contents(__DIR__ . '/../Main/map-tuning.js'), "slider('文字', 'labelSize', 50, 260);")
+        && str_contains((string) file_get_contents(__DIR__ . '/../lib/display-defaults.php'), "\$web['labelSize'] = min(260, \$v);"));
     /*
      * **地図の上の字は全部この係数を通す。** 一部だけ通すと、大きくしたときに
      * 札と長さの釣り合いが崩れて、かえって読みにくくなる。

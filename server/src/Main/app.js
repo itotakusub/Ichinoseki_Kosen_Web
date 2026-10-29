@@ -3130,11 +3130,15 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (isStart || isEnd) {
                     const pinClass = isStart ? 'pin-start' : 'pin-end';
                     const pinText = isStart ? '出発' : '到着';
+                    /*
+                     * 大きくする(2026-10-30、高専祭の振り返り「高齢の方が目的地を見失う」)。到着は赤い面に白い字で、
+                     * 指す点に脈打つ輪(km-dest-pulse)を付ける。吹き出しの高さが変わったら下の fitBounds の上の余白も直す
+                     */
                     const pinIcon = L.divIcon({
                         className: `route-pin ${pinClass}`,
-                        html: `<div class="pin-bubble">${pinText}</div><div class="pin-arrow"></div>`,
-                        iconSize: [60, 40],
-                        iconAnchor: [30, 40]
+                        html: `<div class="pin-bubble">${pinText}</div><div class="pin-arrow"></div>${isEnd ? '<span class="km-dest-pulse" aria-hidden="true"></span>' : ''}`,
+                        iconSize: [96, 56],
+                        iconAnchor: [48, 56]
                     });
                     const marker = L.marker([node.y, node.x], {
                         icon: pinIcon,
@@ -3181,8 +3185,8 @@ document.addEventListener('DOMContentLoaded', async () => {
              * 以前は四方 50px 固定で、出発・到着のピンが下の操作やシートの裏に潜った。
              */
             const padding = mapFitPadding();
-            // 出発・到着の吹き出しは点の**上へ 40px** 伸びる。そのぶん上を空けないと検索の窓の裏に潜る
-            padding.paddingTopLeft = padding.paddingTopLeft.add([0, 48]);
+            // 出発・到着の吹き出しは点の**上へ 56px** 伸びる。そのぶん上を空けないと検索の窓の裏に潜る
+            padding.paddingTopLeft = padding.paddingTopLeft.add([0, 64]);
             window.map.fitBounds(pathBoundsGroup.getBounds(), padding);
         } else if (firstOnFloor) {
             window.map.setView(firstOnFloor, window.map.getZoom());
@@ -3689,10 +3693,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     window.map.createPane('kmSelect').style.zIndex = '640';
     let selectionRing = null;
 
+    /*
+     * 選んだ場所には大きな赤いピンと脈打つ輪(2026-10-30、高齢の方の声「どこを選んだか分からない」)。
+     * それまでは青い輪(半径 15px)で、地点の印と見分けにくかった。ピンの先が場所を指す(iconAnchor は下の真ん中)
+     */
     function markSelected(latlng) {
         clearSelected();
-        selectionRing = L.circleMarker(latlng, {
-            pane: 'kmSelect', radius: 15, color: '#2563EB', weight: 3, fillColor: '#2563EB', fillOpacity: 0.15, interactive: false,
+        selectionRing = L.marker(latlng, {
+            pane: 'kmSelect',
+            interactive: false,
+            keyboard: false,
+            icon: L.divIcon({
+                className: 'km-dest-pin',
+                html: '<span class="km-dest-pulse" aria-hidden="true"></span><span class="km-dest-head" aria-hidden="true"></span>',
+                iconSize: [44, 52],
+                iconAnchor: [22, 48],
+            }),
         }).addTo(window.map);
     }
     function clearSelected() {

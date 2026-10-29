@@ -156,7 +156,8 @@
 
         heading('大きさ', 'h3');
         slider('地点', 'nodeSize', 50, 200);
-        slider('文字', 'labelSize', 50, 200);
+        // 上は 260%(2026-10-30、振り返りのフェーズ 1「文字を大きく」。アプリの MapDisplayTuningPanel の文字サイズ 80〜260% と同じ上限)
+        slider('文字', 'labelSize', 50, 260);
         select('名前の出し方', 'labelMode', [
             ['icon_and_text', '図形と文字'],
             ['icon_only', '図形だけ'],

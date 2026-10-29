@@ -27,9 +27,15 @@
      */
     --bg-map: #F3EBDD;
     --text: #0F172A;
-    --glass: rgba(255, 255, 255, 0.8);
-    --glass-heavy: rgba(255, 255, 255, 0.95);
+    /*
+     * 地図の上の面は**透けない**(2026-10-30、振り返りのフェーズ 1「見やすさ」)。それまでは 80〜95% の白に
+     * backdrop-filter のぼかしを重ねていて、床の線が透けて字が読みにくく、ぼかしはズームのたびに重かった(ぼかしは全部外した)
+     */
+    --glass: rgba(255, 255, 255, 0.97);
+    --glass-heavy: #FFFFFF;
     --border: rgba(255, 255, 255, 0.4);
+    /* 地図の上の操作(検索の窓・チップ・左下の操作・階・アカウント)の濃い縁。温かい背景の上でも、白い床の上でも見える */
+    --km-control-edge: #4B4036;
     /* 枠として見せたいとき。--border は面のふちで、こちらは線そのもの */
     --border-strong: rgba(100, 116, 139, 0.4);
     --shadow-sm: 0 4px 6px -1px rgb(0 0 0 / 0.1);
@@ -136,8 +142,9 @@
         --bg-map: #0F1116;
         --text: #E2E8F0;
         --danger: #F87171;
-        --glass: rgba(15, 23, 42, 0.82);
-        --glass-heavy: rgba(15, 23, 42, 0.95);
+        --glass: rgba(15, 23, 42, 0.97);
+        --glass-heavy: #0F172A;
+        --km-control-edge: #CBD5E1;
         --border: rgba(148, 163, 184, 0.35);
         --border-strong: rgba(148, 163, 184, 0.45);
         --map-image-edge: 0 0 0 1px rgba(148, 163, 184, 0.55);
@@ -153,8 +160,9 @@
     --bg-map: #0F1116;
     --text: #E2E8F0;
     --danger: #F87171;
-    --glass: rgba(15, 23, 42, 0.82);
-    --glass-heavy: rgba(15, 23, 42, 0.95);
+    --glass: rgba(15, 23, 42, 0.97);
+    --glass-heavy: #0F172A;
+    --km-control-edge: #CBD5E1;
     --border: rgba(148, 163, 184, 0.35);
     --border-strong: rgba(148, 163, 184, 0.45);
     --map-image-edge: 0 0 0 1px rgba(148, 163, 184, 0.55);
@@ -323,8 +331,6 @@ body {
     text-align: center;
     border-radius: var(--radius-lg);
     background: var(--glass-heavy);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
     border: 1px solid var(--border);
     box-shadow: var(--shadow-lg);
 }
@@ -513,8 +519,6 @@ body {
 /* ======== Common Styles ======== */
 .glass-panel {
     background: var(--glass);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
     border: 1px solid var(--border);
     box-shadow: var(--shadow-lg);
 }
@@ -652,8 +656,6 @@ body {
     border-radius: 999px;
     border: 1px solid var(--border);
     background: var(--glass-heavy);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
     box-shadow: var(--shadow-sm);
     color: var(--text);
     font-size: var(--text-label);
@@ -1411,8 +1413,6 @@ body.km-route-active { --km-route-lift: calc(var(--km-touch) + 20px); }
     border-radius: 999px;
     border: 1px solid var(--border);
     background: var(--glass-heavy);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
     box-shadow: var(--shadow-lg);
     color: var(--text);
     animation: km-route-in 0.25s ease;
@@ -1495,8 +1495,6 @@ body.km-route-active { --km-route-lift: calc(var(--km-touch) + 20px); }
     border-radius: var(--radius-lg);
     border: 1px solid var(--border);
     background: var(--glass-heavy);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
     box-shadow: var(--shadow-lg);
     color: var(--text);
     animation: km-route-in 0.2s ease;
@@ -1559,8 +1557,6 @@ body.km-route-active { --km-route-lift: calc(var(--km-touch) + 20px); }
     display: flex;
     flex-direction: column;
     background: var(--glass-heavy);
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
     border-left: 1px solid var(--border);
     border-radius: var(--radius-xl) 0 0 var(--radius-xl);
     box-shadow: var(--shadow-lg);
@@ -1722,8 +1718,6 @@ body.km-route-active { --km-route-lift: calc(var(--km-touch) + 20px); }
     padding: 1.5rem;
     border-radius: var(--radius-xl);
     background: var(--glass-heavy);
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
     border: 1px solid var(--border);
     box-shadow: var(--shadow-lg);
     color: var(--text);
@@ -2231,8 +2225,6 @@ a.icon-btn { text-decoration: none; color: inherit; }
     border-radius: 999px;
     border: 1px solid var(--border);
     background: var(--glass-heavy);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
     box-shadow: var(--shadow-sm);
 }
 .km-building-btn {
@@ -2271,8 +2263,6 @@ a.icon-btn { text-decoration: none; color: inherit; }
     border-radius: 50%;
     border: 1px solid var(--border);
     background: var(--glass-heavy);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
     box-shadow: var(--shadow-sm);
     color: var(--text);
     font-size: 1.1rem;
@@ -2297,8 +2287,6 @@ a.icon-btn { text-decoration: none; color: inherit; }
     border-radius: var(--radius-lg);
     border: 1px solid var(--border);
     background: var(--glass-heavy);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
     box-shadow: var(--shadow-lg);
     color: var(--text);
     font-size: 0.82rem;
@@ -2384,8 +2372,6 @@ a.icon-btn { text-decoration: none; color: inherit; }
 
 .leaflet-popup-content-wrapper {
     background: var(--glass-heavy) !important;
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg) !important;
     box-shadow: var(--shadow-lg) !important;
@@ -2502,15 +2488,16 @@ a.icon-btn { text-decoration: none; color: inherit; }
     pointer-events: none !important;
 }
 
+/* 出発・到着の吹き出し。2026-10-30 に大きくした(13px → 17px。高齢の方の声。app.js の iconSize 96×56 と対) */
 .pin-bubble {
     background: white;
-    padding: 6px 12px;
-    border-radius: 20px;
-    font-size: 13px;
+    padding: 8px 16px;
+    border-radius: 22px;
+    font-size: 17px;
     font-weight: 900;
     white-space: nowrap;
     box-shadow: 0 8px 20px rgba(0,0,0,0.2);
-    border: 2px solid transparent;
+    border: 3px solid transparent;
     animation: pin-float 2s ease-in-out infinite;
 }
 
@@ -2529,15 +2516,70 @@ a.icon-btn { text-decoration: none; color: inherit; }
 }
 .pin-start .pin-arrow { border-top-color: #2563eb; }
 
+/* 到着は赤い面に白い字(出発の青い縁と取り違えない) */
 .pin-end .pin-bubble {
-    color: #dc2626;
-    border-color: #dc2626;
+    color: #ffffff;
+    background: #dc2626;
+    border-color: #ffffff;
 }
 .pin-end .pin-arrow { border-top-color: #dc2626; }
+.route-pin { position: relative; }
+.route-pin .km-dest-pulse { left: 50%; top: 100%; }
 
 @keyframes pin-float {
     0%, 100% { transform: translateY(0); }
     50% { transform: translateY(-8px); }
+}
+
+/*
+ * 選んだ場所のピン(app.js の markSelected)と、到着の点の脈打つ輪(2026-10-30)。
+ * 輪は指す点を中心に広がって消える。動きを減らす設定の人には輪を止めて、薄い輪だけ残す
+ */
+.km-dest-pin { position: relative; }
+.km-dest-head {
+    position: absolute;
+    left: 50%;
+    top: 4px;
+    /* 36px の角を 45° 回すと、先は真ん中(4 + 18 = 22px)から 25.5px 下 = 47.5px。app.js の iconAnchor の 48 と対 */
+    width: 36px;
+    height: 36px;
+    margin-left: -18px;
+    border-radius: 50% 50% 50% 0;
+    background: #dc2626;
+    border: 3px solid #ffffff;
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.35);
+    transform: rotate(-45deg);
+}
+.km-dest-head::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 9px;
+    height: 9px;
+    margin: -4.5px 0 0 -4.5px;
+    border-radius: 50%;
+    background: #ffffff;
+}
+/* 輪の真ん中をピンの先(iconAnchor の 48px)に合わせる */
+.km-dest-pin .km-dest-pulse { left: 50%; top: 48px; }
+.km-dest-pulse {
+    position: absolute;
+    width: 56px;
+    height: 56px;
+    margin: -28px 0 0 -28px;
+    border-radius: 50%;
+    border: 4px solid #dc2626;
+    pointer-events: none;
+    animation: km-dest-pulse 1.6s ease-out infinite;
+}
+@keyframes km-dest-pulse {
+    0% { transform: scale(0.3); opacity: 0.9; }
+    100% { transform: scale(1.4); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .km-dest-pulse { animation: none; transform: scale(0.8); opacity: 0.5; }
+    .pin-bubble { animation: none; }
 }
 /* ------------------------------------------------------------------ */
 /* イベントモード(1.0.4)                                              */
@@ -3067,8 +3109,6 @@ body.km-route-panel-open .km-searchbox-route { background: var(--primary); color
     border-radius: var(--radius-lg);
     border: 1px solid var(--border);
     background: var(--glass-heavy);
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
     box-shadow: var(--shadow-lg);
 }
 .km-search-results[hidden] { display: none; }
@@ -3228,8 +3268,6 @@ body.km-route-panel-open .km-searchbox-route { background: var(--primary); color
     /* 窓(z 1300)が上に重なる。中身は窓の下から */
     padding-top: calc(var(--km-edge) + var(--km-searchbox-height) + 8px);
     background: var(--glass-heavy);
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
     border-right: 1px solid var(--border);
     border-radius: 0 var(--radius-xl) var(--radius-xl) 0;
     box-shadow: var(--shadow-lg);
@@ -3515,8 +3553,6 @@ body.km-route-panel-open .km-searchbox-route { background: var(--primary); color
     border-radius: 999px;
     border: 1px solid var(--border);
     background: var(--glass-heavy);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
     box-shadow: var(--shadow-sm);
     color: var(--text);
     overflow-x: auto;
@@ -3687,4 +3723,25 @@ body.km-route-panel-open .km-searchbox-route { background: var(--primary); color
     border-radius: 50%;
     background: #ef4444;
     box-shadow: 0 0 0 2px #ffffff;
+}
+
+/*
+ * ======== 地図の上の操作の縁(2026-10-30、振り返りのフェーズ 1 の 2)========
+ *
+ * 高齢の方から「ボタンがどこか分からない」。白に近い薄い縁と影だけで、温かい背景・白い床のどちらの上でも境が見えなかった。
+ * 押せるものには 2px の濃い縁(--km-control-edge)を付ける。いまの階は色を変えたうえで外側にも縁を付ける。
+ * 置き場所は最後(各部品の border を上書きするため)。大きさは box-sizing: border-box なので変わらない
+ */
+.km-searchbox,
+.km-chip,
+.km-action-btn,
+.floor-nav,
+.km-account-summary,
+.km-route-bar {
+    border: 2px solid var(--km-control-edge);
+}
+/* 外側の縁(outline)だと、階の並び(縦に送る箱)の端で切れる。内側の縁にする(経路の階の赤は内側の影なので重ならない) */
+.floor-nav .floor-btn.active,
+.floor-nav.is-collapsed .floor-toggle {
+    border: 3px solid var(--km-control-edge);
 }
