@@ -107,9 +107,15 @@ $started = microtime(true);
 // 考える(管理画面の設定)。ON の間は 1 回の返事が遅いので、1 回あたり 40 秒まで待ち、言い換えは 15 秒を過ぎたら出さない
 if ($llmConfig !== null) {
     $llmConfig['reasoning'] = $settings['reasoning'];
+    // 管理画面で選んだ模型(2026-10-29、利用者「AI を選択できるように」)。空なら自宅 PC の既定
+    if ($settings['model'] !== '') {
+        $llmConfig['model'] = $settings['model'];
+    }
 }
 $thinking = $llmConfig !== null && km_guide_reasoning_on($llmConfig);
-$llm = $llmConfig === null ? null : static function (array $messages, int $maxTokens) use ($llmConfig, $started, $thinking): string {
+// 答えに使った模型(自宅 PC が返す)。質問と答えの記録に残す
+$usedModel = '';
+$llm = $llmConfig === null ? null : static function (array $messages, int $maxTokens) use ($llmConfig, $started, $thinking, &$usedModel): string {
     $elapsed = microtime(true) - $started;
     if ($maxTokens === KM_GUIDE_RESOLVE_TOKENS && $elapsed > ($thinking ? 15 : 25)) {
         throw new RuntimeException('言い換えの時間切れ');
@@ -119,7 +125,11 @@ $llm = $llmConfig === null ? null : static function (array $messages, int $maxTo
         throw new RuntimeException('時間切れ');
     }
     $perCall = $thinking ? 40 : ($maxTokens <= 160 ? 20 : 30);
-    return km_guide_llm_chat($llmConfig, $messages, $maxTokens, (int) min($perCall, floor($left)));
+    $text = km_guide_llm_chat($llmConfig, $messages, $maxTokens, (int) min($perCall, floor($left)), $meta);
+    if (($meta['model'] ?? '') !== '') {
+        $usedModel = $meta['model'];
+    }
+    return $text;
 };
 // 出発地を言わなかった経路は、展示の場所から(テスト用アカウントの設定。2026-10-25、利用者「テストユーザーのみ、出発点を Let's Play Densan に」)
 try {
@@ -133,6 +143,9 @@ $result = km_guide_answer($catalog, $question, $llm, $startNodeId);
 // 質問と答えを残す(2026-10-25、利用者「機能改善のために保存」)。誰が聞いたかは入れない。残せなくても答えは返す。
 // 評価の合言葉は画面に返し、ここにはハッシュだけを残す(残せなかったときは評価のボタンを出さない)
 $rateToken = bin2hex(random_bytes(16));
+if (!$result['fallback']) {
+    $result['model'] = $usedModel;
+}
 try {
     km_guide_log_save($pdo, km_guide_log_row(
         $question,
@@ -145,7 +158,7 @@ try {
 } catch (Throwable $exception) {
     error_log('api/guide-chat.php log save failed: ' . $exception->getMessage());
 }
-unset($result['intent']);
+unset($result['intent'], $result['model']);
 
 try {
     if ($result['fallback']) {

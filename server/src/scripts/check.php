@@ -1936,7 +1936,7 @@ function km_check_guide_chat(): void
     check('メールアドレスと電話番号らしい文字は伏せる(部屋番号・年は残す)', '[メール] か [電話番号] / [電話番号] に 1-209 と 2026 年',
         km_guide_mask_personal('taro.k@example.com か 090-1234-5678 / ０３（１２３４）５６７８ に 1-209 と 2026 年'));
     $logRow = km_guide_log_row('090-1111-2222 です。たこ焼き', ['answer' => 'あります', 'cards' => [['name' => 'たこ焼き']], 'route' => ['from' => null, 'to' => ['name' => '図書館']], 'fallback' => false, 'intent' => 'route'], 2345, '2026-10-25 10:00:00', str_repeat('a', 32));
-    check('残す欄は決まったものだけ(誰が聞いたかは入れない)', ['rate_hash', 'asked_at', 'question', 'answer', 'intent', 'cards', 'route', 'fallback', 'elapsed_ms'], array_keys($logRow));
+    check('残す欄は決まったものだけ(誰が聞いたかは入れない)', ['rate_hash', 'asked_at', 'question', 'answer', 'intent', 'cards', 'route', 'fallback', 'elapsed_ms', 'model'], array_keys($logRow));
     check('残す中身: 伏せた質問・カードの名前・経路の名前・合言葉はハッシュ', ['[電話番号] です。たこ焼き', '["たこ焼き"]', '(出発地は地図で選ぶ) → 図書館', hash('sha256', str_repeat('a', 32))],
         [$logRow['question'], $logRow['cards'], $logRow['route'], $logRow['rate_hash']]);
     $token = str_repeat('0f', 16);
@@ -2015,7 +2015,7 @@ function km_check_guide_chat(): void
     check_bool('既定は OFF(管理画面で ON にして人を選んでから)', str_contains($lib, "'enabled' => km_setting_get(\$pdo, KM_GUIDE_ENABLED_SETTING, '0') === '1',"));
     // 2026-10-25: 質問と答えを残す・評価・時間の枠・チャットを開いたまま・「AI は間違えることがあります」
     check_bool('口: 評価は質問より前に受ける(回数に数えない)・答えたら残す・質問の種類は画面へ返さない', strpos($api, "if (array_key_exists('rate', \$input)) {") < strpos($api, '$question = ')
-        && str_contains($api, 'km_guide_log_save($pdo, km_guide_log_row(') && str_contains($api, "unset(\$result['intent']);")
+        && str_contains($api, 'km_guide_log_save($pdo, km_guide_log_row(') && str_contains($api, "unset(\$result['intent'], \$result['model']);")
         && str_contains($api, "\$result['rateToken'] = \$rateToken;") && str_contains($api, '$rateToken = bin2hex(random_bytes(16));'));
     check_bool('口: 全部で 55 秒まで・言い換えは 25 秒を過ぎたら出さない', str_contains($api, '$left = 55 - $elapsed;')
         && str_contains($api, 'if ($maxTokens === KM_GUIDE_RESOLVE_TOKENS && $elapsed > ($thinking ? 15 : 25)) {'));
@@ -2036,22 +2036,26 @@ function km_check_guide_chat(): void
     $llmDir = $root . '/guide-llm';
     $serverPy = (string) @file_get_contents($llmDir . '/server.py');
     /*
-     * 2026-10-25 に作り直した(利用者の指示「WSL は使わない」「Unsloth に API リクエストする」)。
-     * 同じ日に、頼む先を Bionic に替えた(利用者「Unsloth にバグが報告されていて使えないので Bionic に代替」)。
-     * 自宅 PC の server.py は模型を読まず、利用者が動かしている Bionic の API へ渡す**門番**(標準ライブラリだけ)
+     * 2026-10-25 に作り直した(利用者の指示「WSL は使わない」「Unsloth に API リクエストする」)。同じ日に Bionic に替えた。
+     * 2026-10-29、利用者「Unsloth API が使えるようになったので変更」「AI を選択できるように」: 頼み先を 2 つ持つ**門番**(標準ライブラリだけ)
      */
-    check_bool('自宅 PC: 門番は 127.0.0.1 だけ・鍵は定数時間で比べる・4 つの模型だけ・Bionic はこの PC の中だけ', str_contains($serverPy, 'ThreadingHTTPServer(("127.0.0.1", PORT), Handler)')
-        && str_contains($serverPy, 'secrets.compare_digest(') && str_contains($serverPy, '"gpt-oss-20b": re.compile(') && str_contains($serverPy, '"qwen3.5-9b": re.compile(')
-        && str_contains($serverPy, 'parts.hostname in ("127.0.0.1", "localhost", "::1")')
-        && str_contains($serverPy, 'UPSTREAM = os.environ.get("LLM_API_URL", "")')
+    check_bool('自宅 PC: 門番は 127.0.0.1 だけ(番号を 2 つ目に取らせない)・鍵は定数時間で比べる・頼み先はこの PC の中だけ', str_contains($serverPy, 'ExclusiveServer(("127.0.0.1", PORT), Handler).serve_forever()')
+        && str_contains($serverPy, 'allow_reuse_address = False')
+        && str_contains($serverPy, 'secrets.compare_digest(') && str_contains($serverPy, 'parts.hostname in ("127.0.0.1", "localhost", "::1")')
+        && str_contains($serverPy, 'if not is_local_url(backend.url):')
         && !preg_match('/^\s*(import|from)\s+(fastapi|uvicorn|unsloth|torch)\b/m', $serverPy));
-    // Bionic の識別名(3885219b… のような文字列)は名前から 4 つのどれか分からない。GUIDE_LLM_FAMILY で言い切り、/v1/models にあるかを起こすときに確かめる
-    check_bool('自宅 PC: 識別名の模型は GUIDE_LLM_FAMILY で 4 つのどれかを言い切る・読み込まれているかを確かめる', str_contains($serverPy, 'family = resolve_family(MODEL_NAME, MODEL_FAMILY)')
-        && str_contains($serverPy, 'if declared not in ALLOWED_FAMILIES or (by_name is not None and by_name != declared):')
-        && str_contains($serverPy, 'elif MODEL_NAME not in listed:'));
+    check_bool('自宅 PC: 頼み先は Unsloth と Bionic(Bionic は古い名前 LLM_API_URL でも読む)・一覧に無い模型は既定へ', str_contains($serverPy, 'BACKEND_NAMES = ("unsloth", "bionic")')
+        && str_contains($serverPy, 'os.environ.get("BIONIC_API_URL", "").strip() or os.environ.get("LLM_API_URL", "").strip()')
+        && str_contains($serverPy, "if isinstance(requested, str) and requested in catalog:\n        return requested"));
+    check_bool('自宅 PC: Unsloth には道具を使わせない(enable_tools・mcp_enabled を false。頼み直しでも外さない)', str_contains($serverPy, 'body["enable_tools"] = False')
+        && str_contains($serverPy, 'body["mcp_enabled"] = False') && str_contains($serverPy, 'OPTIONAL_KEYS = ("chat_template_kwargs", "reasoning_effort", "enable_thinking")'));
+    check_bool('自宅 PC: 模型は 1 つだけ読む(ほかを外してから)・入れ替えの間は答えない・起動のときはアンロードしてからロード', str_contains($serverPy, 'unload_everything()')
+        && str_contains($serverPy, '"/api/v1/models/load"') && str_contains($serverPy, '"/v1/load"')
+        && str_contains($serverPy, 'switching = next((k for k, v in LOAD_STATE.items() if v == "loading"), None)')
+        && str_contains($serverPy, 'load_model(key, reload=True)'));
     // Bionic は chat_template_kwargs を聞かない。reasoning_effort で考えを止めないと Qwen3.5 の本文が空になる(2026-10-25 のベンチで 20 件中 19 件)
-    check_bool('自宅 PC: 考えは reasoning_effort で止める(Qwen・custom は none)・空の答えは 502', str_contains($serverPy, 'REASONING_EFFORT = {"qwen3.5-9b": "none", "gpt-oss-20b": "low", "custom": "none"}')
-        && str_contains($serverPy, 'body["reasoning_effort"] = effort') && str_contains($serverPy, 'raise BadRequest(502, "upstream empty")'));
+    check_bool('自宅 PC: 考えは reasoning_effort で止める・空の答えは 1 度 low で頼み直し、それでも空なら 502', str_contains($serverPy, 'body["reasoning_effort"] = effort')
+        && str_contains($serverPy, 'if not text and effort in ("", "none"):') && str_contains($serverPy, 'raise BadRequest(502, "upstream empty")'));
     // 2026-10-25、利用者「Website 側で、考えるの ON-OFF はできませんか」: 管理画面で選び、頼みのたびに reasoning_effort で伝える
     $llmBody = static fn (string $reasoning): array => km_guide_llm_body(['model' => 'm', 'reasoning' => $reasoning], [['role' => 'user', 'content' => 'x']], 160);
     check('考える: auto は付けない・off は none・ON は low/medium/high・知らない値は付けない', [null, 'none', 'low', 'high', null],
@@ -2061,13 +2065,19 @@ function km_check_guide_chat(): void
         && str_contains($guideAdmin, '} elseif (!array_key_exists($reasoning, KM_GUIDE_REASONING_CHOICES)) {')
         && str_contains($api, "\$llmConfig['reasoning'] = \$settings['reasoning'];") && str_contains($api, '$perCall = $thinking ? 40 : ($maxTokens <= 160 ? 20 : 30);'));
     check_bool('自宅 PC: Website の指定を受ける・止められない模型の OFF は low にする', str_contains($serverPy, 'REQUESTABLE_EFFORTS = ("none", "low", "medium", "high")')
-        && str_contains($serverPy, 'if effort == "none" and REASONING_OFF_OK == "no":') && str_contains($serverPy, 'effort = choose_effort(payload.get("reasoning_effort"))'));
-    // 2026-10-25、利用者「GUIDE_LLM_FAMILY を custom にして、API 識別子のみ変更でロード」「既にロードされていたらアンロードからロード」
-    check_bool('自宅 PC: custom なら 4 つの決まりを外す・起動のたびにアンロードしてからロード', str_contains($serverPy, "if declared == CUSTOM_FAMILY:\n        return CUSTOM_FAMILY")
-        && preg_match('/foreach \(\$instance in @\(\$entry\.loaded_instances\)\).*?\/api\/v1\/models\/unload.*?\/api\/v1\/models\/load/s', (string) @file_get_contents($llmDir . '/start-guide-llm.ps1')) === 1);
-    check_bool('自宅 PC: 模型の名前と出す字数は門番が決める・余計な項目は渡さない', str_contains($serverPy, '"model": MODEL_NAME,') && str_contains($serverPy, '"max_tokens": min(max_tokens, MAX_NEW_TOKENS_CAP) + (REASONING_HEADROOM if effort not in ("", "none") else 0),'));
-    check_bool('自宅 PC: 本文をログに書かない', str_contains($serverPy, '# **本文は書かない**。時間と字数だけ') && !preg_match('/LOG\.\w+\([^)]*(messages|text|body)\b/', $serverPy)
+        && str_contains($serverPy, 'if effort == "none" and off_ok == "no":') && str_contains($serverPy, 'effort = choose_effort(payload.get("reasoning_effort"), ')); 
+    check_bool('自宅 PC: 模型の名前と出す字数は門番が決める・余計な項目は渡さない', str_contains($serverPy, '"model": model_id,')
+        && str_contains($serverPy, '"max_tokens": min(max_tokens, MAX_NEW_TOKENS_CAP) + (REASONING_HEADROOM if thinking else 0),'));
+    check_bool('自宅 PC: 本文をログに書かない', str_contains($serverPy, '# **本文は書かない**。時間と字数と模型だけ') && !preg_match('/LOG\.\w+\([^)]*(messages|text|body)\b/', $serverPy)
         && str_contains($serverPy, 'def log_message(self, format: str, *args: Any) -> None:'));
+    // 2026-10-29: 模型を選ぶ(管理画面 → 門番の /v1/models・/v1/select)。答えた模型を記録に残す
+    check_bool('模型を選ぶ: 管理画面は門番の一覧の模型だけ・変えたら読み込みを頼む・答えた模型を残す', str_contains($guideAdmin, '$modelList = km_guide_llm_models($llmConfig);')
+        && str_contains($guideAdmin, "|| (\$modelList !== null && in_array(\$model, array_column(\$modelList['models'], 'id'), true));")
+        && str_contains($guideAdmin, '$loadState = km_guide_llm_select($llmConfig, $model);')
+        && str_contains($api, "\$llmConfig['model'] = \$settings['model'];") && str_contains($api, "\$result['model'] = \$usedModel;")
+        && str_contains($lib, "ALTER TABLE km_guide_chat_log ADD COLUMN model"));
+    check('模型の鍵の形', [true, true, true, false, false, false], array_map('km_guide_model_key_valid', ['', 'unsloth:unsloth/Qwen3.5-9B-GGUF', 'bionic:980b060c@q4_k_xl', 'openai:gpt', 'unsloth:a b', 'bionic:']));
+    check('本文の model: 選んでいなければ default', ['default', 'unsloth:x'], [km_guide_llm_body(['model' => ''], [], 10)['model'], km_guide_llm_body(['model' => 'unsloth:x'], [], 10)['model']]);
     $startPs = (string) @file_get_contents($llmDir . '/start-guide-llm.ps1');
     // 説明の文の「WSL」ではなく、wsl を呼ぶ形(wsl -d … / Start-Process 'wsl' / WSLENV)を探す
     check_bool('自宅 PC: WSL を使わない・ngrok で出す・鍵は環境変数で渡す', !preg_match("/\bwsl(\.exe)?\s+-|FilePath\s+'wsl|WSLENV/i", $startPs)
@@ -2076,7 +2086,8 @@ function km_check_guide_chat(): void
     $exampleEnv = (string) @file_get_contents($llmDir . '/guide-llm.env.example');
     check_bool('自宅 PC: guide-llm.env は git に入れない・見本の鍵とドメインは空', str_contains((string) @file_get_contents($llmDir . '/.gitignore'), 'guide-llm.env')
         && preg_match('/^KM_GUIDE_LLM_KEY=\s*$/m', $exampleEnv) === 1 && preg_match('/^NGROK_DOMAIN=\s*$/m', $exampleEnv) === 1
-        && preg_match('/^LLM_API_KEY=\s*$/m', $exampleEnv) === 1 && preg_match('/^GUIDE_LLM_MODEL=\s*$/m', $exampleEnv) === 1);
+        && preg_match('/^UNSLOTH_API_KEY=\s*$/m', $exampleEnv) === 1 && preg_match('/^BIONIC_API_KEY=\s*$/m', $exampleEnv) === 1
+        && preg_match('/^GUIDE_LLM_MODEL=\s*$/m', $exampleEnv) === 1 && preg_match('/^GUIDE_LLM_PORT=8192$/m', $exampleEnv) === 1);
 }
 
 /**

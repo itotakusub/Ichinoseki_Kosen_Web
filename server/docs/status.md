@@ -629,6 +629,24 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
     あわせて、経路のカードと目的地で、名前が番号だけの一時地点(「99」)は見出し(「献血」)にした。
     本物の Bionic で: 現在地はどこ → Densan(0 秒)、現在地から体育館 / ここから献血 → Densan から、第二体育館から図書館 → 第二体育館から、
     ここのトイレはどこ → トイレ。check.php 2409 件。
+- **AI の頼み先を Unsloth に・AI を選べるように(2026-10-29。プランのフェーズ A)**: 利用者「Unsloth API が使えるようになったので変更」
+  「AI を選択できるように」(答え: 頼み先は自宅 PC の設定で選ぶ・模型は管理画面で選ぶ。Unsloth は http://127.0.0.1:8888/v1)。
+  - 本物の Unsloth を調べた: Unsloth Studio(Unsloth UI Backend 2026.10.10)。OpenAI と同じ /v1/chat/completions・/v1/models、
+    読み込み /v1/load {model_path}・外す /v1/unload・いま読んでいる模型 /v1/status。**鍵(Bearer)が要る**(無いと 401)。
+    会話の model は飾りで、いま読んでいる模型が答える。enable_thinking・reasoning_effort を受ける。**道具(Python・ターミナル・MCP)を使わせる欄がある**。
+  - 門番(server.py)を作り直した: 頼み先を 2 つ持つ(UNSLOTH_API_URL / BIONIC_API_URL。Bionic は古い LLM_API_URL でも読む)。
+    一覧を「unsloth:<id>」「bionic:<id>」で作り、鍵の要る GET /v1/models で返す。頼みの model が一覧にあればそちら、無ければ既定。
+    模型は GPU に 1 つだけ(ほかを外してから読む。入れ替えの間は 503 で答えない)。POST /v1/select で先に読み込みを始める。
+    起動のときは既定の模型をアンロードしてからロード。**Unsloth には enable_tools・mcp_enabled を必ず false**。
+    空の答えは 1 度 low で頼み直す。localhost は 127.0.0.1 にする(Windows で 1 回ごとに約 2 秒待った)。
+    **同じ番号を 2 つ目の門番が取れないようにした**(Windows の SO_REUSEADDR で、止め損ねた古い門番が答え続けた)。
+  - 起動の手順: 頼み先それぞれが答えるかを見る。読み直しは門番に移した(15 分まで待つ)。**本物の python を探す**
+    (この PC の C:\Python315 は DLL が欠けて動かず、「python」は Microsoft Store の案内だった。py → python → uv python find の順。GUIDE_LLM_PYTHON で指定もできる)。
+  - Website: 管理画面「案内チャット」に「模型(AI)」(門番の一覧から。変えたら読み込みを頼む)、「模型ごと」の 👍/👎・平均の時間。
+    質問と答えの記録に答えた模型(km_guide_chat_log.model。本番の表には ALTER で足す)。「届くか確かめる」に答えた模型を出す。
+  - guide-llm.env: 既定を Unsloth にした(UNSLOTH_API_KEY は利用者が Unsloth の画面で作って入れる)。前の Bionic の値は BIONIC_API_URL へ。
+  - 確かめ: 作り物の Unsloth と Bionic で門番を通しで(起動の読み直し・一覧・既定の会話と道具を止める項目・Bionic へ切り替え・一覧に無い名前・空の答えの頼み直し)。
+    check.php 2413 件。**本物の Unsloth はまだ(鍵待ち)**。管理画面の模型の欄はまだ見ていない。
 - **ログインが切れる(2026-10-25)**: 利用者「posters.php へ行って、ito4.jp へ戻ると、ログインが切れているときがあります」。
   - 原因: web コンテナは php.ini を読まないので、セッションの寿命が組み込み既定の **24 分**だった。最後の操作から 24 分たったセッションは、
     約 100 回に 1 回のリクエストのついでに走る掃除で消える。ログイン中かどうかはセッションの ID トークンがあるかだけで決まるので、

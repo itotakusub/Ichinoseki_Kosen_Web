@@ -5,7 +5,7 @@
 # **タグは系列(8.4)のまま残す** —— 使われるのは digest で、タグは scripts/check-updates.sh が
 # 「8.4 の修正版が出たか」を読むため。知らせが来たら digest をここで書き換えて build する。
 # 2026-10-12: PHP 8.4.26 のまま土台(Debian)だけ作り直された版(2026-10-06 作成)に上げた
-FROM php:8.4-apache@sha256:c6527b06c772a2c3cae648ce58c23a2a12ed2fed41cdfb0619ea64be008cc601
+FROM php:8.4-apache@sha256:be1326658a7d36dba6be79a71212d6ff9c5f854335b8ba77d714da1852c1b2ea
 # composer は実行時には使わない(ホスト側で vendor を入れるときの道具)。今の web を作った版に固定する
 COPY --from=composer:2@sha256:b6dcd72ca98fa19d0e5b8476de179859704891fad06dd9e0b96833d4c430a5fc /usr/bin/composer /usr/local/bin/composer
 

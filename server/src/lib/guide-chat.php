@@ -44,6 +44,11 @@ const KM_GUIDE_DAILY_SETTING = 'guide_chat_daily_limit';
  * (off は none。考えを止められない模型では門番が low に置き換える)
  */
 const KM_GUIDE_REASONING_SETTING = 'guide_chat_reasoning';
+/**
+ * 使う模型(2026-10-29、利用者「AI を選択できるようにしてください」)。自宅 PC の門番の一覧の鍵(「unsloth:<id>」「bionic:<id>」)。
+ * 空なら自宅 PC の既定(guide-llm.env の GUIDE_LLM_BACKEND / GUIDE_LLM_MODEL)
+ */
+const KM_GUIDE_MODEL_SETTING = 'guide_chat_model';
 const KM_GUIDE_REASONING_CHOICES = [
     'auto' => '模型に任せる(自宅 PC の設定)',
     'off' => 'OFF(考えない。速い)',
@@ -79,13 +84,15 @@ const KM_GUIDE_INTENTS = ['shop', 'route', 'place', 'other'];
 // ---------------------------------------------------------------- 設定と使える人
 
 /**
- * @return array{enabled:bool, sub:string, dailyLimit:int, reasoning:string}
+ * @return array{enabled:bool, sub:string, dailyLimit:int, reasoning:string, model:string}
  */
 function km_guide_settings(PDO $pdo): array
 {
     $limit = (int) km_setting_get($pdo, KM_GUIDE_DAILY_SETTING, (string) KM_GUIDE_DAILY_DEFAULT);
     $reasoning = km_setting_get($pdo, KM_GUIDE_REASONING_SETTING, 'auto');
+    $model = km_setting_get($pdo, KM_GUIDE_MODEL_SETTING, '');
     return [
+        'model' => km_guide_model_key_valid($model) ? $model : '',
         'reasoning' => array_key_exists($reasoning, KM_GUIDE_REASONING_CHOICES) ? $reasoning : 'auto',
         // **既定は OFF**(管理画面で ON にして、使う人を選んでから)
         'enabled' => km_setting_get($pdo, KM_GUIDE_ENABLED_SETTING, '0') === '1',
@@ -214,6 +221,8 @@ function km_guide_log_row(string $question, array $result, int $elapsedMs, strin
         'route' => is_array($route) ? mb_substr((string) ($route['from']['name'] ?? '(出発地は地図で選ぶ)') . ' → ' . (string) ($route['to']['name'] ?? ''), 0, 400) : '',
         'fallback' => !empty($result['fallback']) ? 1 : 0,
         'elapsed_ms' => max(0, $elapsedMs),
+        // 答えに使った模型(2026-10-29。模型ごとの 👍/👎 を比べる)。LLM なしで答えたときは空
+        'model' => is_string($result['model'] ?? null) && km_guide_model_key_valid($result['model']) ? $result['model'] : '',
     ];
 }
 
@@ -239,25 +248,46 @@ function km_guide_log_ensure_table(PDO $pdo): void
             bad_reason VARCHAR(16) NOT NULL DEFAULT '',
             bad_note VARCHAR(600) NOT NULL DEFAULT '',
             rated_at DATETIME NULL,
+            model VARCHAR(220) NOT NULL DEFAULT '',
             KEY asked_at (asked_at),
             KEY rate_hash (rate_hash)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         SQL);
+    // 2026-10-29 に足した欄。先に作った表(本番)には無いので足す
+    if ($pdo->query("SHOW COLUMNS FROM km_guide_chat_log LIKE 'model'")->fetch() === false) {
+        $pdo->exec("ALTER TABLE km_guide_chat_log ADD COLUMN model VARCHAR(220) NOT NULL DEFAULT '' AFTER rated_at");
+    }
     $done = true;
 }
 
 function km_guide_log_save(PDO $pdo, array $row): void
 {
     km_guide_log_ensure_table($pdo);
-    $pdo->prepare('INSERT INTO km_guide_chat_log (asked_at, question, answer, intent, cards, route, fallback, elapsed_ms, rate_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        ->execute([$row['asked_at'], $row['question'], $row['answer'], $row['intent'], $row['cards'], $row['route'], $row['fallback'], $row['elapsed_ms'], $row['rate_hash']]);
+    $pdo->prepare('INSERT INTO km_guide_chat_log (asked_at, question, answer, intent, cards, route, fallback, elapsed_ms, rate_hash, model) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        ->execute([$row['asked_at'], $row['question'], $row['answer'], $row['intent'], $row['cards'], $row['route'], $row['fallback'], $row['elapsed_ms'], $row['rate_hash'], $row['model']]);
+}
+
+/**
+ * 模型ごとの数(2026-10-29。管理画面で模型を比べる)
+ *
+ * @return list<array{model:string, total:int, good:int, bad:int, avgMs:int}>
+ */
+function km_guide_log_by_model(PDO $pdo): array
+{
+    km_guide_log_ensure_table($pdo);
+    $rows = $pdo->query('SELECT model, COUNT(*) AS total, SUM(rating > 0) AS good, SUM(rating < 0) AS bad, AVG(elapsed_ms) AS avg_ms
+        FROM km_guide_chat_log GROUP BY model ORDER BY total DESC LIMIT 30')->fetchAll(PDO::FETCH_ASSOC);
+    return array_map(static fn (array $row): array => [
+        'model' => (string) $row['model'], 'total' => (int) $row['total'], 'good' => (int) $row['good'],
+        'bad' => (int) $row['bad'], 'avgMs' => (int) round((float) $row['avg_ms']),
+    ], $rows);
 }
 
 /** @return list<array> 新しいものから */
 function km_guide_log_recent(PDO $pdo, int $limit = 100, int $offset = 0, bool $badOnly = false): array
 {
     km_guide_log_ensure_table($pdo);
-    $statement = $pdo->prepare('SELECT id, asked_at, question, answer, intent, cards, route, fallback, elapsed_ms, rating, bad_reason, bad_note FROM km_guide_chat_log'
+    $statement = $pdo->prepare('SELECT id, asked_at, question, answer, intent, cards, route, fallback, elapsed_ms, rating, bad_reason, bad_note, model FROM km_guide_chat_log'
         . ($badOnly ? ' WHERE rating < 0' : '') . ' ORDER BY id DESC LIMIT '
         . max(1, min(500, $limit)) . ' OFFSET ' . max(0, $offset));
     $statement->execute();
@@ -268,7 +298,7 @@ function km_guide_log_recent(PDO $pdo, int $limit = 100, int $offset = 0, bool $
             'answer' => (string) $row['answer'], 'intent' => (string) $row['intent'], 'cards' => is_array($cards) ? $cards : [],
             'route' => (string) $row['route'], 'fallback' => (int) $row['fallback'] === 1, 'elapsedMs' => (int) $row['elapsed_ms'],
             'rating' => $row['rating'] === null ? null : ((int) $row['rating'] > 0 ? 'good' : 'bad'),
-            'badReason' => (string) $row['bad_reason'], 'badNote' => (string) $row['bad_note'],
+            'badReason' => (string) $row['bad_reason'], 'badNote' => (string) $row['bad_note'], 'model' => (string) $row['model'],
         ];
     }, $statement->fetchAll(PDO::FETCH_ASSOC));
 }
@@ -1118,7 +1148,18 @@ function km_guide_plan(array $catalog, array $classification, ?callable $resolve
 
 // ---------------------------------------------------------------- LLM を呼ぶ(自宅 PC の Bionic を ngrok 越しに)
 
-/** @return array{url:string, key:string, model:string}|null 設定が無ければ null(LLM なしで答える) */
+/**
+ * 模型の鍵の形(門番の一覧の「unsloth:<id>」「bionic:<id>」)。**純粋関数**。空は「自宅 PC の既定」
+ */
+function km_guide_model_key_valid(string $key): bool
+{
+    return $key === '' || preg_match('#^(unsloth|bionic):[A-Za-z0-9._/@:+\-]{1,200}$#', $key) === 1;
+}
+
+/**
+ * @return array{url:string, key:string, model:string}|null 設定が無ければ null(LLM なしで答える)。
+ * model は空なら門番の既定(管理画面で選んだ模型は、呼ぶ側が settings の model で上書きする)
+ */
 function km_guide_llm_config(): ?array
 {
     $url = trim((string) getenv('KM_GUIDE_LLM_URL'));
@@ -1128,7 +1169,7 @@ function km_guide_llm_config(): ?array
         return null;
     }
     $model = trim((string) getenv('KM_GUIDE_LLM_MODEL'));
-    return ['url' => rtrim($url, '/'), 'key' => $key, 'model' => $model !== '' ? $model : 'kosenmap-guide'];
+    return ['url' => rtrim($url, '/'), 'key' => $key, 'model' => km_guide_model_key_valid($model) ? $model : ''];
 }
 
 /**
@@ -1138,7 +1179,8 @@ function km_guide_llm_config(): ?array
 function km_guide_llm_body(array $config, array $messages, int $maxTokens): array
 {
     $body = [
-        'model' => $config['model'],
+        // 空なら「default」(門番は一覧に無い名前を既定へ回す)
+        'model' => ($config['model'] ?? '') !== '' ? $config['model'] : 'default',
         'messages' => $messages,
         'max_tokens' => $maxTokens,
         'temperature' => 0.2,
@@ -1157,18 +1199,19 @@ function km_guide_reasoning_on(array $config): bool
 }
 
 /**
- * /v1/chat/completions の形で 1 回呼んで、文を返す。失敗は RuntimeException(本文はログに出さない)。
+ * 自宅 PC の門番を 1 回呼ぶ。失敗は RuntimeException(本文はログに出さない)。
  * 手本は lib/logto-management.php の km_logto_management_get(TLS を確かめる・転送しない・時間を切る)
+ *
+ * @param array<string, mixed>|null $body null なら GET
+ * @return array{status:int, json:mixed}
  */
-function km_guide_llm_chat(array $config, array $messages, int $maxTokens, int $timeoutSeconds = 30): string
+function km_guide_llm_request(array $config, string $path, ?array $body, int $timeoutSeconds): array
 {
-    $body = json_encode(km_guide_llm_body($config, $messages, $maxTokens), JSON_UNESCAPED_UNICODE);
     $received = '';
     $tooLarge = false;
-    $curl = curl_init($config['url'] . '/v1/chat/completions');
-    curl_setopt_array($curl, [
-        CURLOPT_POST => true,
-        CURLOPT_POSTFIELDS => $body,
+    $curl = curl_init($config['url'] . $path);
+    $options = $body === null ? [CURLOPT_HTTPGET => true] : [CURLOPT_POST => true, CURLOPT_POSTFIELDS => json_encode($body, JSON_UNESCAPED_UNICODE)];
+    curl_setopt_array($curl, $options + [
         CURLOPT_HTTPHEADER => [
             'Content-Type: application/json',
             'Authorization: Bearer ' . $config['key'],
@@ -1197,15 +1240,73 @@ function km_guide_llm_chat(array $config, array $messages, int $maxTokens, int $
     if ($tooLarge) {
         throw new RuntimeException('LLM の返事が大きすぎます');
     }
-    if ($ok === false || $status !== 200) {
-        throw new RuntimeException('LLM に届きません(' . ($status > 0 ? 'HTTP ' . $status : $error) . ')');
+    if ($ok === false || $status === 0) {
+        throw new RuntimeException('LLM に届きません(' . $error . ')');
     }
-    $decoded = json_decode($received, true);
-    $text = $decoded['choices'][0]['message']['content'] ?? null;
+    return ['status' => $status, 'json' => json_decode($received, true)];
+}
+
+/**
+ * /v1/chat/completions の形で 1 回呼んで、文を返す。失敗は RuntimeException(本文はログに出さない)。
+ * $meta['model'] に、門番が答えに使った模型(「unsloth:<id>」など)を入れる(質問と答えの記録に残す。2026-10-29)
+ */
+function km_guide_llm_chat(array $config, array $messages, int $maxTokens, int $timeoutSeconds = 30, ?array &$meta = null): string
+{
+    $response = km_guide_llm_request($config, '/v1/chat/completions', km_guide_llm_body($config, $messages, $maxTokens), $timeoutSeconds);
+    if ($response['status'] === 503 && is_string($response['json']['model'] ?? null)) {
+        // 選んだ模型を自宅 PC が読み込み中(管理画面で模型を変えた直後)
+        throw new RuntimeException('LLM が模型を読み込み中です(' . $response['json']['model'] . ')');
+    }
+    if ($response['status'] !== 200) {
+        throw new RuntimeException('LLM に届きません(HTTP ' . $response['status'] . ')');
+    }
+    $text = $response['json']['choices'][0]['message']['content'] ?? null;
     if (!is_string($text) || trim($text) === '') {
         throw new RuntimeException('LLM の返事を読めません');
     }
+    $model = $response['json']['model'] ?? '';
+    $meta = ['model' => is_string($model) && km_guide_model_key_valid($model) ? $model : ''];
     return trim($text);
+}
+
+/**
+ * 自宅 PC の門番にある模型の一覧(管理画面「案内チャット」の模型の欄。2026-10-29)。失敗は RuntimeException
+ *
+ * @return array{default:string, models:list<array{id:string, backend:string, name:string, loaded:bool, loading:bool, failed:bool}>}
+ */
+function km_guide_llm_models(array $config): array
+{
+    $response = km_guide_llm_request($config, '/v1/models', null, 15);
+    if ($response['status'] !== 200 || !is_array($response['json']['models'] ?? null)) {
+        throw new RuntimeException('模型の一覧を読めません(HTTP ' . $response['status'] . ')');
+    }
+    $models = [];
+    foreach ($response['json']['models'] as $row) {
+        $id = is_array($row) ? (string) ($row['id'] ?? '') : '';
+        if ($id === '' || !km_guide_model_key_valid($id)) {
+            continue;
+        }
+        $models[] = [
+            'id' => $id,
+            'backend' => (string) ($row['backend'] ?? ''),
+            'name' => mb_substr((string) ($row['name'] ?? $id), 0, 120),
+            'loaded' => ($row['loaded'] ?? false) === true,
+            'loading' => ($row['loading'] ?? false) === true,
+            'failed' => ($row['failed'] ?? false) === true,
+        ];
+    }
+    $default = $response['json']['default'] ?? '';
+    return ['default' => is_string($default) && km_guide_model_key_valid($default) ? $default : '', 'models' => $models];
+}
+
+/** 模型を選んだので、自宅 PC に先に読み込んでもらう(待たない)。戻り値は loaded / loading。失敗は RuntimeException */
+function km_guide_llm_select(array $config, string $model): string
+{
+    $response = km_guide_llm_request($config, '/v1/select', ['model' => $model], 15);
+    if (!in_array($response['status'], [200, 202], true)) {
+        throw new RuntimeException('模型を切り替えられません(HTTP ' . $response['status'] . ')');
+    }
+    return (string) ($response['json']['status'] ?? 'loading');
 }
 
 /**
