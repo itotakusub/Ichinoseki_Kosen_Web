@@ -215,7 +215,8 @@ require __DIR__ . '/_inc/partials/page-header.php';
 
             <div class="row">
               <?php
-              $table('byDay', 'page.visitors.byDay', '日別', [['page.visitors.colDay', '日付'], ['page.visitors.visits', '訪問'], ['page.visitors.ips', '送り元(IP)'], ['page.visitors.foreign', '外国から'], ['page.visitors.colDanger', '危険']], 'col-12 col-xl-6', collapsible: true);
+              // 端末の目安(2026-10-29)。IP と端末の名乗りの組・サインインの印で数える(assets/js/visitors.js の deviceKey)
+              $table('byDay', 'page.visitors.byDay', '日別', [['page.visitors.colDay', '日付'], ['page.visitors.visits', '訪問'], ['page.visitors.ips', '送り元(IP)'], ['page.visitors.colDevices', '端末の目安'], ['page.visitors.foreign', '外国から'], ['page.visitors.colDanger', '危険']], 'col-12 col-xl-6', collapsible: true);
               $table('byPage', 'page.visitors.byPage', 'ページ別', [['page.visitors.colPage', 'ページ'], ['page.visitors.visits', '訪問'], ['page.visitors.ips', '送り元(IP)']], 'col-12 col-xl-6', collapsible: true);
               ?>
             </div>

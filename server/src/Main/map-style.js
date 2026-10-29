@@ -147,6 +147,13 @@
          */
         facilityZoomed: 'faded',
         theme: 'system',    // system / light / dark
+        /*
+         * 暗い配色のとき床の画像も沈めるか(2026-10-29)。**既定は沈めない** —— 振り返りのフェーズ 1 で、暗い配色でも床は明るいままにした
+         * (反転すると線の濃さが崩れた)。まぶしい人向けに残す。明るい配色では効かない
+         */
+        dimFloorImage: false,
+        // 場所ごとの色分け(2026-10-30。管理画面で塗った床があれば出す。アプリの「色分け」と同じ。既定は出す)
+        areaColors: true,
         types: {},          // { room: { shape, visible, label, showScale } }
     };
 
@@ -311,13 +318,13 @@
          * 「文字」のつまみを係数(1 = 等倍)にする。
          *
          * **壊れた値でも倒れないこと。** localStorage は閲覧者の手元にあり、
-         * 古い版の値や手で書き換えた値が入りうる。つまみの範囲(50〜200%)へ
+         * 古い版の値や手で書き換えた値が入りうる。つまみの範囲(50〜260%。2026-10-30 に上を 200 → 260)へ
          * 丸めてから返す —— 0 を書かれると**地図の文字が全部消える**。
          */
         labelScale: function (tuning) {
             const raw = Number(tuning && tuning.labelSize);
             if (!isFinite(raw)) return 1;
-            return Math.min(200, Math.max(50, raw)) / 100;
+            return Math.min(260, Math.max(50, raw)) / 100;
         },
 
         /**

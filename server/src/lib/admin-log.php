@@ -245,6 +245,9 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     'map.floor_add' => 'が階を足しました',
     'map.floor_delete' => 'が階を消しました',
     'map.floor_zip' => 'が zip で階の画像をまとめて差し替えました',
+    // 場所ごとの色分け(2026-10-30、admin/map-areas.php)
+    'map.area_paint' => 'が階の色分けを作り直しました',
+    'map.area_clear' => 'が階の色分けを外しました',
     'map.event_cleanup_mode' => 'が期限切れイベントの掃除方法を変更しました',
     'map.event_cleanup' => 'が期限切れのイベントを削除しました',
     /*

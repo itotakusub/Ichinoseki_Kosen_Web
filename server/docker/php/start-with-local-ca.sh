@@ -26,4 +26,14 @@ else
 fi
 chmod 0644 "$COMBINED_CA"
 
+# PHP のセッションの置き場(2026-10-29。99-limits.ini の session.save_path)。名前付きのボリュームは
+# 初めは root の持ち物なので、Apache の子(www-data)が書けるようにする。ほかの利用者には見せない
+SESSION_DIR="/var/lib/km-sessions"
+if [ -d "$SESSION_DIR" ]; then
+  chown www-data:www-data "$SESSION_DIR"
+  chmod 0700 "$SESSION_DIR"
+else
+  echo "WARNING: session directory not mounted ($SESSION_DIR). Sign-ins will fail until web_sessions is mounted." >&2
+fi
+
 exec apache2-foreground

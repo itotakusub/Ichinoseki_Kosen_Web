@@ -4671,6 +4671,23 @@ function km_check_hardening(): void
         && strpos((string) $file('src/lib/session.php'), "ini_set('session.gc_maxlifetime', (string) KM_SESSION_LIFETIME_SECONDS);")
             < strpos((string) $file('src/lib/session.php'), "    session_start();"));
     check_bool('99-limits.ini は memory_limit を変えない', !str_contains($limitsIni, 'memory_limit'));
+    // 配備でログインを消さない(2026-10-29、振り返りのフェーズ 0)。セッションは /tmp(tmpfs)から名前付きのボリュームへ
+    $baseCompose = (string) $file('compose.yaml');
+    $vpsCompose = (string) $file('compose.vps.yaml');
+    $webStart = (string) $file('docker/php/start-with-local-ca.sh');
+    check_bool('セッションの置き場は名前付きのボリューム(lib・compose・本番の上書きの 3 か所が同じ)', KM_SESSION_DIR === '/var/lib/km-sessions'
+        && str_contains($baseCompose, '      - web_sessions:/var/lib/km-sessions') && str_contains($vpsCompose, '      - web_sessions:/var/lib/km-sessions')
+        && preg_match('/^  web_sessions:\n    name: km_web_sessions$/m', $baseCompose) === 1);
+    // 同じ日: ini で決め打ちにすると、ボリュームの無いまま ini だけ届いたとき全員がログインできない。在って書けるときだけ使う
+    $sessionTmp = sys_get_temp_dir() . '/km-session-check-' . bin2hex(random_bytes(4));
+    @mkdir($sessionTmp);
+    check('セッションの置き場: 在って書けるときだけ使い、無ければ既定(/tmp)のまま', [$sessionTmp, null],
+        [km_session_save_path($sessionTmp), km_session_save_path($sessionTmp . '/missing')]);
+    @rmdir($sessionTmp);
+    check_bool('セッションの置き場: ini では決め打ちにしない・開始の前に向ける', !preg_match('/^session\.save_path\s*=/m', $limitsIni)
+        && strpos((string) $file('src/lib/session.php'), "ini_set('session.save_path', \$savePath);") < strpos((string) $file('src/lib/session.php'), "    session_start();"));
+    check_bool('セッションの置き場は起動のとき www-data・0700 にしてから Apache を起こす', ($own = strpos($webStart, 'chown www-data:www-data "$SESSION_DIR"')) !== false
+        && str_contains($webStart, 'chmod 0700 "$SESSION_DIR"') && $own < strpos($webStart, 'exec apache2-foreground'));
     /*
      * 上限はコンテナ全部に。mailserver にだけ no-new-privileges を付けない
      * (postfix の postdrop が setgid で動くので、付けると送信が止まる)。
@@ -5126,6 +5143,12 @@ function km_check_hardening(): void
         && !str_contains(str_replace($geoBlock, '', $csp), "'https://ipwho.is'") && !str_contains(str_replace($geoBlock, '', $csp), "'https://api.country.is'"));
     $visitorsJs = $file('src/admin/assets/js/visitors.js');
     check_bool('位置は既定で引かない(スイッチを入れたときだけ)・文字は textContent', str_contains($visitorsJs, "pref.get(PREF_GEO, '0') === '1'") && !str_contains($visitorsJs, 'innerHTML'));
+    // 端末の目安(2026-10-29、振り返り「170 人は IP の数で、学校の回線は 1 人」)。新しい印を作らず、記録の ip・ua・種別の印だけで数える
+    check_bool('端末の目安: サインイン等は種別の印、ほかは IP と端末の名乗りの組・日別の列と見出しの数が合う',
+        str_contains($visitorsJs, "const deviceKey = (v) => (v.v && v.v.includes(':') ? v.v : `\${v.ip}\\n\${v.ua || ''}`);")
+        && str_contains($visitorsJs, 'String(d.ips.size), String(d.devices.size), String(d.foreign)')
+        && str_contains($file('src/admin/visitors.php'), "['page.visitors.ips', '送り元(IP)'], ['page.visitors.colDevices', '端末の目安'], ['page.visitors.foreign', '外国から']")
+        && str_contains($file('src/admin/assets/i18n/en.js'), '"page.visitors.colDevices"'));
     // 色分け(2026-10-08、利用者の指示「危険は赤・怪しいは黄・危険リスト・外国はチェックボックスで表示・非表示」)
     $threatsJs = $file('src/admin/assets/js/visitors-threats.js');
     $visitorsPage = $file('src/admin/visitors.php');
@@ -8465,7 +8488,7 @@ function km_check_layout(): void
     check_bool('左の引き出しは左から(PC)・地図を覆わない', preg_match('/\.km-sheet \{[^}]*left: 0;[^}]*transform: translateX\(-105%\);/s', $gmCss) === 1 && !str_contains((string) file_get_contents(__DIR__ . '/../Main/km-sheet.js'), 'scrim'));
     check_bool('候補のアイコンはその場所のポスター(無ければ種類の形)', str_contains($gmApp, "box.classList.add('has-poster');") && str_contains($gmApp, "box.innerHTML = nodeIconHtml({ name: item.name }, item.type);"));
     check_bool('共有: 場所・一時地点・経路の URL。navigator.share が無ければ写す', str_contains($gmApp, "shareUrl('/?poi=' + Number(button.dataset.kmPoi)")
-        && str_contains($gmApp, "shareUrl('/?' + fromPart + '&' + toPart, label") && str_contains($gmApp, "'fromPoi=' + routeStartPoi") && str_contains($gmApp, 'await navigator.clipboard.writeText(url);'));
+        && str_contains($gmApp, "shareUrl('/?' + [fromPart, toPart].concat(optionParts).join('&'), label") && str_contains($gmApp, "'fromPoi=' + routeStartPoi") && str_contains($gmApp, 'await navigator.clipboard.writeText(url);'));
     check_bool('共有のリンクは字の形だけ確かめて meta で渡す(from/to は 32 字の 16 進・poi は数字)', str_contains($gmIndex, "preg_match('/^[0-9A-Fa-f-]{32,36}\$/', \$value) !== 1")
         && str_contains($gmIndex, "preg_match('/^[1-9]\\d{0,9}\$/', \$poiParam) === 1") && str_contains($gmIndex, '<meta name="km-focus-from" content="<?= km_home_e($kmFocusFrom) ?>">') && str_contains($gmIndex, '$kmFocusFromPoi = $kmFocusFrom === null ? $kmPoiParam(\'fromPoi\') : null;'));
     check_bool('表示調整・履歴・予定も左の引き出しに出す', str_contains((string) file_get_contents(__DIR__ . '/../Main/map-tuning.js'), "sheet.open({ key: 'tuning', title: '表示調整'")
@@ -8624,6 +8647,43 @@ function km_check_layout(): void
     check_bool('共有から来たら、開いた所を出したあとで広告', str_contains($shareApp, "if (document.querySelector('meta[name=\"km-from-share\"]')) {")
         && str_contains($shareApp, 'if (typeof window.kmShowAd === \'function\') window.kmShowAd();')
         && str_contains($shareApp, 'const SHARE_AD_DELAY_MS = 1500;'));
+
+    // 2026-10-29(振り返りのフェーズ 0): 経路の選択も共有する。開いた人の保存した設定は書き換えない。共有の経路は履歴に入れない
+    $shareIndexCode = (string) file_get_contents(__DIR__ . '/../index.php');
+    check_bool('共有: 経路の選択(vp・ff・rain)を URL に載せる', str_contains($shareApp, "verticalPreference === 'elevator' || verticalPreference === 'stairs' ? 'vp=' + verticalPreference : ''")
+        && str_contains($shareApp, "routeOptions.fewerFloors ? 'ff=1' : ''") && str_contains($shareApp, "routeOptions.rain ? 'rain=1' : ''"));
+    check_bool('共有: 受け取りは決まった値だけ', str_contains($shareIndexCode, "in_array(\$_GET['vp'] ?? '', ['elevator', 'stairs'], true)")
+        && str_contains($shareIndexCode, "(\$_GET['ff'] ?? '') === '1'") && str_contains($shareIndexCode, '<meta name="km-focus-route-options"'));
+    if (preg_match('/const shared = \(read\(\'km-focus-route-options\'\).*?routeFromShare = false;/s', $shareApp, $sharedBlock) === 1) {
+        check_bool('共有: 選択はこのページの間だけ(端末に保存しない)・共有から引いた印を付ける', !str_contains($sharedBlock[0], 'localStorage')
+            && str_contains($sharedBlock[0], 'rebuildDijkstra();') && str_contains($sharedBlock[0], 'routeFromShare = true;'));
+    } else {
+        check_bool('共有: 選択を当てる所がある', false);
+    }
+    check_bool('共有: 共有から引いた経路は履歴(前回の経路)に入れない', str_contains($shareApp, 'shared: routeFromShare } }));')
+        && str_contains($shareHistory, 'if (d.shared) return;'));
+
+    // 2026-10-29(振り返りのフェーズ 1): 地図の周りは温かい色・カーソルは縁取り・暗い配色でも床は明るいまま(沈めるのは表示調整で選んだときだけ)
+    $lookCss = (string) file_get_contents(__DIR__ . '/../Main/styles.css');
+    check_bool('見やすさ: 周りは温かい色・Leaflet の灰色を使わない・地図の上は縁取りのカーソル', str_contains($lookCss, '--bg-map: #F3EBDD;')
+        && str_contains($lookCss, '#map.leaflet-container { background: var(--bg-map); }')
+        && str_contains($lookCss, "cursor: url('cursor-map.svg') 16 16, grab;") && is_file(__DIR__ . '/../Main/cursor-map.svg'));
+    check_bool('見やすさ: 床の画像を沈めるのは「床の画像も暗く」を選んだ暗い配色だけ', substr_count($lookCss, '--map-image-filter: invert(') === 2
+        && substr_count($lookCss, '[data-km-floor-dim="1"] {') === 2
+        && str_contains((string) file_get_contents(__DIR__ . '/../Main/map-style.js'), 'dimFloorImage: false,')
+        && str_contains((string) file_get_contents(__DIR__ . '/../Main/map-tuning.js'), "if (tuning.dimFloorImage) root.setAttribute('data-km-floor-dim', '1');"));
+
+    // 同じフェーズの 2(2026-10-30): ぼかしをやめて透けない面に・押せるものに濃い縁・いまの階は内側の縁(外側だと並びの箱で切れる)
+    check_bool('見やすさ: ぼかし(backdrop-filter の blur)を使わない・面は透けない', !str_contains($lookCss, 'backdrop-filter: blur')
+        && str_contains($lookCss, '--glass-heavy: #FFFFFF;') && substr_count($lookCss, '--glass-heavy: #0F172A;') === 2);
+    check_bool('見やすさ: 地図の上の操作に 2px の濃い縁・いまの階は内側に 3px', preg_match('/\.km-searchbox,\s*\.km-chip,\s*\.km-action-btn,\s*\.floor-nav,\s*\.km-account-summary,\s*\.km-route-bar \{\s*border: 2px solid var\(--km-control-edge\);/', $lookCss) === 1
+        && preg_match('/\.floor-nav \.floor-btn\.active,\s*\.floor-nav\.is-collapsed \.floor-toggle \{\s*border: 3px solid var\(--km-control-edge\);/', $lookCss) === 1);
+    // 同じフェーズの 4: 選んだ場所は赤いピン + 脈打つ輪(先と輪の真ん中を iconAnchor の 48px にそろえる)・到着は赤い面で大きく
+    $lookApp = (string) file_get_contents(__DIR__ . '/../Main/app.js');
+    check_bool('見やすさ: 選んだ場所は赤いピンと輪・到着は大きな赤い吹き出しと輪・動きを減らす設定では輪を止める', str_contains($lookApp, "className: 'km-dest-pin',")
+        && str_contains($lookApp, 'iconAnchor: [22, 48],') && str_contains($lookCss, '.km-dest-pin .km-dest-pulse { left: 50%; top: 48px; }')
+        && str_contains($lookApp, "\${isEnd ? '<span class=\"km-dest-pulse\" aria-hidden=\"true\"></span>' : ''}")
+        && str_contains($lookCss, 'font-size: 17px;') && str_contains($lookCss, '.km-dest-pulse { animation: none;'));
 
     km_check_heading('地図: 札は 6 文字 + …・イベントの地点の見分け・経路の線(2026-10-24)');
     $viewCss = (string) file_get_contents(__DIR__ . '/../Main/styles.css');
@@ -8936,8 +8996,58 @@ function km_check_layout(): void
         km_map_floor_kind('6', ['6' => ['kind' => 'campus']]), km_map_floor_kind('1', []),
     ]);
     $floorImageApi = (string) file_get_contents(__DIR__ . '/../api/floor-image.php');
-    check_bool('見取り図の口: 差し替えた画像も組み込みも km_map_floor_image_file で引く(錠の確かめの後)', str_contains($floorImageApi, '$path = km_map_floor_image_file((string) $svgPath);')
-        && strpos($floorImageApi, 'km_map_floor_image_file((string) $svgPath)') > strpos($floorImageApi, 'if (!$viewUnlocked) {'));
+    // 2026-10-30: 色分けした床(?area=1)も同じ口から。塗りのファイルは km_area_paint_file(名前の形を確かめる)で引く
+    check_bool('見取り図の口: 差し替えた画像も組み込みも km_map_floor_image_file で引く(錠の確かめの後)', str_contains($floorImageApi, "\$path = str_starts_with((string) \$svgPath, 'area:') ? (\$areaFile ?? null) : km_map_floor_image_file((string) \$svgPath);")
+        && strpos($floorImageApi, 'km_map_floor_image_file((string) $svgPath)') > strpos($floorImageApi, 'if (!$viewUnlocked) {')
+        && strpos($floorImageApi, "if ((\$_GET['area'] ?? '') === '1') {") > strpos($floorImageApi, 'if (!$viewUnlocked) {'));
+
+    // 場所ごとの色分け(2026-10-30、lib/area-paint.php)
+    require_once __DIR__ . '/../lib/area-paint.php';
+    $paintRecord = ['file' => 'area_0123456789ab_0123456789abcdef.png', 'source' => '/api/floor-image.php?floor=1&v=5', 'at' => '2026-10-30 10:00:00'];
+    check('色分け: 塗ったときと同じ床の画像なら URL・差し替えていれば出さない・名前の形が違えば出さない', [
+        '/api/floor-image.php?floor=1&area=1&v=0123456789abcdef', null, null, null,
+    ], [
+        km_area_paint_url('1', '/api/floor-image.php?floor=1&v=5', $paintRecord),
+        km_area_paint_url('1', '/api/floor-image.php?floor=1&v=6', $paintRecord),
+        km_area_paint_url('1', '/api/floor-image.php?floor=1&v=5', null),
+        km_area_paint_url('1', '/api/floor-image.php?floor=1&v=5', ['file' => '../etc/passwd', 'source' => '/api/floor-image.php?floor=1&v=5', 'at' => '']),
+    ]);
+    $paintInputs = km_area_paint_inputs([
+        'floors' => [['id' => '1', 'label' => '1F', 'svgPath' => '/api/floor-image.php?floor=1&v=5', 'coordWidth' => 1600, 'coordHeight' => 1200],
+                     ['id' => 'outside', 'label' => '外', 'svgPath' => '/api/floor-image.php?floor=outside', 'coordWidth' => null, 'coordHeight' => null]],
+        'nodes' => [
+            'aaaaaaaabbbbccccddddeeeeeeeeeeee' => ['floor' => '1', 'type' => 'room', 'x' => 10.0, 'y' => 20.0],
+            'h1' => ['floor' => '1', 'type' => 'room', 'x' => 30.0, 'y' => 40.0, 'hidden' => true],
+            'w1' => ['floor' => '1', 'type' => 'wall', 'x' => 0.0, 'y' => 0.0],
+            'w2' => ['floor' => '1', 'type' => 'wall', 'x' => 5.0, 'y' => 0.0],
+            'p' => ['floor' => '1', 'type' => 'poster', 'x' => 1.0, 'y' => 1.0],
+        ],
+        'edges' => [['source' => 'w1', 'target' => 'w2', 'wall' => true], ['source' => 'w1', 'target' => 'h1', 'wall' => false]],
+    ], [
+        'overrides' => ['AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE' => ['kind' => 'corridor', 'color' => '#A8E0C8']],
+        'markers' => [['uuid' => 'm1', 'floor' => '1F', 'x' => 50.0, 'y' => 1100.0, 'kind' => null, 'color' => '#D0B0E8']],
+    ], ['1' => $paintRecord]);
+    check('色分けの材料: 種類で絞る・隠した地点は押せない・手の指定は uuid の形をそろえて当てる・印はアプリの座標から直す・壁は両端が壁の線だけ', [
+        ['aaaaaaaabbbbccccddddeeeeeeeeeeee', 'room', true, 'corridor', 0xA8E0C8],
+        ['h1', 'room', false, null, null],
+        ['m1', 'area', false, null, 0xD0B0E8, 100.0],
+        [[0.0, 0.0, 5.0, 0.0]],
+        [false, true, true],
+    ], [
+        [$paintInputs[0]['seeds'][0]['uuid'], $paintInputs[0]['seeds'][0]['type'], $paintInputs[0]['seeds'][0]['tappable'], $paintInputs[0]['seeds'][0]['kind'], $paintInputs[0]['seeds'][0]['color']],
+        [$paintInputs[0]['seeds'][1]['uuid'], $paintInputs[0]['seeds'][1]['type'], $paintInputs[0]['seeds'][1]['tappable'], $paintInputs[0]['seeds'][1]['kind'], $paintInputs[0]['seeds'][1]['color']],
+        [$paintInputs[0]['seeds'][2]['uuid'], $paintInputs[0]['seeds'][2]['type'], $paintInputs[0]['seeds'][2]['tappable'], $paintInputs[0]['seeds'][2]['kind'], $paintInputs[0]['seeds'][2]['color'], $paintInputs[0]['seeds'][2]['y']],
+        $paintInputs[0]['walls'],
+        [$paintInputs[0]['outdoor'], $paintInputs[1]['outdoor'], $paintInputs[0]['painted']['current']],
+    ]);
+    $areaApp = (string) file_get_contents(__DIR__ . '/../Main/app.js');
+    check_bool('色分け: 公開の地図は塗った床があれば出す(表示調整で切れる・切り替えたら読み直す)・来場者の端末では塗らない',
+        str_contains($areaApp, 'return (areaColorsOn && floorAreaImages[floor]) || floorImages[floor];') && str_contains($areaApp, 'const url = floorImageUrl(floor);')
+        && str_contains($areaApp, 'if ((tuning.areaColors !== false) !== areaColorsOn) {') && !str_contains($areaApp, 'segmentAreas(')
+        && !str_contains((string) file_get_contents(__DIR__ . '/../index.php'), 'area-segmentation.js'));
+    check_bool('色分け: 地図データは階ごとに塗りの URL を持つ・置くときは PNG だけ・床が変わっていたら断る', str_contains($mapDataLib, "\$floor['areaPath'] = km_area_paint_url(")
+        && str_contains((string) file_get_contents(__DIR__ . '/../lib/area-paint.php'), "if (\$checked['ext'] !== 'png') {")
+        && str_contains((string) file_get_contents(__DIR__ . '/../lib/area-paint.php'), 'if ($source !== km_map_floor_image_endpoint($floorId, $svgPath)) {'));
     check_bool('地図データ: 階の無い地点と、その線を出さない', str_contains($mapDataLib = (string) file_get_contents(__DIR__ . '/../lib/map-data.php'), "if (!isset(\$floorIds[(string) \$node['floor']])) {")
         && str_contains($mapDataLib, "isset(\$nodesById[(string) \$edge['source']], \$nodesById[(string) \$edge['target']])"));
     check_bool('公開ページ: 右の階の並びは地図データの校舎の階から作る(無ければ組み込みの 6 つ)', str_contains($homeCode, "if ((\$railFloor['kind'] ?? 'campus') === 'campus') {")
@@ -9144,7 +9254,10 @@ function km_check_layout(): void
     check_bool('文字の倍率を CSS へ渡す', str_contains($styleJs, "setProperty('--km-label-scale'"));
     check_bool('CSS に既定の倍率がある', str_contains($css, '--km-label-scale: 1;'));
     // 0 を書かれると地図の字が全部消える。つまみの範囲へ丸めてから使う
-    check_bool('壊れた値はつまみの範囲へ丸める', str_contains($styleJs, 'Math.min(200, Math.max(50, raw))'));
+    // 上限は 260%(2026-10-30、振り返りのフェーズ 1。アプリと同じ)。つまみ・丸め・配った既定の 3 か所をそろえる
+    check_bool('壊れた値はつまみの範囲へ丸める(50〜260%。つまみ・配った既定と同じ)', str_contains($styleJs, 'Math.min(260, Math.max(50, raw))')
+        && str_contains((string) file_get_contents(__DIR__ . '/../Main/map-tuning.js'), "slider('文字', 'labelSize', 50, 260);")
+        && str_contains((string) file_get_contents(__DIR__ . '/../lib/display-defaults.php'), "\$web['labelSize'] = min(260, \$v);"));
     /*
      * **地図の上の字は全部この係数を通す。** 一部だけ通すと、大きくしたときに
      * 札と長さの釣り合いが崩れて、かえって読みにくくなる。

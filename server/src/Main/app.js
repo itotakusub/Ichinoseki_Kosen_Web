@@ -564,6 +564,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     })();
 
     /*
+     * 場所ごとに色分けした床(2026-10-30、振り返りのフェーズ 1。管理画面「地図の色分け」が塗って置く。lib/area-paint.php)。
+     * 塗っていない階・塗ったあと床を差し替えた階は無い(塗っていない床を出す)。表示調整の「場所ごとの色分け」で切れる
+     * (tuning より先に読むので、ここでは保存した値を直に見る。切り替えは applyTuning が reloadFloorImages で反映する)
+     */
+    const floorAreaImages = {};
+    (graphData.floors || []).forEach((floor) => {
+        if (floor && floor.id != null && typeof floor.areaPath === 'string' && floor.areaPath !== '') floorAreaImages[String(floor.id)] = floor.areaPath;
+    });
+    let areaColorsOn = window.KM_MAP_STYLE ? window.KM_MAP_STYLE.load().areaColors !== false : true;
+    /** その階で出す床の画像(色分けがあって ON ならそちら) */
+    function floorImageUrl(floor) {
+        return (areaColorsOn && floorAreaImages[floor]) || floorImages[floor];
+    }
+
+    /*
      * ---- ノード座標系 ----
      *
      * **ノードの座標は画像の解像度に従属させない。**
@@ -613,7 +628,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     function preloadFloorImage(floor) {
         if (imagePreloadPromises[floor]) return imagePreloadPromises[floor];
-        const url = floorImages[floor];
+        const url = floorImageUrl(floor);
         if (!url) return Promise.resolve(null);
 
         imagePreloadPromises[floor] = new Promise((resolve) => {
@@ -798,6 +813,13 @@ document.addEventListener('DOMContentLoaded', async () => {
      */
     function applyTuning() {
         mapStyle.applyLabelScale(tuning);
+        // 場所ごとの色分けを切り替えたら、床の画像を読み直す(先読みした絵を捨てて、いまの階から)
+        if ((tuning.areaColors !== false) !== areaColorsOn) {
+            areaColorsOn = tuning.areaColors !== false;
+            Object.keys(preloadedImages).forEach((floor) => { delete preloadedImages[floor]; });
+            Object.keys(imagePreloadPromises).forEach((floor) => { delete imagePreloadPromises[floor]; });
+            loadFloorImageDynamic(String(window.currentFloor));
+        }
         clearFloorMarkers();
         renderGlobalLabels();
         renderGlobalEdges();
@@ -2191,6 +2213,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (startInput) startInput.addEventListener('input', () => { routeStartId = null; routeStartPoi = null; });
     if (endInput) endInput.addEventListener('input', () => { routeEndId = null; routeEndPoi = null; });
 
+    // 共有のリンクから引いている間だけ true(focusFromUrl)。km:route に載せて履歴に入れないようにする
+    let routeFromShare = false;
+
     // ---- UIイベントリスナー ----
     if (searchBtn) {
         searchBtn.addEventListener('click', () => {
@@ -2228,7 +2253,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
             if (path) {
                 // 履歴の「経路」と「検索した言葉」(2026-10-23。Main/user-history.js)
-                window.dispatchEvent(new CustomEvent('km:route', { detail: { from: startNode, to: endNode, fromText: startText, toText: endText } }));
+                window.dispatchEvent(new CustomEvent('km:route', { detail: { from: startNode, to: endNode, fromText: startText, toText: endText, shared: routeFromShare } }));
                 currentRoutePath = path;
                 routeFitPending = true;
                 setRouteHint('');
@@ -3127,11 +3152,15 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (isStart || isEnd) {
                     const pinClass = isStart ? 'pin-start' : 'pin-end';
                     const pinText = isStart ? '出発' : '到着';
+                    /*
+                     * 大きくする(2026-10-30、高専祭の振り返り「高齢の方が目的地を見失う」)。到着は赤い面に白い字で、
+                     * 指す点に脈打つ輪(km-dest-pulse)を付ける。吹き出しの高さが変わったら下の fitBounds の上の余白も直す
+                     */
                     const pinIcon = L.divIcon({
                         className: `route-pin ${pinClass}`,
-                        html: `<div class="pin-bubble">${pinText}</div><div class="pin-arrow"></div>`,
-                        iconSize: [60, 40],
-                        iconAnchor: [30, 40]
+                        html: `<div class="pin-bubble">${pinText}</div><div class="pin-arrow"></div>${isEnd ? '<span class="km-dest-pulse" aria-hidden="true"></span>' : ''}`,
+                        iconSize: [96, 56],
+                        iconAnchor: [48, 56]
                     });
                     const marker = L.marker([node.y, node.x], {
                         icon: pinIcon,
@@ -3178,8 +3207,8 @@ document.addEventListener('DOMContentLoaded', async () => {
              * 以前は四方 50px 固定で、出発・到着のピンが下の操作やシートの裏に潜った。
              */
             const padding = mapFitPadding();
-            // 出発・到着の吹き出しは点の**上へ 40px** 伸びる。そのぶん上を空けないと検索の窓の裏に潜る
-            padding.paddingTopLeft = padding.paddingTopLeft.add([0, 48]);
+            // 出発・到着の吹き出しは点の**上へ 56px** 伸びる。そのぶん上を空けないと検索の窓の裏に潜る
+            padding.paddingTopLeft = padding.paddingTopLeft.add([0, 64]);
             window.map.fitBounds(pathBoundsGroup.getBounds(), padding);
         } else if (firstOnFloor) {
             window.map.setView(firstOnFloor, window.map.getZoom());
@@ -3686,10 +3715,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     window.map.createPane('kmSelect').style.zIndex = '640';
     let selectionRing = null;
 
+    /*
+     * 選んだ場所には大きな赤いピンと脈打つ輪(2026-10-30、高齢の方の声「どこを選んだか分からない」)。
+     * それまでは青い輪(半径 15px)で、地点の印と見分けにくかった。ピンの先が場所を指す(iconAnchor は下の真ん中)
+     */
     function markSelected(latlng) {
         clearSelected();
-        selectionRing = L.circleMarker(latlng, {
-            pane: 'kmSelect', radius: 15, color: '#2563EB', weight: 3, fillColor: '#2563EB', fillOpacity: 0.15, interactive: false,
+        selectionRing = L.marker(latlng, {
+            pane: 'kmSelect',
+            interactive: false,
+            keyboard: false,
+            icon: L.divIcon({
+                className: 'km-dest-pin',
+                html: '<span class="km-dest-pulse" aria-hidden="true"></span><span class="km-dest-head" aria-hidden="true"></span>',
+                iconSize: [44, 52],
+                iconAnchor: [22, 48],
+            }),
         }).addTo(window.map);
     }
     function clearSelected() {
@@ -4167,7 +4208,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 一時地点はその番号で渡す(?fromPoi= / ?toPoi=)。開いた人の欄に、つなぎ先の道ではなく一時地点の名前が出る
         const fromPart = routeStartPoi !== null && routeStartId === from ? 'fromPoi=' + routeStartPoi : 'from=' + encodeURIComponent(from);
         const toPart = routeEndPoi !== null && routeEndId === to ? 'toPoi=' + routeEndPoi : 'to=' + encodeURIComponent(to);
-        shareUrl('/?' + fromPart + '&' + toPart, label + '(高専マップ案内)');
+        // 経路の選択も載せる(2026-10-29)。載せないと、開いた人の端末の設定で別の経路が引かれる(階段を避けたのに階段の経路が出る)
+        const optionParts = [
+            verticalPreference === 'elevator' || verticalPreference === 'stairs' ? 'vp=' + verticalPreference : '',
+            routeOptions.fewerFloors ? 'ff=1' : '',
+            routeOptions.rain ? 'rain=1' : '',
+        ].filter(Boolean);
+        shareUrl('/?' + [fromPart, toPart].concat(optionParts).join('&'), label + '(高専マップ案内)');
     }
     const routeShareBtn = document.getElementById('km-route-share');
     if (routeShareBtn) routeShareBtn.addEventListener('click', shareRoute);
@@ -4370,7 +4417,26 @@ document.addEventListener('DOMContentLoaded', async () => {
             routeEndPoi = to.poi;
             if (startInput) startInput.value = from.label;
             if (endInput) endInput.value = to.label;
+            /*
+             * 共有した人の経路の選択で引く(2026-10-29)。**このページの間だけ**で、端末に保存した設定は書き換えない
+             * (localStorage に書かない。欄の表示だけ合わせる。読み込み直せば自分の設定に戻る)
+             */
+            const shared = (read('km-focus-route-options') || '').split(',');
+            if (shared[0] === 'elevator' || shared[0] === 'stairs' || shared[0] === 'any') {
+                verticalPreference = shared[0];
+                routeOptions = { fewerFloors: shared.includes('ff'), rain: shared.includes('rain') };
+                if (verticalSelect) verticalSelect.value = verticalPreference;
+                const ffBox = document.getElementById('route-fewer-floors');
+                const rainBox = document.getElementById('route-rain');
+                if (ffBox) ffBox.checked = routeOptions.fewerFloors;
+                if (rainBox) rainBox.checked = routeOptions.rain;
+                rebuildDijkstra();
+                updateRouteOptionsState();
+            }
+            // 共有から引いた経路は「前回の経路」(履歴)に入れない(Main/user-history.js が km:route の shared を見る)
+            routeFromShare = true;
             searchBtn.click();
+            routeFromShare = false;
             return;
         }
         if (poiId) {

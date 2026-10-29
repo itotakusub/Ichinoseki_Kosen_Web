@@ -146,6 +146,7 @@ const KM_CONTACT_WHERE_LABELS = [
     'route' => '地図(経路の案内中)',
     'guide' => '地図(案内チャット)',
     'posters' => 'ポスターの一覧',
+    'app' => 'Android アプリ',   // アプリの地図の「不具合」(LegalLinks.BUG_REPORT_PATH)
 ];
 
 /** 端末のおおまかな種類(User-Agent から。版や機種までは書かない) */

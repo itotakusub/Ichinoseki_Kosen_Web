@@ -115,7 +115,9 @@ heading('map-style: 文字の大きさ');
 check('既定は等倍', 1, style.labelScale(style.load()));
 check('150% は 1.5 倍', 1.5, style.labelScale({ labelSize: 150 }));
 check('下限より小さくならない', 0.5, style.labelScale({ labelSize: 0 }));
-check('上限より大きくならない', 2, style.labelScale({ labelSize: 1000 }));
+// 上限は 260%(2026-10-30。アプリの文字サイズの上限と同じ)
+check('260% まで大きくできる', 2.6, style.labelScale({ labelSize: 260 }));
+check('上限より大きくならない', 2.6, style.labelScale({ labelSize: 1000 }));
 check('数でなければ等倍', 1, style.labelScale({ labelSize: 'おおきく' }));
 check('鍵が無くても等倍', 1, style.labelScale({}));
 

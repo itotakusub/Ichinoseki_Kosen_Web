@@ -382,6 +382,13 @@
     });
   };
 
+  /*
+   * 端末の目安(2026-10-29、高専祭の振り返り「利用者 170 人」は送り元 IP の数で、学校の回線は何人でも 1 つに数えていた)。
+   * 新しい印は作らず、記録に既にあるものだけで見分ける: サインイン・お試し・アプリは種別の印(v)、それ以外は IP と端末の名乗り(ua)の組。
+   * 同じ回線の同じ機種・同じ版のブラウザは 1 つに、回線が変わった端末は 2 つに数える(目安)
+   */
+  const deviceKey = (v) => (v.v && v.v.includes(':') ? v.v : `${v.ip}\n${v.ua || ''}`);
+
   /** いま表示している訪問(外国を隠していれば隠したもの) */
   const shownVisits = () => {
     const showForeign = foreignCheck ? foreignCheck.checked : true;
@@ -403,6 +410,7 @@
     setText('visits', String(list.length));
     setText('visitsSub', showForeign ? '' : `外国からの ${foreignVisits.length} 件を隠しています`);
     setText('ips', String(ips.size));
+    setText('ipsSub', `端末の目安 ${new Set(list.map(deviceKey)).size}`);
     setText('foreign', String(foreignVisits.length));
     setText('foreignSub', `位置が分かった ${known} / ${visits.length} 件のうち`);
     setText('signed', String(signed));
@@ -415,9 +423,10 @@
     const byDay = new Map();
     list.forEach((v) => {
       const day = (v.t || '').slice(0, 10);
-      const d = byDay.get(day) || { n: 0, ips: new Set(), foreign: 0, danger: 0 };
+      const d = byDay.get(day) || { n: 0, ips: new Set(), devices: new Set(), foreign: 0, danger: 0 };
       d.n += 1;
       d.ips.add(v.ip);
+      d.devices.add(deviceKey(v));
       if (place(v.ip).foreign === true) {
         d.foreign += 1;
       }
@@ -428,7 +437,7 @@
     });
     fill('byDay', [...byDay.entries()].sort((a, b) => b[0].localeCompare(a[0]))
       .map(([day, d]) => {
-        const tr = row([day, String(d.n), String(d.ips.size), String(d.foreign), String(d.danger)]);
+        const tr = row([day, String(d.n), String(d.ips.size), String(d.devices.size), String(d.foreign), String(d.danger)]);
         if (d.danger > 0) {
           tr.className = 'table-danger';
         }

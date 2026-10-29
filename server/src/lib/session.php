@@ -36,11 +36,29 @@ const KM_SESSION_NAME = '__Host-KMSID';
  * セッションにある Logto の ID トークンも消える —— Logto 側のサインインはまだ有効なのに、ここだけ先に切れていた。
  * 文化祭の 1 日を通して切れないよう 12 時間にする。
  *
- * **docker/php/99-limits.ini の session.gc_maxlifetime と同じ値にすること。** 掃除は /tmp のセッション全部を見るので、
+ * **docker/php/99-limits.ini の session.gc_maxlifetime と同じ値にすること。** 掃除は置き場(2026-10-29 から名前付きのボリューム
+ * /var/lib/km-sessions。それまでは /tmp で、配備のたびに全員のログインが消えた)のセッション全部を見るので、
  * 短い値で走ったリクエストが、ほかの人のセッションまで消す。
  * 長くなる分、地図の錠をパスワードで解いた印(km_map_unlocked)も、使わないまま最大 12 時間残る(以前は 24 分)。
  */
 const KM_SESSION_LIFETIME_SECONDS = 43200;
+
+/**
+ * セッションの置き場(2026-10-29)。compose.yaml / compose.vps.yaml の名前付きのボリューム web_sessions。
+ * それまでは /tmp(tmpfs)で、配備で web を作り直すたびに全員のログインが消えた(高専祭の振り返り)。
+ */
+const KM_SESSION_DIR = '/var/lib/km-sessions';
+
+/**
+ * 置き場が**在って書けるときだけ**そこを返す。無ければ null(PHP の既定 = /tmp のまま)。
+ *
+ * ini(99-limits.ini)で決め打ちにしない —— compose を作り直す前に ini だけ届くと(2026-10-29 の配備で
+ * ボリュームが無いまま動いていた)、在らない置き場に書こうとして**全員がログインできなくなる**。
+ */
+function km_session_save_path(string $dir): ?string
+{
+    return is_dir($dir) && is_writable($dir) ? $dir : null;
+}
 
 /**
  * まだ開始していなければ、決めた属性でセッションを開始する。
@@ -69,6 +87,10 @@ function km_session_start(bool $suppressCacheHeaders = false): void
     ini_set('session.use_trans_sid', '0');
     // 残す長さ(上の KM_SESSION_LIFETIME_SECONDS。99-limits.ini と同じ値)
     ini_set('session.gc_maxlifetime', (string) KM_SESSION_LIFETIME_SECONDS);
+    $savePath = km_session_save_path(KM_SESSION_DIR);
+    if ($savePath !== null) {
+        ini_set('session.save_path', $savePath);
+    }
 
     session_name(KM_SESSION_NAME);
     session_set_cookie_params([

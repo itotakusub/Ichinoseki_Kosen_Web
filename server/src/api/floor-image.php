@@ -130,6 +130,23 @@ if ($buildingKey !== '') {
         http_response_code(404);
         exit;
     }
+
+    /*
+     * 場所ごとに色分けした床(2026-10-30、?area=1。lib/area-paint.php)。同じ錠の内側から配る。
+     * 塗ったあとで床の画像を差し替えていれば 404(古い床の塗りを出さない。公開の地図はそもそも URL を出さない)
+     */
+    if (($_GET['area'] ?? '') === '1') {
+        require_once __DIR__ . '/../lib/area-paint.php';
+        $pdo = km_db();
+        $record = km_area_paint_records($pdo)[$floorId] ?? null;
+        $areaFile = $record !== null && km_area_paint_url($floorId, km_map_floor_image_endpoint($floorId, $svgPath), $record) !== null
+            ? km_area_paint_file($record['file']) : null;
+        if ($areaFile === null) {
+            http_response_code(404);
+            exit;
+        }
+        $svgPath = 'area:' . $record['file'];
+    }
 }
 
 /*
@@ -141,7 +158,7 @@ if ($buildingKey !== '') {
  * 組み込みは `Main/` の下。どちらも外へ出るものは null(lib/map-floors.php の km_map_floor_image_file)。
  */
 require_once __DIR__ . '/../lib/map-floors.php';
-$path = km_map_floor_image_file((string) $svgPath);
+$path = str_starts_with((string) $svgPath, 'area:') ? ($areaFile ?? null) : km_map_floor_image_file((string) $svgPath);
 if ($path === null) {
     error_log("api/floor-image.php: 画像が見つからないか、不正なパスが登録されています: {$svgPath}");
     http_response_code(404);

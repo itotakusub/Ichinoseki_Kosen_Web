@@ -65,6 +65,9 @@
             // system。**属性を消す**ことで端末の設定へ戻す
             root.removeAttribute('data-km-theme');
         }
+        // 暗い配色のとき床の画像も沈める(styles.css の data-km-floor-dim。明るい配色では CSS の側で効かない)
+        if (tuning.dimFloorImage) root.setAttribute('data-km-floor-dim', '1');
+        else root.removeAttribute('data-km-floor-dim');
     }
 
     function build(tuning) {
@@ -110,6 +113,7 @@
             input.addEventListener('change', function () {
                 tuning[key] = input.checked;
                 style.save(tuning);
+                if (key === 'dimFloorImage') applyTheme(tuning);
                 notify();
             });
             const label = document.createElement('label');
@@ -148,10 +152,14 @@
             ['light', '明るい'],
             ['dark', '暗い'],
         ]);
+        toggle('暗い配色のとき床の画像も暗く', 'dimFloorImage');
+        // 管理画面で塗った床(部屋・廊下・階段・建物・道を色で分ける)。塗っていない階は変わらない
+        toggle('場所ごとの色分け', 'areaColors');
 
         heading('大きさ', 'h3');
         slider('地点', 'nodeSize', 50, 200);
-        slider('文字', 'labelSize', 50, 200);
+        // 上は 260%(2026-10-30、振り返りのフェーズ 1「文字を大きく」。アプリの MapDisplayTuningPanel の文字サイズ 80〜260% と同じ上限)
+        slider('文字', 'labelSize', 50, 260);
         select('名前の出し方', 'labelMode', [
             ['icon_and_text', '図形と文字'],
             ['icon_only', '図形だけ'],
