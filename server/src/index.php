@@ -134,6 +134,8 @@ if ($loggedIn && isset($claims->sub)) {
                 'guide' => km_test_guide_lines(km_test_guide_text($testPdo)),
                 // 触られないまま過ぎたら自動で「始めから」(分。0 は使わない)
                 'idleMinutes' => km_test_idle_minutes($testPdo),
+                // 経路の出発地が空なら入れる地点(2026-10-25、利用者「テストユーザーのみ、出発点を Let's Play Densan に」。空なら入れない)
+                'startNode' => km_test_start_node($testPdo),
             ];
         }
     } catch (Throwable $exception) {
@@ -251,6 +253,19 @@ try {
     error_log('KosenMap home: switches: ' . $exception->getMessage());
 }
 
+/*
+ * 案内チャット(2026-10-24、企画書「模擬店案内・会場内ルート案内システム」。lib/guide-chat.php)。
+ * **管理画面「案内チャット」で選んだテスト用アカウントで開いたときだけ**出す(企画書 §8「テストユーザー1のみ」)。
+ * ほかの人には「💬 案内」も Main/guide-chat.js も出さない。読めなければ出さない(閉じる側に倒す)
+ */
+require_once __DIR__ . '/lib/guide-chat.php';
+$kmGuideChat = false;
+try {
+    $kmGuideChat = km_guide_allowed($_SESSION, time(), km_guide_settings(km_db()));
+} catch (Throwable $exception) {
+    error_log('KosenMap home: guide chat: ' . $exception->getMessage());
+}
+
 $inlineMapData = null;
 $kmEvent = null;             // イベントモードの案内(バナー)。無ければ null
 $kmFirstFloorImage = null;    // 最初に映す階の見取り図。<head> で preload する
@@ -342,6 +357,8 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <?php /* 描いたときのサインインの状態(2026-10-25)。戻るボタンでメモリから戻ったとき、Main/back-refresh.js が api/session-state.php と比べる */ ?>
+    <meta name="km-logged-in" content="<?= $loggedIn ? '1' : '0' ?>">
     <?php if ($kmFocusRoom !== null): ?>
         <?php /* QR の部屋(上の $kmFocusRoom。32 字の 16 進だけ)。Main/app.js の focusRoomFromUrl が読む */ ?>
         <meta name="km-focus-room" content="<?= km_home_e($kmFocusRoom) ?>">
@@ -365,13 +382,17 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
         <?php /* テスト用アカウントの印と、自動で「始めから」にするまでの分(Main/test-mode.js が読む。一般の人には出さない) */ ?>
         <meta name="km-test-mode" content="1">
         <meta name="km-test-idle" content="<?= (int) $kmTestMode['idleMinutes'] ?>">
+        <?php if ($kmTestMode['startNode'] !== ''): ?>
+            <?php /* 経路の出発地が空なら入れる地点(展示の PC の場所。Main/app.js の setAsLocation が読む) */ ?>
+            <meta name="km-test-start" content="<?= km_home_e($kmTestMode['startNode']) ?>">
+        <?php endif; ?>
     <?php elseif ($kmEventCollect !== null): ?>
         <?php /* イベント中の来場者の記録。値は許可の覚え(localStorage)をイベントごとに分けるための名前 */ ?>
         <meta name="km-event-collect" content="<?= km_home_e($kmEventCollect['key']) ?>">
     <?php endif; ?>
     <?php $kmHasPosters = ($kmMapData['posters'] ?? []) !== []; ?>
-    <?php if ($kmTestMode !== null || $kmEventCollect !== null || $kmHasPosters || $kmUserMapKey !== null): ?>
-        <?php /* 記録の送信に使うトークン(api/test-events.php・ポスターの数を数える api/poster-event.php・履歴の同期 api/user-map-data.php が X-KM-CSRF で見る) */ ?>
+    <?php if ($kmTestMode !== null || $kmEventCollect !== null || $kmHasPosters || $kmUserMapKey !== null || $kmGuideChat): ?>
+        <?php /* 記録の送信に使うトークン(api/test-events.php・ポスターの数を数える api/poster-event.php・履歴の同期 api/user-map-data.php・案内チャット api/guide-chat.php が X-KM-CSRF で見る) */ ?>
         <meta name="km-csrf" content="<?= km_home_e(km_csrf_token()) ?>">
     <?php endif; ?>
     <?php if ($kmUserMapKey !== null): ?>
@@ -472,10 +493,10 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
 
         <?php
         /*
-         * ログイン・ログアウトの欄(2026-10-23、利用者の指示「上のバーをなくして、ログインは設定項目に入れて」)。
-         * **1 回だけ組み立てて 1 か所に出す** —— ふだんは「ダウンロード・設定」の中(#km-auth-slot)、
-         * 展示の PC(テストモード)は引き出しが無いので、左下の操作の横の小さな欄(.km-test-auth)。
-         * 2 つ書いて片方を隠す形にはしない(片方だけ直したときに食い違う)。
+         * ログイン・ログアウトの欄。**1 回だけ組み立てて 1 か所に出す**(2 つ書いて片方を隠す形にはしない。片方だけ直したときに食い違う)。
+         * 出す所は右上のアカウントの欄(#km-account。2026-10-29、高専祭の振り返り「ログインが消える」)。
+         * それまでは「ダウンロード・設定」の中にしか無く、スマホでは引き出し(案内チャットなど)が開いている間 ⚙️ ごと隠れて届かなかった。
+         * 展示の PC(テストモード)も同じ欄(以前の .km-test-auth は「テスト中」の札・階の列と重なった)。
          */
         ob_start();
         ?>
@@ -532,6 +553,21 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
         // ポスターの一覧(2026-10-21、lib/posters.php)。**いま出しているポスターがあるときだけ**左下に出す
         $kmPosterCount = count($kmMapData['posters'] ?? []);
         ?>
+
+        <?php
+        /*
+         * アカウントの欄(右上。2026-10-29)。閉じているときは「ログイン」か「○○ さん」だけ。押すと上の $kmAuthLinksHtml が開く。
+         * 引き出し・案内チャット・シートを開いても隠さない(⚙️ を開かなくても届く)。開け閉ては <details> のまま(JS が無くても動く)
+         */
+        ?>
+        <details class="km-account" id="km-account">
+            <summary class="km-account-summary glass-panel" aria-label="<?= $loggedIn ? km_home_e($displayName) . ' さん(ログイン中)' : 'ログイン' ?>">
+                <?php /* 絵文字の 👤 はダークモードで背景に沈むので、文字の色で描く */ ?>
+                <svg class="km-account-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="8" r="4.2"/><path d="M3.8 20.5c0-4.3 3.7-6.6 8.2-6.6s8.2 2.3 8.2 6.6z"/></svg>
+                <span class="km-account-label"><?= $loggedIn ? km_home_e($displayName) . ' さん' : 'ログイン' ?></span>
+            </summary>
+            <div class="km-account-menu glass-panel"><?= $kmAuthLinksHtml ?></div>
+        </details>
 
         <?php
         /*
@@ -694,6 +730,13 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
                     <span class="km-action-label">ポスター</span>
                 </a>
             <?php endif; ?>
+            <?php if ($kmGuideChat): ?>
+                <?php /* 案内チャット(2026-10-24。選んだテスト用アカウントだけ。Main/guide-chat.js が左の引き出しに開く) */ ?>
+                <button id="km-guide-open" type="button" class="km-action-btn" title="模擬店や場所を言葉で聞く" aria-label="案内チャットを開く">
+                    <span class="km-action-icon" aria-hidden="true">💬</span>
+                    <span class="km-action-label">案内</span>
+                </button>
+            <?php endif; ?>
             <button
                 id="mobile-search-toggle"
                 type="button"
@@ -705,11 +748,17 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
                 <span class="km-action-icon" aria-hidden="true">🧭</span>
                 <span class="km-action-label">経路</span>
             </button>
+            <?php
+            /*
+             * 不具合の報告(2026-10-29、高専祭のアンケートで「不具合の連絡先が分からない」が 5/8。窓口は ⚙️ の奥にしか無かった)。
+             * 別のタブで開く(地図と経路をそのまま残す)。どこで・端末・時刻は contact.php がひな形に入れる(URL には決まった値だけ)
+             */
+            ?>
+            <a href="/contact.php?subject=bug&amp;where=map" target="_blank" rel="noopener" class="km-action-btn km-bug-btn" title="不具合を報告する(別のタブで開きます)" aria-label="不具合を報告する(別のタブで開きます)">
+                <span class="km-action-icon" aria-hidden="true">🐞</span>
+                <span class="km-action-label">不具合</span>
+            </a>
         </div>
-        <?php if ($kmTestMode !== null): ?>
-            <?php /* 展示の PC はダウンロード・設定が無いので、係の人のログアウトはここ(左下の操作の上) */ ?>
-            <div class="km-test-auth glass-panel"><?= $kmAuthLinksHtml ?></div>
-        <?php endif; ?>
 
         <?php
         /*
@@ -794,6 +843,8 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
             </button>
             <?php /* 経路の共有(2026-10-23、利用者の指示)。/?from=&to= のリンク(Main/app.js の shareRoute) */ ?>
             <button id="km-route-share" type="button" class="km-route-share" title="この経路を共有" aria-label="この経路を共有">↗</button>
+            <?php /* 経路のおかしな所の報告(2026-10-29)。見た目は共有と同じ丸 */ ?>
+            <a href="/contact.php?subject=bug&amp;where=route" target="_blank" rel="noopener" class="km-route-share km-route-bug" title="経路の不具合を報告する(別のタブで開きます)" aria-label="経路の不具合を報告する(別のタブで開きます)">🐞</a>
             <button id="km-route-next" type="button" class="km-route-next">位置の更新</button>
         </div>
         </div>
@@ -831,15 +882,7 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
                  * 使っており、消すと DB が起動しない**(compose.yaml の --ssl-ca)。
                  */
                 ?>
-                <?php
-                /*
-                 * ログイン(2026-10-23 から PC でもここ。上のバーを外した)。中身は上で 1 回だけ組み立てた $kmAuthLinksHtml
-                 */
-                ?>
-                <div class="info-section" id="km-auth-section">
-                    <h4>ログイン</h4>
-                    <div id="km-auth-slot"><?= $kmAuthLinksHtml ?></div>
-                </div>
+                <?php /* ログインは右上のアカウントの欄(#km-account。2026-10-29 にここから移した) */ ?>
                 <div class="info-section">
                     <h4>Android アプリ</h4>
                     <?php if ($apkAvailable): ?>
@@ -1181,6 +1224,8 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
         <script defer src="<?= km_home_e(km_public_asset('Main/test-mode.js')) ?>"></script>
     <?php endif; ?>
     <script defer src="<?= km_home_e(km_public_asset('Main/app.js')) ?>"></script>
+    <?php /* 戻るボタンでメモリから戻った画面のサインインの状態が古ければ読み直す(2026-10-25、利用者「戻るボタンでログインが切れる」) */ ?>
+    <script defer src="<?= km_home_e(km_public_asset('Main/back-refresh.js')) ?>"></script>
     <?php /* 企画のスケジュールの一覧(2026-10-23。lib/event-schedule.php)。一般に出す行があるときだけ「予定」を出す */ ?>
     <script defer src="<?= km_home_e(km_public_asset('Main/event-schedule.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/panel.js')) ?>"></script>
@@ -1193,6 +1238,10 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
     <?php /* ポスター・広告の表示回数とリンクの人数を数える(2026-10-21)。tutorial-end.js より先に読む(window.kmPosterStat を使う) */ ?>
     <script defer src="<?= km_home_e(km_public_asset('Main/poster-stats.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/tutorial-end.js')) ?>"></script>
+    <?php if ($kmGuideChat): ?>
+        <?php /* 案内チャット(2026-10-24。選んだテスト用アカウントのときだけ読む。app.js のあと) */ ?>
+        <script defer src="<?= km_home_e(km_public_asset('Main/guide-chat.js')) ?>"></script>
+    <?php endif; ?>
 
 </body>
 

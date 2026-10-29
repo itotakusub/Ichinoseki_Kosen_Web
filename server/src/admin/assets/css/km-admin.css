@@ -119,3 +119,10 @@
 
 /* テーブル管理の外部接続(admin/tables.php。2026-10-21)。作った直後の使い方の例 */
 .km-api-example { white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; background: var(--bs-tertiary-bg); padding: 0.5rem 0.75rem; border-radius: 0.375rem; }
+
+/* 案内チャットの質問と答えの一覧(admin/guide-chat.php。2026-10-25) */
+.km-guide-log-q { min-width: 10rem; }
+.km-guide-log-a { min-width: 16rem; white-space: pre-wrap; }
+.km-guide-log-cards { min-width: 10rem; }
+.km-guide-log-rate { min-width: 8rem; }
+.km-guide-log-confirm { width: 9rem; }

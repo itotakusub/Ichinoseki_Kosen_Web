@@ -15,6 +15,10 @@
  *   KmSheet.close()        … 開いているものを閉じる
  *   KmSheet.close('place') … いま開いているのが place のときだけ閉じる
  *   KmSheet.isOpen('place')
+ *   KmSheet.setBase({ key: 'guide', title: '💬 案内', content: element })
+ *        … **土台**(2026-10-25、利用者「AI 案内は常に表示」→「チャット欄を開いたままに」)。土台があると引き出しは閉じない:
+ *          ほかの中身を閉じる・「←」で戻ると土台に戻る。土台には「×」を出さない
+ *          (案内チャットを使うテストユーザーは PC で見る。スマホでは開いたままのシートが操作の帯を隠すが、利用者の方針で問題にしない)
  */
 (function () {
     'use strict';
@@ -28,6 +32,8 @@
     let current = null;
     const stack = [];
     let lastFocus = null;
+    // 閉じずに戻ってくる中身(案内チャット)。無ければ今までどおり閉じる
+    let base = null;
 
     function el(tag, className, text) {
         const node = document.createElement(tag);
@@ -87,7 +93,8 @@
         bodyEl.appendChild(entry.content);
         bodyEl.scrollTop = 0;
         titleEl.textContent = entry.title || '';
-        backBtn.hidden = stack.length === 0;
+        backBtn.hidden = stack.length === 0 && !(base && entry !== base);
+        closeBtn.hidden = entry === base;
         sheet.dataset.kmSheet = entry.key;
     }
 
@@ -118,9 +125,12 @@
         if (current && options.push) {
             stack.push(current);
         } else {
-            // 入れ替え: 前の中身(戻る先も)は閉じたことにする
-            finish(current);
-            while (stack.length > 0) finish(stack.pop());
+            // 入れ替え: 前の中身(戻る先も)は閉じたことにする。土台は閉じない(閉じれば戻ってくる)
+            if (current !== base) finish(current);
+            while (stack.length > 0) {
+                const entry = stack.pop();
+                if (entry !== base) finish(entry);
+            }
         }
         const wasOpen = sheet.classList.contains('is-open');
         current = entry;
@@ -143,9 +153,27 @@
         window.dispatchEvent(new CustomEvent('km:sheet', { detail: { open: true, key: current.key } }));
     }
 
+    /** 土台へ戻す(ほかの中身と戻る先は閉じたことにする) */
+    function showBase() {
+        if (current !== base) finish(current);
+        while (stack.length > 0) {
+            const entry = stack.pop();
+            if (entry !== base) finish(entry);
+        }
+        current = base;
+        show(base);
+        if (!sheet.classList.contains('is-open')) setOpen(true);
+        else window.dispatchEvent(new CustomEvent('km:sheet', { detail: { open: true, key: base.key } }));
+    }
+
     function close(key) {
         if (!sheet || !current) return;
         if (key !== undefined && current.key !== key && !stack.some(function (entry) { return entry.key === key; })) return;
+        if (base) {
+            // 土台があれば閉じない。土台そのものを閉じる呼び出しは受けない
+            if (current !== base || stack.length > 0) showBase();
+            return;
+        }
         finish(current);
         while (stack.length > 0) finish(stack.pop());
         current = null;
@@ -166,9 +194,21 @@
         return true;
     }
 
+    /** 土台を決める(null で外す)。何も開いていなければ土台を開く */
+    function setBase(options) {
+        ensure();
+        if (!options) { base = null; return; }
+        base = { key: String(options.key || 'base'), title: options.title || '', content: options.content, onClose: null };
+        if (!current) {
+            lastFocus = document.activeElement;
+            showBase();
+        }
+    }
+
     window.KmSheet = {
         open: open,
         close: close,
+        setBase: setBase,
         back: back,
         replace: replace,
         isOpen: function (key) { return !!current && (key === undefined || current.key === key); },

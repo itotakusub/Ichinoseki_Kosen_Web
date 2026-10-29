@@ -28,6 +28,21 @@ declare(strict_types=1);
 const KM_SESSION_NAME = '__Host-KMSID';
 
 /**
+ * セッションを残す長さ(秒)。**最後の操作からこれだけあいたセッションを、PHP の掃除が消す**(2026-10-25)。
+ *
+ * 利用者の報告「posters.php へ行って ito4.jp へ戻ると、ログインが切れているときがある」。
+ * web コンテナは php.ini を読まないので、PHP の組み込みの既定 1440 秒(24 分)だった。地図を 24 分以上開いたままにすると、
+ * 次のページを開いたとき(掃除は約 100 回に 1 回、そのリクエストのついでに走る)にセッションごと消え、
+ * セッションにある Logto の ID トークンも消える —— Logto 側のサインインはまだ有効なのに、ここだけ先に切れていた。
+ * 文化祭の 1 日を通して切れないよう 12 時間にする。
+ *
+ * **docker/php/99-limits.ini の session.gc_maxlifetime と同じ値にすること。** 掃除は /tmp のセッション全部を見るので、
+ * 短い値で走ったリクエストが、ほかの人のセッションまで消す。
+ * 長くなる分、地図の錠をパスワードで解いた印(km_map_unlocked)も、使わないまま最大 12 時間残る(以前は 24 分)。
+ */
+const KM_SESSION_LIFETIME_SECONDS = 43200;
+
+/**
  * まだ開始していなければ、決めた属性でセッションを開始する。
  *
  * @param bool $suppressCacheHeaders true にすると PHP が既定で付ける
@@ -52,6 +67,8 @@ function km_session_start(bool $suppressCacheHeaders = false): void
     ini_set('session.use_strict_mode', '1');
     ini_set('session.use_only_cookies', '1');
     ini_set('session.use_trans_sid', '0');
+    // 残す長さ(上の KM_SESSION_LIFETIME_SECONDS。99-limits.ini と同じ値)
+    ini_set('session.gc_maxlifetime', (string) KM_SESSION_LIFETIME_SECONDS);
 
     session_name(KM_SESSION_NAME);
     session_set_cookie_params([

@@ -10,9 +10,22 @@ document.addEventListener('DOMContentLoaded', () => {
     const unlockSection = document.getElementById('km-unlock-section');
 
     /*
-     * ログインの欄は、PC でもスマホでもこの引き出しの中(#km-auth-slot)。index.php が初めからそこに書く
-     * (2026-10-23、利用者の指示「上のバーをなくして、ログインは設定項目に」)。以前は画面幅で上のバーと行き来させていた
+     * ログインの欄は右上のアカウントの欄(#km-account、<details>)。2026-10-29 にこの引き出しから移した
+     * (スマホでは引き出しが開いている間 ⚙️ ごと隠れて、ログインに届かなかった)。
+     * 開け閉ては <details> のまま。外を押したとき・Esc で閉じるのだけここで足す(展示の PC にも要るので、下の return より前)
      */
+    const account = document.getElementById('km-account');
+    if (account) {
+        document.addEventListener('click', (event) => {
+            if (account.open && !account.contains(event.target)) account.open = false;
+        });
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape' && account.open) {
+                account.open = false;
+                account.querySelector('summary')?.focus();
+            }
+        });
+    }
 
     if (!toggleBtn || !panel || !unlockSection) return;
 

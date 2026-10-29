@@ -3278,6 +3278,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             routeEndId = nodeId;
             routeEndPoi = poi ? Number(poi.id) : null;
             if (endInput) endInput.value = label;
+            // 呼ぶ側が出発地をこのあと入れるとき(案内チャットの経路。opts.noTestStart)は入れない(2026-10-25)
+            if (!routeStartId && !(opts && opts.noTestStart)) applyTestStart(nodeId);
         }
         window.map.closePopup();
         if (routeStartId && routeEndId) {
@@ -3285,6 +3287,34 @@ document.addEventListener('DOMContentLoaded', async () => {
         } else {
             openRoutePanel(type === 'start' ? 'end' : 'start');
         }
+    };
+
+    /**
+     * テスト用アカウント(展示の PC)は、出発地が空なら展示の場所を入れる(2026-10-25、利用者「テストユーザーのみ、
+     * 出発点を Let's Play Densan に」)。地点は index.php の <meta name="km-test-start">(一般の人には出さない)。
+     * 目的地と同じ所・地図に無い所・経路に使えない所なら入れない(いつもどおり出発地を選んでもらう)
+     */
+    function applyTestStart(endId) {
+        const meta = document.querySelector('meta[name="km-test-start"]');
+        const startId = meta ? meta.getAttribute('content') : '';
+        const node = startId ? graphData.nodes[startId] : null;
+        if (!node || startId === endId || !isRoutableNode(node)) return;
+        routeStartId = startId;
+        routeStartPoi = null;
+        if (startInput) startInput.value = getLabelForNode(startId, node);
+    }
+
+    /**
+     * 出発地・目的地を空にする(2026-10-24。案内チャット Main/guide-chat.js が新しい経路を出す前に呼ぶ)。
+     * 前の経路の端が残ったまま片方だけ入れると、その古い端で経路を引いてしまう
+     */
+    window.kmClearRouteEnds = function () {
+        routeStartId = null;
+        routeStartPoi = null;
+        routeEndId = null;
+        routeEndPoi = null;
+        if (startInput) startInput.value = '';
+        if (endInput) endInput.value = '';
     };
 
     /** 臨時の地点の札(検索の候補・経路の欄と同じ)。名前が番号ならポスターの見出し */

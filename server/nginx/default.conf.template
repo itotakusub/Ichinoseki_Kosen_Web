@@ -255,6 +255,10 @@ limit_req_zone $binary_remote_addr zone=km_api:10m rate=240r/m;
 # アプリの地図の取得(/api/app-map.php)。1 回ごとにアクセスコードの照合と数 MB の応答を伴う。
 # 端末は起動時と手で取り直すときにしか呼ばないので狭くてよい。本丸は lib/map-rate-limit.php の失敗回数。
 limit_req_zone $binary_remote_addr zone=km_appmap:10m rate=30r/m;
+# 案内チャット(/api/guide-chat.php。2026-10-24、企画書「LLM の API を無制限に呼び出せないようにする」)。
+# 1 回ごとに自宅 PC の LLM を 2 回呼ぶ(数秒〜数十秒)。使えるのはテストユーザー 1 人だけなので狭くてよい。
+# 本丸は PHP 側(セッションで 1 分 6 回・1 日の上限。lib/guide-chat.php)
+limit_req_zone $binary_remote_addr zone=km_guide:10m rate=10r/m;
 
 # 同時接続の上限(2026-09-14 の診断で追加)。1 つの送信元が同時に張れる本数。
 # **HTTP/2 では 1 本の中の同時リクエストが 1 つずつ数えられる**ので、443 は広めに取る(server ごとの値は各 server に)。
@@ -718,6 +722,16 @@ server {
         limit_req zone=km_api burst=60 nodelay;
         include /etc/nginx/km/proxy-web.conf;
         proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+
+    # 案内チャット(2026-10-24。lib/guide-chat.php)。本文は質問 1 つ(PHP でも 2KB で切る)。
+    # LLM を待つので、返事の待ち時間は既定より長く取る(PHP の curl は 30 秒 × 2 回で切る)
+    location = /api/guide-chat.php {
+        client_max_body_size 4k;
+        limit_req zone=km_guide burst=5 nodelay;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+        proxy_read_timeout 90s;
     }
 
     # アプリのランキングへの記録(POST だけ数える。取得の GET は数えない)

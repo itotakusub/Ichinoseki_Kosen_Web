@@ -1,0 +1,5 @@
+# 鍵が入る(秘密)。見本は guide-llm.env.example
+guide-llm.env
+.venv/
+__pycache__/
+bench-*.json
