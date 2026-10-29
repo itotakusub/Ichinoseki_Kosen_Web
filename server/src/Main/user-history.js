@@ -434,6 +434,8 @@
     window.addEventListener('km:route', function (event) {
         const d = event.detail || {};
         if (!isId(d.from) || !isId(d.to) || d.from === d.to) return;
+        // 共有のリンクから開いた経路は残さない(2026-10-29)。残すと、次に普通に開いたとき「前回の経路」として聞いていた
+        if (d.shared) return;
         [d.fromText, d.toText].forEach(function (text) {
             if (typeof text === 'string' && text.trim() !== '') doc.searches = [{ q: text.trim().slice(0, 64), at: Date.now() }].concat(doc.searches);
         });

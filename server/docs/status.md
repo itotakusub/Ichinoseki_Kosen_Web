@@ -629,6 +629,19 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
     あわせて、経路のカードと目的地で、名前が番号だけの一時地点(「99」)は見出し(「献血」)にした。
     本物の Bionic で: 現在地はどこ → Densan(0 秒)、現在地から体育館 / ここから献血 → Densan から、第二体育館から図書館 → 第二体育館から、
     ここのトイレはどこ → トイレ。check.php 2409 件。
+- **配備でログインを消さない(2026-10-29。フェーズ 0 の 4)**: PHP のセッションが web の /tmp(tmpfs)にあり、配備で web を作り直すたびに全員がログアウトされた。
+  - 名前付きのボリューム km_web_sessions を /var/lib/km-sessions に置き、99-limits.ini の session.save_path をそこへ。compose.yaml と compose.vps.yaml(`!override`)の両方に書いた。
+    名前付きのボリュームは初め root の持ち物なので、start-with-local-ca.sh が起動のとき www-data・0700 にしてから Apache を起こす(Dockerfile は触らない)。
+  - この PC に Docker が無いので、**本番で確かめる**: 配備のあと `docker exec km-php-apache ls -ld /var/lib/km-sessions` が www-data・drwx------、
+    ログインしたまま、もう一度配備してもログインが残ること。初回の配備では /tmp のセッションが移らないので、そのときだけ全員が一度ログアウトされる。
+- **共有に経路の選択を載せる(2026-10-29。フェーズ 0 の 3)**: 共有の URL に階段/エレベーター・階の移動を減らす・雨の日が無く、開いた人の端末の設定で別の経路が引かれていた。
+  - Web: shareRoute が `vp=elevator|stairs`・`ff=1`・`rain=1` を付ける。index.php は決まった値だけ meta(km-focus-route-options)へ。
+    focusFromUrl はその選択で引く(**このページの間だけ**。localStorage は書き換えない。欄の表示だけ合わせる)。
+  - 共有から引いた経路は履歴(「前回の経路」)に入れない(km:route の shared。user-history.js)。
+  - アプリ(版 28): SharedMapLink.Route に options。MapScreen は**出発地と目的地がその共有の経路の間だけ**使い、端末の設定は変えない。履歴にも入れない。
+    地図の左下に「不具合」(ブラウザで contact.php?subject=bug&where=app。【どこで】Android アプリ)。
+  - 確かめ: check.php 2430 件。アプリの単体試験 両フレーバー通過(共有の選択の読み取り・不具合の URL)。手元の試し場は地図データが無いので、共有のリンクの動きは本番で見てもらう。
+  - アプリ: v27 を Old\release-v27-20261025 へ写し、両フレーバーのリリース版 28(1000028・261029.2348)。署名は前と同じ鍵(d71fbf0a…)。apk-push で受け箱へ送った。
 - **不具合の報告を見える所に(2026-10-29。フェーズ 0 の 2)**: アンケート 13「不具合の連絡先が分かるか」で「いいえ」が 5/8。窓口(contact.php)は ⚙️ の奥だけだった。
   - 入口: 操作の帯の「🐞 不具合」(スマホは丸いアイコンだけ。テストモードでも出す)・経路の帯の 🐞・案内チャットの注意書きの後ろ・ポスターの一覧の上。どれも別のタブで開く。
   - contact.php?subject=bug&where=map|route|guide|posters で開くと、件名を「不具合の報告」にし、本文に【どこで】【端末】【時刻】【何が起きたか】のひな形を入れる。

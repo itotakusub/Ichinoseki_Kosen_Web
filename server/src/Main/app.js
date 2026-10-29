@@ -2191,6 +2191,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (startInput) startInput.addEventListener('input', () => { routeStartId = null; routeStartPoi = null; });
     if (endInput) endInput.addEventListener('input', () => { routeEndId = null; routeEndPoi = null; });
 
+    // 共有のリンクから引いている間だけ true(focusFromUrl)。km:route に載せて履歴に入れないようにする
+    let routeFromShare = false;
+
     // ---- UIイベントリスナー ----
     if (searchBtn) {
         searchBtn.addEventListener('click', () => {
@@ -2228,7 +2231,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
             if (path) {
                 // 履歴の「経路」と「検索した言葉」(2026-10-23。Main/user-history.js)
-                window.dispatchEvent(new CustomEvent('km:route', { detail: { from: startNode, to: endNode, fromText: startText, toText: endText } }));
+                window.dispatchEvent(new CustomEvent('km:route', { detail: { from: startNode, to: endNode, fromText: startText, toText: endText, shared: routeFromShare } }));
                 currentRoutePath = path;
                 routeFitPending = true;
                 setRouteHint('');
@@ -4167,7 +4170,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 一時地点はその番号で渡す(?fromPoi= / ?toPoi=)。開いた人の欄に、つなぎ先の道ではなく一時地点の名前が出る
         const fromPart = routeStartPoi !== null && routeStartId === from ? 'fromPoi=' + routeStartPoi : 'from=' + encodeURIComponent(from);
         const toPart = routeEndPoi !== null && routeEndId === to ? 'toPoi=' + routeEndPoi : 'to=' + encodeURIComponent(to);
-        shareUrl('/?' + fromPart + '&' + toPart, label + '(高専マップ案内)');
+        // 経路の選択も載せる(2026-10-29)。載せないと、開いた人の端末の設定で別の経路が引かれる(階段を避けたのに階段の経路が出る)
+        const optionParts = [
+            verticalPreference === 'elevator' || verticalPreference === 'stairs' ? 'vp=' + verticalPreference : '',
+            routeOptions.fewerFloors ? 'ff=1' : '',
+            routeOptions.rain ? 'rain=1' : '',
+        ].filter(Boolean);
+        shareUrl('/?' + [fromPart, toPart].concat(optionParts).join('&'), label + '(高専マップ案内)');
     }
     const routeShareBtn = document.getElementById('km-route-share');
     if (routeShareBtn) routeShareBtn.addEventListener('click', shareRoute);
@@ -4370,7 +4379,26 @@ document.addEventListener('DOMContentLoaded', async () => {
             routeEndPoi = to.poi;
             if (startInput) startInput.value = from.label;
             if (endInput) endInput.value = to.label;
+            /*
+             * 共有した人の経路の選択で引く(2026-10-29)。**このページの間だけ**で、端末に保存した設定は書き換えない
+             * (localStorage に書かない。欄の表示だけ合わせる。読み込み直せば自分の設定に戻る)
+             */
+            const shared = (read('km-focus-route-options') || '').split(',');
+            if (shared[0] === 'elevator' || shared[0] === 'stairs' || shared[0] === 'any') {
+                verticalPreference = shared[0];
+                routeOptions = { fewerFloors: shared.includes('ff'), rain: shared.includes('rain') };
+                if (verticalSelect) verticalSelect.value = verticalPreference;
+                const ffBox = document.getElementById('route-fewer-floors');
+                const rainBox = document.getElementById('route-rain');
+                if (ffBox) ffBox.checked = routeOptions.fewerFloors;
+                if (rainBox) rainBox.checked = routeOptions.rain;
+                rebuildDijkstra();
+                updateRouteOptionsState();
+            }
+            // 共有から引いた経路は「前回の経路」(履歴)に入れない(Main/user-history.js が km:route の shared を見る)
+            routeFromShare = true;
             searchBtn.click();
+            routeFromShare = false;
             return;
         }
         if (poiId) {

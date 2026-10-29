@@ -4671,6 +4671,15 @@ function km_check_hardening(): void
         && strpos((string) $file('src/lib/session.php'), "ini_set('session.gc_maxlifetime', (string) KM_SESSION_LIFETIME_SECONDS);")
             < strpos((string) $file('src/lib/session.php'), "    session_start();"));
     check_bool('99-limits.ini は memory_limit を変えない', !str_contains($limitsIni, 'memory_limit'));
+    // 配備でログインを消さない(2026-10-29、振り返りのフェーズ 0)。セッションは /tmp(tmpfs)から名前付きのボリュームへ
+    $baseCompose = (string) $file('compose.yaml');
+    $vpsCompose = (string) $file('compose.vps.yaml');
+    $webStart = (string) $file('docker/php/start-with-local-ca.sh');
+    check_bool('セッションの置き場は名前付きのボリューム(ini・compose・本番の上書きの 3 か所が同じ)', str_contains($limitsIni, 'session.save_path = "/var/lib/km-sessions"')
+        && str_contains($baseCompose, '      - web_sessions:/var/lib/km-sessions') && str_contains($vpsCompose, '      - web_sessions:/var/lib/km-sessions')
+        && preg_match('/^  web_sessions:\n    name: km_web_sessions$/m', $baseCompose) === 1);
+    check_bool('セッションの置き場は起動のとき www-data・0700 にしてから Apache を起こす', ($own = strpos($webStart, 'chown www-data:www-data "$SESSION_DIR"')) !== false
+        && str_contains($webStart, 'chmod 0700 "$SESSION_DIR"') && $own < strpos($webStart, 'exec apache2-foreground'));
     /*
      * 上限はコンテナ全部に。mailserver にだけ no-new-privileges を付けない
      * (postfix の postdrop が setgid で動くので、付けると送信が止まる)。
@@ -8465,7 +8474,7 @@ function km_check_layout(): void
     check_bool('左の引き出しは左から(PC)・地図を覆わない', preg_match('/\.km-sheet \{[^}]*left: 0;[^}]*transform: translateX\(-105%\);/s', $gmCss) === 1 && !str_contains((string) file_get_contents(__DIR__ . '/../Main/km-sheet.js'), 'scrim'));
     check_bool('候補のアイコンはその場所のポスター(無ければ種類の形)', str_contains($gmApp, "box.classList.add('has-poster');") && str_contains($gmApp, "box.innerHTML = nodeIconHtml({ name: item.name }, item.type);"));
     check_bool('共有: 場所・一時地点・経路の URL。navigator.share が無ければ写す', str_contains($gmApp, "shareUrl('/?poi=' + Number(button.dataset.kmPoi)")
-        && str_contains($gmApp, "shareUrl('/?' + fromPart + '&' + toPart, label") && str_contains($gmApp, "'fromPoi=' + routeStartPoi") && str_contains($gmApp, 'await navigator.clipboard.writeText(url);'));
+        && str_contains($gmApp, "shareUrl('/?' + [fromPart, toPart].concat(optionParts).join('&'), label") && str_contains($gmApp, "'fromPoi=' + routeStartPoi") && str_contains($gmApp, 'await navigator.clipboard.writeText(url);'));
     check_bool('共有のリンクは字の形だけ確かめて meta で渡す(from/to は 32 字の 16 進・poi は数字)', str_contains($gmIndex, "preg_match('/^[0-9A-Fa-f-]{32,36}\$/', \$value) !== 1")
         && str_contains($gmIndex, "preg_match('/^[1-9]\\d{0,9}\$/', \$poiParam) === 1") && str_contains($gmIndex, '<meta name="km-focus-from" content="<?= km_home_e($kmFocusFrom) ?>">') && str_contains($gmIndex, '$kmFocusFromPoi = $kmFocusFrom === null ? $kmPoiParam(\'fromPoi\') : null;'));
     check_bool('表示調整・履歴・予定も左の引き出しに出す', str_contains((string) file_get_contents(__DIR__ . '/../Main/map-tuning.js'), "sheet.open({ key: 'tuning', title: '表示調整'")
@@ -8624,6 +8633,21 @@ function km_check_layout(): void
     check_bool('共有から来たら、開いた所を出したあとで広告', str_contains($shareApp, "if (document.querySelector('meta[name=\"km-from-share\"]')) {")
         && str_contains($shareApp, 'if (typeof window.kmShowAd === \'function\') window.kmShowAd();')
         && str_contains($shareApp, 'const SHARE_AD_DELAY_MS = 1500;'));
+
+    // 2026-10-29(振り返りのフェーズ 0): 経路の選択も共有する。開いた人の保存した設定は書き換えない。共有の経路は履歴に入れない
+    $shareIndexCode = (string) file_get_contents(__DIR__ . '/../index.php');
+    check_bool('共有: 経路の選択(vp・ff・rain)を URL に載せる', str_contains($shareApp, "verticalPreference === 'elevator' || verticalPreference === 'stairs' ? 'vp=' + verticalPreference : ''")
+        && str_contains($shareApp, "routeOptions.fewerFloors ? 'ff=1' : ''") && str_contains($shareApp, "routeOptions.rain ? 'rain=1' : ''"));
+    check_bool('共有: 受け取りは決まった値だけ', str_contains($shareIndexCode, "in_array(\$_GET['vp'] ?? '', ['elevator', 'stairs'], true)")
+        && str_contains($shareIndexCode, "(\$_GET['ff'] ?? '') === '1'") && str_contains($shareIndexCode, '<meta name="km-focus-route-options"'));
+    if (preg_match('/const shared = \(read\(\'km-focus-route-options\'\).*?routeFromShare = false;/s', $shareApp, $sharedBlock) === 1) {
+        check_bool('共有: 選択はこのページの間だけ(端末に保存しない)・共有から引いた印を付ける', !str_contains($sharedBlock[0], 'localStorage')
+            && str_contains($sharedBlock[0], 'rebuildDijkstra();') && str_contains($sharedBlock[0], 'routeFromShare = true;'));
+    } else {
+        check_bool('共有: 選択を当てる所がある', false);
+    }
+    check_bool('共有: 共有から引いた経路は履歴(前回の経路)に入れない', str_contains($shareApp, 'shared: routeFromShare } }));')
+        && str_contains($shareHistory, 'if (d.shared) return;'));
 
     km_check_heading('地図: 札は 6 文字 + …・イベントの地点の見分け・経路の線(2026-10-24)');
     $viewCss = (string) file_get_contents(__DIR__ . '/../Main/styles.css');

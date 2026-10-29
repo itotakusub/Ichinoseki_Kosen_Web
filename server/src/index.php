@@ -233,6 +233,13 @@ if (is_string($poiParam) && preg_match('/^[1-9]\d{0,9}$/', $poiParam) === 1) {
 $kmFocusFromPoi = $kmFocusFrom === null ? $kmPoiParam('fromPoi') : null;
 $kmFocusToPoi = $kmFocusTo === null ? $kmPoiParam('toPoi') : null;
 /*
+ * 共有した経路の選択(2026-10-29、振り返りのフェーズ 0)。以前は載せておらず、開いた人の端末の設定で引き直していた
+ * (階段を避けた経路を送っても、相手には階段の経路が出た)。vp=elevator|stairs・ff=1(階の移動を少なく)・rain=1。決まった値だけ通す
+ */
+$kmFocusRouteVp = in_array($_GET['vp'] ?? '', ['elevator', 'stairs'], true) ? (string) $_GET['vp'] : '';
+$kmFocusRouteFf = ($_GET['ff'] ?? '') === '1';
+$kmFocusRouteRain = ($_GET['rain'] ?? '') === '1';
+/*
  * 共有のリンク(部屋の QR を含む)から開いたか(2026-10-24、利用者の指示「共有から開いた時は、チュートリアル、
  * 前回の経路を全て無視(広告は無視しない)」)。**読み手はこの 1 つだけを見る**(tutorial.js・welcome.js・user-history.js)。
  * 以前は部屋の QR(km-focus-room)しか見ておらず、経路や一時地点の共有ではチュートリアルが出て、前回の経路も聞いていた
@@ -370,6 +377,8 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
     <?php if (($kmFocusFrom !== null || $kmFocusFromPoi !== null) && ($kmFocusTo !== null || $kmFocusToPoi !== null)): ?>
         <?php if ($kmFocusFrom !== null): ?><meta name="km-focus-from" content="<?= km_home_e($kmFocusFrom) ?>"><?php else: ?><meta name="km-focus-from-poi" content="<?= km_home_e((string) $kmFocusFromPoi) ?>"><?php endif; ?>
         <?php if ($kmFocusTo !== null): ?><meta name="km-focus-to" content="<?= km_home_e($kmFocusTo) ?>"><?php else: ?><meta name="km-focus-to-poi" content="<?= km_home_e((string) $kmFocusToPoi) ?>"><?php endif; ?>
+        <?php /* 共有した人の経路の選択(上の $kmFocusRouteVp など)。この経路を引くときだけ使い、開いた人の保存した設定は変えない */ ?>
+        <meta name="km-focus-route-options" content="<?= km_home_e(($kmFocusRouteVp !== '' ? $kmFocusRouteVp : 'any') . ($kmFocusRouteFf ? ',ff' : '') . ($kmFocusRouteRain ? ',rain' : '')) ?>">
     <?php endif; ?>
     <?php if ($kmFocusPoi !== null): ?>
         <meta name="km-focus-poi" content="<?= km_home_e($kmFocusPoi) ?>">

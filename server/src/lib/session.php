@@ -36,7 +36,8 @@ const KM_SESSION_NAME = '__Host-KMSID';
  * セッションにある Logto の ID トークンも消える —— Logto 側のサインインはまだ有効なのに、ここだけ先に切れていた。
  * 文化祭の 1 日を通して切れないよう 12 時間にする。
  *
- * **docker/php/99-limits.ini の session.gc_maxlifetime と同じ値にすること。** 掃除は /tmp のセッション全部を見るので、
+ * **docker/php/99-limits.ini の session.gc_maxlifetime と同じ値にすること。** 掃除は置き場(2026-10-29 から名前付きのボリューム
+ * /var/lib/km-sessions。それまでは /tmp で、配備のたびに全員のログインが消えた)のセッション全部を見るので、
  * 短い値で走ったリクエストが、ほかの人のセッションまで消す。
  * 長くなる分、地図の錠をパスワードで解いた印(km_map_unlocked)も、使わないまま最大 12 時間残る(以前は 24 分)。
  */
