@@ -748,6 +748,16 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
                 <span class="km-action-icon" aria-hidden="true">🧭</span>
                 <span class="km-action-label">経路</span>
             </button>
+            <?php
+            /*
+             * 不具合の報告(2026-10-29、高専祭のアンケートで「不具合の連絡先が分からない」が 5/8。窓口は ⚙️ の奥にしか無かった)。
+             * 別のタブで開く(地図と経路をそのまま残す)。どこで・端末・時刻は contact.php がひな形に入れる(URL には決まった値だけ)
+             */
+            ?>
+            <a href="/contact.php?subject=bug&amp;where=map" target="_blank" rel="noopener" class="km-action-btn km-bug-btn" title="不具合を報告する(別のタブで開きます)" aria-label="不具合を報告する(別のタブで開きます)">
+                <span class="km-action-icon" aria-hidden="true">🐞</span>
+                <span class="km-action-label">不具合</span>
+            </a>
         </div>
 
         <?php
@@ -833,6 +843,8 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
             </button>
             <?php /* 経路の共有(2026-10-23、利用者の指示)。/?from=&to= のリンク(Main/app.js の shareRoute) */ ?>
             <button id="km-route-share" type="button" class="km-route-share" title="この経路を共有" aria-label="この経路を共有">↗</button>
+            <?php /* 経路のおかしな所の報告(2026-10-29)。見た目は共有と同じ丸 */ ?>
+            <a href="/contact.php?subject=bug&amp;where=route" target="_blank" rel="noopener" class="km-route-share km-route-bug" title="経路の不具合を報告する(別のタブで開きます)" aria-label="経路の不具合を報告する(別のタブで開きます)">🐞</a>
             <button id="km-route-next" type="button" class="km-route-next">位置の更新</button>
         </div>
         </div>

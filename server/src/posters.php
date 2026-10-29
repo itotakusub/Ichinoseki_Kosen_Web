@@ -235,6 +235,8 @@ $placesOf = static function (array $poster) use ($nodes, $eventPois): array {
         <h1>ポスター</h1>
         <nav class="km-doc-nav">
             <a href="/" class="km-doc-link">地図へ戻る</a>
+            <?php /* 不具合の報告(2026-10-29。地図の「🐞 不具合」と同じ。URL には決まった値だけ) */ ?>
+            <a href="/contact.php?subject=bug&amp;where=posters" class="km-doc-link" target="_blank" rel="noopener">🐞 不具合を報告</a>
         </nav>
     </header>
 

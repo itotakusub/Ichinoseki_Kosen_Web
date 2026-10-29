@@ -7616,6 +7616,29 @@ function km_check_layout(): void
         && $accountAt < strpos($panelJs, 'if (!toggleBtn'));
     check_bool('panel.js は画面幅で入れ替えない', !str_contains($panelJs, 'placeAuthLinks'));
 
+    // 不具合の報告の入口(2026-10-29、高専祭のアンケートで「不具合の連絡先が分からない」が 5/8)
+    require_once __DIR__ . '/../lib/forms.php';
+    $contactCode = (string) file_get_contents(__DIR__ . '/../contact.php');
+    $postersCode = (string) file_get_contents(__DIR__ . '/../posters.php');
+    $guideChatJs = (string) file_get_contents(__DIR__ . '/../Main/guide-chat.js');
+    check_bool('不具合の報告: 操作の帯・経路の帯・案内チャット・ポスターの一覧から、別のタブで開く',
+        str_contains($index, 'href="/contact.php?subject=bug&amp;where=map" target="_blank" rel="noopener"')
+        && str_contains($index, 'href="/contact.php?subject=bug&amp;where=route" target="_blank" rel="noopener"')
+        && str_contains($guideChatJs, "bug.href = '/contact.php?subject=bug&where=guide';")
+        && str_contains($postersCode, 'href="/contact.php?subject=bug&amp;where=posters"'));
+    check_bool('不具合の報告: 操作の帯の入口はテストモードでも出す(⚙️ のように囲まない)', preg_match('/<\?php if \(\$kmTestMode[^)]*\): \?>\s*<a href="\/contact\.php\?subject=bug/', $index) === 0);
+    check('不具合の報告: ひな形(どこで・端末・時刻だけ。知らない where は「Web サイト」)',
+        "【どこで】地図(経路の案内中)\n【端末】スマホ(Android / Chrome)\n【時刻】2026-10-29 21:05\n【何が起きたか】\n",
+        km_contact_bug_template('route', 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36', (int) strtotime('2026-10-29 21:05:00')));
+    check('不具合の報告: 端末の見分け', ['PC(Windows / Edge)', 'スマホ(iOS / Safari)', 'タブレット(iOS / Safari)', 'PC(Mac / Firefox)'], [
+        km_contact_device('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36 Edg/130.0'),
+        km_contact_device('Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'),
+        km_contact_device('Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'),
+        km_contact_device('Mozilla/5.0 (Macintosh; Intel Mac OS X 14.0; rv:131.0) Gecko/20100101 Firefox/131.0'),
+    ]);
+    check_bool('不具合の報告: where は決まった値だけ使い、そのまま本文に入れない', str_contains((string) file_get_contents(__DIR__ . '/../lib/forms.php'), "(KM_CONTACT_WHERE_LABELS[\$where] ?? 'Web サイト')")
+        && str_contains(km_contact_bug_template('<script>', '', 0), '【どこで】Web サイト') && str_contains($contactCode, "km_contact_bug_template((string) (\$_GET['where'] ?? '')"));
+
     km_check_heading('layout: ズームボタン');
     // 左下は操作ピルが使う。ぶつからない側へ
     check_bool('ズームは右下', str_contains($appJs, "L.control.zoom({ position: 'bottomright' })"));

@@ -109,6 +109,12 @@
         });
         const note = el('p', 'km-guide-note', 'AIは間違えることがあります。大事なことは会場の案内や係の人に確かめてください。質問と答えは、案内をよくするために保存します(誰が聞いたかは残しません)。');
         // 入力欄と注意書きは一緒に下へ貼り付ける(会話が長くなっても注意書きが見える)
+        // 不具合の報告(2026-10-29)。答えの良し悪しは 👍/👎 で、動かない・表示がおかしいはこちら
+        const bug = el('a', 'km-guide-bug', '🐞 不具合を報告');
+        bug.href = '/contact.php?subject=bug&where=guide';
+        bug.target = '_blank';
+        bug.rel = 'noopener';
+        note.append(' ', bug);
         const foot = el('div', 'km-guide-foot');
         foot.append(form, note);
         box.append(log, foot);

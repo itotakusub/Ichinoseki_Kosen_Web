@@ -136,3 +136,41 @@ function km_form_delete(PDO $pdo, int $id): void
     km_form_ensure_table($pdo);
     $pdo->prepare('DELETE FROM km_form_submissions WHERE id = ?')->execute([$id]);
 }
+
+/**
+ * 地図の「🐞 不具合」から来たときの「どこで」(2026-10-29、高専祭のアンケートで「不具合の連絡先が分からない」が 5/8)。
+ * URL には**この決まった値だけ**を載せる(場所の名前・検索した語・個人のことは載せない)
+ */
+const KM_CONTACT_WHERE_LABELS = [
+    'map' => '地図',
+    'route' => '地図(経路の案内中)',
+    'guide' => '地図(案内チャット)',
+    'posters' => 'ポスターの一覧',
+];
+
+/** 端末のおおまかな種類(User-Agent から。版や機種までは書かない) */
+function km_contact_device(string $userAgent): string
+{
+    $kind = preg_match('/iPad|Tablet/i', $userAgent) ? 'タブレット'
+        : (preg_match('/Mobile|Android|iPhone/i', $userAgent) ? 'スマホ' : 'PC');
+    $os = preg_match('/iPhone|iPad|iPod/i', $userAgent) ? 'iOS'
+        : (preg_match('/Android/i', $userAgent) ? 'Android'
+        : (preg_match('/Windows/i', $userAgent) ? 'Windows'
+        : (preg_match('/Mac OS X|Macintosh/i', $userAgent) ? 'Mac'
+        : (preg_match('/CrOS/i', $userAgent) ? 'ChromeOS' : (preg_match('/Linux/i', $userAgent) ? 'Linux' : 'その他')))));
+    $browser = preg_match('/Edg\//', $userAgent) ? 'Edge'
+        : (preg_match('/SamsungBrowser/', $userAgent) ? 'Samsung Internet'
+        : (preg_match('/Firefox|FxiOS/', $userAgent) ? 'Firefox'
+        : (preg_match('/Chrome|CriOS/', $userAgent) ? 'Chrome'
+        : (preg_match('/Safari/', $userAgent) ? 'Safari' : 'その他'))));
+    return "{$kind}({$os} / {$browser})";
+}
+
+/** 不具合の報告の本文のひな形。「何が起きたか」だけを書けばよいようにする */
+function km_contact_bug_template(string $where, string $userAgent, int $now): string
+{
+    return '【どこで】' . (KM_CONTACT_WHERE_LABELS[$where] ?? 'Web サイト') . "\n"
+        . '【端末】' . km_contact_device($userAgent) . "\n"
+        . '【時刻】' . date('Y-m-d H:i', $now) . "\n"
+        . "【何が起きたか】\n";
+}

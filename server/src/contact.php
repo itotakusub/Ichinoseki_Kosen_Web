@@ -57,6 +57,11 @@ $input = [
     'subject' => (string) ($_POST['subject'] ?? 'other'),
     'body' => (string) ($_POST['body'] ?? ''),
 ];
+// 地図の「🐞 不具合」から来たとき(GET の ?subject=bug&where=…)は、件名とひな形を入れておく
+if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST' && ($_GET['subject'] ?? '') === 'bug') {
+    $input['subject'] = 'bug';
+    $input['body'] = km_contact_bug_template((string) ($_GET['where'] ?? ''), (string) ($_SERVER['HTTP_USER_AGENT'] ?? ''), time());
+}
 
 $ready = km_recaptcha_configured();
 

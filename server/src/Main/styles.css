@@ -3577,6 +3577,15 @@ body.km-route-panel-open .km-searchbox-route { background: var(--primary); color
 .km-guide-send { flex: 0 0 auto; }
 /* 2026-10-25、利用者「AI は間違えることがありますと表示」。入力欄の下にいつも出す */
 .km-guide-note { margin: 0; font-size: 0.75rem; line-height: 1.5; color: var(--secondary); }
+.km-guide-bug { color: var(--primary); font-weight: 700; white-space: nowrap; }
+/* 操作の帯の 🐞(a なので下線を消す)。スマホは丸いアイコンだけにして、帯を 2 行にしない(名前は aria-label と title に残す) */
+.km-bug-btn { text-decoration: none; }
+@media (max-width: 768px) {
+    .km-bug-btn { width: var(--km-touch); padding: 0; }
+    .km-bug-btn .km-action-label { display: none; }
+}
+/* 経路の帯の 🐞(共有の ↗ と同じ丸。a なので文字の線と寄せを直す) */
+.km-route-bug { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; font-size: 1.05rem; }
 /* 例(2026-10-25、利用者「例を押せば自動入力して送信」「企画番号の例」「苦手な文も例に」) */
 .km-guide-examples { display: flex; flex-direction: column; gap: 6px; align-self: stretch; }
 .km-guide-examples-head { margin: 0; font-size: 0.8rem; color: var(--secondary); font-weight: 600; }
