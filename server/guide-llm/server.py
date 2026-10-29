@@ -197,10 +197,17 @@ def catalog_unsloth(backend: Backend) -> list[dict[str, Any]]:
     for item in (listed.get("data") or []) if isinstance(listed, dict) else []:
         if not isinstance(item, dict) or not isinstance(item.get("id"), str) or item["id"] in seen:
             continue
+        # 音声の文字起こしなど(task が付く)は会話に使えない(2026-10-29 の本物の一覧に qwen3-asr があった)
+        if item.get("task"):
+            continue
         seen.add(item["id"])
-        loaded = bool(active) and item["id"] == active
+        # 本物の一覧は模型ごとに loaded を持つ。無ければ /v1/status のいま読んでいる模型で決める
+        loaded = item["loaded"] if isinstance(item.get("loaded"), bool) else bool(active) and item["id"] == active
+        quant = str(item.get("quant") or "")
+        # 読み込み済みの模型は display_name を持たないことがある(本物で見た)ので、id の後ろを使う
+        name = str(item.get("name") or item.get("display_name") or item["id"].rsplit("/", 1)[-1])
         entries.append({
-            "id": item["id"], "name": str(item.get("name") or item.get("display_name") or item["id"]),
+            "id": item["id"], "name": f"{name} ({quant})" if quant else name, "quant": quant,
             "loaded": loaded, "instances": [],
             # いま読んでいる模型だけ、考えを止められるかが分かる(reasoning_always_on)
             "offOk": ("no" if status.get("reasoning_always_on") else "yes") if loaded else "",
@@ -271,6 +278,18 @@ def unload_everything(except_key: str | None = None) -> None:
             LOG.warning("could not unload %s: %s", key, type(error).__name__)
 
 
+def wait_until_loaded(key: str, started: float) -> bool:
+    """一覧で読み込み済みになるまで待つ(読み込みの時間の上限まで)"""
+    while time.time() - started < LOAD_TIMEOUT:
+        time.sleep(3)
+        try:
+            if refresh_catalog(force=True).get(key, {}).get("loaded"):
+                return True
+        except Exception:  # 読み込み中は一覧も遅れて答えないことがある
+            pass
+    return False
+
+
 def load_model(key: str, reload: bool = False) -> None:
     """模型を読み込む。ほかの模型は外す。reload なら読み込み済みでも外してから読む(起動のとき。利用者「アンロードからロード」)"""
     backend_name, model_id = split_key(key)
@@ -284,6 +303,12 @@ def load_model(key: str, reload: bool = False) -> None:
                 LOAD_STATE.pop(key, None)
                 return
             unload_everything()
+            # 外しきれていなければ読まない(2 つ読むと PC が固まりかねない。利用者 2026-10-29)。
+            # Bionic の古い一覧(/v1/models だけ)は読み込み済みか分からないので数えない
+            still = [k for k, v in refresh_catalog(force=True).items()
+                     if v["loaded"] and (v["backend"] == "unsloth" or v["instances"])]
+            if still:
+                raise BadRequest(503, "another model is still loaded")
             started = time.time()
             if backend_name == "bionic":
                 body: dict[str, Any] = {"model": model_id}
@@ -291,10 +316,20 @@ def load_model(key: str, reload: bool = False) -> None:
                     body["context_length"] = int(CONTEXT_LENGTH)
                 backend.request("POST", "/api/v1/models/load", body, timeout=LOAD_TIMEOUT)
             else:
-                body = {"model_path": model_id}
+                # alongside は false(今の模型を残して横に読まない。2 つ読むと PC が固まりかねない)。
+                # gguf_variant は一覧の量子化(手元にある版。無ければ Unsloth が選ぶ)
+                body = {"model_path": model_id, "alongside": False}
+                if entry.get("quant"):
+                    body["gguf_variant"] = entry["quant"]
                 if CONTEXT_LENGTH.isdigit():
                     body["max_seq_length"] = int(CONTEXT_LENGTH)
-                backend.request("POST", "/v1/load", body, timeout=LOAD_TIMEOUT)
+                try:
+                    backend.request("POST", "/v1/load", body, timeout=LOAD_TIMEOUT)
+                except (urllib.error.URLError, OSError) as error:
+                    # 読み込みの途中で Unsloth が接続を切ることがある(読み込み自体は続いて終わる。2026-10-29 の本物で
+                    # ConnectionResetError のあと読み込まれた)。断りの返事(HTTPError)でなければ、読み込まれるまで待つ
+                    if isinstance(error, urllib.error.HTTPError) or not wait_until_loaded(key, started):
+                        raise
             LOG.info("loaded %s in %.0fs", key, time.time() - started)
             LOAD_STATE.pop(key, None)
         except (urllib.error.URLError, OSError, ValueError, BadRequest) as error:

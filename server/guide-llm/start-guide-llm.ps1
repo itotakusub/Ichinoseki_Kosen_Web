@@ -103,6 +103,11 @@ if (-not $Bench -and -not $NoNgrok) {
 # (2026-10-29、Python 3.13 を外して C:\Python315 にした PC で「Python was not found」と出た)。py ランチャーを先に見る
 # 同じ日に C:\Python315 は DLL が欠けていて動かなかったので、uv の python(uv python find)も見る。
 # guide-llm.env の GUIDE_LLM_PYTHON に置き場所を書けば、それを先に使う
+# C:\Python315 は Lib(標準ライブラリ)が無いまま「動いてしまう」(警告を出して終了コード 0)ので、
+# 門番が使う標準ライブラリのファイルが在るかまで確かめる(2026-10-29 の -Bench で警告が出て止まった)
+$pythonProbe = "import os, sys, sysconfig; lib = sysconfig.get_paths()['stdlib']; " +
+    "ok = all(os.path.isfile(os.path.join(lib, *p)) for p in (('http', 'server.py'), ('json', '__init__.py'), ('urllib', 'request.py'))); " +
+    "print(sys.executable if ok else '')"
 $pythonExe = $null
 $candidates = @()
 if ($conf['GUIDE_LLM_PYTHON']) { $candidates += , @($conf['GUIDE_LLM_PYTHON']) }
@@ -115,9 +120,11 @@ if (Get-Command uv -ErrorAction SilentlyContinue) {
 }
 foreach ($candidate in $candidates) {
     if (-not (Get-Command $candidate[0] -ErrorAction SilentlyContinue)) { continue }
-    $found = try { & $candidate[0] @($candidate | Select-Object -Skip 1) -c 'import sys; print(sys.executable)' 2>$null } catch { $null }
-    if ($LASTEXITCODE -eq 0 -and $found -and (Test-Path -LiteralPath "$found".Trim())) { $pythonExe = "$found".Trim(); break }
+    $found = try { & $candidate[0] @($candidate | Select-Object -Skip 1) -c $pythonProbe 2>$null | Select-Object -Last 1 } catch { $null }
+    if ($LASTEXITCODE -eq 0 -and "$found".Trim() -and (Test-Path -LiteralPath "$found".Trim())) { $pythonExe = "$found".Trim(); break }
+    Write-Host ("python の候補 {0} は動かないか標準ライブラリが欠けているので使いません。" -f ($candidate -join ' ')) -ForegroundColor Yellow
 }
+Write-Host "python: $pythonExe"
 if (-not $pythonExe) { throw 'python が見つかりません(門番 server.py を動かすのに使います。標準ライブラリだけで動きます)。' }
 $python = [pscustomobject]@{ Source = $pythonExe }
 

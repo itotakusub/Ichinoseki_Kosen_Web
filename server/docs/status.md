@@ -646,7 +646,18 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
     質問と答えの記録に答えた模型(km_guide_chat_log.model。本番の表には ALTER で足す)。「届くか確かめる」に答えた模型を出す。
   - guide-llm.env: 既定を Unsloth にした(UNSLOTH_API_KEY は利用者が Unsloth の画面で作って入れる)。前の Bionic の値は BIONIC_API_URL へ。
   - 確かめ: 作り物の Unsloth と Bionic で門番を通しで(起動の読み直し・一覧・既定の会話と道具を止める項目・Bionic へ切り替え・一覧に無い名前・空の答えの頼み直し)。
-    check.php 2413 件。**本物の Unsloth はまだ(鍵待ち)**。管理画面の模型の欄はまだ見ていない。
+    check.php 2413 件。管理画面の模型の欄はまだ見ていない。
+  - **本物の Unsloth で確かめた(同じ日、鍵が入ったあと)**: 利用者「作り物ではなく直接アクセスして検証」「模型は 1 つだけ。2 つ以上で PC が固まりかねない」。
+    - 一覧は模型ごとに loaded・quant(量子化)・display_name を持つ。文字起こしの模型(task 付き。qwen3-asr)も混ざる → 一覧から外した。
+    - /v1/load には alongside(今の模型を残して横に読む。既定 false)と gguf_variant がある → **alongside: false と一覧の quant を必ず付ける**。
+      外しきれていなければ読まない(503)も足した。multi_model_mode は off。
+    - 入れ替えの途中で Unsloth が接続を切ることがあった(ConnectionResetError。読み込み自体は終わっていた)→ 一覧で読み込まれるまで待つ。
+    - 門番越しに gemma-4-12B-it-qat → granite-4.1-8b → gemma と入れ替え、**どの時点も Unsloth に載っている模型は 1 つ**(/api/inference/loaded-models を見張った)。
+      読み込みは 5〜8 秒、入れ替えの間は 503、答えた模型が返事に入る。enable_thinking false で考えずに答える(true は reasoning_content に出る)。
+    - start-guide-llm.ps1 -Bench(gemma-4-12B-it-qat UD-Q4_K_XL): **20/20 が JSON・中央値 0.34 秒・最大 0.58 秒**。
+      bench.py は答えた模型を結果に残すようにした。guide-llm.env の GUIDE_LLM_MODEL をこの模型にした(何も読んでいないと一覧の先頭を読むため)。
+    - 利用者の -Bench で止まった件: **C:\Python315 は Lib(標準ライブラリ)が無いのに、警告を出して終了コード 0 で動いてしまう**(py -3 がこれを選んだ)。
+      python を探すとき、標準ライブラリのファイル(http/server.py ほか)が在るかまで確かめる → uv の Python 3.13 を選ぶ。check.php 2415 件。
 - **ログインが切れる(2026-10-25)**: 利用者「posters.php へ行って、ito4.jp へ戻ると、ログインが切れているときがあります」。
   - 原因: web コンテナは php.ini を読まないので、セッションの寿命が組み込み既定の **24 分**だった。最後の操作から 24 分たったセッションは、
     約 100 回に 1 回のリクエストのついでに走る掃除で消える。ログイン中かどうかはセッションの ID トークンがあるかだけで決まるので、

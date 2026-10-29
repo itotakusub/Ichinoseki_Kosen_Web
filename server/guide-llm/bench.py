@@ -1,6 +1,6 @@
 """模型を選ぶための測り(自宅 PC。2026-10-24、2026-10-25 に門番越しに直した)。
 
-動いている門番 server.py(127.0.0.1)越しに Bionic の API へ、案内でよく来そうな質問 20 件を、Website と同じ
+動いている門番 server.py(127.0.0.1)越しに 頼み先(Unsloth / Bionic)の API へ、案内でよく来そうな質問 20 件を、Website と同じ
 「分ける」頼み方で送り、1 件ごとの時間と返事を出す。Bionic で読む模型(Gemma4 E4B / 12B QAT / Qwen3.5-9B / GPT-OSS-20B)を
 入れ替えて走らせ、**速さ(中央値)と、返事が JSON として読めた数**で比べる。日本語の出来は、出した返事を目で見て決める。
 
@@ -18,7 +18,7 @@ import time
 import urllib.error
 import urllib.request
 
-PORT = int(os.environ.get("GUIDE_LLM_PORT", "8888"))
+PORT = int(os.environ.get("GUIDE_LLM_PORT", "8192"))
 KEY = os.environ.get("KM_GUIDE_LLM_KEY", "")
 
 QUESTIONS = [
@@ -34,7 +34,7 @@ SYSTEM = (
 )
 
 
-def ask(question: str) -> tuple[float, str]:
+def ask(question: str) -> tuple[float, str, str]:
     body = json.dumps({
         "model": "bench",
         "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": question}],
@@ -49,7 +49,8 @@ def ask(question: str) -> tuple[float, str]:
     started = time.time()
     with urllib.request.urlopen(request, timeout=120) as response:
         data = json.loads(response.read())
-    return time.time() - started, data["choices"][0]["message"]["content"]
+    # 答えた模型(門番が返事に入れる「unsloth:<id>」)も返す
+    return time.time() - started, data["choices"][0]["message"]["content"], str(data.get("model") or "")
 
 
 def parses(text: str) -> bool:
@@ -64,9 +65,11 @@ def parses(text: str) -> bool:
 
 def main() -> None:
     results = []
+    models: set[str] = set()
     for question in QUESTIONS:
         try:
-            seconds, text = ask(question)
+            seconds, text, model = ask(question)
+            models.add(model)
         except urllib.error.HTTPError as error:
             # 門番が断った・空の答え(502)でも止めずに NG として数える
             seconds, text = 0.0, f"(HTTP {error.code})"
@@ -74,8 +77,7 @@ def main() -> None:
         print(f"{seconds:6.2f}s  {'OK ' if parses(text) else 'NG '} {question} → {text[:80]!r}")
     times = [r["seconds"] for r in results]
     summary = {
-        "model": os.environ.get("GUIDE_LLM_MODEL", ""),
-        "family": os.environ.get("GUIDE_LLM_FAMILY", ""),
+        "model": ", ".join(sorted(m for m in models if m)),
         "median_seconds": round(statistics.median(times), 2),
         "max_seconds": round(max(times), 2),
         "json_ok": sum(1 for r in results if r["json"]),
