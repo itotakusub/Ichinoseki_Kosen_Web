@@ -1024,6 +1024,7 @@ globalThis.KM_I18N.en = {
   "page.visitors.days30": "30 days",
   "page.visitors.geo": "Look up locations (sends IPs outside)",
   "page.visitors.colDanger": "Dangerous",
+  "page.visitors.colDevices": "Devices (est.)",
   "page.visitors.colLast": "Last seen",
   "page.visitors.colLevel": "Rating",
   "page.visitors.colReason": "Reasons",

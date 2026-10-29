@@ -5135,6 +5135,12 @@ function km_check_hardening(): void
         && !str_contains(str_replace($geoBlock, '', $csp), "'https://ipwho.is'") && !str_contains(str_replace($geoBlock, '', $csp), "'https://api.country.is'"));
     $visitorsJs = $file('src/admin/assets/js/visitors.js');
     check_bool('位置は既定で引かない(スイッチを入れたときだけ)・文字は textContent', str_contains($visitorsJs, "pref.get(PREF_GEO, '0') === '1'") && !str_contains($visitorsJs, 'innerHTML'));
+    // 端末の目安(2026-10-29、振り返り「170 人は IP の数で、学校の回線は 1 人」)。新しい印を作らず、記録の ip・ua・種別の印だけで数える
+    check_bool('端末の目安: サインイン等は種別の印、ほかは IP と端末の名乗りの組・日別の列と見出しの数が合う',
+        str_contains($visitorsJs, "const deviceKey = (v) => (v.v && v.v.includes(':') ? v.v : `\${v.ip}\\n\${v.ua || ''}`);")
+        && str_contains($visitorsJs, 'String(d.ips.size), String(d.devices.size), String(d.foreign)')
+        && str_contains($file('src/admin/visitors.php'), "['page.visitors.ips', '送り元(IP)'], ['page.visitors.colDevices', '端末の目安'], ['page.visitors.foreign', '外国から']")
+        && str_contains($file('src/admin/assets/i18n/en.js'), '"page.visitors.colDevices"'));
     // 色分け(2026-10-08、利用者の指示「危険は赤・怪しいは黄・危険リスト・外国はチェックボックスで表示・非表示」)
     $threatsJs = $file('src/admin/assets/js/visitors-threats.js');
     $visitorsPage = $file('src/admin/visitors.php');

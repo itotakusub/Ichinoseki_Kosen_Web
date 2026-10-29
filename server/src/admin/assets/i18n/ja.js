@@ -1025,6 +1025,7 @@ globalThis.KM_I18N.ja = {
   "page.visitors.days30": "30 日",
   "page.visitors.geo": "位置を調べる(外部へ IP を送る)",
   "page.visitors.colDanger": "危険",
+  "page.visitors.colDevices": "端末の目安",
   "page.visitors.colLast": "最後",
   "page.visitors.colLevel": "判定",
   "page.visitors.colReason": "理由",
