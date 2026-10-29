@@ -2028,6 +2028,10 @@ function km_check_guide_chat(): void
         str_contains($guideJs, "'AIは間違えることがあります。") && str_contains($guideJs, '質問と答えは、案内をよくするために保存します')
         && str_contains($guideJs, "window.KmSheet.setBase({ key: 'guide', title: '💬 案内', content: box });")
         && str_contains((string) file_get_contents(__DIR__ . '/../Main/km-sheet.js'), 'closeBtn.hidden = entry === base;'));
+    // 2026-10-29(振り返りのフェーズ 0): 土台は PC だけ。スマホは開いたままのシートが画面の半分と操作の帯を隠す
+    check_bool('画面: チャットを土台にするのは PC だけ(スマホは「💬 案内」で開いて閉じられる)',
+        str_contains($guideJs, "const wide = window.matchMedia('(min-width: 769px)');") && str_contains($guideJs, 'if (wide.matches && !pin())')
+        && str_contains($guideJs, "window.KmSheet.open({ key: 'guide', title: '💬 案内', content: box });"));
     check_bool('管理画面: 質問と答えの一覧・👎 だけに絞る・まとめて消すのは「消す」と打ってから・記録に残す',
         str_contains($guideAdmin, '$logs = km_guide_log_recent($pdo, $logPerPage, ($logPage - 1) * $logPerPage, $logBadOnly);')
         && str_contains($guideAdmin, "if (trim((string) (\$_POST['confirm'] ?? '')) !== '消す') {")
@@ -7598,10 +7602,18 @@ function km_check_layout(): void
      * PHP で2つ書くと、ログイン中と未ログインの出し分けが2箇所になって食い違う。
      */
     check('入口は2つだけ', 2, substr_count($index, 'sign-in.php?mode=signIn'));
-    // 2026-10-23 から: 1 回だけ組み立てて(ob_start)、ふだんは「ダウンロード・設定」の中、展示の PC は左下の小さな欄に出す
+    // 2026-10-29 から: 1 回だけ組み立てて(ob_start)、**右上のアカウントの欄の 1 か所だけ**に出す(展示の PC も同じ)。
+    // 「ダウンロード・設定」の中だけだと、スマホで引き出しを開いている間 ⚙️ ごと隠れて届かなかった(高専祭の振り返り)
     check_bool('ログインの欄は 1 回だけ組み立てる', substr_count($index, 'id="km-auth-links"') === 1 && str_contains($index, '$kmAuthLinksHtml = (string) ob_get_clean();'));
-    check_bool('ふだんはダウンロード・設定の中', str_contains($index, '<div id="km-auth-slot"><?= $kmAuthLinksHtml ?></div>'));
-    check_bool('展示の PC は左下の小さな欄', str_contains($index, '<div class="km-test-auth glass-panel"><?= $kmAuthLinksHtml ?></div>'));
+    check('ログインの欄を出すのは 1 か所だけ', 1, substr_count($index, '<?= $kmAuthLinksHtml ?>'));
+    check_bool('出す所は右上のアカウントの欄(テストモードで囲まない)', str_contains($index, '<div class="km-account-menu glass-panel"><?= $kmAuthLinksHtml ?></div>')
+        && preg_match('/<\?php if \(\$kmTestMode[^)]*\): \?>\s*<details class="km-account"/', $index) === 0);
+    $kmCss = (string) file_get_contents(__DIR__ . '/../Main/styles.css');
+    check_bool('アカウントの欄は引き出し・シートより手前で、シートが開いても隠さない', preg_match('/^\.km-account \{[^}]*z-index: 1350;/m', $kmCss) === 1
+        && !preg_match('/km-sheet-open[^{]*\.km-account/', $kmCss) && !str_contains($kmCss, '.km-test-auth'));
+    check_bool('PC の種類のチップはアカウントの欄の分を空ける', str_contains($kmCss, 'right: calc(var(--km-edge) + var(--km-account-reserve) + 8px);'));
+    check_bool('アカウントの欄は外を押す・Esc で閉じる(展示の PC でも。引き出しが無いときの return より前)', ($accountAt = strpos($panelJs, "getElementById('km-account')")) !== false
+        && $accountAt < strpos($panelJs, 'if (!toggleBtn'));
     check_bool('panel.js は画面幅で入れ替えない', !str_contains($panelJs, 'placeAuthLinks'));
 
     km_check_heading('layout: ズームボタン');
@@ -7905,7 +7917,7 @@ function km_check_layout(): void
     // 2026-10-19(同日、利用者の指示): テスト用アカウントでは「ダウンロード・設定」を開けない。⚙️ も引き出しも書かない
     check_bool('テスト用アカウントでは「ダウンロード・設定」の ⚙️ を出さない', preg_match('/<\?php if \(\$kmTestMode === null\): \?>\s*<button id="info-panel-toggle"/', $homeCode) === 1);
     check_bool('テスト用アカウントでは引き出しごと書かない(APK・アカウント設定への導線をページに残さない)', preg_match('/<\?php if \(\$kmTestMode === null\): \?>\s*<div id="km-drawer-scrim".*?<\/aside>\s*<\?php endif; \?>/s', $homeCode) === 1);
-    check_bool('引き出しが無ければ(展示の PC)ログインの欄は左下の小さな欄に出す', preg_match('/<\?php if \(\$kmTestMode !== null\): \?>\s*<\?php \/\*[^*]*\*\/ \?>\s*<div class="km-test-auth glass-panel">/', $homeCode) === 1);
+    check_bool('引き出しが無くても(展示の PC)ログインの欄は右上のアカウントの欄に出る', str_contains($homeCode, '<details class="km-account" id="km-account">'));
     if (preg_match('/^\.action-group-left \{(.*?)^\}/ms', (string) file_get_contents(__DIR__ . '/../Main/styles.css'), $leftCss) === 1) {
         check_bool('バーに残ったログインの欄はスマホで折り返す(画面の右へはみ出さない)', str_contains($leftCss[1], 'flex-wrap: wrap;') && str_contains($leftCss[1], 'min-width: 0;'));
     } else {

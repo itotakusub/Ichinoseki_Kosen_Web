@@ -493,10 +493,10 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
 
         <?php
         /*
-         * ログイン・ログアウトの欄(2026-10-23、利用者の指示「上のバーをなくして、ログインは設定項目に入れて」)。
-         * **1 回だけ組み立てて 1 か所に出す** —— ふだんは「ダウンロード・設定」の中(#km-auth-slot)、
-         * 展示の PC(テストモード)は引き出しが無いので、左下の操作の横の小さな欄(.km-test-auth)。
-         * 2 つ書いて片方を隠す形にはしない(片方だけ直したときに食い違う)。
+         * ログイン・ログアウトの欄。**1 回だけ組み立てて 1 か所に出す**(2 つ書いて片方を隠す形にはしない。片方だけ直したときに食い違う)。
+         * 出す所は右上のアカウントの欄(#km-account。2026-10-29、高専祭の振り返り「ログインが消える」)。
+         * それまでは「ダウンロード・設定」の中にしか無く、スマホでは引き出し(案内チャットなど)が開いている間 ⚙️ ごと隠れて届かなかった。
+         * 展示の PC(テストモード)も同じ欄(以前の .km-test-auth は「テスト中」の札・階の列と重なった)。
          */
         ob_start();
         ?>
@@ -553,6 +553,21 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
         // ポスターの一覧(2026-10-21、lib/posters.php)。**いま出しているポスターがあるときだけ**左下に出す
         $kmPosterCount = count($kmMapData['posters'] ?? []);
         ?>
+
+        <?php
+        /*
+         * アカウントの欄(右上。2026-10-29)。閉じているときは「ログイン」か「○○ さん」だけ。押すと上の $kmAuthLinksHtml が開く。
+         * 引き出し・案内チャット・シートを開いても隠さない(⚙️ を開かなくても届く)。開け閉ては <details> のまま(JS が無くても動く)
+         */
+        ?>
+        <details class="km-account" id="km-account">
+            <summary class="km-account-summary glass-panel" aria-label="<?= $loggedIn ? km_home_e($displayName) . ' さん(ログイン中)' : 'ログイン' ?>">
+                <?php /* 絵文字の 👤 はダークモードで背景に沈むので、文字の色で描く */ ?>
+                <svg class="km-account-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="8" r="4.2"/><path d="M3.8 20.5c0-4.3 3.7-6.6 8.2-6.6s8.2 2.3 8.2 6.6z"/></svg>
+                <span class="km-account-label"><?= $loggedIn ? km_home_e($displayName) . ' さん' : 'ログイン' ?></span>
+            </summary>
+            <div class="km-account-menu glass-panel"><?= $kmAuthLinksHtml ?></div>
+        </details>
 
         <?php
         /*
@@ -734,10 +749,6 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
                 <span class="km-action-label">経路</span>
             </button>
         </div>
-        <?php if ($kmTestMode !== null): ?>
-            <?php /* 展示の PC はダウンロード・設定が無いので、係の人のログアウトはここ(左下の操作の上) */ ?>
-            <div class="km-test-auth glass-panel"><?= $kmAuthLinksHtml ?></div>
-        <?php endif; ?>
 
         <?php
         /*
@@ -859,15 +870,7 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
                  * 使っており、消すと DB が起動しない**(compose.yaml の --ssl-ca)。
                  */
                 ?>
-                <?php
-                /*
-                 * ログイン(2026-10-23 から PC でもここ。上のバーを外した)。中身は上で 1 回だけ組み立てた $kmAuthLinksHtml
-                 */
-                ?>
-                <div class="info-section" id="km-auth-section">
-                    <h4>ログイン</h4>
-                    <div id="km-auth-slot"><?= $kmAuthLinksHtml ?></div>
-                </div>
+                <?php /* ログインは右上のアカウントの欄(#km-account。2026-10-29 にここから移した) */ ?>
                 <div class="info-section">
                     <h4>Android アプリ</h4>
                     <?php if ($apkAvailable): ?>

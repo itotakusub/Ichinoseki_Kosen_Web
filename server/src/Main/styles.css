@@ -745,11 +745,63 @@ body {
     border: 1px solid var(--border-strong);
     border-radius: var(--radius-xs);
 }
-/* 「ダウンロード・設定」へ移したときの並び(スマホ)。panel.js が入れ替える */
-#km-auth-slot .action-group-left {
-    flex-wrap: wrap;
+/*
+ * アカウントの欄(右上。2026-10-29、高専祭の振り返り「ログインが消える」)。閉じると「👤 ログイン」/「👤 ○○ さん」の丸い札だけ。
+ * 引き出し(1200)・検索の窓(1300)より手前に置き、シートや案内チャットを開いても隠れない
+ */
+:root { --km-account-reserve: 200px; }   /* PC で種類のチップの右に空けておく幅 */
+.km-account {
+    position: absolute;
+    top: var(--km-edge);
+    right: var(--km-edge);
+    z-index: 1350;
+}
+.km-account-summary {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    max-width: var(--km-account-reserve);
+    height: var(--km-searchbox-height);
+    padding: 0 16px 0 12px;
+    border-radius: 999px;
+    border: 1px solid var(--border-strong);
+    background: var(--glass-heavy);
+    box-shadow: var(--shadow-lg);
+    color: var(--text);
+    font-weight: 700;
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+}
+.km-account-summary::-webkit-details-marker { display: none; }
+.km-account-summary:focus-visible { outline: 3px solid var(--primary); outline-offset: 2px; }
+.km-account[open] > .km-account-summary { border-color: var(--primary); }
+.km-account-icon { width: 22px; height: 22px; flex: 0 0 auto; fill: currentColor; }
+.km-account-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.km-account-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    width: max-content;
+    max-width: min(340px, calc(100vw - var(--km-edge) * 2));
+    padding: 0.75rem;
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border-strong);
+    background: var(--glass-heavy);
+    box-shadow: var(--shadow-lg);
+}
+.km-account-menu .action-group-left {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
     gap: 0.5rem;
 }
+.km-account-menu .user-chip { white-space: normal; }
 
 /* ======== Search Panel ======== */
 /*
@@ -3049,7 +3101,8 @@ body.km-route-panel-open .km-searchbox-route { background: var(--primary); color
     position: absolute;
     top: var(--km-edge);
     left: calc(var(--km-edge) + min(400px, calc(100vw - var(--km-edge) * 2)) + 8px);
-    right: var(--km-edge);
+    /* 右上のアカウントの欄(#km-account)の分を空ける */
+    right: calc(var(--km-edge) + var(--km-account-reserve) + 8px);
     height: var(--km-searchbox-height);
     align-items: center;
     z-index: 1250;
@@ -3306,21 +3359,23 @@ body.km-route-panel-open .km-searchbox-route { background: var(--primary); color
 }
 .km-toast { z-index: 3500; }
 
-/* 展示の PC のログアウト(ダウンロード・設定が無いので右上の小さな欄) */
-.km-test-auth {
-    position: absolute;
-    /* 種類のチップが窓の右隣に並ぶので、その下 */
-    top: var(--km-top-offset);
-    right: var(--km-edge);
-    z-index: 1100;
-    padding: 0.4rem 0.6rem;
-    border-radius: var(--radius-lg);
-}
-
 @media (max-width: 768px) {
+    /* 窓の右に、アカウントの欄(丸い 👤 だけ)を置く */
     .km-searchbox {
-        right: var(--km-edge);
+        right: calc(var(--km-edge) + var(--km-searchbox-height) + 8px);
         width: auto;
+    }
+    .km-account-summary {
+        width: var(--km-searchbox-height);
+        padding: 0;
+        justify-content: center;
+    }
+    .km-account-label {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
     }
     /*
      * スマホは窓が画面の幅いっぱいなので、チップは窓の下。**1 行にして横に送る**(2026-10-24、利用者の指示。
@@ -3382,7 +3437,6 @@ body.km-route-panel-open .km-searchbox-route { background: var(--primary); color
     /* シートが出ている間、左下の操作は隠す(シートの下に潜る) */
     body.km-sheet-open .km-action-bar,
     body.km-sheet-open .km-route-dock { visibility: hidden; }
-    .km-test-auth { top: auto; bottom: calc(var(--km-bottom) + var(--km-touch) + 8px); }
 }
 
 @media (prefers-reduced-motion: reduce) {

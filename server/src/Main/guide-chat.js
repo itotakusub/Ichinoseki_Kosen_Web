@@ -337,19 +337,30 @@
         }
     }
 
-    // チャットを引き出しの土台にする(閉じない。ほかの中身を閉じると戻ってくる)。入力欄にはまだ触れない(スマホでキーボードを出さない)
+    /*
+     * PC はチャットを引き出しの土台にする(閉じない。ほかの中身を閉じると戻ってくる)。入力欄にはまだ触れない。
+     * **スマホは土台にしない**(2026-10-29、振り返りのプランのフェーズ 0): 開いたままのシートが画面の半分と操作の帯を隠すので、
+     * 「💬 案内」で開き、閉じれば地図に戻る
+     */
+    const wide = window.matchMedia('(min-width: 769px)');
     function pin() {
         if (!window.KmSheet) return false;
         if (!box) build();
         window.KmSheet.setBase({ key: 'guide', title: '💬 案内', content: box });
         return true;
     }
-    if (!pin()) window.addEventListener('load', pin, { once: true });
+    if (wide.matches && !pin()) window.addEventListener('load', pin, { once: true });
 
-    // 「💬 案内」は、ほかの中身を開いているときにチャットへ戻すボタン
+    // 「💬 案内」: PC はほかの中身を開いているときにチャットへ戻す。スマホはチャットを開く
     openButton.addEventListener('click', () => {
-        if (!pin()) return;
-        if (window.KmSheet.currentKey() !== 'guide') window.KmSheet.close();
+        if (!window.KmSheet) return;
+        if (wide.matches) {
+            if (!pin()) return;
+            if (window.KmSheet.currentKey() !== 'guide') window.KmSheet.close();
+        } else {
+            if (!box) build();
+            window.KmSheet.open({ key: 'guide', title: '💬 案内', content: box });
+        }
         window.setTimeout(() => { if (input) input.focus(); }, 300);
     });
 }());
