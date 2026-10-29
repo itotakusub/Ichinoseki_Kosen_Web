@@ -8685,6 +8685,15 @@ function km_check_layout(): void
         && str_contains($lookApp, "\${isEnd ? '<span class=\"km-dest-pulse\" aria-hidden=\"true\"></span>' : ''}")
         && str_contains($lookCss, 'font-size: 17px;') && str_contains($lookCss, '.km-dest-pulse { animation: none;'));
 
+    // 2026-10-30(振り返りのフェーズ 2「ズームがカクつく」): 横へ動かしただけでは札を測り直さない・書くのはコマに分ける・書き終えてから経路の重なり
+    check_bool('軽さ: 移動だけなら札を測り直さない(拡大率・階・札の数が同じ)・拡大と外からの呼び出しは必ず測る',
+        str_contains($shareApp, "window.map.on('moveend', () => scheduleDeclutter(false));") && str_contains($shareApp, 'scheduleDeclutter(true);')
+        && str_contains($shareApp, "if (force !== true && declutterKey() === lastDeclutterKey) return;")
+        && str_contains($shareApp, 'window.kmDeclutterLabels = function () { scheduleDeclutter(true); };'));
+    check_bool('軽さ: 札の置き方はコマに分けて書く・次の並べ直しが始まったら古い分は書かない・書き終えたら経路の重なりを塗り直す',
+        str_contains($shareApp, 'window.requestAnimationFrame(writeChunk);') && str_contains($shareApp, 'if (generation !== declutterGeneration) return;')
+        && str_contains($shareApp, 'if (routeLineRuns.length > 0) routeLineRuns.forEach(paintRouteRun);'));
+
     km_check_heading('地図: 札は 6 文字 + …・イベントの地点の見分け・経路の線(2026-10-24)');
     $viewCss = (string) file_get_contents(__DIR__ . '/../Main/styles.css');
     check_bool('札はすべて縮める(地点・一時地点)', str_contains($shareApp, 'escapeHtml(shortPoiName(project ? project.name : displayNameFor(node)));')
@@ -8704,7 +8713,9 @@ function km_check_layout(): void
     check_bool('線が重なる所は 70% 透かす', str_contains($shareApp, 'const ROUTE_OVERLAP_OPACITY = 0.3;')
         && str_contains($shareApp, 'view.splitRouteByObstacles(points, routeObstacleRects(), ROUTE_OVERLAP_PAD)')
         && str_contains($shareApp, "container.querySelectorAll('.leaflet-marker-pane .km-node, .leaflet-tooltip-pane .km-label')"));
-    check_bool('動き終えたら塗り直す・経路を消したら忘れる', str_contains($shareApp, "window.map.on('moveend', refreshRouteOverlap);")
+    // 2026-10-30: 塗り直すのは拡大率が変わったときだけ(横へ動かしただけでは重なる所は変わらない)
+    check_bool('拡大し終えたら塗り直す・横へ動かしただけでは塗り直さない・経路を消したら忘れる', str_contains($shareApp, "window.map.on('zoomend', refreshRouteOverlap);")
+        && !str_contains($shareApp, "window.map.on('moveend', refreshRouteOverlap);")
         && preg_match('/function clearRoute\(\) \{[^}]*routeLineRuns = \[\];/s', $shareApp) === 1);
     check_bool('route-view.js を app.js より先に読む', ($rv = strpos($shareIndex, "Main/route-view.js')")) !== false
         && $rv < (int) strpos($shareIndex, "<script defer src=\"<?= km_home_e(km_public_asset('Main/app.js'))"));

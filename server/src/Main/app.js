@@ -1924,6 +1924,10 @@ document.addEventListener('DOMContentLoaded', async () => {
      */
     const KM_LABEL_PRIORITY = { facility: 0, entrance: 1, stairs: 2, room: 3, wifi_router: 4, road: 5, wall: 6 };
     let declutterTimer = null;
+    let lastDeclutterKey = '';
+    let declutterGeneration = 0;
+    /** 1 コマに書く札の数(書くだけなので軽い。測るのは 1 回にまとめる) */
+    const DECLUTTER_CHUNK = 60;
 
     function labelPriority(el) {
         const type = (el.className.match(/km-label-([a-z_]+)/) || [])[1];
@@ -2021,41 +2025,74 @@ document.addEventListener('DOMContentLoaded', async () => {
             nodes: nodes,
         });
 
-        placements.forEach(function (p, i) {
-            const el = targets[i];
-            if (p === null) {
-                el.classList.add('km-label-hidden');
+        /*
+         * **書くのはコマに分ける**(2026-10-30、振り返りのフェーズ 2。利用者の案「数ミリ秒ずらす」)。建物の中は札が 200 を超え、
+         * 一度に書くとズームの直後に 1 コマ大きく止まった。DECLUTTER_CHUNK 個ずつ requestAnimationFrame で書く。
+         * 途中で次の並べ直しが始まったら、古い分は書かない(generation)
+         */
+        const generation = ++declutterGeneration;
+        let next = 0;
+        const writeChunk = function () {
+            if (generation !== declutterGeneration) return;
+            const end = Math.min(placements.length, next + DECLUTTER_CHUNK);
+            for (; next < end; next++) applyPlacement(placements[next], targets[next], items[next]);
+            if (next < placements.length) {
+                window.requestAnimationFrame(writeChunk);
                 return;
             }
-            if (p.dy !== 0) el.style.marginTop = p.dy + 'px';
-            if (p.dx !== 0) el.style.marginLeft = p.dx + 'px';
-            if (p.leader) {
-                /*
-                 * 線は札の ::after で描く(styles.css の .km-label-led)。札と一緒に動くので、
-                 * 地図を動かしている間もずれない。始点は札の縁、向きは点の方。
-                 * **style 属性ではなく CSSOM で入れる**(CSP は style 属性を止めるが、JS からの代入は通す)。
-                 */
-                const box = items[i].box;
-                const left = box.left + p.dx;
-                const top = box.top + p.dy;
-                const vx = p.leader.x1 - p.leader.x2;
-                const vy = p.leader.y1 - p.leader.y2;
-                el.classList.add('km-label-led');
-                // 1.5px は札の枠。::after の left/top は枠の内側から測る
-                el.style.setProperty('--km-lead-x', (p.leader.x2 - left - 1.5).toFixed(1) + 'px');
-                el.style.setProperty('--km-lead-y', (p.leader.y2 - top - 1.5).toFixed(1) + 'px');
-                el.style.setProperty('--km-lead-len', Math.sqrt(vx * vx + vy * vy).toFixed(1) + 'px');
-                el.style.setProperty('--km-lead-ang', (Math.atan2(vy, vx) * 180 / Math.PI).toFixed(1) + 'deg');
-            }
-        });
+            // 札が落ち着いたので、経路の線の重なりを塗り直す(札の位置で透かす所が変わる)
+            if (routeLineRuns.length > 0) routeLineRuns.forEach(paintRouteRun);
+        };
+        writeChunk();
     }
 
-    /** 連続して呼ばれる(ズーム中・移動中)ので、落ち着いてから1回だけ測る。 */
-    function scheduleDeclutter() {
-        window.clearTimeout(declutterTimer);
-        declutterTimer = window.setTimeout(declutterLabels, 120);
+    /** 1 つの札に置き方を書く(declutterLabels がコマに分けて呼ぶ) */
+    function applyPlacement(p, el, item) {
+        if (p === null) {
+            el.classList.add('km-label-hidden');
+            return;
+        }
+        if (p.dy !== 0) el.style.marginTop = p.dy + 'px';
+        if (p.dx !== 0) el.style.marginLeft = p.dx + 'px';
+        if (p.leader) {
+            /*
+             * 線は札の ::after で描く(styles.css の .km-label-led)。札と一緒に動くので、
+             * 地図を動かしている間もずれない。始点は札の縁、向きは点の方。
+             * **style 属性ではなく CSSOM で入れる**(CSP は style 属性を止めるが、JS からの代入は通す)。
+             */
+            const box = item.box;
+            const left = box.left + p.dx;
+            const top = box.top + p.dy;
+            const vx = p.leader.x1 - p.leader.x2;
+            const vy = p.leader.y1 - p.leader.y2;
+            el.classList.add('km-label-led');
+            // 1.5px は札の枠。::after の left/top は枠の内側から測る
+            el.style.setProperty('--km-lead-x', (p.leader.x2 - left - 1.5).toFixed(1) + 'px');
+            el.style.setProperty('--km-lead-y', (p.leader.y2 - top - 1.5).toFixed(1) + 'px');
+            el.style.setProperty('--km-lead-len', Math.sqrt(vx * vx + vy * vy).toFixed(1) + 'px');
+            el.style.setProperty('--km-lead-ang', (Math.atan2(vy, vx) * 180 / Math.PI).toFixed(1) + 'deg');
+        }
     }
-    window.kmDeclutterLabels = scheduleDeclutter;
+
+    /*
+     * 連続して呼ばれる(ズーム中・移動中)ので、落ち着いてから1回だけ測る。
+     *
+     * **横へ動かしただけ(拡大率も階も札の数も同じ)なら測り直さない**(2026-10-30、振り返りのフェーズ 2「ズームがカクつく」)。
+     * 札と点は同じだけ動くので、ずらし方は変わらない。それまでは moveend のたびに全部の札を測り直していた(200 個 × 2 回の測り)
+     */
+    function declutterKey() {
+        return [window.map.getZoom(), String(window.currentFloor), document.querySelectorAll('.km-label').length].join('|');
+    }
+    function scheduleDeclutter(force) {
+        if (force !== true && declutterKey() === lastDeclutterKey) return;
+        window.clearTimeout(declutterTimer);
+        declutterTimer = window.setTimeout(function () {
+            lastDeclutterKey = declutterKey();
+            declutterLabels();
+        }, 120);
+    }
+    // 外から呼ばれるのは札の中身が変わったとき(表示調整・階の切り替えなど)。必ず測り直す
+    window.kmDeclutterLabels = function () { scheduleDeclutter(true); };
 
     // 部屋の詳細を開いた(テスト用アカウントの記録。createNodeMarker が marker.kmNodeId を付ける)
     window.map.on('popupopen', (e) => {
@@ -2067,9 +2104,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     window.map.on('zoomend', () => {
         renderGlobalLabels();
-        scheduleDeclutter();
+        scheduleDeclutter(true);
     });
-    window.map.on('moveend', scheduleDeclutter);
+    window.map.on('moveend', () => scheduleDeclutter(false));
 
     /*
      * 利用者が自分で拡大・移動したかを覚えておく。Leaflet はプログラムからの
@@ -3118,7 +3155,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         return rects;
     }
 
-    // 動き終えたら塗り直す。札の並べ直し(kmDeclutterLabels)が先に済むよう、少し待つ
+    /*
+     * 拡大率が変わったら塗り直す。札の並べ直し(kmDeclutterLabels)が先に済むよう、少し待つ(並べ直しが書き終えたときにも塗り直す)。
+     * **横へ動かしただけでは塗り直さない**(2026-10-30、振り返りのフェーズ 2)。線と札は同じだけ動くので重なる所は変わらない。
+     * それまでは moveend のたびに全部の印と札の箱を測っていた
+     */
     let routeOverlapTimer = null;
     function refreshRouteOverlap() {
         if (routeOverlapTimer) window.clearTimeout(routeOverlapTimer);
@@ -3127,7 +3168,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             routeLineRuns.forEach(paintRouteRun);
         }, 250);
     }
-    window.map.on('moveend', refreshRouteOverlap);
+    window.map.on('zoomend', refreshRouteOverlap);
 
     function drawPath(pathNodeIds) {
         currentMarkers.forEach(m => window.map.removeLayer(m));
