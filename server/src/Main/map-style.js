@@ -154,6 +154,12 @@
         dimFloorImage: false,
         // 場所ごとの色分け(2026-10-30。管理画面で塗った床があれば出す。アプリの「色分け」と同じ。既定は出す)
         areaColors: true,
+        /*
+         * 軽い表示(2026-10-30、振り返りのフェーズ 2「軽くする」)。影・ぼかし・動き(脈打つ輪など)を止める。
+         *   auto … 遅そうな端末だけ入れる(liteActive。メモリ 2GB 以下・4 コア以下・データ節約)
+         *   on / off … いつも入れる / 入れない
+         */
+        liteMode: 'auto',
         types: {},          // { room: { shape, visible, label, showScale } }
     };
 
@@ -369,6 +375,20 @@
             if (scale < hideScale(type)) return true;
             // 拡大して消える側に入った建物名。**屋外だけ**、設定に応じて残す(薄くするのは facilityFaded)
             return String(floor) === 'outside' && this.facilityZoomMode(tuning) !== 'hidden';
+        },
+
+        /**
+         * 軽い表示を入れるか。env は { deviceMemory, cores, saveData }(navigator から。無い値は undefined)。
+         * auto のときは**分かっている値だけ**で決める(deviceMemory は Chrome だけ。分からなければ入れない)
+         */
+        liteActive: function (tuning, env) {
+            const mode = tuning && tuning.liteMode;
+            if (mode === 'on') return true;
+            if (mode === 'off') return false;
+            const e = env || {};
+            if (e.saveData === true) return true;
+            if (typeof e.deviceMemory === 'number' && e.deviceMemory > 0 && e.deviceMemory <= 2) return true;
+            return typeof e.cores === 'number' && e.cores > 0 && e.cores <= 4;
         },
 
         /** 屋外で拡大したときの建物名の扱い。**知らない値は既定(薄く)へ倒す。** */

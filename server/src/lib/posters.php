@@ -709,6 +709,8 @@ function km_posters_public(PDO $pdo, bool $eventActive, array $nodes, array $pro
             'likes' => $likes[(int) $row['id']] ?? 0,
         ];
         $poster['imageUrl'] = km_poster_public_image_url($poster);
+        // 一覧・検索の候補の小さな絵は縮小版(2026-10-30。作れなければ口が元の画像を返す)
+        $poster['thumbUrl'] = $poster['imageUrl'] . '&w=640';
         unset($poster['updatedEpoch']);
         $posters[] = $poster;
     }
@@ -720,7 +722,7 @@ function km_posters_public(PDO $pdo, bool $eventActive, array $nodes, array $pro
  * 画像を返す(公開の口と管理画面の口が使う)。返せなければ false(呼ぶ側が 404 にする)。
  * Content-Type は**保存名の拡張子から決める**(保存のときに中身を見て決めてある)。
  */
-function km_poster_send_image(array $poster, bool $publicCache): bool
+function km_poster_send_image(array $poster, bool $publicCache, int $thumbWidth = 0): bool
 {
     $storedName = (string) ($poster['storedName'] ?? '');
     if (!km_poster_stored_name_valid($storedName)) {
@@ -737,6 +739,22 @@ function km_poster_send_image(array $poster, bool $publicCache): bool
     foreach (KM_POSTER_IMAGE_TYPES as [$allowed, $type]) {
         if ($ext === $allowed) {
             $mime = $type;
+        }
+    }
+
+    /*
+     * 縮小版(?w=。2026-10-30、振り返りのフェーズ 2。lib/image-thumb.php)。WebP を読める端末だけ。
+     * 作れなければ元の画像(本番の PHP に GD が入るまでは常に元の画像)
+     */
+    if ($thumbWidth > 0) {
+        require_once __DIR__ . '/image-thumb.php';
+        header('Vary: Accept');
+        if (km_floor_webp_accepted((string) ($_SERVER['HTTP_ACCEPT'] ?? ''))) {
+            $thumb = km_image_thumb_file($path, $thumbWidth);
+            if ($thumb !== null) {
+                $path = $thumb;
+                $mime = 'image/webp';
+            }
         }
     }
 

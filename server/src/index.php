@@ -1233,6 +1233,8 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
         <script defer src="<?= km_home_e(km_public_asset('Main/test-mode.js')) ?>"></script>
     <?php endif; ?>
     <script defer src="<?= km_home_e(km_public_asset('Main/app.js')) ?>"></script>
+    <?php /* 全画面のボタンと、全画面・横画面で上の帯を隠す(2026-10-30、振り返りのフェーズ 2)。**app.js の後に**読む(地図の右下にボタンを置く) */ ?>
+    <script defer src="<?= km_home_e(km_public_asset('Main/top-bar.js')) ?>"></script>
     <?php /* 戻るボタンでメモリから戻った画面のサインインの状態が古ければ読み直す(2026-10-25、利用者「戻るボタンでログインが切れる」) */ ?>
     <script defer src="<?= km_home_e(km_public_asset('Main/back-refresh.js')) ?>"></script>
     <?php /* 企画のスケジュールの一覧(2026-10-23。lib/event-schedule.php)。一般に出す行があるときだけ「予定」を出す */ ?>

@@ -261,7 +261,7 @@ $placesOf = static function (array $poster) use ($nodes, $eventPois): array {
                         <a class="km-poster-card-image" href="<?= km_posters_e($imageHref) ?>" data-km-poster-open
                             <?= $imageExternal ? 'target="_blank" rel="noopener noreferrer"' : '' ?>
                             aria-label="<?= km_posters_e($poster['title'] . '(大きく見る)') ?>">
-                            <img src="<?= km_posters_e($poster['imageUrl']) ?>" alt="<?= km_posters_e($poster['title']) ?>" width="<?= (int) $poster['width'] ?>" height="<?= (int) $poster['height'] ?>" loading="lazy">
+                            <img src="<?= km_posters_e($poster['thumbUrl'] ?? $poster['imageUrl']) ?>" alt="<?= km_posters_e($poster['title']) ?>" width="<?= (int) $poster['width'] ?>" height="<?= (int) $poster['height'] ?>" loading="lazy">
                         </a>
                         <div class="km-poster-card-body">
                             <h2 class="km-poster-card-title"><?= km_posters_e($poster['title']) ?></h2>

@@ -7,7 +7,7 @@
 # 2026-10-12: PHP 8.4.26 のまま土台(Debian)だけ作り直された版(2026-10-06 作成)に上げた
 FROM php:8.4-apache@sha256:be1326658a7d36dba6be79a71212d6ff9c5f854335b8ba77d714da1852c1b2ea
 # composer は実行時には使わない(ホスト側で vendor を入れるときの道具)。今の web を作った版に固定する
-COPY --from=composer:2@sha256:b6dcd72ca98fa19d0e5b8476de179859704891fad06dd9e0b96833d4c430a5fc /usr/bin/composer /usr/local/bin/composer
+COPY --from=composer:2@sha256:c7f68260503e3c1f0ece10bdbe84519fd98d48ba091f2c02f16ea94a7faae337 /usr/bin/composer /usr/local/bin/composer
 
 # **使わない拡張を入れない**(2026-09-15。security-review-2026-09-14 §7 の 14)。
 # 以前は pdo_pgsql と、そのための libpq-dev を入れていたが、PHP は Postgres を一度も使わない

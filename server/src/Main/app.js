@@ -529,8 +529,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     /*
      * 地図の初期化が終わったことを知らせる。**送出は残す** ——
-     * いまの購読者は居ないが、地図を触る側から見れば「使える状態になった」合図で、
-     * 退避した zoom.js を戻したときにもそのまま繋がる。
+     * 地図を触る側から見れば「使える状態になった」合図(Main/top-bar.js が全画面のボタンを置く。2026-10-30)。
      */
     window.dispatchEvent(new CustomEvent('km:map-ready'));
 
@@ -620,8 +619,8 @@ document.addEventListener('DOMContentLoaded', async () => {
      * 従来は changeFloor() のたびに new Image() でネットワークから読みに行っていた。
      * ブラウザキャッシュが効けば2回目以降は速いが、キャッシュが効かない環境
      * (キャッシュ無効化・初回切替など)では毎回ロード待ちが発生し、切替直後に
-     * 建物が一瞬崩れて見える原因になっていた。ここで全フロア分をバックグラウンドで
-     * 先読みしてサイズ込みでキャッシュしておき、切替時はキャッシュを最優先で使う。
+     * 建物が一瞬崩れて見える原因になっていた。ここで先読みしてサイズ込みでキャッシュしておき、
+     * 切替時はキャッシュを最優先で使う。**読むのはいまの階と隣の階だけ**(2026-10-30。下の neighborFloors)。
      */
     const preloadedImages = {}; // floor -> { src, bounds }
     const imagePreloadPromises = {};
@@ -686,15 +685,37 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     /**
-     * 全階の見取り図を読む。
+     * 隣の階(上下)。並びは 外 → 1F → 2F → …(外の隣は 1F)。数字でない階(足した建物など)はその後ろ。
+     * **先読みはいまの階と隣だけ**(2026-10-30、振り返りのフェーズ 2「軽くする」)。
+     * それまでは全階を読んでいた。遅い端末では 1600×1200 の絵を 6 枚ほどいて持つだけで重い
+     */
+    function neighborFloors(floor) {
+        const ordered = preloadOrder(floor).slice();
+        ordered.sort((a, b) => floorRank(a) - floorRank(b) || a.localeCompare(b));
+        const at = ordered.indexOf(String(floor));
+        if (at < 0) return [];
+        return [ordered[at - 1], ordered[at + 1]].filter(Boolean);
+    }
+    function floorRank(floor) {
+        if (floor === 'outside') return 0;
+        const n = Number(floor);
+        return Number.isFinite(n) ? n : 1000;
+    }
+    /** 切り替えた先の階の隣を、裏で読んでおく */
+    function preloadNeighborFloors(floor) {
+        neighborFloors(floor).forEach((next) => { preloadFloorImage(next); });
+    }
+
+    /**
+     * いまの階と隣の階の見取り図を読む(ほかの階は切り替えたときに読む)。
      *
      * @param {Function} onFirstReady 現在の階が読めた時点で呼ぶ。**ここで地図を見せる。**
      *   全階を待ってから見せていた頃は、1Mbps で「1階は6.0秒で揃っているのに
      *   読み込み画面が閉じるのは19.3秒」という状態だった(実測)。
-     * @returns {Promise<void>} 全階ぶん読み終えたら解決する(裏で進む)
+     * @returns {Promise<void>} 読み終えたら解決する(裏で進む)
      */
     async function preloadAllFloorImages(firstFloor, onProgress, onFirstReady) {
-        const queue = preloadOrder(firstFloor);
+        const queue = [String(firstFloor)].concat(neighborFloors(firstFloor)).filter(floor => floorImages[floor]);
         const total = queue.length;
         let loaded = 0;
         let next = 0;
@@ -1330,7 +1351,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             return `<figure class="km-poster${focused ? ' is-focused' : ''}">
                 <button type="button" class="km-poster-thumb" data-km-poster-view="${escapeHtml(String(poster.id))}"
                         aria-label="${escapeHtml(poster.title)}(大きく見る)">
-                    <img src="${escapeHtml(poster.imageUrl)}" alt="" width="${Number(poster.width) || 0}" height="${Number(poster.height) || 0}">
+                    <img src="${escapeHtml(poster.thumbUrl || poster.imageUrl)}" alt="" width="${Number(poster.width) || 0}" height="${Number(poster.height) || 0}" loading="lazy">
                 </button>
                 <figcaption class="km-poster-caption">
                     <b class="km-poster-title">${escapeHtml(poster.title)}</b>
@@ -1551,6 +1572,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         window.map.fitBounds(L.latLngBounds(rawBounds), mapFitPadding());
     }
 
+    /** その階の全体が入る倍率(fitMinZoom が出す)。拡大したら部品を隠す所(下の「地図以外を隠す」)の基準 */
+    let floorFitZoom = null;
+
     /** その階の全体が入る倍率まで、ズームの下限を下げる(収めはしない。経路の途中で階を移るとき用。2026-10-23) */
     function fitMinZoom(rawBounds) {
         /*
@@ -1579,6 +1603,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             const scale = Math.min(available.x / width, available.y / height);
             // 下限は zoomSnap(0.25)の刻みに合わせて、必要なぶんだけ下げる
             const fitZoom = Math.floor(Math.log2(scale) * 4) / 4;
+            floorFitZoom = fitZoom;
             window.map.setMinZoom(Math.min(-1, fitZoom));
         }
     }
@@ -1735,6 +1760,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         const cached = preloadedImages[floor];
         if (cached) {
             applyFloorImage(cached.src, cached.bounds);
+            // 次に行きそうな階(上下)を裏で読んでおく。先読みは隣だけにした(neighborFloors)
+            preloadNeighborFloors(floor);
             return;
         }
 
@@ -1758,6 +1785,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             if (entry) {
                 applyFloorImage(entry.src, entry.bounds);
+                preloadNeighborFloors(floor);   // いまの階が載ってから(取り合わせない)
                 return;
             }
 
@@ -1916,13 +1944,18 @@ document.addEventListener('DOMContentLoaded', async () => {
      *
      *   1. 大事なものから順に置く(施設 → 出入口 → 階段 → 部屋 → その他)
      *   2. 重なったら上下にずらす → 点の横・下に付ける → **点から離して線で結ぶ**(2026-10-14)
-     *   3. どこへ置いても重なるなら、屋外は**そのラベルは出さない**(点は出したまま。
-     *      押せば名前が読めるので、情報は失われない)。建物の中は元の位置のまま重ねる
+     *   3. どこへ置いても重なるなら、**そのラベルは出さない**(点は出したまま。
+     *      押せば名前が読めるので、情報は失われない)。2026-10-30 から建物の中も同じ(下の declutterLabels)
      *
      * 置き方の計算は `Main/label-layout.js`(アプリと同じ手順)。
      * ズームを上げると点どうしの間が開くので、隠れていたものから順に戻ってくる。
+     *
+     * **大事な順**(2026-10-30、振り返りのフェーズ 2「大事な地点だけ出す」): イベントの地点 > 施設・出入口 > 階段 > 部屋 > ほか。
+     * 中くらいの倍率では下の方から隠れる。イベントで関係ない地点(薄くしている)は一番後ろ
      */
-    const KM_LABEL_PRIORITY = { facility: 0, entrance: 1, stairs: 2, room: 3, wifi_router: 4, road: 5, wall: 6 };
+    const KM_LABEL_PRIORITY = { facility: 1, entrance: 1, stairs: 2, room: 3, wifi_router: 4, road: 5, wall: 6 };
+    const KM_LABEL_PRIORITY_EVENT = 0;
+    const KM_LABEL_PRIORITY_UNRELATED = 10;
     let declutterTimer = null;
     let lastDeclutterKey = '';
     let declutterGeneration = 0;
@@ -1930,8 +1963,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     const DECLUTTER_CHUNK = 60;
 
     function labelPriority(el) {
+        if (el.classList.contains('km-label-event')) return KM_LABEL_PRIORITY_EVENT;
         const type = (el.className.match(/km-label-([a-z_]+)/) || [])[1];
-        return KM_LABEL_PRIORITY[type] === undefined ? 9 : KM_LABEL_PRIORITY[type];
+        const base = KM_LABEL_PRIORITY[type] === undefined ? 9 : KM_LABEL_PRIORITY[type];
+        return el.classList.contains('km-label-unrelated') ? KM_LABEL_PRIORITY_UNRELATED + base : base;
     }
 
     /** 札の要素 → その点のマーカー(点の中心を測って、線の根元にする) */
@@ -1975,10 +2010,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!layoutApi) return;
 
         /*
-         * 屋外は、置けない札を**出さない**。建物の中は**消さない**(2026-09-25、利用者の指示。
-         * 部屋名が 1 つでも欠けると探せなくなる)—— ずらしと線だけ使い、置けなければ元の位置で重ねる。
+         * 置けない札は**建物の中でも出さない**(2026-10-30、振り返りのフェーズ 2。利用者の判断「B」)。
+         * それまで建物の中は消さずに元の位置で重ねていたが(2026-09-25)、重なった札はどれも読めなかった。
+         * 点は残るので押せば名前が分かり、拡大すると出てくる。**選んだ場所の札だけは隠さない**(keep)
          */
-        const outdoors = String(window.currentFloor) === 'outside';
+        const selectedAt = selectionRing ? selectionRing.getLatLng() : null;
 
         /*
          * 薄く出している建物名は**数に入れない。** 下敷きの文字なので、
@@ -2015,12 +2051,18 @@ document.addEventListener('DOMContentLoaded', async () => {
                 anchor: r && r.width > 0 ? { x: (r.left + r.right) / 2, y: (r.top + r.bottom) / 2 } : null,
                 radius: r ? r.width / 2 : 0,
                 priority: labelPriority(el),
+                keep: !!(selectedAt && marker && marker.getLatLng && marker.getLatLng().equals(selectedAt)),
             });
             targets.push(el);
         });
+        /*
+         * 札の元の margin-top(leaflet.css の .leaflet-tooltip-top は -6px)。ずらす量はこれに**足して**書く。
+         * 2026-10-30 まで dy だけを書いて -6px を消していたので、上下にずらした札は 6px 下へ落ち、隣の札と重なっていた
+         */
+        const baseMarginTop = targets.length > 0 ? (parseFloat(window.getComputedStyle(targets[0]).marginTop) || 0) : 0;
         const c = window.map.getContainer().getBoundingClientRect();
         const placements = layoutApi.layout(items, {
-            hideWhenCrowded: outdoors,
+            hideWhenCrowded: true,
             bounds: { left: c.left, top: c.top, right: c.right, bottom: c.bottom },
             nodes: nodes,
         });
@@ -2035,7 +2077,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const writeChunk = function () {
             if (generation !== declutterGeneration) return;
             const end = Math.min(placements.length, next + DECLUTTER_CHUNK);
-            for (; next < end; next++) applyPlacement(placements[next], targets[next], items[next]);
+            for (; next < end; next++) applyPlacement(placements[next], targets[next], items[next], baseMarginTop);
             if (next < placements.length) {
                 window.requestAnimationFrame(writeChunk);
                 return;
@@ -2047,12 +2089,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     /** 1 つの札に置き方を書く(declutterLabels がコマに分けて呼ぶ) */
-    function applyPlacement(p, el, item) {
+    function applyPlacement(p, el, item, baseMarginTop) {
         if (p === null) {
             el.classList.add('km-label-hidden');
             return;
         }
-        if (p.dy !== 0) el.style.marginTop = p.dy + 'px';
+        if (p.dy !== 0) el.style.marginTop = (baseMarginTop + p.dy) + 'px';
         if (p.dx !== 0) el.style.marginLeft = p.dx + 'px';
         if (p.leader) {
             /*
@@ -2122,6 +2164,50 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!event || !event.originalEvent) return;   // fitBounds では畳まない
         userMovedMap = true;
         setFloorNavCollapsed(true);
+    });
+
+    /*
+     * ======== 拡大したら地図以外を隠す ========(2026-10-30、振り返りのフェーズ 2)
+     *
+     * スマホで部屋を探して拡大すると、上の検索・チップと下の操作の帯で地図の半分近くが埋まる。
+     * **利用者が自分で**その階の全体の 4 倍(2 段)より拡大したら、検索・チップ・アカウント・操作の帯を薄く消す。
+     * 縮めるか、地図の何もない所を軽くたたくと戻る。階のボタン・経路の帯・ズームのボタンは残す(今どこかと戻り方)。
+     *
+     * 「自分で」は、地図の上の操作(指・ホイール・ズームのボタン・キー)から 1.5 秒以内の拡大で見る。
+     * Leaflet はピンチやホイールの zoomstart に originalEvent を付けないので、上の zoomstart の判定は使えない。
+     * 検索の候補で飛んだとき(fitBounds)は隠さない
+     */
+    const KM_CHROME_HIDE_STEPS = 2;
+    const KM_CHROME_INPUT_MS = 1500;
+    let mapInputAt = 0;
+    ['pointerdown', 'wheel', 'touchstart', 'keydown'].forEach(function (type) {
+        window.map.getContainer().addEventListener(type, function () { mapInputAt = Date.now(); }, { passive: true });
+    });
+    function setChromeHidden(hidden) {
+        document.body.classList.toggle('km-chrome-hidden', hidden);
+    }
+    /** 使っている最中は隠さない(検索に打っている・候補・アカウントの欄・経路の欄が開いている) */
+    function chromeInUse() {
+        const active = document.activeElement;
+        if (active && active.closest && active.closest('#km-searchbox, #km-account, #km-category-chips, #km-action-bar')) return true;
+        const account = document.getElementById('km-account');
+        if (account && account.open) return true;
+        return document.body.classList.contains('km-route-panel-open');
+    }
+    window.map.on('zoomend', function () {
+        if (floorFitZoom === null) return;
+        const deep = window.map.getZoom() - floorFitZoom >= KM_CHROME_HIDE_STEPS;
+        if (!deep) {
+            setChromeHidden(false);
+        } else if (Date.now() - mapInputAt < KM_CHROME_INPUT_MS && !chromeInUse()) {
+            setChromeHidden(true);
+        }
+    });
+    // 地図の何もない所をたたく(点を押したときは点が止めるので来ない)
+    window.map.on('click', function () { setChromeHidden(false); });
+    // キーで動かす人は、隠れたボタンへ Tab で行けない。Tab・Esc で戻す
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Tab' || event.key === 'Escape') setChromeHidden(false);
     });
 
     // 画面サイズが変わったら収め直す。連続発火するので落ち着いてから1回だけ。
@@ -3773,10 +3859,14 @@ document.addEventListener('DOMContentLoaded', async () => {
                 iconAnchor: [22, 48],
             }),
         }).addTo(window.map);
+        // 選んだ場所の札は隠さない(declutterLabels の keep)。重なりで隠れていたら出す
+        scheduleDeclutter(true);
     }
     function clearSelected() {
-        if (selectionRing) window.map.removeLayer(selectionRing);
+        if (!selectionRing) return;
+        window.map.removeLayer(selectionRing);
         selectionRing = null;
+        scheduleDeclutter(true);
     }
 
     /** 引き出しが隠している所を避けて、その点が見えるように動かす(拡大率は変えない) */
@@ -3964,7 +4054,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         box.className = 'km-result-icon';
         if (item.poster && item.poster.imageUrl) {
             const img = document.createElement('img');
-            img.src = item.poster.imageUrl;
+            // 小さなアイコンなので縮小版(2026-10-30。lib/image-thumb.php)
+            img.src = item.poster.thumbUrl || item.poster.imageUrl;
             img.alt = '';
             img.loading = 'lazy';
             img.decoding = 'async';

@@ -68,6 +68,15 @@
         // 暗い配色のとき床の画像も沈める(styles.css の data-km-floor-dim。明るい配色では CSS の側で効かない)
         if (tuning.dimFloorImage) root.setAttribute('data-km-floor-dim', '1');
         else root.removeAttribute('data-km-floor-dim');
+        // 軽い表示(styles.css の data-km-lite。影・ぼかし・動きを止める)。auto は端末の様子で決める(map-style.js の liteActive)
+        const nav = window.navigator || {};
+        const lite = style.liteActive(tuning, {
+            deviceMemory: nav.deviceMemory,
+            cores: nav.hardwareConcurrency,
+            saveData: !!(nav.connection && nav.connection.saveData),
+        });
+        if (lite) root.setAttribute('data-km-lite', '1');
+        else root.removeAttribute('data-km-lite');
     }
 
     function build(tuning) {
@@ -138,7 +147,7 @@
             el.addEventListener('change', function () {
                 tuning[key] = el.value;
                 style.save(tuning);
-                if (key === 'theme') applyTheme(tuning);
+                if (key === 'theme' || key === 'liteMode') applyTheme(tuning);
                 notify();
             });
             label.appendChild(el);
@@ -155,6 +164,12 @@
         toggle('暗い配色のとき床の画像も暗く', 'dimFloorImage');
         // 管理画面で塗った床(部屋・廊下・階段・建物・道を色で分ける)。塗っていない階は変わらない
         toggle('場所ごとの色分け', 'areaColors');
+        // 影・ぼかし・動きを止める(2026-10-30、振り返りのフェーズ 2)。自動は遅そうな端末だけ
+        select('軽い表示', 'liteMode', [
+            ['auto', '自動(遅い端末だけ)'],
+            ['on', 'いつも軽くする'],
+            ['off', '軽くしない'],
+        ]);
 
         heading('大きさ', 'h3');
         slider('地点', 'nodeSize', 50, 200);

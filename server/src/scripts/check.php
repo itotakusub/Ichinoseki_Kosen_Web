@@ -2633,7 +2633,7 @@ function km_check_map_vertical(): void
     km_check_heading('map: ラベルの重なりをほどく');
     // 置き方の計算は Main/label-layout.js(2026-10-14。引き出し線)
     check_bool('ずらしてから隠す', str_contains($src('Main/label-layout.js'), 'const NUDGES = [0, -14, 14, -30, 30];'));
-    check_bool('大事なものから順に置く', str_contains($app, "KM_LABEL_PRIORITY = { facility: 0, entrance: 1, stairs: 2"));
+    check_bool('大事なものから順に置く', str_contains($app, "KM_LABEL_PRIORITY = { facility: 1, entrance: 1, stairs: 2"));
     check_bool('隠すのは文字だけ(点は残す)', str_contains($src('Main/styles.css'), '.km-label.km-label-hidden'));
     check_bool('編集画面では間引かない', str_contains($app, 'if (window.isAdmin) return;'));
     check_bool('測り直す前に前回の結果を戻す', ($reset = strpos($app, 'all.forEach(clearLabelLayout);')) !== false && $reset < (int) strpos($app, 'layoutApi.layout(items'));
@@ -9188,8 +9188,114 @@ function km_check_layout(): void
     check_bool('管理画面に CSRF と記録の消去の確認', str_contains((string) file_get_contents(__DIR__ . '/../admin/test-mode.php'), "!km_csrf_verify()")
         && str_contains((string) file_get_contents(__DIR__ . '/../admin/test-mode.php'), 'data-km-confirm="テスト用アカウントの記録を全部消します。'));
 
-    km_check_heading('layout: ラベルの重なり(屋外は消す・屋内は消さない。2026-09-25 / 引き出し線 2026-10-14)');
-    check_bool('屋内では消さない(屋外だけ hideWhenCrowded)', str_contains($appJs, 'hideWhenCrowded: outdoors') && str_contains($appJs, "const outdoors = String(window.currentFloor) === 'outside';"));
+    km_check_heading('layout: ラベルの重なり(引き出し線 2026-10-14 / 建物の中も隠す 2026-10-30)');
+    // 2026-10-30、利用者の判断「B」: 建物の中でも置けない札は隠す。選んだ場所の札(keep)だけは隠さない
+    check_bool('建物の中も置けない札は隠す', str_contains($appJs, 'hideWhenCrowded: true,') && !str_contains($appJs, 'hideWhenCrowded: outdoors'));
+    check_bool('選んだ場所の札は隠さない(keep)', str_contains($appJs, 'keep: !!(selectedAt && marker && marker.getLatLng && marker.getLatLng().equals(selectedAt)),')
+        && str_contains((string) file_get_contents(__DIR__ . '/../Main/label-layout.js'), 'if (!hide || item.keep) {'));
+    check_bool('選び直したら札を並べ直す', substr_count($appJs, "scheduleDeclutter(true);\n    }") >= 1 && str_contains($appJs, "selectionRing = null;\n        scheduleDeclutter(true);"));
+    // 上下のずらしは Leaflet の margin-top(-6px)に足す。dy だけ書くと 6px 下へ落ちて隣と重なっていた(試し場で 1 階の重なり 2〜8 組 → 0)
+    km_check_heading('map: 拡大したら地図以外を隠す(2026-10-30、振り返りのフェーズ 2 の 3)');
+    $chromeCss = (string) file_get_contents(__DIR__ . '/../Main/styles.css');
+    check_bool('全体の 4 倍(2 段)より拡大したら隠す・基準は階の全体が入る倍率', str_contains($appJs, 'const KM_CHROME_HIDE_STEPS = 2;') && str_contains($appJs, 'floorFitZoom = fitZoom;')
+        && str_contains($appJs, 'const deep = window.map.getZoom() - floorFitZoom >= KM_CHROME_HIDE_STEPS;'));
+    check_bool('隠すのは利用者が自分で拡大したときだけ(検索の候補で飛んだときは隠さない)', str_contains($appJs, 'Date.now() - mapInputAt < KM_CHROME_INPUT_MS && !chromeInUse()'));
+    check_bool('縮める・地図をたたく・Tab/Esc で戻す', str_contains($appJs, "if (!deep) {\n            setChromeHidden(false);")
+        && str_contains($appJs, "window.map.on('click', function () { setChromeHidden(false); });") && str_contains($appJs, "if (event.key === 'Tab' || event.key === 'Escape') setChromeHidden(false);"));
+    check_bool('隠すときは押せなくする(visibility も落とす)。階・経路の帯・ズームは残す', preg_match('/body\.km-chrome-hidden \.km-action-bar \{\s*opacity: 0;\s*visibility: hidden;\s*pointer-events: none;/', $chromeCss) === 1
+        && !str_contains($chromeCss, 'body.km-chrome-hidden .floor-nav') && !str_contains($chromeCss, 'body.km-chrome-hidden .km-route-bar'));
+
+    km_check_heading('map: 床の画像を可逆の WebP で配る(2026-10-30、振り返りのフェーズ 2 の 5。lib/floor-webp.php)');
+    require_once __DIR__ . '/../lib/floor-webp.php';
+    check_bool('WebP: Accept に image/webp があるときだけ・q=0 は断り', km_floor_webp_accepted('image/avif,image/webp,image/apng,*/*;q=0.8')
+        && !km_floor_webp_accepted('image/png,*/*') && !km_floor_webp_accepted('image/webp;q=0') && km_floor_webp_accepted('IMAGE/WEBP;q=0.5'));
+    $floorPngForWebp = __DIR__ . '/../Main/Picture/１階.png';
+    if (function_exists('imagewebp') && is_file($floorPngForWebp)) {
+        $webpDir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'km-check-webp-' . bin2hex(random_bytes(4));
+        $webpFile = km_floor_webp_file($floorPngForWebp, $webpDir);
+        $pngImage = @imagecreatefrompng($floorPngForWebp);
+        $webpImage = $webpFile !== null ? @imagecreatefromwebp($webpFile) : false;
+        $sameSize = $pngImage !== false && $webpImage !== false && imagesx($pngImage) === imagesx($webpImage) && imagesy($pngImage) === imagesy($webpImage);
+        // 可逆: 何か所か画素を比べる(パレットの PNG は真色に直して比べる)
+        $samePixels = $sameSize;
+        if ($sameSize) {
+            imagepalettetotruecolor($pngImage);
+            for ($i = 0; $i < 400 && $samePixels; $i++) {
+                $px = ($i * 397) % imagesx($pngImage);
+                $py = ($i * 131) % imagesy($pngImage);
+                $samePixels = imagecolorsforindex($pngImage, imagecolorat($pngImage, $px, $py)) == imagecolorsforindex($webpImage, imagecolorat($webpImage, $px, $py));
+            }
+        }
+        check_bool('WebP: 1 階の床は小さくなり、画素は同じ(可逆)', $webpFile !== null && filesize($webpFile) < filesize($floorPngForWebp) && $samePixels);
+        check_bool('WebP: 2 回目は作った写しを使う', $webpFile !== null && km_floor_webp_file($floorPngForWebp, $webpDir) === $webpFile);
+        foreach (glob($webpDir . DIRECTORY_SEPARATOR . '*') ?: [] as $leftover) {
+            @unlink($leftover);
+        }
+        @rmdir($webpDir);
+    } else {
+        check_skip('WebP: 1 階の床は小さくなり、画素は同じ(可逆)', 'GD に WebP が無い');
+    }
+    // 本番の PHP には GD が無いので、組み込みの床は手元で作った横の写しを配る(src/scripts/make-floor-webp.php)
+    $staleWebp = [];
+    foreach (array_merge(glob(__DIR__ . '/../Main/Picture/*.png') ?: [], glob(__DIR__ . '/../Main/Picture/bldg/*.png') ?: []) as $builtinPng) {
+        if (km_floor_webp_sibling($builtinPng) === null) {
+            $staleWebp[] = basename($builtinPng);
+        }
+    }
+    check_bool('WebP: 組み込みの床すべてに PNG より新しい写し(無ければ php src/scripts/make-floor-webp.php)' . ($staleWebp === [] ? '' : ' 足りない: ' . implode('・', $staleWebp)), $staleWebp === []);
+    check_bool('WebP: 横の写しを先に使い、無ければ GD で作る', str_contains((string) file_get_contents(__DIR__ . '/../lib/floor-webp.php'), 'return km_floor_webp_sibling($pngPath) ?? km_floor_webp_file($pngPath);')
+        && str_contains((string) file_get_contents(__DIR__ . '/../api/floor-image.php'), '$webp = km_floor_webp_for($path);'));
+    check_bool('WebP: PNG ではないもの・無いファイルは null(PNG のまま配る)', km_floor_webp_file(__DIR__ . '/../index.php') === null && km_floor_webp_file(__DIR__ . '/nope.png') === null);
+    $floorImageForWebp = (string) file_get_contents(__DIR__ . '/../api/floor-image.php');
+    check_bool('WebP: 錠を見た後で・PNG のときだけ写しに替え、Vary: Accept と別の ETag', ($wp = strpos($floorImageForWebp, "if (\$contentType === 'image/png' && km_floor_webp_accepted(")) !== false
+        && $wp > (int) strpos($floorImageForWebp, 'if (!$viewUnlocked) {') && str_contains($floorImageForWebp, "header('Vary: Accept');")
+        && str_contains($floorImageForWebp, "(string) \$modified . \$variant), 0, 32)"));
+
+    km_check_heading('ポスター: 一覧・候補は縮小版(2026-10-30、振り返りのフェーズ 2 の 5。lib/image-thumb.php)');
+    require_once __DIR__ . '/../lib/image-thumb.php';
+    check_bool('縮小: 幅は決まった値だけ(好きな幅で縮小を走らせない)', km_image_thumb_width('640') === 640 && km_image_thumb_width('641') === 0
+        && km_image_thumb_width(['640']) === 0 && km_image_thumb_width('0640') === 0 && km_image_thumb_width(null) === 0);
+    if (function_exists('imagewebp') && function_exists('imagejpeg')) {
+        $thumbDir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'km-check-thumb-' . bin2hex(random_bytes(4));
+        @mkdir($thumbDir, 0700, true);
+        $bigJpeg = $thumbDir . DIRECTORY_SEPARATOR . 'big.jpg';
+        $canvas = imagecreatetruecolor(1600, 900);
+        for ($i = 0; $i < 60; $i++) {
+            imagefilledrectangle($canvas, $i * 26, 0, $i * 26 + 13, 900, imagecolorallocate($canvas, ($i * 37) % 256, ($i * 91) % 256, ($i * 53) % 256));
+        }
+        imagejpeg($canvas, $bigJpeg, 92);
+        imagedestroy($canvas);
+        $thumbFile = km_image_thumb_file($bigJpeg, 640, $thumbDir);
+        $thumbSize = $thumbFile !== null ? getimagesize($thumbFile) : false;
+        check_bool('縮小: 1600×900 の JPEG → 幅 640・縦横比そのままの WebP で小さく', $thumbSize !== false && $thumbSize[0] === 640 && $thumbSize[1] === 360
+            && $thumbSize['mime'] === 'image/webp' && filesize($thumbFile) < filesize($bigJpeg));
+        check_bool('縮小: 元が幅 640 以下なら縮めない(元を配る)', km_image_thumb_file(__DIR__ . '/../Main/Picture/bldg/bldg_gym1.png', 640, $thumbDir) === null || getimagesize(__DIR__ . '/../Main/Picture/bldg/bldg_gym1.png')[0] > 640);
+        foreach (glob($thumbDir . DIRECTORY_SEPARATOR . '*') ?: [] as $leftover) {
+            @unlink($leftover);
+        }
+        @rmdir($thumbDir);
+    } else {
+        check_skip('縮小: 1600×900 の JPEG → 幅 640・縦横比そのままの WebP で小さく', 'GD に WebP / JPEG が無い');
+    }
+    $posterLibForThumb = (string) file_get_contents(__DIR__ . '/../lib/posters.php');
+    check_bool('縮小: 公開の口は ?w= を受け、WebP を読める端末だけ縮小版(Vary: Accept)', str_contains((string) file_get_contents(__DIR__ . '/../api/poster-image.php'), '$thumbWidth = km_image_thumb_width($_GET[\'w\'] ?? null);')
+        && str_contains($posterLibForThumb, "header('Vary: Accept');") && str_contains($posterLibForThumb, "\$poster['thumbUrl'] = \$poster['imageUrl'] . '&w=640';"));
+    check_bool('縮小: 一覧・検索の候補・地点のポスターは thumbUrl', str_contains((string) file_get_contents(__DIR__ . '/../posters.php'), "\$poster['thumbUrl'] ?? \$poster['imageUrl']")
+        && str_contains($appJs, 'img.src = item.poster.thumbUrl || item.poster.imageUrl;') && str_contains($appJs, 'escapeHtml(poster.thumbUrl || poster.imageUrl)'));
+
+    km_check_heading('map: 全画面・横画面の上の帯(2026-10-30、振り返りのフェーズ 2 の 4。アプリの TopBarController と同じ)');
+    $topBarJs = (string) file_get_contents(__DIR__ . '/../Main/top-bar.js');
+    $homeForTopBar = (string) file_get_contents(__DIR__ . '/../index.php');
+    check_bool('top-bar.js を app.js の後に読む', ($tb = strpos($homeForTopBar, "km_public_asset('Main/top-bar.js')")) !== false && $tb > (int) strpos($homeForTopBar, "km_public_asset('Main/app.js')"));
+    check_bool('全画面か横にしたスマホで帯を隠す', str_contains($topBarJs, "window.matchMedia('(orientation: landscape) and (max-height: 500px)')") && str_contains($topBarJs, 'return isFullscreen() || landscapePhone.matches;'));
+    check_bool('アプリと同じ数(4 秒・上の端 40px・24px 引く)', str_contains($topBarJs, 'const AUTO_HIDE_MS = 4000;') && str_contains($topBarJs, 'const EDGE_PX = 40;') && str_contains($topBarJs, 'const PULL_PX = 24;'));
+    check_bool('打っている間・欄が開いている間は隠さない', str_contains($topBarJs, 'if (barInUse()) {'));
+    check_bool('全画面のボタンは地図ができてから置く(km:map-ready)', str_contains($topBarJs, "window.addEventListener('km:map-ready', addFullscreenControl);") && str_contains($appJs, "window.dispatchEvent(new CustomEvent('km:map-ready'));"));
+    check_bool('取っ手は帯を隠しているときだけ出す', str_contains($chromeCss, 'body.km-topbar-auto:not(.km-topbar-peek) .km-topbar-handle {'));
+
+    check_bool('上下のずらしは元の margin-top に足す', str_contains($appJs, "el.style.marginTop = (baseMarginTop + p.dy) + 'px';"));
+    check_bool('イベントの地点を一番先・関係ない地点を一番後ろ', str_contains($appJs, "if (el.classList.contains('km-label-event')) return KM_LABEL_PRIORITY_EVENT;")
+        && str_contains($appJs, 'const KM_LABEL_PRIORITY_UNRELATED = 10;'));
     $labelLayoutJs = (string) file_get_contents(__DIR__ . '/../Main/label-layout.js');
     // 頭の preload にも app.js があるので、<script> の並びで比べる
     $scriptTag = static fn (string $file): string => '<script defer src="<?= km_home_e(km_public_asset(\'Main/' . $file . '\')) ?>"></script>';

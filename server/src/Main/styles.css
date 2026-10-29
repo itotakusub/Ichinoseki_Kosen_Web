@@ -1805,7 +1805,12 @@ body.km-map-unavailable .km-route-bar {
  * 2箇所に置くと片方だけ直したときに食い違う。
  */
 .km-node { background: none; border: none; }
-.km-node-shape { display: block; overflow: visible; filter: drop-shadow(0 1px 2px rgba(15, 23, 42, 0.35)); }
+/*
+ * 地点の縁は**線で描く**(2026-10-30、振り返りのフェーズ 2「影と filter を減らす」)。それまでは drop-shadow で、
+ * 地点 200 個のそれぞれにぼかしの層ができ、拡大・移動のたびに描き直していた。細い濃い線なら床の白の上でも境が見える
+ */
+.km-node-shape { display: block; overflow: visible; }
+.km-node-shape path { stroke: rgba(15, 23, 42, 0.45); stroke-width: 1px; }
 
 /* ラベルは**その地点の色で縁取る**。どの種類のものか、文字を読む前に分かる */
 /*
@@ -3744,4 +3749,133 @@ body.km-route-panel-open .km-searchbox-route { background: var(--primary); color
 .floor-nav .floor-btn.active,
 .floor-nav.is-collapsed .floor-toggle {
     border: 3px solid var(--km-control-edge);
+}
+
+/*
+ * ======== 拡大したら地図以外を隠す(2026-10-30、振り返りのフェーズ 2 の 3)========
+ *
+ * app.js の「地図以外を隠す」が body に km-chrome-hidden を付ける。検索・チップ・アカウント・操作の帯を薄く消す。
+ * visibility も落とす(見えないボタンを押したり、Tab で入ったりさせない)。階のボタン・経路の帯・ズームは残す
+ */
+.km-searchbox,
+.km-chips,
+.km-account,
+.km-action-bar {
+    transition: opacity 0.2s ease, visibility 0.2s;
+}
+body.km-chrome-hidden .km-searchbox,
+body.km-chrome-hidden .km-chips,
+body.km-chrome-hidden .km-account,
+body.km-chrome-hidden .km-action-bar {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+    .km-searchbox,
+    .km-chips,
+    .km-account,
+    .km-action-bar {
+        transition: none;
+    }
+}
+/*
+ * ======== 全画面・横画面の上の帯(2026-10-30、振り返りのフェーズ 2 の 4。Main/top-bar.js)========
+ *
+ * 全画面か横にしたスマホでは body に km-topbar-auto が付く。上の帯(検索・チップ・アカウント)を上へ逃がし、
+ * 上の真ん中に取っ手(▼)を出す。引くか押すと km-topbar-peek が付き、帯が地図の上に下りてくる(4 秒で戻る)
+ */
+.km-topbar-handle {
+    display: none;
+}
+body.km-topbar-auto:not(.km-topbar-peek) .km-topbar-handle {
+    display: block;
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1360;
+    width: 64px;
+    height: 28px;
+    padding: 0;
+    border: 2px solid var(--km-control-edge);
+    border-top: none;
+    border-radius: 0 0 14px 14px;
+    background: var(--glass-heavy);
+    box-shadow: var(--shadow-sm);
+    color: var(--text);
+    font-size: 0.9rem;
+    line-height: 1;
+    cursor: pointer;
+}
+.km-topbar-handle:focus-visible { outline: 3px solid var(--primary); outline-offset: 2px; }
+body.km-topbar-auto .km-searchbox,
+body.km-topbar-auto .km-chips,
+body.km-topbar-auto .km-account {
+    transition: transform 0.2s ease, opacity 0.2s ease, visibility 0.2s;
+}
+body.km-topbar-auto:not(.km-topbar-peek) .km-searchbox,
+body.km-topbar-auto:not(.km-topbar-peek) .km-chips,
+body.km-topbar-auto:not(.km-topbar-peek) .km-account {
+    transform: translateY(calc(-100% - var(--km-edge) - 8px));
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+}
+/* 全画面のボタン(ズームの +/− の上)。大きさは Leaflet の .leaflet-bar a(スマホは上の 44px)に合わせる */
+.leaflet-bottom.leaflet-right .km-fullscreen-control {
+    margin: 0 0 8px;
+}
+.km-fullscreen-control .km-fullscreen-btn {
+    font-size: 1.1rem;
+    text-decoration: none;
+    color: var(--text);
+    background: var(--glass-heavy);
+}
+@media (prefers-reduced-motion: reduce) {
+    body.km-topbar-auto .km-searchbox,
+    body.km-topbar-auto .km-chips,
+    body.km-topbar-auto .km-account {
+        transition: none;
+    }
+}
+/*
+ * ======== 軽い表示(2026-10-30、振り返りのフェーズ 2 の 5。表示調整「軽い表示」・Main/map-tuning.js の data-km-lite)========
+ *
+ * 遅い端末(自動: メモリ 2GB 以下・4 コア以下・データ節約)では、飾りの影・ぼかし・動きを止める。
+ * **影は一律に消さない** —— チュートリアルの暗幕(大きな影)・経路が通る階の赤い輪(内側の影)は意味がある。
+ * 飾りの影は変数(--shadow-sm / --shadow-lg)と、地図の上に何十個も出るもの(札・ピン)だけを消す。
+ * 意味のある印(イベントの赤い縁・ポスターの輪)は filter の代わりに線で残す。床を暗くする設定(利用者が選んだもの)はそのまま。
+ * 動き(transition)を止めても困らないこと: transitionend を待つ所(app.js の経路の欄)は保険のタイマーを持っている
+ */
+:root[data-km-lite="1"] {
+    --shadow-sm: none;
+    --shadow-lg: none;
+}
+:root[data-km-lite="1"] .km-label,
+:root[data-km-lite="1"] .pin-bubble,
+:root[data-km-lite="1"] .km-dest-head,
+:root[data-km-lite="1"] .km-event-poi-icon {
+    box-shadow: none !important;
+    text-shadow: none !important;
+}
+:root[data-km-lite="1"] .km-label.km-label-event {
+    box-shadow: 0 0 0 1.5px #ffffff !important;
+}
+:root[data-km-lite="1"] *,
+:root[data-km-lite="1"] *::before,
+:root[data-km-lite="1"] *::after {
+    animation: none !important;
+    transition: none !important;
+}
+:root[data-km-lite="1"] .km-node-shape {
+    filter: none !important;
+}
+:root[data-km-lite="1"] .km-node-has-poster:not(.km-node-event) .km-node-shape path {
+    stroke: #f59e0b;
+    stroke-width: 2.5px;
+}
+/* 脈打つ輪は止めると輪だけが残る。出さない(ピンは残る) */
+:root[data-km-lite="1"] .km-dest-pulse {
+    display: none;
 }

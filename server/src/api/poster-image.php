@@ -38,7 +38,11 @@ try {
     $poster = null;
 }
 
-if ($poster === null || !km_poster_send_image($poster, true)) {
+// ?w=640 は縮小版(一覧・検索の候補。lib/image-thumb.php。決まった幅だけ受ける)
+require_once __DIR__ . '/../lib/image-thumb.php';
+$thumbWidth = km_image_thumb_width($_GET['w'] ?? null);
+
+if ($poster === null || !km_poster_send_image($poster, true, $thumbWidth)) {
     http_response_code(404);
     exit('not found');
 }
