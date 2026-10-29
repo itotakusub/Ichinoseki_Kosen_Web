@@ -564,6 +564,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     })();
 
     /*
+     * 場所ごとに色分けした床(2026-10-30、振り返りのフェーズ 1。管理画面「地図の色分け」が塗って置く。lib/area-paint.php)。
+     * 塗っていない階・塗ったあと床を差し替えた階は無い(塗っていない床を出す)。表示調整の「場所ごとの色分け」で切れる
+     * (tuning より先に読むので、ここでは保存した値を直に見る。切り替えは applyTuning が reloadFloorImages で反映する)
+     */
+    const floorAreaImages = {};
+    (graphData.floors || []).forEach((floor) => {
+        if (floor && floor.id != null && typeof floor.areaPath === 'string' && floor.areaPath !== '') floorAreaImages[String(floor.id)] = floor.areaPath;
+    });
+    let areaColorsOn = window.KM_MAP_STYLE ? window.KM_MAP_STYLE.load().areaColors !== false : true;
+    /** その階で出す床の画像(色分けがあって ON ならそちら) */
+    function floorImageUrl(floor) {
+        return (areaColorsOn && floorAreaImages[floor]) || floorImages[floor];
+    }
+
+    /*
      * ---- ノード座標系 ----
      *
      * **ノードの座標は画像の解像度に従属させない。**
@@ -613,7 +628,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     function preloadFloorImage(floor) {
         if (imagePreloadPromises[floor]) return imagePreloadPromises[floor];
-        const url = floorImages[floor];
+        const url = floorImageUrl(floor);
         if (!url) return Promise.resolve(null);
 
         imagePreloadPromises[floor] = new Promise((resolve) => {
@@ -798,6 +813,13 @@ document.addEventListener('DOMContentLoaded', async () => {
      */
     function applyTuning() {
         mapStyle.applyLabelScale(tuning);
+        // 場所ごとの色分けを切り替えたら、床の画像を読み直す(先読みした絵を捨てて、いまの階から)
+        if ((tuning.areaColors !== false) !== areaColorsOn) {
+            areaColorsOn = tuning.areaColors !== false;
+            Object.keys(preloadedImages).forEach((floor) => { delete preloadedImages[floor]; });
+            Object.keys(imagePreloadPromises).forEach((floor) => { delete imagePreloadPromises[floor]; });
+            loadFloorImageDynamic(String(window.currentFloor));
+        }
         clearFloorMarkers();
         renderGlobalLabels();
         renderGlobalEdges();

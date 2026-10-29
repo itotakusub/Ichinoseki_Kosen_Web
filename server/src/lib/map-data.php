@@ -175,6 +175,9 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
      */
     require_once __DIR__ . '/map-floors.php';
     $customFloors = km_map_floor_custom_rows($pdo);
+    // 場所ごとに色分けした床(2026-10-30。lib/area-paint.php)。読めなければ空(色分けの無い床のまま)
+    require_once __DIR__ . '/area-paint.php';
+    $areaRecords = km_area_paint_records($pdo);
     $floorIds = [];
     foreach ($floors as &$floor) {
         $floorIds[(string) $floor['id']] = true;
@@ -188,6 +191,8 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
         [$coordWidth, $coordHeight] = $coordSpaces[(string) $floor['id']] ?? [null, null];
         $floor['coordWidth'] = $coordWidth;
         $floor['coordHeight'] = $coordHeight;
+        // 色分けした床。塗ったあと床の画像を差し替えていれば null(Main/app.js は塗っていない床を出す)
+        $floor['areaPath'] = km_area_paint_url((string) $floor['id'], $floor['svgPath'], $areaRecords[(string) $floor['id']] ?? null);
     }
     unset($floor); // 参照渡しの後始末。外さないと次の foreach が最後の要素を壊す
 

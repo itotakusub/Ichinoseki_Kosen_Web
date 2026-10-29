@@ -8996,8 +8996,58 @@ function km_check_layout(): void
         km_map_floor_kind('6', ['6' => ['kind' => 'campus']]), km_map_floor_kind('1', []),
     ]);
     $floorImageApi = (string) file_get_contents(__DIR__ . '/../api/floor-image.php');
-    check_bool('見取り図の口: 差し替えた画像も組み込みも km_map_floor_image_file で引く(錠の確かめの後)', str_contains($floorImageApi, '$path = km_map_floor_image_file((string) $svgPath);')
-        && strpos($floorImageApi, 'km_map_floor_image_file((string) $svgPath)') > strpos($floorImageApi, 'if (!$viewUnlocked) {'));
+    // 2026-10-30: 色分けした床(?area=1)も同じ口から。塗りのファイルは km_area_paint_file(名前の形を確かめる)で引く
+    check_bool('見取り図の口: 差し替えた画像も組み込みも km_map_floor_image_file で引く(錠の確かめの後)', str_contains($floorImageApi, "\$path = str_starts_with((string) \$svgPath, 'area:') ? (\$areaFile ?? null) : km_map_floor_image_file((string) \$svgPath);")
+        && strpos($floorImageApi, 'km_map_floor_image_file((string) $svgPath)') > strpos($floorImageApi, 'if (!$viewUnlocked) {')
+        && strpos($floorImageApi, "if ((\$_GET['area'] ?? '') === '1') {") > strpos($floorImageApi, 'if (!$viewUnlocked) {'));
+
+    // 場所ごとの色分け(2026-10-30、lib/area-paint.php)
+    require_once __DIR__ . '/../lib/area-paint.php';
+    $paintRecord = ['file' => 'area_0123456789ab_0123456789abcdef.png', 'source' => '/api/floor-image.php?floor=1&v=5', 'at' => '2026-10-30 10:00:00'];
+    check('色分け: 塗ったときと同じ床の画像なら URL・差し替えていれば出さない・名前の形が違えば出さない', [
+        '/api/floor-image.php?floor=1&area=1&v=0123456789abcdef', null, null, null,
+    ], [
+        km_area_paint_url('1', '/api/floor-image.php?floor=1&v=5', $paintRecord),
+        km_area_paint_url('1', '/api/floor-image.php?floor=1&v=6', $paintRecord),
+        km_area_paint_url('1', '/api/floor-image.php?floor=1&v=5', null),
+        km_area_paint_url('1', '/api/floor-image.php?floor=1&v=5', ['file' => '../etc/passwd', 'source' => '/api/floor-image.php?floor=1&v=5', 'at' => '']),
+    ]);
+    $paintInputs = km_area_paint_inputs([
+        'floors' => [['id' => '1', 'label' => '1F', 'svgPath' => '/api/floor-image.php?floor=1&v=5', 'coordWidth' => 1600, 'coordHeight' => 1200],
+                     ['id' => 'outside', 'label' => '外', 'svgPath' => '/api/floor-image.php?floor=outside', 'coordWidth' => null, 'coordHeight' => null]],
+        'nodes' => [
+            'aaaaaaaabbbbccccddddeeeeeeeeeeee' => ['floor' => '1', 'type' => 'room', 'x' => 10.0, 'y' => 20.0],
+            'h1' => ['floor' => '1', 'type' => 'room', 'x' => 30.0, 'y' => 40.0, 'hidden' => true],
+            'w1' => ['floor' => '1', 'type' => 'wall', 'x' => 0.0, 'y' => 0.0],
+            'w2' => ['floor' => '1', 'type' => 'wall', 'x' => 5.0, 'y' => 0.0],
+            'p' => ['floor' => '1', 'type' => 'poster', 'x' => 1.0, 'y' => 1.0],
+        ],
+        'edges' => [['source' => 'w1', 'target' => 'w2', 'wall' => true], ['source' => 'w1', 'target' => 'h1', 'wall' => false]],
+    ], [
+        'overrides' => ['AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE' => ['kind' => 'corridor', 'color' => '#A8E0C8']],
+        'markers' => [['uuid' => 'm1', 'floor' => '1F', 'x' => 50.0, 'y' => 1100.0, 'kind' => null, 'color' => '#D0B0E8']],
+    ], ['1' => $paintRecord]);
+    check('色分けの材料: 種類で絞る・隠した地点は押せない・手の指定は uuid の形をそろえて当てる・印はアプリの座標から直す・壁は両端が壁の線だけ', [
+        ['aaaaaaaabbbbccccddddeeeeeeeeeeee', 'room', true, 'corridor', 0xA8E0C8],
+        ['h1', 'room', false, null, null],
+        ['m1', 'area', false, null, 0xD0B0E8, 100.0],
+        [[0.0, 0.0, 5.0, 0.0]],
+        [false, true, true],
+    ], [
+        [$paintInputs[0]['seeds'][0]['uuid'], $paintInputs[0]['seeds'][0]['type'], $paintInputs[0]['seeds'][0]['tappable'], $paintInputs[0]['seeds'][0]['kind'], $paintInputs[0]['seeds'][0]['color']],
+        [$paintInputs[0]['seeds'][1]['uuid'], $paintInputs[0]['seeds'][1]['type'], $paintInputs[0]['seeds'][1]['tappable'], $paintInputs[0]['seeds'][1]['kind'], $paintInputs[0]['seeds'][1]['color']],
+        [$paintInputs[0]['seeds'][2]['uuid'], $paintInputs[0]['seeds'][2]['type'], $paintInputs[0]['seeds'][2]['tappable'], $paintInputs[0]['seeds'][2]['kind'], $paintInputs[0]['seeds'][2]['color'], $paintInputs[0]['seeds'][2]['y']],
+        $paintInputs[0]['walls'],
+        [$paintInputs[0]['outdoor'], $paintInputs[1]['outdoor'], $paintInputs[0]['painted']['current']],
+    ]);
+    $areaApp = (string) file_get_contents(__DIR__ . '/../Main/app.js');
+    check_bool('色分け: 公開の地図は塗った床があれば出す(表示調整で切れる・切り替えたら読み直す)・来場者の端末では塗らない',
+        str_contains($areaApp, 'return (areaColorsOn && floorAreaImages[floor]) || floorImages[floor];') && str_contains($areaApp, 'const url = floorImageUrl(floor);')
+        && str_contains($areaApp, 'if ((tuning.areaColors !== false) !== areaColorsOn) {') && !str_contains($areaApp, 'segmentAreas(')
+        && !str_contains((string) file_get_contents(__DIR__ . '/../index.php'), 'area-segmentation.js'));
+    check_bool('色分け: 地図データは階ごとに塗りの URL を持つ・置くときは PNG だけ・床が変わっていたら断る', str_contains($mapDataLib, "\$floor['areaPath'] = km_area_paint_url(")
+        && str_contains((string) file_get_contents(__DIR__ . '/../lib/area-paint.php'), "if (\$checked['ext'] !== 'png') {")
+        && str_contains((string) file_get_contents(__DIR__ . '/../lib/area-paint.php'), 'if ($source !== km_map_floor_image_endpoint($floorId, $svgPath)) {'));
     check_bool('地図データ: 階の無い地点と、その線を出さない', str_contains($mapDataLib = (string) file_get_contents(__DIR__ . '/../lib/map-data.php'), "if (!isset(\$floorIds[(string) \$node['floor']])) {")
         && str_contains($mapDataLib, "isset(\$nodesById[(string) \$edge['source']], \$nodesById[(string) \$edge['target']])"));
     check_bool('公開ページ: 右の階の並びは地図データの校舎の階から作る(無ければ組み込みの 6 つ)', str_contains($homeCode, "if ((\$railFloor['kind'] ?? 'campus') === 'campus') {")

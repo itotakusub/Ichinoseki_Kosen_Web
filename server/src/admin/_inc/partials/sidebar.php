@@ -28,6 +28,7 @@ $openMenus = [
     'backups' => 'database',
     'schedule' => 'database',
     'mapFloors' => 'database',
+    'mapAreas' => 'database',
     'login' => 'auth',
     'projects' => 'content',
     'timeline' => 'content',
@@ -176,6 +177,13 @@ $parentLink = static fn(string $id): string => 'nav-link' . ($openMenu === $id ?
                     <a href="./map-floors.php" class="<?= $link('mapFloors') ?>">
                       <i class="nav-icon bi bi-layers"></i>
                       <p data-i18n="side.mapFloors">階と平面図</p>
+                    </a>
+                  </li>
+                  <?php // 場所ごとの色分け(2026-10-30、lib/area-paint.php。床を塗った画像を作って公開の地図に出す) ?>
+                  <li class="nav-item">
+                    <a href="./map-areas.php" class="<?= $link('mapAreas') ?>">
+                      <i class="nav-icon bi bi-palette"></i>
+                      <p data-i18n="side.mapAreas">地図の色分け</p>
                     </a>
                   </li>
                   <?php // ポスター・広告と地点の URL(2026-10-21、lib/posters.php) ?>

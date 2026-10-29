@@ -152,6 +152,8 @@
          * (反転すると線の濃さが崩れた)。まぶしい人向けに残す。明るい配色では効かない
          */
         dimFloorImage: false,
+        // 場所ごとの色分け(2026-10-30。管理画面で塗った床があれば出す。アプリの「色分け」と同じ。既定は出す)
+        areaColors: true,
         types: {},          // { room: { shape, visible, label, showScale } }
     };
 
