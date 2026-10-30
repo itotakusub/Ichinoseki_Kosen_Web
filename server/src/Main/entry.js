@@ -191,6 +191,8 @@
         const body = el('div', 'km-entry-body');
         const grid = el('div', 'km-entry-choices km-entry-genres');
         document.querySelectorAll('#km-category-chips [data-km-category]').forEach(function (chip) {
+            // 当てはまる所の無いジャンルは app.js がチップを隠している。ここにも並べない
+            if (chip.hidden) return;
             const b = el('button', 'km-entry-choice', chip.textContent.trim());
             b.type = 'button';
             b.addEventListener('click', function () {

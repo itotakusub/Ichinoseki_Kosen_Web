@@ -37,7 +37,8 @@ declare(strict_types=1);
 require_once __DIR__ . '/db.php';
 
 /** 臨時の地点の種別。任意の文字列を入れさせない(アイコンの対応表でもある)。 */
-const KM_MAP_EVENT_POI_CATEGORIES = ['food', 'exhibit', 'reception', 'firstaid', 'toilet', 'stage', 'other'];
+// experience(体験)・rest(休憩・座れる場所)は 2026-10-30 に足した(振り返りのフェーズ 3 の 2「ジャンルを大 → 小で」)
+const KM_MAP_EVENT_POI_CATEGORIES = ['food', 'exhibit', 'experience', 'rest', 'reception', 'firstaid', 'toilet', 'stage', 'other'];
 
 /**
  * テーブルを用意する。**管理側の入口からだけ呼ぶこと。**

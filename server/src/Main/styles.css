@@ -4065,3 +4065,14 @@ body.km-topbar-auto:not(.km-topbar-peek) .km-account {
     }
     .km-entry-choices { grid-template-columns: 1fr; }
 }
+/* ジャンル(2026-10-30。Main/app.js の KM_GENRES)。当てはまる所の無いチップは隠す。結果は小さい分類の見出しで区切る */
+.km-chip[hidden] { display: none; }
+.km-category-group {
+    margin: 0.6rem 0 0.2rem;
+    padding: 0 0.25rem;
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--secondary);
+    list-style: none;
+}
+.km-category-group:first-child { margin-top: 0; }

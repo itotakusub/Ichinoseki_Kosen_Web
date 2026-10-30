@@ -833,6 +833,8 @@ function km_app_map_diff(array $converted, array $existing): array
 const KM_APP_MAP_POI_CATEGORY_LABELS = [
     'food' => '模擬店',
     'exhibit' => '展示',
+    'experience' => '体験',
+    'rest' => '休憩',
     'reception' => '受付',
     'firstaid' => '救護',
     'toilet' => 'トイレ',

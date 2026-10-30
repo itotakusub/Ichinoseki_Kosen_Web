@@ -594,8 +594,20 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
             <button id="km-route-open" type="button" class="km-searchbox-btn km-searchbox-route" title="経路を調べる" aria-label="経路を調べる" aria-controls="search-panel">🧭</button>
             <ul id="km-place-results" class="km-search-results" role="listbox" aria-label="検索の候補" hidden></ul>
         </div>
-        <div id="km-category-chips" class="km-chips" role="toolbar" aria-label="種類でまとめて探す">
+        <?php
+        /*
+         * ジャンル(2026-10-30、振り返りのフェーズ 3 の 2)。中身は Main/app.js の KM_GENRES(一時地点の種類・地点の種類・名前の言葉)。
+         * 当てはまる所が無いジャンルは app.js が隠す(会期の外は「食べる・飲む」などが出ない)
+         */
+        ?>
+        <div id="km-category-chips" class="km-chips" role="toolbar" aria-label="ジャンルで探す">
             <button type="button" class="km-chip" data-km-category="WC">🚻 トイレ</button>
+            <button type="button" class="km-chip" data-km-category="food">🍢 食べる・飲む</button>
+            <button type="button" class="km-chip" data-km-category="exhibit">🎨 見る(展示)</button>
+            <button type="button" class="km-chip" data-km-category="experience">🧪 体験</button>
+            <button type="button" class="km-chip" data-km-category="rest">🪑 休む・座れる</button>
+            <button type="button" class="km-chip" data-km-category="help">📋 受付・救護</button>
+            <button type="button" class="km-chip" data-km-category="stage">🎤 ステージ</button>
             <button type="button" class="km-chip" data-km-category="stairs">🏃 階段・EV</button>
             <button type="button" class="km-chip" data-km-category="room">📖 教室</button>
             <button type="button" class="km-chip" data-km-category="facility">🏢 建物</button>

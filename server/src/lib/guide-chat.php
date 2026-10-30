@@ -74,9 +74,9 @@ const KM_GUIDE_RESOLVE_TOKENS = 80;
 /** LLM の返事の大きさの上限(バイト) */
 const KM_GUIDE_LLM_MAX_BYTES = 65536;
 /** 一時地点の種類(lib/map-events.php の KM_MAP_EVENT_POI_CATEGORIES と同じ) */
-const KM_GUIDE_CATEGORIES = ['food', 'exhibit', 'reception', 'firstaid', 'toilet', 'stage', 'other'];
+const KM_GUIDE_CATEGORIES = ['food', 'exhibit', 'experience', 'rest', 'reception', 'firstaid', 'toilet', 'stage', 'other'];
 const KM_GUIDE_CATEGORY_LABELS = [
-    'food' => '模擬店', 'exhibit' => '展示', 'reception' => '受付', 'firstaid' => '救護',
+    'food' => '模擬店', 'exhibit' => '展示', 'experience' => '体験', 'rest' => '休憩', 'reception' => '受付', 'firstaid' => '救護',
     'toilet' => 'トイレ', 'stage' => 'ステージ', 'other' => 'その他',
 ];
 const KM_GUIDE_INTENTS = ['shop', 'route', 'place', 'other'];

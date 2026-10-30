@@ -866,13 +866,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     const poiMarkers = new Map();
 
     const KM_POI_ICONS = {
-        food: '🍢', exhibit: '🎨', reception: '📋',
+        food: '🍢', exhibit: '🎨', experience: '🧪', rest: '🪑', reception: '📋',
         firstaid: '🚑', toilet: '🚻', stage: '🎤', other: '📍',
     };
 
     /** 臨時の地点の種類の言葉(Website の値。lib/map-events.php の KM_MAP_EVENT_POI_CATEGORIES) */
     const KM_POI_LABELS = {
-        food: '模擬店', exhibit: '展示', reception: '受付',
+        food: '模擬店', exhibit: '展示', experience: '体験', rest: '休憩', reception: '受付',
         firstaid: '救護', toilet: 'トイレ', stage: 'ステージ', other: '臨時の地点',
     };
 
@@ -4284,42 +4284,82 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     /* ---------------- 種類でまとめて探す(チップ) ---------------- */
 
-    const CATEGORY_PATTERNS = {
-        WC: /WC|トイレ|便所|お手洗い/i,
-        stairs: /階段|エレベーター|EV/i,
-        room: /室|教室|実験|講義|ラボ/i,
-        facility: /棟|館|ホール|センター/i,
+    /*
+     * ======== ジャンル(大 → 小) ========(2026-10-30、振り返りのフェーズ 3 の 2)
+     *
+     * 振り返り: 「トイレの一時地点が 🚻 に出ない」「食べる所・休める所を探したい」。それまでのチップは地点(恒久)だけを見て、
+     * 一時地点(模擬店・救護・臨時のトイレ)を拾っていなかった。
+     * 大きなジャンルごとに、入る一時地点の種類(poi)・地点の種類(types)・名前の言葉(pattern)・企画の地点(projects)を決める。
+     * 結果は小さい分類(一時地点の種類・地点の種類)ごとに見出しを付けて並べる(大 → 小)。
+     * 当てはまる所が 1 つも無いジャンルはチップを出さない(会期の外に「食べる・飲む」が空で並ばないように)。
+     * 最初の画面(Main/entry.js)の「ジャンルから」は、出ているチップをそのまま並べる。
+     */
+    const KM_GENRES = {
+        WC: { poi: ['toilet'], pattern: /WC|トイレ|便所|お手洗い/i, label: 'トイレ' },
+        food: { poi: ['food'], pattern: /食堂|売店|カフェ|喫茶|模擬店|自販機|自動販売/, label: '食堂・売店' },
+        exhibit: { poi: ['exhibit'], projects: true },
+        experience: { poi: ['experience'], pattern: /体験|ワークショップ/, label: '体験' },
+        rest: { poi: ['rest'], pattern: /休憩|ラウンジ|ロビー|ベンチ/, label: '休める所' },
+        help: { poi: ['reception', 'firstaid'], pattern: /受付|保健|救護|案内所/, label: '受付・保健室' },
+        stage: { poi: ['stage'], pattern: /ステージ/, label: 'ステージ' },
+        stairs: { types: ['stairs'], pattern: /階段|エレベーター|EV/i },
+        room: { types: ['room'], pattern: /室|教室|実験|講義|ラボ/i },
+        facility: { types: ['facility'], pattern: /棟|館|ホール|センター/i },
+        event: { allPoi: true, projects: true },
     };
+
+    /** そのジャンルに入る場所。group は小さい分類の名前(見出しにする) */
+    function genreResults(key) {
+        const genre = KM_GENRES[key];
+        if (!genre) return [];
+        const results = [];
+        const seen = new Set();
+        (graphData.eventPois || []).forEach(poi => {
+            const category = KM_POI_LABELS[poi.category] ? poi.category : 'other';
+            if (!genre.allPoi && !(genre.poi || []).includes(category)) return;
+            results.push({ poiId: Number(poi.id), name: poiDisplay(poi).name, floor: String(poi.floor), type: 'room', group: category === 'other' ? KM_POI_LABELS.other : '臨時の' + KM_POI_LABELS[category], poster: (postersByNode.get('poi:' + poi.id) || [])[0] || null });
+        });
+        for (const [id, node] of Object.entries(graphData.nodes)) {
+            // 人が行ける場所だけ。通路の点・壁・Wi-Fi ルーター・イベント中に出さない地点は出さない
+            if (node.type === 'road' || node.type === 'wall' || node.type === 'wifi_router' || node.type === 'area' || node.hidden) continue;
+            const shownName = node.alias || node.name;
+            const isProject = Array.isArray(node.projects) && node.projects.length > 0;
+            const byProject = genre.projects && isProject;
+            const byType = (genre.types || []).includes(String(node.type));
+            const byName = genre.pattern && (genre.pattern.test(node.name || '') || genre.pattern.test(shownName || '') || genre.pattern.test(node.type2 || ''));
+            if (!byProject && !byType && !byName) continue;
+            if (seen.has(id)) continue;
+            seen.add(id);
+            const project = isProject ? projectDisplayFor(id, node) : null;
+            results.push({
+                id: id,
+                name: project ? project.name : shownName,
+                floor: String(node.floor),
+                type: String(node.type),
+                // 常設の場所はジャンルの言葉(トイレなら「トイレ」)。階段・教室・建物のジャンルは地点の種類の言葉
+                group: byProject ? '企画' : (genre.label || mapStyle.LABELS[node.type] || '場所'),
+                poster: (postersByNode.get(id) || [])[0] || null,
+            });
+        }
+        // 小さい分類の順(最初に出てきた順)→ いまの階を先に → 階の順 → 名前の順
+        const groupOrder = [];
+        results.forEach(r => { if (!groupOrder.includes(r.group)) groupOrder.push(r.group); });
+        const current = String(window.currentFloor);
+        results.sort((a, b) => groupOrder.indexOf(a.group) - groupOrder.indexOf(b.group)
+            || (a.floor === current ? 0 : 1) - (b.floor === current ? 0 : 1)
+            || String(a.floor).localeCompare(String(b.floor), 'ja', { numeric: true })
+            || String(a.name).localeCompare(String(b.name), 'ja'));
+        return results;
+    }
+
     document.querySelectorAll('[data-km-category]').forEach((chip) => {
+        const key = chip.dataset.kmCategory;
+        // 当てはまる所が無いジャンルは出さない(イベントのチップは index.php が会期中だけ置く)
+        chip.hidden = genreResults(key).length === 0;
         chip.addEventListener('click', () => {
-            const type = chip.dataset.kmCategory;
             const title = chip.textContent.trim();
             testLog('category', { text: title });
-            const results = [];
-            if (type === 'event') {
-                (graphData.eventPois || []).forEach(poi => results.push({ poiId: Number(poi.id), name: poiDisplay(poi).name, floor: String(poi.floor), type: 'room', poster: (postersByNode.get('poi:' + poi.id) || [])[0] || null }));
-                for (const [id, node] of Object.entries(graphData.nodes)) {
-                    if (node.hidden || !Array.isArray(node.projects) || node.projects.length === 0) continue;
-                    const project = projectDisplayFor(id, node);
-                    results.push({ id: id, name: project ? project.name : displayNameFor(node), floor: String(node.floor), type: String(node.type), poster: (postersByNode.get(id) || [])[0] || null });
-                }
-            } else {
-                const pattern = CATEGORY_PATTERNS[type];
-                for (const [id, node] of Object.entries(graphData.nodes)) {
-                    // 人が行ける場所だけ。通路の点・壁・Wi-Fi ルーター・イベント中に出さない地点は出さない
-                    if (node.type === 'road' || node.type === 'wall' || node.type === 'wifi_router' || node.hidden) continue;
-                    const shownName = node.alias || node.name;
-                    if (node.type === type || (pattern && (pattern.test(node.name) || pattern.test(shownName)))) {
-                        results.push({ id: id, name: shownName, floor: String(node.floor), type: String(node.type), poster: (postersByNode.get(id) || [])[0] || null });
-                    }
-                }
-            }
-            // いまの階を先に、そのあと階の順・名前の順
-            const current = String(window.currentFloor);
-            results.sort((a, b) => (a.floor === current ? 0 : 1) - (b.floor === current ? 0 : 1)
-                || String(a.floor).localeCompare(String(b.floor), 'ja', { numeric: true })
-                || String(a.name).localeCompare(String(b.name), 'ja'));
-            showCategoryResults(title, results);
+            showCategoryResults(title, genreResults(key));
         });
     });
 
@@ -4334,7 +4374,18 @@ document.addEventListener('DOMContentLoaded', async () => {
         box.appendChild(count);
         const list = document.createElement('ul');
         list.className = 'km-category-list';
+        // 小さい分類が 2 つ以上なら見出しを入れる(大 → 小。genreResults が分類の順に並べてある)
+        const groups = new Set(results.map(item => item.group).filter(Boolean));
+        let lastGroup = null;
         results.forEach(item => {
+            if (groups.size > 1 && item.group !== lastGroup) {
+                lastGroup = item.group;
+                const heading = document.createElement('li');
+                heading.className = 'km-category-group';
+                heading.setAttribute('role', 'presentation');
+                heading.textContent = `${item.group}(${results.filter(r => r.group === item.group).length})`;
+                list.appendChild(heading);
+            }
             const li = document.createElement('li');
             const button = document.createElement('button');
             button.type = 'button';

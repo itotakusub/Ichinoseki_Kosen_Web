@@ -9305,6 +9305,28 @@ function km_check_layout(): void
         && str_contains($entryJs, "if (toMap && typeof window.kmShowAd === 'function')"));
     check_bool('操作の帯の「🏠 はじめ」から開き直せる', str_contains($homeForEntry, 'data-km-entry-open') && str_contains($entryJs, "document.querySelectorAll('[data-km-entry-open]')"));
 
+    km_check_heading('map: ジャンル(大 → 小)と一時地点の種類(2026-10-30、振り返りのフェーズ 3 の 2)');
+    require_once __DIR__ . '/../lib/map-events.php';
+    require_once __DIR__ . '/../lib/guide-chat.php';
+    require_once __DIR__ . '/../lib/map-event-import.php';
+    check('一時地点の種類に体験・休憩', true, in_array('experience', KM_MAP_EVENT_POI_CATEGORIES, true) && in_array('rest', KM_MAP_EVENT_POI_CATEGORIES, true));
+    check('案内チャットの種類は一時地点の種類と同じ', KM_MAP_EVENT_POI_CATEGORIES, KM_GUIDE_CATEGORIES);
+    check('アプリへ渡す言葉・取り込みの言葉に体験・休憩', true, isset(KM_APP_MAP_POI_CATEGORY_LABELS['experience'], KM_APP_MAP_POI_CATEGORY_LABELS['rest'], KM_MAP_EVENT_IMPORT_CATEGORY_WORDS['experience'], KM_MAP_EVENT_IMPORT_CATEGORY_WORDS['rest']));
+    $editorJsForPoi = (string) file_get_contents(__DIR__ . '/../admin/assets/js/map-editor.js');
+    $missingPoiLabels = array_values(array_filter(KM_MAP_EVENT_POI_CATEGORIES, static fn (string $c): bool => !str_contains($editorJsForPoi, "['{$c}', ") || !preg_match('/\b' . $c . ': \'/', $appJs)));
+    check('地図編集と公開の地図の言葉が種類をすべて持つ', [], $missingPoiLabels);
+    $homeForGenres = (string) file_get_contents(__DIR__ . '/../index.php');
+    $missingGenres = [];
+    preg_match_all('/data-km-category="([a-zA-Z]+)"/', $homeForGenres, $genreMatches);
+    foreach ($genreMatches[1] as $genreKey) {
+        if (!preg_match('/^\s+' . preg_quote($genreKey, '/') . ': \{/m', $appJs)) {
+            $missingGenres[] = $genreKey;
+        }
+    }
+    check('チップのジャンルはすべて KM_GENRES にある', [], $missingGenres);
+    check_bool('トイレのジャンルは臨時のトイレも拾う・当てはまらないチップは隠す', str_contains($appJs, "WC: { poi: ['toilet'],") && str_contains($appJs, 'chip.hidden = genreResults(key).length === 0;')
+        && str_contains((string) file_get_contents(__DIR__ . '/../Main/entry.js'), 'if (chip.hidden) return;'));
+
     km_check_heading('map: 階の列の上でホイール・縦のスワイプ(2026-10-30、振り返りのフェーズ 3 の 4)');
     check_bool('ホイールの上 = 上の階・地図の拡大へ渡さない・1 段ずつ', str_contains($appJs, "stepFloor(e.deltaY < 0 ? 1 : -1);") && str_contains($appJs, "}, { passive: false });")
         && str_contains($appJs, 'if (now - floorStepAt < 250) return;'));
