@@ -9664,6 +9664,9 @@ function km_check_layout(): void
         }
     }
     check('チップのジャンルはすべて KM_GENRES にある', [], $missingGenres);
+    check_bool('種類で集めるジャンル(階段・教室・建物)は名前が当たっても別の種類の地点を入れない(「1号棟 階段」を建物に入れない。アプリの EntryGenres.kt と同じ)',
+        str_contains($appJs, 'const KM_GENRE_KIND_TYPES = { room: true, facility: true, stairs: true, entrance: true };')
+        && str_contains($appJs, 'const byName = !otherKind && genre.pattern'));
     check_bool('トイレのジャンルは臨時のトイレも拾う・当てはまらないチップは隠す', str_contains($appJs, "WC: { poi: ['toilet'],") && str_contains($appJs, 'chip.hidden = genreResults(key).length === 0;')
         && str_contains((string) file_get_contents(__DIR__ . '/../Main/entry.js'), 'if (chip.hidden) return;'));
 

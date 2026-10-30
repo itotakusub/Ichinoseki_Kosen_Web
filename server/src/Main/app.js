@@ -4606,6 +4606,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         event: { allPoi: true, projects: true },
     };
 
+    /** 種類で集めるジャンルが「別の種類」とみなす地点の種類(アプリの EntryGenres.kt の NODE_TYPE_LABELS と同じ) */
+    const KM_GENRE_KIND_TYPES = { room: true, facility: true, stairs: true, entrance: true };
+
     /** そのジャンルに入る場所。group は小さい分類の名前(見出しにする) */
     function genreResults(key) {
         const genre = KM_GENRES[key];
@@ -4624,7 +4627,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             const isProject = Array.isArray(node.projects) && node.projects.length > 0;
             const byProject = genre.projects && isProject;
             const byType = (genre.types || []).includes(String(node.type));
-            const byName = genre.pattern && (genre.pattern.test(node.name || '') || genre.pattern.test(shownName || '') || genre.pattern.test(node.type2 || ''));
+            // 種類で集めるジャンル(階段・教室・建物)は、名前が当たっても別の種類の地点は入れない(2026-10-30、アプリの実機で「建物」に階段が並んだ)
+            const otherKind = (genre.types || []).length > 0 && Object.prototype.hasOwnProperty.call(KM_GENRE_KIND_TYPES, node.type) && !genre.types.includes(String(node.type));
+            const byName = !otherKind && genre.pattern && (genre.pattern.test(node.name || '') || genre.pattern.test(shownName || '') || genre.pattern.test(node.type2 || ''));
             if (!byProject && !byType && !byName) continue;
             if (seen.has(id)) continue;
             seen.add(id);
