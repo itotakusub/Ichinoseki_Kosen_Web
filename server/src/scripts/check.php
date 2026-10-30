@@ -9305,6 +9305,35 @@ function km_check_layout(): void
         && str_contains($entryJs, "if (toMap && typeof window.kmShowAd === 'function')"));
     check_bool('操作の帯の「🏠 はじめ」から開き直せる', str_contains($homeForEntry, 'data-km-entry-open') && str_contains($entryJs, "document.querySelectorAll('[data-km-entry-open]')"));
 
+    km_check_heading('map: 現在地の QR(2026-10-30、振り返りのフェーズ 3 の 6。lib/here-qr.php)');
+    require_once __DIR__ . '/../lib/here-qr.php';
+    $hereId = '2735e277ed554b74963e82baa0b6a641';
+    check('QR の URL は ?here=<32 字の 16 進>(ハイフンは外す・形が違えば作らない)', ['https://ito4.jp/?here=' . $hereId, null],
+        [km_here_qr_url('https://ito4.jp/', '2735e277-ed55-4b74-963e-82baa0b6a641'), km_here_qr_url('https://ito4.jp', 'x"><script>')]);
+    $hereCandidates = km_here_qr_candidates([
+        ['id' => $hereId, 'floor' => '1', 'name' => '第二実習室', 'type' => 'room'],
+        ['id' => str_repeat('a', 32), 'floor' => '1', 'name' => '', 'type' => 'room'],
+        ['id' => str_repeat('b', 32), 'floor' => '1', 'name' => '道', 'type' => 'road'],
+        ['id' => str_repeat('c', 32), 'floor' => '9', 'name' => '無い階', 'type' => 'room'],
+        ['id' => str_repeat('d', 32), 'floor' => '1', 'name' => 'A階段', 'type' => 'stairs'],
+    ], ['1' => '1F', '2' => '2F']);
+    check('選べるのは名前のある部屋・建物・出入口・階段だけ(階ごと・名前の順・空の階は出さない)', ['1' => ['A階段', '第二実習室']],
+        array_map(static fn (array $list): array => array_column($list, 'name'), $hereCandidates));
+    check('印刷に選んだ id は候補に在るものだけ・重ねない', [$hereId], km_here_qr_selected([$hereId, $hereId, str_repeat('b', 32), ['x']], $hereCandidates));
+    $homeForHere = (string) file_get_contents(__DIR__ . '/../index.php');
+    check_bool('公開ページ: ?here= は字の形だけ確かめて meta で渡し、共有のリンクとは数えない', str_contains($homeForHere, "\$kmHere = \$kmNodeIdParam('here');")
+        && str_contains($homeForHere, '<meta name="km-here" content="<?= km_home_e($kmHere) ?>">') && !preg_match('/\$kmFromShare = [^;]*kmHere/s', $homeForHere));
+    check_bool('今いる場所はタブの間だけ(sessionStorage)・出発地が空なら展示の場所より先に使う', str_contains($appJs, "window.sessionStorage.setItem(KM_HERE_KEY, id);")
+        && str_contains($appJs, "const startId = hereNodeId() || (meta ? meta.getAttribute('content') : '');"));
+    check_bool('「位置の更新」で選んだ所も今いる場所にする', str_contains($appJs, "        setHere(nodeId);\n        const goalId = currentRoutePath[currentRoutePath.length - 1];"));
+    check_bool('最初の画面: 今いる場所から・QR の読み方(カメラは使わない)', str_contains((string) file_get_contents(__DIR__ . '/../Main/entry.js'), "'今いる場所(' + here.name + ')から'")
+        && str_contains((string) file_get_contents(__DIR__ . '/../Main/entry.js'), "'校内の QR を読む'") && !str_contains((string) file_get_contents(__DIR__ . '/../Main/entry.js'), 'getUserMedia'));
+    check_bool('案内チャット: 今いる場所を送り、サーバーは字の形を確かめて展示の場所より先に使う', str_contains((string) file_get_contents(__DIR__ . '/../Main/guide-chat.js'), '{ here: window.kmHere().id }')
+        && str_contains((string) file_get_contents(__DIR__ . '/../api/guide-chat.php'), "preg_match('/^[0-9a-f]{32}\$/', \$hereParam) === 1"));
+    $hereQrAdmin = (string) file_get_contents(__DIR__ . '/../admin/map-here-qr.php');
+    check_bool('管理画面: QR はこのサーバーで作る(lib/qr.php)・印刷のページの style/script は nonce 付き', str_contains($hereQrAdmin, 'km_qr_svg(km_qr_matrix($url,')
+        && str_contains($hereQrAdmin, '<style<?= km_csp_nonce_attr() ?>>') && str_contains($hereQrAdmin, '<script<?= km_csp_nonce_attr() ?>>'));
+
     km_check_heading('map: 曲がる所の目印・階段の上り下り(2026-10-30、振り返りのフェーズ 3 の 3)');
     $routeViewJs = (string) file_get_contents(__DIR__ . '/../Main/route-view.js');
     check_bool('角度の決まりはアプリと同じ(20° / 60° / 135°)', str_contains($routeViewJs, 'const STRAIGHT_DEGREES = 20;') && str_contains($routeViewJs, 'const SLIGHT_TURN_DEGREES = 60;')

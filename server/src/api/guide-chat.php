@@ -138,6 +138,14 @@ try {
     error_log('api/guide-chat.php start node failed: ' . $exception->getMessage());
     $startNodeId = '';
 }
+/*
+ * 今いる場所(現在地の QR。2026-10-30、振り返りのフェーズ 3 の 6。Main/guide-chat.js が送る)。展示の場所より先に使う。
+ * 字の形だけ確かめる —— km_guide_plan は一覧(地図に出している地点)に在るときだけ出発地にするので、無い id は効かない
+ */
+$hereParam = $input['here'] ?? '';
+if (is_string($hereParam) && preg_match('/^[0-9a-f]{32}$/', $hereParam) === 1) {
+    $startNodeId = $hereParam;
+}
 $result = km_guide_answer($catalog, $question, $llm, $startNodeId);
 
 // 質問と答えを残す(2026-10-25、利用者「機能改善のために保存」)。誰が聞いたかは入れない。残せなくても答えは返す。

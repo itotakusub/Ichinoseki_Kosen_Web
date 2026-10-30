@@ -221,6 +221,13 @@ $kmNodeIdParam = static function (string $name): ?string {
 };
 $kmFocusFrom = $kmNodeIdParam('from');
 $kmFocusTo = $kmNodeIdParam('to');
+/*
+ * 校内に貼る「現在地の QR」(2026-10-30、振り返りのフェーズ 3 の 6)。`/?here=<地点の id>`。
+ * その地点を「今いる場所」にする(このタブの間だけ。Main/app.js が sessionStorage に覚える)。経路の出発地・案内チャットの「現在地」に使う。
+ * **共有のリンクとは数えない** —— 現在地の QR を読んだ人は、これから行き先を探す人なので、最初の画面(Main/entry.js)を出す。
+ * 印刷は管理画面「現在地の QR」(admin/map-here-qr.php)
+ */
+$kmHere = $kmNodeIdParam('here');
 $kmPoiParam = static function (string $name): ?string {
     $value = $_GET[$name] ?? '';
     return is_string($value) && preg_match('/^[1-9]\d{0,9}$/', $value) === 1 ? $value : null;
@@ -382,6 +389,10 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
     <?php endif; ?>
     <?php if ($kmFocusPoi !== null): ?>
         <meta name="km-focus-poi" content="<?= km_home_e($kmFocusPoi) ?>">
+    <?php endif; ?>
+    <?php if ($kmHere !== null): ?>
+        <?php /* 現在地の QR(上の $kmHere。32 字の 16 進だけ)。Main/app.js の hereFromUrl が読む */ ?>
+        <meta name="km-here" content="<?= km_home_e($kmHere) ?>">
     <?php endif; ?>
     <?php if ($kmFromShare): ?>
         <?php /* 共有のリンクから開いた印(上の $kmFromShare)。チュートリアル・はじめに・前回の経路を出さない。広告は出す(Main/tutorial-end.js の kmShowAd) */ ?>

@@ -311,7 +311,9 @@
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'X-KM-CSRF': csrf },
                 credentials: 'same-origin',
-                body: JSON.stringify({ question: question }),
+                // 今いる場所(現在地の QR。2026-10-30)があれば、「現在地から」「ここはどこ」に使ってもらう。地点の id だけ送る
+                body: JSON.stringify(Object.assign({ question: question },
+                    typeof window.kmHere === 'function' && window.kmHere() ? { here: window.kmHere().id } : {})),
             });
             const data = await response.json().catch(() => null);
             waiting.remove();

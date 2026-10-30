@@ -1748,6 +1748,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         renderBuildingSwitcher();
         renderBuildingOverlays();
         renderStairGuides();
+        renderHereMarker();
 
         if (currentRoutePath) {
             drawPath(currentRoutePath);
@@ -1911,6 +1912,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 loadFloorImageDynamic(window.currentFloor);
                 kmLoading.finish();
                 window.setTimeout(focusRoomFromUrl, 0);
+                window.setTimeout(hereFromUrl, 0);
             }
         );
 
@@ -1929,6 +1931,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 loadFloorImageDynamic(window.currentFloor);
                 kmLoading.finish();
                 window.setTimeout(focusRoomFromUrl, 0);
+                window.setTimeout(hereFromUrl, 0);
             }
         }, LOADING_TIMEOUT_MS);
 
@@ -2468,6 +2471,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         routeLineRuns = [];
         markRouteNodes(new Set());
         renderStairGuides();
+        renderHereMarker();
         renderRouteBar();
     }
 
@@ -3391,6 +3395,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     function drawRouteGuides(pathNodeIds) {
         renderStairGuides();   // 経路の階段の「行ける階」を外す
+        renderHereMarker();    // 今いる場所から始まる経路なら、出発のピンと重ねない
         const view = window.KmRouteView;
         const floor = String(window.currentFloor);
         const onRoute = new Set();
@@ -3648,13 +3653,98 @@ document.addEventListener('DOMContentLoaded', async () => {
      * 目的地と同じ所・地図に無い所・経路に使えない所なら入れない(いつもどおり出発地を選んでもらう)
      */
     function applyTestStart(endId) {
+        // 現在地の QR で決めた「今いる場所」が先(下の hereNodeId)。無ければ展示の場所
         const meta = document.querySelector('meta[name="km-test-start"]');
-        const startId = meta ? meta.getAttribute('content') : '';
+        const startId = hereNodeId() || (meta ? meta.getAttribute('content') : '');
         const node = startId ? graphData.nodes[startId] : null;
         if (!node || startId === endId || !isRoutableNode(node)) return;
         routeStartId = startId;
         routeStartPoi = null;
         if (startInput) startInput.value = getLabelForNode(startId, node);
+    }
+
+    /*
+     * ======== 今いる場所(現在地の QR)========(2026-10-30、振り返りのフェーズ 3 の 6)
+     *
+     * Website は現在地を測れない。校内に貼った QR(`/?here=<地点>`。管理画面「現在地の QR」で印刷)を読むと、その地点を
+     * 「今いる場所」にする。**このタブの間だけ**覚える(sessionStorage。サーバーへは送らない。読めない環境ではこの画面の間だけ)。
+     * 使う所: 経路の出発地が空のとき(applyTestStart)・最初の画面の「今いる場所から」・案内チャットの「現在地」(Main/guide-chat.js)。
+     * 「位置の更新」で選んだ地点も今いる場所にする(本人が「ここにいる」と言った所なので)
+     */
+    const KM_HERE_KEY = 'km-here';
+    let hereMemory = '';
+    function hereNodeId() {
+        let id = hereMemory;
+        try {
+            id = window.sessionStorage.getItem(KM_HERE_KEY) || hereMemory;
+        } catch (e) {
+            // 覚えられない環境。この画面の間だけ
+        }
+        const node = id ? graphData.nodes[id] : null;
+        return node && !node.hidden && isRoutableNode(node) ? id : '';
+    }
+    function setHere(id) {
+        const node = graphData.nodes[id];
+        if (!node || node.hidden || !isRoutableNode(node)) return false;
+        hereMemory = id;
+        try {
+            window.sessionStorage.setItem(KM_HERE_KEY, id);
+        } catch (e) {
+            // この画面の間だけ覚える
+        }
+        renderHereMarker();
+        return true;
+    }
+    /** 最初の画面(Main/entry.js)・案内チャットが使う。無ければ null */
+    window.kmHere = function () {
+        const id = hereNodeId();
+        if (!id) return null;
+        const node = graphData.nodes[id];
+        return { kind: 'node', id: id, name: routeNodeLabel(node), floor: String(node.floor), type: String(node.type), routable: true };
+    };
+
+    let hereMarker = null;
+    function renderHereMarker() {
+        if (hereMarker) window.map.removeLayer(hereMarker);
+        hereMarker = null;
+        const id = hereNodeId();
+        const node = id ? graphData.nodes[id] : null;
+        // 経路が今いる場所から始まるなら、出発のピンがその印になる(重ねない)
+        if (!node || String(node.floor) !== String(window.currentFloor) || (currentRoutePath && currentRoutePath[0] === id)) return;
+        hereMarker = guideMarker([node.y, node.x], 'km-here-pin', '<span class="km-guide-chip km-here">📍 今いる場所</span>');
+    }
+
+    /** `/?here=` で開いたとき: 今いる場所にして、その階を開いて寄せる。出さない地点なら知らせる */
+    let hereFromUrlDone = false;
+    function hereFromUrl() {
+        if (hereFromUrlDone) return;
+        hereFromUrlDone = true;
+        const meta = document.querySelector('meta[name="km-here"]');
+        const id = meta ? meta.getAttribute('content') : '';
+        if (!id) {
+            renderHereMarker();
+            return;
+        }
+        if (!setHere(id)) {
+            showRoomNotice('この QR の場所は今は案内していません。地図から探してください。');
+            return;
+        }
+        const node = graphData.nodes[id];
+        let done = false;
+        const center = () => {
+            if (done) return;
+            done = true;
+            userMovedMap = true;
+            window.map.setView([node.y, node.x], Math.max(window.map.getZoom(), 1));
+            renderHereMarker();
+        };
+        if (String(node.floor) !== String(window.currentFloor) && floorImages[String(node.floor)]) {
+            window.map.once('moveend', center);
+            window.setTimeout(center, 700);
+            changeFloor(String(node.floor));
+        } else {
+            center();
+        }
     }
 
     /**
@@ -3990,6 +4080,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!isRoutableNode(node)) return false;
 
         stopPositionPick();
+        // 本人が「ここにいる」と選んだ所。今いる場所にもする(現在地の QR と同じ。最初の画面・案内チャットで使う)
+        setHere(nodeId);
         const goalId = currentRoutePath[currentRoutePath.length - 1];
         if (nodeId === goalId) {
             // 目的地に居る。引き直すものが無い

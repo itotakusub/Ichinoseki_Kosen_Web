@@ -97,6 +97,9 @@
     function home() {
         chosen = null;
         const body = el('div', 'km-entry-body');
+        // 現在地の QR から来た人には、どこにいることになっているかを見せる(道順の出発地になる)
+        const here = typeof window.kmHere === 'function' ? window.kmHere() : null;
+        if (here) body.appendChild(el('p', 'km-entry-here', '📍 今いる場所: ' + here.name));
         body.appendChild(el('p', 'km-entry-lead', 'どうやって探しますか?'));
         const grid = el('div', 'km-entry-choices');
         grid.appendChild(button('km-entry-choice', '🔢', 'ポスター・企画の番号から', function () { finder('number'); }));
@@ -230,7 +233,10 @@
         show('ここへ行きますか?', body, home);
     }
 
-    /** 出発地を選ぶ。文字で探すか、地図の上(経路の欄)で選ぶ */
+    /**
+     * 出発地を選ぶ。今いる場所(現在地の QR で決めた所)・QR を読む・文字で探す・経路の欄で選ぶ。
+     * 今いる場所が分かっていれば一番上に出す(2026-10-30、振り返りのフェーズ 3 の 6)
+     */
     function startPicker() {
         const target = chosen;
         if (!target) return home();
@@ -242,11 +248,43 @@
             onlyRoutable: true,
             back: function () { picked(target); },
         });
+        const body = panel.querySelector('.km-entry-body');
+        const here = typeof window.kmHere === 'function' ? window.kmHere() : null;
+        const quick = el('div', 'km-entry-actions km-entry-start-quick');
+        if (here && here.id !== target.id) {
+            quick.appendChild(button('km-entry-action km-entry-action-route', '📍', '今いる場所(' + here.name + ')から', function () {
+                closeToMap(false);
+                window.kmEntryApi.route(target, here);
+            }));
+        }
+        quick.appendChild(button('km-entry-action', '📷', '校内の QR を読む', function () { qrHelp(target); }));
+        body.insertBefore(quick, body.firstChild);
+        body.insertBefore(el('p', 'km-entry-lead', 'または、出発する場所の名前で探す:'), quick.nextSibling);
         // 文字で探す代わりに、経路の欄(出発地の候補・テスト用の出発地)で選ぶ
-        panel.querySelector('.km-entry-body').appendChild(button('km-entry-link', '🧭', '出発地は経路の欄で選ぶ', function () {
+        body.appendChild(button('km-entry-link', '🧭', '出発地は経路の欄で選ぶ', function () {
             closeToMap(false);
             window.kmEntryApi.route(target, null);
         }));
+    }
+
+    /*
+     * QR の読み方。**この画面ではカメラを使わない**(サイトはカメラを止めている: nginx の Permissions-Policy camera=())。
+     * スマホのカメラで校内の「現在地の QR」を読むと、その場所を今いる場所にした地図が開く(index.php の ?here=)。
+     * 行き先を選び直さなくて済むよう、いま選んだ行き先を覚えておく必要は無い(QR の地図は最初の画面から始まる)
+     */
+    function qrHelp(target) {
+        const body = el('div', 'km-entry-body');
+        body.appendChild(el('p', 'km-entry-lead', '近くの壁や柱に貼ってある「現在地の QR」を、スマホのカメラで読んでください。'));
+        const steps = el('ol', 'km-entry-steps');
+        ['スマホのカメラ(または QR を読むアプリ)を開く', 'QR に向けて、出てきたリンクを開く', '開いた地図で、もう一度行き先を選ぶ(出発地は「今いる場所」になります)'].forEach(function (text) {
+            steps.appendChild(el('li', '', text));
+        });
+        body.appendChild(steps);
+        body.appendChild(el('p', 'km-entry-note', 'QR が見つからないときは、もどって出発する場所の名前で探してください。'));
+        show('校内の QR を読む', body, function () {
+            chosen = target;
+            startPicker();
+        });
     }
 
     function open() {

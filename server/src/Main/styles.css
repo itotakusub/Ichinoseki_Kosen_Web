@@ -4140,3 +4140,19 @@ body.km-route-active .leaflet-tooltip-pane .km-label:not(.km-on-route) {
 }/* 引いて見ているとき(app.js の km-guides-compact)は、曲がる所の札を矢印だけに */
 .km-guides-compact .km-turn-pin .km-guide-text { display: none; }
 .km-guides-compact .km-turn-pin .km-guide-chip { padding: 2px 7px; }
+/* 今いる場所(現在地の QR。2026-10-30。Main/app.js の renderHereMarker・Main/entry.js) */
+.km-here-pin .km-guide-chip {
+    transform: translate(-50%, calc(-100% - 14px));
+    background: #059669;
+    color: #ffffff;
+}
+.km-entry-here {
+    margin: 0 0 0.5rem;
+    padding: 0.5rem 0.75rem;
+    border-radius: 12px;
+    background: rgba(5, 150, 105, 0.12);
+    color: var(--text);
+    font-weight: 700;
+}
+.km-entry-start-quick { margin-bottom: 0.75rem; }
+.km-entry-steps { margin: 0.5rem 0 0.75rem; padding-left: 1.4rem; line-height: 1.7; font-size: 1.05rem; }
