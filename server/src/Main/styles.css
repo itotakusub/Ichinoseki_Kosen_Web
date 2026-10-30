@@ -4076,3 +4076,67 @@ body.km-topbar-auto:not(.km-topbar-peek) .km-account {
     list-style: none;
 }
 .km-category-group:first-child { margin-top: 0; }
+/*
+ * ======== 曲がる所の目印・階段の札(2026-10-30、振り返りのフェーズ 3 の 3。Main/app.js の drawRouteGuides / renderStairGuides)========
+ *
+ * 札は点の上(曲がる所・経路の階段)と点の下(行ける階)に、点を真ん中にして置く(iconSize: null なので左上が点。transform で寄せる)。
+ * 上 = 朱・下 = 青(Okabe-Ito。アプリの StairGuide.kt と同じ)。色だけに頼らず ▲▼ と文字を必ず添える。
+ * 矢印(↑)は上り口・下り口の向き(--km-heading。地図の画像の上 = 0°・時計回り)へ回す。向きが無ければ矢印を外す
+ */
+.km-guide-pin { width: 0 !important; height: 0 !important; border: none; background: none; }
+.km-guide-chip {
+    position: absolute;
+    left: 0;
+    top: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    border: 2px solid #ffffff;
+    font-size: calc(13px * var(--km-label-scale, 1));
+    font-weight: 700;
+    line-height: 1.3;
+    white-space: nowrap;
+    box-shadow: var(--shadow-sm);
+    pointer-events: none;
+}
+.km-turn-pin .km-guide-chip {
+    transform: translate(-50%, calc(-100% - 14px));
+    background: #1d4ed8;
+    color: #ffffff;
+}
+.km-turn-pin .km-guide-chip b { font-size: 1.25em; line-height: 1; }
+.km-stair-pin .km-guide-chip {
+    transform: translate(-50%, calc(-100% - 44px));
+    background: #1d4ed8;
+    color: #ffffff;
+}
+.km-stair-pin.is-up .km-guide-chip { background: #d55e00; }
+.km-stair-pin.is-down .km-guide-chip { background: #0072b2; }
+.km-stair-pin.is-arriving .km-guide-chip { background: #475569; }
+.km-reach-pin .km-guide-chip {
+    transform: translate(-50%, 16px);
+    font-size: calc(11px * var(--km-label-scale, 1));
+    padding: 1px 7px;
+    color: #ffffff;
+    background: #6d28d9;
+}
+.km-reach-pin.is-line-1 .km-guide-chip { transform: translate(-50%, 40px); }
+.km-reach-pin.is-up .km-guide-chip { background: #d55e00; }
+.km-reach-pin.is-down .km-guide-chip { background: #0072b2; }
+.km-guide-arrow {
+    display: inline-block;
+    font-size: 1.15em;
+    line-height: 1;
+    transform: rotate(var(--km-heading, 0deg));
+}
+
+/* 案内中は、経路の地点と目印(.km-on-route)だけを濃く。ほかの地点と札は薄く(押すことはできる) */
+body.km-route-active .leaflet-marker-pane .km-node:not(.km-on-route),
+body.km-route-active .leaflet-tooltip-pane .km-label:not(.km-on-route) {
+    /* Leaflet が印と札に opacity を直接書く(札は 0.9)ので !important で上書きする */
+    opacity: 0.35 !important;
+}/* 引いて見ているとき(app.js の km-guides-compact)は、曲がる所の札を矢印だけに */
+.km-guides-compact .km-turn-pin .km-guide-text { display: none; }
+.km-guides-compact .km-turn-pin .km-guide-chip { padding: 2px 7px; }

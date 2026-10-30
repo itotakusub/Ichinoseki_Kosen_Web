@@ -9305,6 +9305,20 @@ function km_check_layout(): void
         && str_contains($entryJs, "if (toMap && typeof window.kmShowAd === 'function')"));
     check_bool('操作の帯の「🏠 はじめ」から開き直せる', str_contains($homeForEntry, 'data-km-entry-open') && str_contains($entryJs, "document.querySelectorAll('[data-km-entry-open]')"));
 
+    km_check_heading('map: 曲がる所の目印・階段の上り下り(2026-10-30、振り返りのフェーズ 3 の 3)');
+    $routeViewJs = (string) file_get_contents(__DIR__ . '/../Main/route-view.js');
+    check_bool('角度の決まりはアプリと同じ(20° / 60° / 135°)', str_contains($routeViewJs, 'const STRAIGHT_DEGREES = 20;') && str_contains($routeViewJs, 'const SLIGHT_TURN_DEGREES = 60;')
+        && str_contains($routeViewJs, 'const TURN_BACK_DEGREES = 135;'));
+    check_bool('Web の地図は上が +y(左右を取り違えない)', str_contains($routeViewJs, 'const right = o.yDown ? turn > 0 : turn < 0;'));
+    check_bool('経路を引くたびに曲がる所を数え直し、消すときに印を外す', str_contains($appJs, 'routeTurnList = computeRouteTurns(path);') && str_contains($appJs, "routeTurnList = [];\n        routeStepIndex = 0;")
+        && str_contains($appJs, 'markRouteNodes(new Set());'));
+    check_bool('案内の帯に次の曲がり角', str_contains($appJs, "const turnHint = nextTurn ? `次: \${nextTurn.arrow} \${nextTurn.phrase} · ` : '';"));
+    check_bool('地図データに階段の向き(uuid は出さない)', str_contains((string) file_get_contents(__DIR__ . '/../lib/map-data.php'), "\$node['stairUpHeading'] = \$heading['up'];")
+        && str_contains((string) file_get_contents(__DIR__ . '/../lib/map-data.php'), "unset(\$node['uuid']);"));
+    check_bool('矢印の向きは CSSOM で入れる(style 属性は CSP で効かない)', str_contains($appJs, "arrow.style.setProperty('--km-heading', heading + 'deg');"));
+    check_bool('案内中は関係ない地点を薄く(Leaflet の opacity に勝つ)', preg_match('/body\.km-route-active \.leaflet-tooltip-pane \.km-label:not\(\.km-on-route\) \{[^}]*opacity: 0\.35 !important;/s', $chromeCss) === 1);
+    check_bool('札の文字は escapeHtml を通す', str_contains($appJs, '${escapeHtml(turn.phrase)}</span></span>`') && str_contains($appJs, '${escapeHtml(mark.text)}</span>`'));
+
     km_check_heading('map: ジャンル(大 → 小)と一時地点の種類(2026-10-30、振り返りのフェーズ 3 の 2)');
     require_once __DIR__ . '/../lib/map-events.php';
     require_once __DIR__ . '/../lib/guide-chat.php';

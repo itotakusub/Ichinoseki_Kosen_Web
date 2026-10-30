@@ -130,10 +130,202 @@
         return out;
     }
 
+    /*
+     * ======== 曲がる所と目印 ========(2026-10-30、振り返りのフェーズ 3 の 3「曲がる所の案内」)
+     *
+     * 角度の決まりはアプリの RouteInstructions.kt と同じ: 向きの変わりが 20° 未満は直進、60° までは斜め、135° を超えると引き返す。
+     * Web の地図の座標は**上が +y**(CRS.Simple。アプリは下が +y)。左右は yDown で切り替える。
+     * 階が変わる所(階段・出入口)で向きを数え直す。短すぎる区間(minSegment 未満)は向きを決めるのに使わない(点の小さなずれで曲がらない)
+     */
+    const STRAIGHT_DEGREES = 20;
+    const SLIGHT_TURN_DEGREES = 60;
+    const TURN_BACK_DEGREES = 135;
+
+    function normalizeTurn(degrees) {
+        let value = degrees % 360;
+        if (value > 180) value -= 360;
+        if (value <= -180) value += 360;
+        return value;
+    }
+
+    /**
+     * @param points [{id, x, y, floor}] 経路の地点の並び
+     * @param opts { yDown?: boolean, minSegment?: number }
+     * @return [{index, id, turn: 'right'|'left'|'slight-right'|'slight-left'|'back', degrees}] 曲がる地点(index は points の位置)
+     */
+    function routeTurns(points, opts) {
+        const list = Array.isArray(points) ? points : [];
+        const o = opts || {};
+        const minSegment = o.minSegment === undefined ? 3 : o.minSegment;
+        const turns = [];
+        let bearing = null;
+        for (let i = 0; i < list.length - 1; i++) {
+            const a = list[i];
+            const b = list[i + 1];
+            if (String(a.floor) !== String(b.floor)) {
+                bearing = null;
+                continue;
+            }
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            if (Math.hypot(dx, dy) < minSegment) continue;
+            const next = Math.atan2(dy, dx) * 180 / Math.PI;
+            if (bearing !== null) {
+                const turn = normalizeTurn(next - bearing);
+                const magnitude = Math.abs(turn);
+                if (magnitude >= STRAIGHT_DEGREES) {
+                    // 上が +y の座標では、角度が増える(反時計回り)のが左
+                    const right = o.yDown ? turn > 0 : turn < 0;
+                    let kind;
+                    if (magnitude > TURN_BACK_DEGREES) kind = 'back';
+                    else if (magnitude > SLIGHT_TURN_DEGREES) kind = right ? 'right' : 'left';
+                    else kind = right ? 'slight-right' : 'slight-left';
+                    turns.push({ index: i, id: a.id, turn: kind, degrees: Math.round(turn) });
+                }
+            }
+            bearing = next;
+        }
+        return turns;
+    }
+
+    /**
+     * 曲がる所の目印。曲がる地点そのものに名前があればそれ、無ければ同じ階で maxDist 以内のいちばん近い名前のある地点。
+     * candidates は [{id, name, x, y, floor}](名前のある、人が見て分かる地点だけを渡す)。無ければ null
+     */
+    function turnLandmark(point, candidates, maxDist) {
+        let best = null;
+        let bestDistance = Infinity;
+        (Array.isArray(candidates) ? candidates : []).forEach(function (c) {
+            if (!c || !String(c.name || '').trim() || String(c.floor) !== String(point.floor)) return;
+            if (c.id === point.id) {
+                best = c;
+                bestDistance = -1;
+                return;
+            }
+            const d = Math.hypot(c.x - point.x, c.y - point.y);
+            if (d <= maxDist && d < bestDistance) {
+                best = c;
+                bestDistance = d;
+            }
+        });
+        return best;
+    }
+
+    const TURN_WORDS = {
+        right: '右へ曲がる', left: '左へ曲がる', 'slight-right': '右斜め前へ', 'slight-left': '左斜め前へ', back: '引き返す',
+    };
+    const TURN_SHORT = { right: '右へ', left: '左へ', 'slight-right': '右斜め前へ', 'slight-left': '左斜め前へ', back: '引き返す' };
+    const TURN_ARROWS = { right: '↱', left: '↰', 'slight-right': '↗', 'slight-left': '↖', back: '↩' };
+
+    /** 「講義室1を目印に右へ」/ 目印が無ければ「右へ曲がる」 */
+    function turnPhrase(turn, landmarkName) {
+        const name = String(landmarkName || '').trim();
+        if (!name) return TURN_WORDS[turn] || '';
+        return turn === 'back' ? name + 'で引き返す' : name + 'を目印に' + (TURN_SHORT[turn] || '');
+    }
+
+    function turnArrow(turn) {
+        return TURN_ARROWS[turn] || '';
+    }
+
+    /*
+     * ======== 階段の上り・下り ========(2026-10-30、振り返りのフェーズ 3 の 3。アプリの StairGuide.kt と同じ)
+     */
+
+    /** 屋内の階(1F〜)だけ数にする。外・建物の階は null */
+    function floorNumber(floor) {
+        const text = String(floor === null || floor === undefined ? '' : floor).trim();
+        return /^\d+$/.test(text) ? Number(text) : null;
+    }
+
+    /** 階の並びを短く(続いていれば「2〜5F」、飛んでいれば「2・4F」) */
+    function floorRangeLabel(floors) {
+        const sorted = (Array.isArray(floors) ? floors : []).slice().sort(function (a, b) { return a - b; });
+        if (sorted.length === 0) return '';
+        const contiguous = sorted.every(function (f, i) { return i === 0 || f === sorted[i - 1] + 1; });
+        return sorted.length >= 3 && contiguous ? sorted[0] + '〜' + sorted[sorted.length - 1] + 'F' : sorted.join('・') + 'F';
+    }
+
+    /**
+     * その階段から行ける階。keyOf(node) が同じ階段(接続 ID)を集める。{up: 近い順, down: 近い順, elevator} か null
+     * @param isElevator (node) => boolean
+     */
+    function stairReach(node, allNodes, keyOf, isElevator) {
+        if (!node || node.type !== 'stairs') return null;
+        const here = floorNumber(node.floor);
+        const key = keyOf(node);
+        if (here === null || !key) return null;
+        const floors = [];
+        (Array.isArray(allNodes) ? allNodes : []).forEach(function (other) {
+            if (!other || other === node || other.type !== 'stairs' || keyOf(other) !== key) return;
+            const f = floorNumber(other.floor);
+            if (f !== null && f !== here && floors.indexOf(f) < 0) floors.push(f);
+        });
+        if (floors.length === 0) return null;
+        return {
+            up: floors.filter(function (f) { return f > here; }).sort(function (a, b) { return a - b; }),
+            down: floors.filter(function (f) { return f < here; }).sort(function (a, b) { return b - a; }),
+            elevator: !!(isElevator && isElevator(node)),
+        };
+    }
+
+    /** 階段の札の行。エレベーターは「⇅ 1〜5F」の 1 行(今の階も入れる) */
+    function stairReachLines(reach, hereFloor) {
+        if (!reach) return [];
+        if (reach.elevator) {
+            const all = reach.up.concat(reach.down, [hereFloor]).filter(function (f, i, arr) { return arr.indexOf(f) === i; });
+            return [{ kind: 'elevator', text: '⇅ ' + floorRangeLabel(all) }];
+        }
+        const lines = [];
+        if (reach.up.length > 0) lines.push({ kind: 'up', text: '▲上行き ' + floorRangeLabel(reach.up) });
+        if (reach.down.length > 0) lines.push({ kind: 'down', text: '▼下行き ' + floorRangeLabel(reach.down) });
+        return lines;
+    }
+
+    /**
+     * いまの階で、経路が通る階段の札。出発側は「▲ 2F へ上る」「▼ 1F へ下りる」「エレベーターで 3F へ」、着いた側は「2F から到着」。
+     * pathNodes は経路の地点の並び([{id, type, floor}])。labelOf(floor) は階の呼び名
+     * @return [{id, text, goingUp: true|false|null, arriving}]
+     */
+    function routeStairMarks(pathNodes, currentFloor, labelOf, isElevator) {
+        const list = Array.isArray(pathNodes) ? pathNodes : [];
+        const here = String(currentFloor);
+        const marks = [];
+        for (let i = 0; i < list.length - 1; i++) {
+            const from = list[i];
+            const to = list[i + 1];
+            if (!from || !to || String(from.floor) === String(to.floor) || from.type !== 'stairs') continue;
+            const a = floorNumber(from.floor);
+            const b = floorNumber(to.floor);
+            const up = a !== null && b !== null ? b > a : null;
+            if (String(from.floor) === here) {
+                let text;
+                if (isElevator && isElevator(from)) text = 'エレベーターで ' + labelOf(to.floor) + ' へ';
+                else if (up === true) text = '▲ ' + labelOf(to.floor) + ' へ上る';
+                else if (up === false) text = '▼ ' + labelOf(to.floor) + ' へ下りる';
+                else text = labelOf(to.floor) + ' へ';
+                marks.push({ id: from.id, text: text, goingUp: up, arriving: false });
+            }
+            if (String(to.floor) === here) {
+                marks.push({ id: to.id, text: labelOf(from.floor) + ' から到着', goingUp: up, arriving: true });
+            }
+        }
+        return marks;
+    }
+
     const api = {
         clipSegment: clipSegment,
         splitRouteByObstacles: splitRouteByObstacles,
         routeFloorSequence: routeFloorSequence,
+        routeTurns: routeTurns,
+        turnLandmark: turnLandmark,
+        turnPhrase: turnPhrase,
+        turnArrow: turnArrow,
+        floorNumber: floorNumber,
+        floorRangeLabel: floorRangeLabel,
+        stairReach: stairReach,
+        stairReachLines: stairReachLines,
+        routeStairMarks: routeStairMarks,
     };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     root.KmRouteView = api;

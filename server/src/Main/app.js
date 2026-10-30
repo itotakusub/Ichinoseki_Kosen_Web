@@ -368,6 +368,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const routeCloseBtn = document.getElementById('km-route-close');
     const routeTargetBtn = document.getElementById('km-route-target');
     let routeSteps = [];
+    // 曲がる所と目印(computeRouteTurns。2026-10-30、振り返りのフェーズ 3 の 3)
+    let routeTurnList = [];
     let routeStepIndex = 0;
     // 「位置の更新」で地点を選んでもらっている最中か(下の「位置の更新」の節)
     let pickingPosition = false;
@@ -1745,6 +1747,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         renderEventOverlay();
         renderBuildingSwitcher();
         renderBuildingOverlays();
+        renderStairGuides();
 
         if (currentRoutePath) {
             drawPath(currentRoutePath);
@@ -2385,6 +2388,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                  * 経路が変われば、それまでの「いま何番目」は別の経路の番号になる。
                  */
                 routeSteps = buildRouteSteps(path);
+                routeTurnList = computeRouteTurns(path);
                 routeStepIndex = 0;
                 renderRouteBar();
                 if (window.innerWidth <= 768 && searchPanel) {
@@ -2457,10 +2461,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     function clearRoute() {
         currentRoutePath = null;
         routeSteps = [];
+        routeTurnList = [];
         routeStepIndex = 0;
         currentMarkers.forEach(m => window.map.removeLayer(m));
         currentMarkers = [];
         routeLineRuns = [];
+        markRouteNodes(new Set());
+        renderStairGuides();
         renderRouteBar();
     }
 
@@ -2838,6 +2845,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (!window.map.hasLayer(group)) group.addTo(window.map);
         });
         activeMarkerGroups = wanted;
+        // 地図へ載せ直した印は作り直されるので、案内中の「濃く出す」印を付け直す(下の markRouteNodes)
+        if (window.kmReapplyRouteMarks) window.kmReapplyRouteMarks();
     }
 
 
@@ -3302,6 +3311,147 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     window.map.on('zoomend', refreshRouteOverlap);
 
+    /*
+     * ======== 曲がる所の目印・階段の上り下り・案内中は関係ない地点を薄く ========(2026-10-30、振り返りのフェーズ 3 の 3)
+     *
+     * 振り返り: 「どこで曲がるのか分からない」「階段を上るのか下りるのか」「案内中も地図がごちゃごちゃ」。
+     * - 曲がる所: 角度の決まりはアプリと同じ(Main/route-view.js の routeTurns)。近くの名前のある地点を目印にして
+     *   「講義室1を目印に右へ」を、その角に札で出す。案内の帯にも、次の曲がり角を出す
+     * - 階段: 経路が通る階段に「▲ 2F へ上る」「▼ 1F へ下りる」「2F から到着」(アプリの StairGuide.kt と同じ)。
+     *   上り口・下り口の向き(地図データの stairUpHeading / stairDownHeading。管理アプリで入れる)があれば矢印を向ける
+     * - 拡大すると、階段に行ける階(▲上行き 2〜5F / ▼下行き 1F / エレベーターは ⇅)を出す(renderStairGuides)
+     * - 案内中は、経路の地点と目印だけを濃く、ほかの地点と札を薄くする(body.km-route-active と .km-on-route。styles.css)
+     */
+    const KM_LANDMARK_TYPES = ['room', 'facility', 'entrance', 'stairs'];
+    /** 目印を探す範囲(地図の座標。床の画像は横 1600。廊下 2〜3 本分) */
+    const KM_LANDMARK_DISTANCE = 60;
+
+    function computeRouteTurns(pathNodeIds) {
+        const view = window.KmRouteView;
+        if (!view || !view.routeTurns) return [];
+        const points = pathNodeIds.map((id) => {
+            const node = graphData.nodes[id];
+            return { id: id, x: node.x, y: node.y, floor: String(node.floor) };
+        });
+        const candidatesByFloor = new Map();
+        const candidatesOn = (floor) => {
+            if (!candidatesByFloor.has(floor)) {
+                candidatesByFloor.set(floor, (nodesByFloor.get(floor) || [])
+                    .filter(([, n]) => !n.hidden && KM_LANDMARK_TYPES.includes(String(n.type)) && String(n.alias || n.name || '').trim() !== '')
+                    .map(([id, n]) => ({ id: id, name: n.alias || n.name, x: n.x, y: n.y, floor: floor })));
+            }
+            return candidatesByFloor.get(floor);
+        };
+        return view.routeTurns(points).map((turn) => {
+            const point = points[turn.index];
+            const landmark = view.turnLandmark(point, candidatesOn(point.floor), KM_LANDMARK_DISTANCE);
+            return Object.assign({}, turn, {
+                floor: point.floor,
+                landmarkId: landmark ? landmark.id : null,
+                phrase: view.turnPhrase(turn.turn, landmark ? landmark.name : ''),
+                arrow: view.turnArrow(turn.turn),
+            });
+        });
+    }
+
+    /** 案内中に濃く出す地点(経路の地点と目印)。前に付けた印は外す */
+    let routeMarkedIds = new Set();
+    function markRouteNodes(ids) {
+        const apply = (id, on) => {
+            // 'poi:<番号>' は一時地点の印(出発地・目的地に選んだとき)
+            const marker = String(id).startsWith('poi:') ? poiMarkers.get(Number(String(id).slice(4))) : markersById.get(id);
+            if (!marker) return;
+            const icon = marker.getElement && marker.getElement();
+            if (icon) icon.classList.toggle('km-on-route', on);
+            const tip = marker.getTooltip && marker.getTooltip();
+            const tipEl = tip && tip.getElement && tip.getElement();
+            if (tipEl) tipEl.classList.toggle('km-on-route', on);
+        };
+        routeMarkedIds.forEach((id) => { if (!ids.has(id)) apply(id, false); });
+        ids.forEach((id) => apply(id, true));
+        routeMarkedIds = ids;
+    }
+    window.kmReapplyRouteMarks = () => { if (routeMarkedIds.size > 0) markRouteNodes(new Set(routeMarkedIds)); };
+
+    /** 地図の上の札(divIcon)。向き(度)があれば ↑ の矢印をその向きへ回す(style 属性は CSP で効かないので CSSOM で入れる) */
+    function guideMarker(latlng, className, html, heading) {
+        const marker = L.marker(latlng, {
+            icon: L.divIcon({ className: 'km-guide-pin ' + className, html: html, iconSize: null }),
+            pane: 'kmRoutePins',
+            interactive: false,
+            keyboard: false,
+        }).addTo(window.map);
+        const arrow = marker.getElement() && marker.getElement().querySelector('.km-guide-arrow');
+        if (arrow) {
+            if (typeof heading === 'number') arrow.style.setProperty('--km-heading', heading + 'deg');
+            else arrow.remove();
+        }
+        return marker;
+    }
+
+    function drawRouteGuides(pathNodeIds) {
+        renderStairGuides();   // 経路の階段の「行ける階」を外す
+        const view = window.KmRouteView;
+        const floor = String(window.currentFloor);
+        const onRoute = new Set();
+        pathNodeIds.forEach((id) => {
+            const node = graphData.nodes[id];
+            if (node && node.type !== 'road' && String(node.floor) === floor) onRoute.add(id);
+        });
+        if (routeStartPoi !== null) onRoute.add('poi:' + routeStartPoi);
+        if (routeEndPoi !== null) onRoute.add('poi:' + routeEndPoi);
+        routeTurnList.filter((turn) => turn.floor === floor).forEach((turn) => {
+            const node = graphData.nodes[turn.id];
+            if (turn.landmarkId) onRoute.add(turn.landmarkId);
+            currentMarkers.push(guideMarker([node.y, node.x], 'km-turn-pin',
+                `<span class="km-guide-chip km-turn" title="${escapeHtml(turn.phrase)}"><b aria-hidden="true">${escapeHtml(turn.arrow)}</b><span class="km-guide-text">${escapeHtml(turn.phrase)}</span></span>`));
+        });
+        if (view && view.routeStairMarks) {
+            const pathNodes = pathNodeIds.map((id) => Object.assign({ id: id }, graphData.nodes[id]));
+            view.routeStairMarks(pathNodes, floor, floorLabelFor, Dijkstra.isElevator).forEach((mark) => {
+                const node = graphData.nodes[mark.id];
+                if (!node) return;
+                const heading = mark.arriving ? null : (mark.goingUp === true ? node.stairUpHeading : mark.goingUp === false ? node.stairDownHeading : null);
+                const tone = mark.arriving ? 'is-arriving' : mark.goingUp === true ? 'is-up' : mark.goingUp === false ? 'is-down' : '';
+                currentMarkers.push(guideMarker([node.y, node.x], 'km-stair-pin ' + tone,
+                    `<span class="km-guide-chip km-stair-mark"><span class="km-guide-arrow" aria-hidden="true">↑</span>${escapeHtml(mark.text)}</span>`,
+                    typeof heading === 'number' ? heading : null));
+            });
+        }
+        markRouteNodes(onRoute);
+    }
+
+    /** 拡大したときの、階段の行ける階(経路が無くても出す)。階・拡大率が変わるたびに描き直す */
+    const KM_STAIR_GUIDE_MIN_ZOOM = 0.5;
+    let stairGuideMarkers = [];
+    let allStairs = null;
+    /** 引いて見ているとき(階の全体から 1.5 段未満)は、曲がる所の札を矢印だけにする(札どうし・出発のピンと重なる) */
+    const KM_GUIDE_TEXT_STEPS = 1.5;
+    function renderStairGuides() {
+        window.map.getContainer().classList.toggle('km-guides-compact', floorFitZoom !== null && window.map.getZoom() - floorFitZoom < KM_GUIDE_TEXT_STEPS);
+        stairGuideMarkers.forEach((m) => window.map.removeLayer(m));
+        stairGuideMarkers = [];
+        const view = window.KmRouteView;
+        if (window.isAdmin || !view || !view.stairReach || window.map.getZoom() < KM_STAIR_GUIDE_MIN_ZOOM) return;
+        if (!allStairs) allStairs = Object.entries(graphData.nodes).filter(([, n]) => n.type === 'stairs').map(([id, n]) => Object.assign({ id: id }, n));
+        const floor = String(window.currentFloor);
+        // 経路が通る階段は「▲ 2F へ上る」の札(drawRouteGuides)の方を出す。重ねない
+        const routeIds = new Set(currentRoutePath || []);
+        allStairs.filter((s) => String(s.floor) === floor && !s.hidden && !routeIds.has(s.id)).forEach((stair) => {
+            const reach = view.stairReach(stair, allStairs, Dijkstra.stairKey, Dijkstra.isElevator);
+            const here = view.floorNumber(stair.floor);
+            if (!reach || here === null) return;
+            view.stairReachLines(reach, here).forEach((line, index) => {
+                const heading = line.kind === 'up' ? stair.stairUpHeading : line.kind === 'down' ? stair.stairDownHeading : null;
+                const marker = guideMarker([stair.y, stair.x], 'km-reach-pin is-' + line.kind + ' is-line-' + index,
+                    `<span class="km-guide-chip km-reach"><span class="km-guide-arrow" aria-hidden="true">↑</span>${escapeHtml(line.text)}</span>`,
+                    typeof heading === 'number' ? heading : null);
+                stairGuideMarkers.push(marker);
+            });
+        });
+    }
+    window.map.on('zoomend', renderStairGuides);
+
     function drawPath(pathNodeIds) {
         currentMarkers.forEach(m => window.map.removeLayer(m));
         currentMarkers = [];
@@ -3369,6 +3519,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             currentMarkers.push(polyline);
             pathBoundsGroup.addLayer(polyline);
         }
+        drawRouteGuides(pathNodeIds);
         /*
          * 寄せるのは**経路を引いた直後の 1 回だけ**(2026-10-23、利用者の指摘「別の階に行くと拡大率がリセットされて面倒」)。
          * 階を移ったあと(案内の帯・階のボタン)は拡大率をそのままにして、その階の経路の始まりへ動かすだけ。
@@ -3711,9 +3862,16 @@ document.addEventListener('DOMContentLoaded', async () => {
             : `${step.kind === 'goal' ? goalLabel(node) : routeNodeLabel(node)}に向かう`;
         const where = floorLabelFor(step.floor);
         const counter = `${routeStepIndex + 1}/${routeSteps.length}`;
+        /*
+         * 次の曲がり角(2026-10-30、振り返りのフェーズ 3 の 3)。経路はいつも今いる所(出発地か「位置の更新」で選んだ所)から始まるので、
+         * いま目指している所までの最初の曲がり角が「次」。曲がらずに着くなら出さない
+         */
+        const stepAt = currentRoutePath ? currentRoutePath.indexOf(step.nodeId) : -1;
+        const nextTurn = routeTurnList.find((turn) => stepAt < 0 || turn.index < stepAt);
+        const turnHint = nextTurn ? `次: ${nextTurn.arrow} ${nextTurn.phrase} · ` : '';
         routeSub.textContent = step.kind === 'goal'
-            ? `${counter} · ${where} · 目的地`
-            : `${counter} · ${where} · 着いたら ${floorLabelFor(step.nextFloor)} へ`;
+            ? `${turnHint}${counter} · ${where} · 目的地`
+            : `${turnHint}${counter} · ${where} · 着いたら ${floorLabelFor(step.nextFloor)} へ`;
     }
 
     /*
