@@ -4918,6 +4918,11 @@ function km_check_hardening(): void
     check_bool('check-updates.sh は「タグ@digest」の修正版を知らせ、Logto の版を digest の前から読む', str_contains($checkUpdatesCode, 'compare_pinned "$_image" series ""') && str_contains($checkUpdatesCode, 'compare_pinned "$_base" base') && str_contains($checkUpdatesCode, '_logto_ref="${LOGTO_IMAGE%@*}"'));
     $phpDockerfileCode = $yamlCode($file('docker/php/Dockerfile'));
     check_bool('web のイメージに使わない拡張(pdo_pgsql・libpq)を入れない(§7 の 14)', !str_contains($phpDockerfileCode, 'pdo_pgsql') && !str_contains($phpDockerfileCode, 'libpq'));
+    // GD(2026-10-30、利用者の指示。ポスターの縮小版・差し替えた床の WebP)。-dev は残さず、入ったことを作るときに確かめる
+    check_bool('web の GD は WebP・JPEG 付きで、-dev を外し、作るときに imagewebp を確かめる', str_contains($phpDockerfileCode, 'docker-php-ext-configure gd --with-jpeg --with-webp;')
+        && str_contains($phpDockerfileCode, 'apt-get purge -y --auto-remove') && str_contains($phpDockerfileCode, 'function_exists("imagewebp")'));
+    check_bool('縮小版・WebP の写しは cache/ に置く(/tmp は 64MB の tmpfs でアップロードと取り合う)', str_contains($file('src/lib/floor-webp.php'), "return __DIR__ . '/../cache/floor-webp';")
+        && str_contains($file('src/lib/image-thumb.php'), "return __DIR__ . '/../cache/image-thumb';"));
     $srcMounts = [
         './src:/var/www/html:ro',
         './src/uploads:/var/www/html/uploads',

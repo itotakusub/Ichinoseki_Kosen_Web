@@ -6,11 +6,11 @@ declare(strict_types=1);
  * 画像の縮小版(2026-10-30、振り返りのフェーズ 2 の 5「ポスターは縮小画像を使う」)。
  *
  * ポスターの一覧・検索の候補の小さなアイコンにも、元の画像(数 MB のこともある)をそのまま配っていた。
- * 幅を決めた WebP の縮小版を**一時置き場**に作って配る。
+ * 幅を決めた WebP の縮小版を cache/image-thumb に作って配る。
  *
  * - 幅は決まった値だけ(KM_IMAGE_THUMB_WIDTHS)。好きな幅を受けると、幅を変えながら叩くだけで縮小を何度も走らせられる
  * - 作れないとき(GD に WebP が無い・大きすぎる・元が十分小さい)は null。呼ぶ側は元の画像を配る。
- *   **本番の PHP には今 GD が無い**(docker/php/Dockerfile)ので、入れるまでは元の画像のまま
+ *   GD(WebP・JPEG 付き)は 2026-10-30 に docker/php/Dockerfile へ足した(利用者の指示)
  * - 名前は元のパス・更新時刻・幅から作る。差し替えれば別の名前になる
  */
 
@@ -30,9 +30,10 @@ function km_image_thumb_width(mixed $value): int
     return in_array($width, KM_IMAGE_THUMB_WIDTHS, true) ? $width : 0;
 }
 
+/** 縮小版の置き場。cache/(lib/floor-webp.php と同じ理由で一時置き場には置かない) */
 function km_image_thumb_cache_dir(): string
 {
-    return rtrim(sys_get_temp_dir(), '/\\') . DIRECTORY_SEPARATOR . 'km-image-thumb';
+    return __DIR__ . '/../cache/image-thumb';
 }
 
 /** 縮小版(WebP)のパス。無ければ作る。作れない・作る意味が無ければ null */

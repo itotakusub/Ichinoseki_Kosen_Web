@@ -17,4 +17,23 @@ COPY --from=composer:2@sha256:c7f68260503e3c1f0ece10bdbe84519fd98d48ba091f2c02f1
 RUN docker-php-ext-install mysqli pdo_mysql \
     && a2enmod rewrite status
 
+# GD(PNG・JPEG・WebP)。2026-10-30、利用者の指示(振り返りのフェーズ 2「軽くする」)。
+# ポスターの縮小版(lib/image-thumb.php)と、管理画面で差し替えた床の WebP の写し(lib/floor-webp.php)を作る。
+# 作るときだけ要る -dev は最後に外し、gd.so が使う共有ライブラリ(libpng・libjpeg・libwebp)だけを残す
+# (公式の php イメージの拡張と同じ手順。apt-mark で残すものを決めてから purge する)
+RUN set -eux; \
+    savedAptMark="$(apt-mark showmanual)"; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends libpng-dev libjpeg62-turbo-dev libwebp-dev; \
+    docker-php-ext-configure gd --with-jpeg --with-webp; \
+    docker-php-ext-install -j"$(nproc)" gd; \
+    apt-mark auto '.*' > /dev/null; \
+    apt-mark manual $savedAptMark > /dev/null; \
+    ldd "$(php -r 'echo ini_get("extension_dir");')"/gd.so \
+        | awk '/=>/ { so = $(NF-1); if (index(so, "/usr/local/") == 1) { next }; gsub("^/(usr/)?", "", so); print so }' \
+        | sort -u | xargs -r dpkg-query --search | cut -d: -f1 | sort -u | xargs -rt apt-mark manual; \
+    apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false; \
+    rm -rf /var/lib/apt/lists/*; \
+    php -r 'exit(function_exists("imagewebp") && function_exists("imagecreatefromjpeg") ? 0 : 1);'
+
 WORKDIR /var/www/html

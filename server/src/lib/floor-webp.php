@@ -9,11 +9,10 @@ declare(strict_types=1);
  * (手元の実測: 1 階 49KB → 11KB、外 119KB → 40KB)。可逆なので見た目は同じ。
  *
  * - 元の PNG は置き換えない(管理画面・アプリはそのまま PNG を使う)
- * - **組み込みの床(Main/Picture)は、横に置いた写し `<名前>.webp` を使う。** 本番の PHP には GD が無い
- *   (docker/php/Dockerfile は使う拡張だけ入れる)ので、写しは手元で `php src/scripts/make-floor-webp.php` で作って一緒に配る。
- *   PNG より古い写しは使わない(床を描き直したのに写しを作り忘れたとき)
- * - 管理画面で差し替えた床は、GD があればここで**一時置き場に写し**を作る。名前は元のパスと更新時刻から作るので、
- *   床を差し替えれば別の名前になり、古い写しは使われない
+ * - **組み込みの床(Main/Picture)は、横に置いた写し `<名前>.webp` を使う。** src は web から読み取り専用なので、
+ *   写しは手元で `php src/scripts/make-floor-webp.php` で作って一緒に配る。PNG より古い写しは使わない(床を描き直したのに作り忘れたとき)
+ * - 管理画面で差し替えた床は、GD があれば cache/floor-webp に写しを作る(GD は 2026-10-30 に docker/php/Dockerfile へ足した)。
+ *   名前は元のパスと更新時刻から作るので、床を差し替えれば別の名前になり、古い写しは使われない
  * - 作れないとき(GD に WebP が無い・大きすぎる・壊れた PNG)は null。呼ぶ側は PNG をそのまま配る
  * - 受け取る側が WebP を読めると言ったとき(Accept: image/webp)だけ使う。言わない端末には PNG
  */
@@ -59,10 +58,13 @@ function km_floor_webp_for(string $pngPath): ?string
     return km_floor_webp_sibling($pngPath) ?? km_floor_webp_file($pngPath);
 }
 
-/** 写しの置き場(一時置き場。消えても作り直すだけ) */
+/**
+ * 写しの置き場。cache/(web が書ける・nginx は /cache/ を 404。lib/app-map-cache.php と同じ)。
+ * **一時置き場(tmp)には置かない** —— web の tmp は 64MB の tmpfs で、アップロードの一時ファイルと取り合う。消えても作り直すだけ
+ */
 function km_floor_webp_cache_dir(): string
 {
-    return rtrim(sys_get_temp_dir(), '/\\') . DIRECTORY_SEPARATOR . 'km-floor-webp';
+    return __DIR__ . '/../cache/floor-webp';
 }
 
 /**
