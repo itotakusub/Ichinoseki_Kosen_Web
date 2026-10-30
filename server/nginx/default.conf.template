@@ -531,7 +531,7 @@ server {
 # map-events(Website のイベントを管理アプリへ渡す。管理者だけ)と poster-like(ポスターの ♡。付けるには公開ページの CSRF が要る)も同じ日に足した。
     # **メソッドを問わず数える。** 見取り図・APK・人数・アカウント画像・地図のデータは GET でも PHP が毎回働く。
     # 静的資材の正規表現とは重ならない(こちらは `.php` で終わる)ので、並び順はここでよい。
-    location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update|positioning-params|learning|poster-image|poster-event|table|node-extras|display-defaults|user-map-data|map-events|poster-like)|logto_me)\.php$ {
+    location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update|positioning-params|learning|poster-image|poster-event|table|node-extras|display-defaults|user-map-data|map-events|poster-like|stall|stalls|app-schedule)|logto_me)\.php$ {
         limit_req zone=km_api burst=120 nodelay;
         include /etc/nginx/km/proxy-web.conf;
         proxy_set_header X-Forwarded-Port ${KM_APP_PORT};

@@ -115,6 +115,57 @@ function km_node_extras_posters(PDO $pdo, ?array $node, bool $eventActive): arra
 }
 
 /**
+ * その地点の予定(2026-10-30、振り返りのフェーズ 5 の 1)。**一般の行だけ**(アプリはアクセスコードだけで、教職員か分からない)。
+ * 場所は Web の地図と同じ(会場に選んだ地点・企画の番号の地点)。教員室・研究室は出さない
+ *
+ * @return list<array{title:string, organizer:string, description:string, startsAt:string, endsAt:?string, projectNo:?string}>
+ */
+function km_node_extras_schedule(PDO $pdo, ?array $node): array
+{
+    if ($node === null || km_map_node_is_restricted($node)) {
+        return [];
+    }
+    require_once __DIR__ . '/event-schedule.php';
+    $projectNodes = [];
+    foreach (km_node_extras_project_numbers($pdo, $node) as $number) {
+        $projectNodes[$number] = [$node['id']];
+    }
+    $rows = [];
+    foreach (km_event_schedule_public($pdo, $projectNodes, [], false, [$node['id'] => true]) as $row) {
+        if (in_array($node['id'], $row['nodeIds'], true)) {
+            $rows[] = ['title' => $row['title'], 'organizer' => $row['organizer'], 'description' => $row['description'],
+                'startsAt' => $row['startsAt'], 'endsAt' => $row['endsAt'], 'projectNo' => $row['projectNo']];
+        }
+    }
+    return $rows;
+}
+
+/**
+ * その地点の屋台のメニューと混み具合(2026-10-30、振り返りのフェーズ 5 の 2。lib/stalls.php)。古い値は外れている
+ *
+ * @return list<array{name:string, menu:list<array>, waiting:?int, note:string, menuAt:?string, waitingAt:?string}>
+ */
+function km_node_extras_stalls(PDO $pdo, ?array $node): array
+{
+    if ($node === null || km_map_node_is_restricted($node)) {
+        return [];
+    }
+    require_once __DIR__ . '/stalls.php';
+    $projectNodes = [];
+    foreach (km_node_extras_project_numbers($pdo, $node) as $number) {
+        $projectNodes[$number] = [$node['id']];
+    }
+    $stalls = [];
+    foreach (km_stalls_public($pdo, $projectNodes, [], [$node['id'] => true]) as $stall) {
+        if (in_array($node['id'], $stall['nodeIds'], true)) {
+            $stalls[] = ['name' => $stall['name'], 'menu' => $stall['menu'], 'waiting' => $stall['waiting'], 'note' => $stall['note'],
+                'menuAt' => $stall['menuAt'], 'waitingAt' => $stall['waitingAt']];
+        }
+    }
+    return $stalls;
+}
+
+/**
  * その地点の企画の番号(管理アプリで振った番号 + イベント中の名前が番号のもの)。表が無ければ空。
  *
  * @param array{id:string, uuid?:string} $node

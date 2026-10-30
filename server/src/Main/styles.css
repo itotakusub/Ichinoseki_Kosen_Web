@@ -3037,6 +3037,149 @@ a.icon-btn { text-decoration: none; color: inherit; }
     align-self: flex-start;
     margin-top: 4px;
 }
+/* 屋台のメニューと混み具合(2026-10-30、振り返りのフェーズ 5 の 2。Main/stalls.js) */
+.km-stall {
+    margin: 8px 0;
+    padding: 8px 10px;
+    border: 2px solid var(--km-control-edge);
+    border-radius: var(--radius-sm);
+    background: var(--glass-heavy);
+}
+.km-stall-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-weight: 700;
+}
+.km-stall-wait {
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: var(--text-label);
+    white-space: nowrap;
+}
+.km-stall-wait.is-low { background: #CFF5E1; color: #064E2B; }
+.km-stall-wait.is-mid { background: #FFE08A; color: #4A3300; }
+.km-stall-wait.is-high { background: #FFC9C9; color: #7A0B0B; }
+.km-stall-menu {
+    list-style: none;
+    margin: 6px 0 0;
+    padding: 0;
+    font-size: var(--text-label);
+}
+.km-stall-menu li {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 2px 0;
+    border-top: 1px dashed var(--border-strong);
+}
+.km-stall-menu li.is-sold-out span { text-decoration: line-through; color: var(--secondary); }
+.km-stall-menu li.is-sold-out b { color: var(--danger); }
+.km-stall-note { margin: 6px 0 0; font-size: var(--text-label); overflow-wrap: anywhere; }
+.km-stall-at { display: block; margin-top: 4px; font-size: 0.75em; color: var(--secondary); }
+/* 一覧 / 会場 × 時間(2026-10-30、振り返りのフェーズ 5 の 1。位置は Main/event-schedule.js が CSSOM で入れる) */
+.km-schedule-switch {
+    display: flex;
+    gap: 0;
+    margin: 0 0 8px;
+    border: 2px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    width: fit-content;
+}
+.km-schedule-switch-btn {
+    border: 0;
+    background: var(--glass-heavy);
+    color: var(--text);
+    padding: 6px 14px;
+    font: inherit;
+    font-size: var(--text-label);
+    cursor: pointer;
+}
+.km-schedule-switch-btn[aria-pressed="true"] {
+    background: var(--primary);
+    color: var(--on-primary, #fff);
+    font-weight: 700;
+}
+.km-schedule-staff {
+    align-self: flex-start;
+    font-size: 0.75em;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: #FFE08A;
+    color: #4A3300;
+}
+.km-schedule-grid-scroll {
+    overflow-x: auto;
+    margin: 4px 0 12px;
+    -webkit-overflow-scrolling: touch;
+}
+.km-schedule-grid {
+    display: grid;
+    position: relative;
+    min-width: min-content;
+    font-size: var(--text-label);
+}
+.km-schedule-grid-corner,
+.km-schedule-grid-venue {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--glass-heavy);
+    border-bottom: 2px solid var(--border-strong);
+}
+.km-schedule-grid-venue {
+    padding: 4px 6px;
+    font-weight: 700;
+    text-align: center;
+    overflow-wrap: anywhere;
+}
+.km-schedule-grid-time {
+    border-top: 1px dashed var(--border-strong);
+    color: var(--secondary);
+    padding: 0 2px;
+    line-height: 1.2;
+    pointer-events: none;
+}
+.km-schedule-grid-time.is-hour {
+    border-top: 1px solid var(--secondary);
+}
+.km-schedule-grid-item {
+    position: relative;
+    z-index: 1;
+    margin: 1px 2px;
+    padding: 2px 6px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+    text-align: left;
+    overflow: hidden;
+    font: inherit;
+    color: var(--text);
+    background: color-mix(in srgb, var(--primary) 14%, var(--glass-heavy));
+    border: 1px solid var(--primary);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+}
+.km-schedule-grid-item:disabled {
+    cursor: default;
+    opacity: 1;
+}
+.km-schedule-grid-item.is-live {
+    border: 2px solid var(--success);
+    background: color-mix(in srgb, var(--success) 18%, var(--glass-heavy));
+}
+.km-schedule-grid-item.is-staff {
+    border-style: dashed;
+}
+.km-schedule-grid-at,
+.km-schedule-grid-no {
+    font-size: 0.85em;
+    color: var(--secondary);
+}
 .km-schedule-panel .km-history-list {
     display: flex;
     flex-direction: column;

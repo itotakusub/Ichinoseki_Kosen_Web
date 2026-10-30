@@ -139,6 +139,8 @@
         const meta = [];
         // 今いる場所からの道のり(2026-10-30。近い順に並べたときだけ)
         if (typeof card.distance === 'string' && card.distance) meta.push('🚶 ' + card.distance);
+        // 屋台の今(2026-10-30。待ち・メニュー。lib/stalls.php の km_stall_summary)
+        if (typeof card.stall === 'string' && card.stall) meta.push('🍽 ' + card.stall);
         // 質問との関係の率(2026-10-25。LLM が付けたときだけ)
         if (typeof card.relevance === 'number') meta.push('関係 ' + card.relevance + '%');
         if (card.likes > 0) meta.push('♡ ' + card.likes);

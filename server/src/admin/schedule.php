@@ -16,6 +16,7 @@ require_once dirname(__DIR__) . '/lib/admin-log.php';
  * - 1 行 = 1 つの催し。場所は**企画の番号**で決める(番号は管理アプリで地点に振る。lib/map-node-projects.php)
  * - 「一般に出す」に印の行だけが公開の地図(地点の詳細と「スケジュール」の一覧)に出る
  * - 下に「企画の番号と地点」の一覧を出す(番号を振った地点と、スケジュール・ポスターの付き方)
+ * - 会場(地点)と見せる相手(一般 / スタッフだけ / 出さない)・CSV の書き出しと取り込み(2026-10-30、振り返りのフェーズ 5 の 1)
  */
 
 $errors = [];
@@ -28,10 +29,31 @@ $editing = null;
 $form = null;
 
 $editId = isset($_GET['edit']) && is_string($_GET['edit']) && ctype_digit($_GET['edit']) ? (int) $_GET['edit'] : null;
+/** 取り込みの確かめ(km_event_schedule_csv_parse の結果)。確かめの画面に出し、セッションに置いて「取り込む」で入れる */
+$importPreview = null;
+const KM_SCHEDULE_IMPORT_SESSION = 'km_schedule_import';
+const KM_SCHEDULE_CSV_MAX_BYTES = 512 * 1024;
 
 try {
     $pdo = km_db();
     km_event_schedule_ensure_table($pdo);
+    // 会場に選べる地点(名前のある部屋・建物・出入口・階段。ポスターの置き場と同じ一覧)
+    $venueNames = [];
+    foreach (km_poster_node_options($pdo) as $option) {
+        $venueNames[$option['id']] = $option['name'];
+    }
+
+    // CSV の書き出し(Excel で開ける UTF-8 BOM 付き)
+    if (($_GET['export'] ?? '') === 'csv') {
+        $exportRows = km_event_schedule_all($pdo);
+        $csv = km_event_schedule_csv_export($exportRows, $venueNames);
+        km_admin_log_record('content', 'schedule.export', count($exportRows) . ' 行');
+        header('Content-Type: text/csv; charset=UTF-8');
+        header('Content-Disposition: attachment; filename="schedule-' . date('Ymd') . '.csv"');
+        header('Cache-Control: no-store');
+        echo $csv;
+        exit;
+    }
 
     if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && !km_csrf_verify()) {
         $errors[] = 'セッションの有効期限が切れています。ページを再読み込みしてからやり直してください。';
@@ -53,6 +75,36 @@ try {
             header('Location: ./schedule.php?saved=public#schedule-list', true, 303);
             exit;
         }
+        // CSV の取り込み 1 段目: 読んで確かめるだけ(書き込まない)
+        if ($formAction === 'import_preview') {
+            $file = $_FILES['csv'] ?? null;
+            if (!is_array($file) || ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK || !is_uploaded_file((string) $file['tmp_name'])) {
+                $errors[] = 'CSV のファイルを選んでください。';
+            } elseif ((int) $file['size'] > KM_SCHEDULE_CSV_MAX_BYTES) {
+                $errors[] = 'CSV が大きすぎます(512KB まで)。';
+            } else {
+                $existing = array_fill_keys(array_column(km_event_schedule_all($pdo), 'id'), true);
+                $importPreview = km_event_schedule_csv_parse((string) file_get_contents((string) $file['tmp_name']), $venueNames, $existing);
+                $importPreview['token'] = bin2hex(random_bytes(16));
+                // 誤りが無いときだけ、入れる中身をセッションに置く(2 段目はファイルを送り直さない)
+                $_SESSION[KM_SCHEDULE_IMPORT_SESSION] = $importPreview['errors'] === []
+                    ? ['token' => $importPreview['token'], 'rows' => $importPreview['rows'], 'at' => time()]
+                    : null;
+            }
+        }
+        // 2 段目: 確かめた中身を入れる(合言葉が合い、10 分以内のときだけ)
+        if ($formAction === 'import_commit') {
+            $pending = $_SESSION[KM_SCHEDULE_IMPORT_SESSION] ?? null;
+            unset($_SESSION[KM_SCHEDULE_IMPORT_SESSION]);
+            if (!is_array($pending) || !hash_equals((string) $pending['token'], (string) ($_POST['token'] ?? '')) || time() - (int) $pending['at'] > 600) {
+                $errors[] = '取り込みの確かめが古くなりました。もう一度 CSV を選んでください。';
+            } else {
+                [$added, $updated] = km_event_schedule_csv_commit($pdo, $pending['rows']);
+                km_admin_log_record('content', 'schedule.import', "足す {$added} / 直す {$updated}");
+                header('Location: ./schedule.php?saved=imported&added=' . $added . '&updated=' . $updated . '#schedule-list', true, 303);
+                exit;
+            }
+        }
         if ($formAction === 'save') {
             $form = [
                 'id' => $targetId,
@@ -62,9 +114,17 @@ try {
                 'description' => (string) ($_POST['description'] ?? ''),
                 'startsAt' => (string) ($_POST['starts_at'] ?? ''),
                 'endsAt' => (string) ($_POST['ends_at'] ?? ''),
-                'isPublic' => isset($_POST['is_public']),
+                'audience' => (string) ($_POST['audience'] ?? 'public'),
+                'venueNodeId' => (string) ($_POST['venue_node_id'] ?? ''),
             ];
+            if ($form['venueNodeId'] !== '' && !isset($venueNames[$form['venueNodeId']])) {
+                $form['venueNodeId'] = '';
+                $errors[] = '会場の地点が地図にありません。選び直してください。';
+            }
             try {
+                if ($errors !== []) {
+                    throw new InvalidArgumentException(array_pop($errors));
+                }
                 $savedId = km_event_schedule_save($pdo, $targetId, km_event_schedule_validate($form));
                 km_admin_log_record('content', $targetId === null ? 'schedule.create' : 'schedule.update', trim($form['title']));
                 header('Location: ./schedule.php?saved=' . ($targetId === null ? 'created' : 'updated') . '#schedule-' . $savedId, true, 303);
@@ -97,6 +157,7 @@ $notice = match ((string) ($_GET['saved'] ?? '')) {
     'updated' => 'スケジュールを直しました。',
     'deleted' => 'スケジュールから消しました。',
     'public' => '一般に出すかを切り替えました。',
+    'imported' => 'CSV を取り込みました(足した ' . (int) ($_GET['added'] ?? 0) . ' 行・直した ' . (int) ($_GET['updated'] ?? 0) . ' 行)。',
     default => null,
 };
 
@@ -124,7 +185,8 @@ $placeLabel = static function (?string $projectNo) use ($projectNodes, $projectP
 $allNumbers = array_unique(array_merge(array_keys($projectNodes), array_keys($projectPois)));
 sort($allNumbers, SORT_NATURAL);
 $formatTime = static fn (string $start, ?string $end): string => substr($start, 0, 16) . ($end !== null ? ' 〜 ' . (substr($end, 0, 10) === substr($start, 0, 10) ? substr($end, 11, 5) : substr($end, 0, 16)) : '');
-$isPublicChecked = $form !== null ? (bool) $form['isPublic'] : ($editing === null || $editing['isPublic']);
+$audienceValue = (string) ($form !== null ? ($form['audience'] ?? 'public') : ($editing['audience'] ?? 'public'));
+$venueValue = (string) ($form !== null ? ($form['venueNodeId'] ?? '') : ($editing['venueNodeId'] ?? ''));
 
 // 番号ごとの行の数(企画の番号の一覧で使う)
 $scheduleCount = [];
@@ -181,6 +243,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
                       <div class="table-responsive">
                         <table class="table table-sm align-middle mb-0">
                           <thead><tr><th>日時</th><th>企画</th><th>催し</th><th>場所</th><th>一般</th><th></th></tr></thead>
+                          <?php /* 場所: 会場(選んだ地点)を先に、企画の番号の地点を後に。「一般」はスタッフだけのとき札を添える */ ?>
                           <tbody>
                             <?php foreach ($rows as $row): ?>
                               <?php $place = $placeLabel($row['projectNo']); ?>
@@ -192,8 +255,11 @@ require __DIR__ . '/_inc/partials/page-header.php';
                                   <?php if ($row['organizer'] !== ''): ?><div class="fs-7 text-body-secondary"><?= km_e($row['organizer']) ?></div><?php endif; ?>
                                 </td>
                                 <td class="fs-7">
+                                  <?php if ($row['venueNodeId'] !== null): ?>
+                                    <div><span class="badge text-bg-secondary">会場</span> <?= km_e($nodeNames[$row['venueNodeId']] ?? 'この地点は地図にありません') ?></div>
+                                  <?php endif; ?>
                                   <?php if ($row['projectNo'] === null): ?>
-                                    <span class="text-body-secondary">場所なし</span>
+                                    <?php if ($row['venueNodeId'] === null): ?><span class="text-body-secondary">場所なし</span><?php endif; ?>
                                   <?php elseif ($place === ''): ?>
                                     <span class="text-danger">この番号の地点が地図にありません</span>
                                   <?php else: ?>
@@ -210,6 +276,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
                                       <input class="form-check-input" type="checkbox" role="switch" aria-label="一般に出す" data-km-autosubmit <?= $row['isPublic'] ? 'checked' : '' ?> <?= $KM_ADMIN_CAN_WRITE ? '' : 'disabled' ?>>
                                     </div>
                                   </form>
+                                  <?php if ($row['audience'] === 'staff'): ?><span class="badge text-bg-warning">スタッフだけ</span><?php endif; ?>
                                 </td>
                                 <td class="text-nowrap">
                                   <a class="btn btn-outline-secondary btn-sm" href="./schedule.php?edit=<?= (int) $row['id'] ?>#schedule-form">直す</a>
@@ -305,13 +372,26 @@ require __DIR__ . '/_inc/partials/page-header.php';
                           <label class="form-label" for="km-schedule-description">説明(任意)</label>
                           <textarea class="form-control" id="km-schedule-description" name="description" rows="3" maxlength="<?= KM_SCHEDULE_DESCRIPTION_MAX ?>"><?= km_e((string) $value('description')) ?></textarea>
                         </div>
-                        <div class="form-check mb-3">
-                          <input class="form-check-input" type="checkbox" id="km-schedule-public" name="is_public" value="1" <?= $isPublicChecked ? 'checked' : '' ?>>
-                          <label class="form-check-label" for="km-schedule-public">
-                            <strong>一般に出す</strong>
-                            <div class="text-body-secondary fs-7">外すと、管理画面にだけ残ります(準備・リハーサルなど)。</div>
-                          </label>
+                        <div class="mb-3">
+                          <label class="form-label" for="km-schedule-venue">会場(任意)</label>
+                          <select class="form-select" id="km-schedule-venue" name="venue_node_id">
+                            <option value="">— 企画の番号の場所だけ —</option>
+                            <?php foreach ($nodeNames as $nodeId => $nodeLabel): ?>
+                              <option value="<?= km_e((string) $nodeId) ?>"<?= (string) $nodeId === $venueValue ? ' selected' : '' ?>><?= km_e($nodeLabel) ?></option>
+                            <?php endforeach; ?>
+                          </select>
+                          <div class="form-text">ステージの演目など、企画の番号の無い催しの場所。公開の地図の「会場 × 時間」の表の列になります。</div>
                         </div>
+                        <fieldset class="mb-3">
+                          <legend class="form-label fs-6">見せる相手</legend>
+                          <?php foreach (KM_SCHEDULE_AUDIENCES as $audienceKey => $audienceLabel): ?>
+                            <div class="form-check">
+                              <input class="form-check-input" type="radio" name="audience" id="km-schedule-audience-<?= km_e($audienceKey) ?>" value="<?= km_e($audienceKey) ?>"<?= $audienceKey === $audienceValue ? ' checked' : '' ?>>
+                              <label class="form-check-label" for="km-schedule-audience-<?= km_e($audienceKey) ?>"><?= km_e($audienceLabel) ?></label>
+                            </div>
+                          <?php endforeach; ?>
+                          <div class="form-text">スタッフだけ: 教職員の組織のアカウントでサインインした人の地図にだけ出ます(係の集合・搬入など)。出さない: 管理画面にだけ残ります。</div>
+                        </fieldset>
                         <button type="submit" class="btn btn-primary"><?= $editing !== null ? '直す' : '足す' ?></button>
                         <?php if ($editing !== null): ?>
                           <a class="btn btn-outline-secondary" href="./schedule.php">やめる</a>
@@ -320,8 +400,67 @@ require __DIR__ . '/_inc/partials/page-header.php';
                     <?php endif; ?>
                   </div>
                 </div>
+
+                <div class="card mb-4" id="schedule-csv">
+                  <div class="card-header"><h3 class="card-title">CSV(Excel)</h3></div>
+                  <div class="card-body">
+                    <p class="text-body-secondary fs-7">書き出した CSV を Excel で直して取り込めます。id のある行は直し、id が空の行は足します(消すのはこの画面で)。
+                      会場は「会場の地点id」か、地図の名前とそっくり同じ「会場」。見せる相手は「一般」「スタッフだけ」「出さない」。</p>
+                    <a class="btn btn-outline-secondary btn-sm mb-3" href="./schedule.php?export=csv"><i class="bi bi-download me-1" aria-hidden="true"></i>CSV を書き出す</a>
+                    <?php if ($KM_ADMIN_CAN_WRITE): ?>
+                      <form method="post" enctype="multipart/form-data" class="mb-0">
+                        <?= km_csrf_field() ?>
+                        <input type="hidden" name="form_action" value="import_preview">
+                        <input class="form-control form-control-sm mb-2" type="file" name="csv" accept=".csv,text/csv" aria-label="取り込む CSV">
+                        <button type="submit" class="btn btn-outline-primary btn-sm">読んで確かめる(まだ入れません)</button>
+                      </form>
+                    <?php endif; ?>
+                  </div>
+                </div>
               </div>
             </div>
+
+            <?php if ($importPreview !== null): ?>
+              <div class="card mb-4" id="schedule-import">
+                <div class="card-header"><h3 class="card-title">取り込みの確かめ(<?= count($importPreview['rows']) ?> 行)</h3></div>
+                <div class="card-body">
+                  <?php if ($importPreview['errors'] !== []): ?>
+                    <div class="alert alert-danger" role="alert">
+                      直してからもう一度選んでください。誤りがあるうちは 1 行も入れません。
+                      <ul class="mb-0"><?php foreach ($importPreview['errors'] as $importError): ?><li><?= km_e($importError) ?></li><?php endforeach; ?></ul>
+                    </div>
+                  <?php endif; ?>
+                  <div class="table-responsive">
+                    <table class="table table-sm align-middle">
+                      <thead><tr><th>行</th><th>する</th><th>日時</th><th>企画</th><th>催し</th><th>会場</th><th>見せる相手</th></tr></thead>
+                      <tbody>
+                        <?php foreach ($importPreview['rows'] as $importRow): ?>
+                          <?php $f = $importRow['fields']; ?>
+                          <tr>
+                            <td><?= (int) $importRow['line'] ?></td>
+                            <td><?= $importRow['id'] === null ? '<span class="badge text-bg-success">足す</span>' : '<span class="badge text-bg-info">直す #' . (int) $importRow['id'] . '</span>' ?></td>
+                            <td class="fs-7 text-nowrap"><?= km_e($formatTime($f['startsAt'], $f['endsAt'])) ?></td>
+                            <td><?= km_e((string) ($f['projectNo'] ?? '')) ?></td>
+                            <td><?= km_e($f['title']) ?></td>
+                            <td class="fs-7"><?= km_e($f['venueNodeId'] !== null ? ($nodeNames[$f['venueNodeId']] ?? '') : '') ?></td>
+                            <td><?= km_e(KM_SCHEDULE_AUDIENCES[$f['audience']]) ?></td>
+                          </tr>
+                        <?php endforeach; ?>
+                      </tbody>
+                    </table>
+                  </div>
+                  <?php if ($importPreview['errors'] === [] && $importPreview['rows'] !== []): ?>
+                    <form method="post" class="mb-0">
+                      <?= km_csrf_field() ?>
+                      <input type="hidden" name="form_action" value="import_commit">
+                      <input type="hidden" name="token" value="<?= km_e($importPreview['token']) ?>">
+                      <button type="submit" class="btn btn-primary">この <?= count($importPreview['rows']) ?> 行を取り込む</button>
+                      <a class="btn btn-outline-secondary" href="./schedule.php">やめる</a>
+                    </form>
+                  <?php endif; ?>
+                </div>
+              </div>
+            <?php endif; ?>
 
           </div>
         </div>

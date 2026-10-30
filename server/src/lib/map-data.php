@@ -437,7 +437,13 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
          * 企画のスケジュール(2026-10-23。lib/event-schedule.php)。一般に出す印の行だけ。場所は企画の番号から引き、
          * 出している地点だけを指す(錠・イベントで隠した地点の場所を漏らさない)
          */
-        'schedule' => km_event_schedule_public($pdo, $shownProjectNodes, $projectPois),
+        // 会場(2026-10-30)は出している地点だけ。スタッフだけの行は教職員の組織のアカウントにだけ(この応答はキャッシュしない。api/map-data.php の no-store)
+        'schedule' => km_event_schedule_public($pdo, $shownProjectNodes, $projectPois, $member, array_filter($nodesById, static fn (array $n): bool => empty($n['hidden']))),
+        // 屋台のメニューと混み具合(2026-10-30、振り返りのフェーズ 5 の 2。lib/stalls.php)。場所は出している地点だけ。今の値は Main/stalls.js が api/stalls.php で読み直す
+        'stalls' => (static function () use ($pdo, $shownProjectNodes, $projectPois, $nodesById): array {
+            require_once __DIR__ . '/stalls.php';
+            return km_stalls_public($pdo, $shownProjectNodes, $projectPois, array_filter($nodesById, static fn (array $n): bool => empty($n['hidden'])));
+        })(),
         'buildings' => km_map_building_overlays($pdo),
         /*
          * 建物の階(2026-09-24。lib/building-floors.php)。**平面図 1 枚が 1 つの階。**

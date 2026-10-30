@@ -1266,7 +1266,10 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
     <?php /* 戻るボタンでメモリから戻った画面のサインインの状態が古ければ読み直す(2026-10-25、利用者「戻るボタンでログインが切れる」) */ ?>
     <script defer src="<?= km_home_e(km_public_asset('Main/back-refresh.js')) ?>"></script>
     <?php /* 企画のスケジュールの一覧(2026-10-23。lib/event-schedule.php)。一般に出す行があるときだけ「予定」を出す */ ?>
-    <script defer src="<?= km_home_e(km_public_asset('Main/event-schedule.js')) ?>"></script>
+    <?php /* 屋台のメニューと混み具合(2026-10-30。lib/stalls.php)。屋台があるときだけ 30 秒ごとに読み直す */ ?>
+<script defer src="<?= km_home_e(km_public_asset('Main/stalls.js')) ?>"></script>
+<script defer src="<?= km_home_e(km_public_asset('Main/schedule-grid.js')) ?>"></script>
+<script defer src="<?= km_home_e(km_public_asset('Main/event-schedule.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/panel.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/welcome.js')) ?>"></script>
     <?php /* 最初の画面(2026-10-30、振り返りのフェーズ 3 の 1)。「はじめに」の後・**tutorial.js より先に**読む(tutorial.js は window.kmEntry があれば自動で始めない) */ ?>

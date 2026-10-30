@@ -31,6 +31,7 @@ $openMenus = [
     'mapAreas' => 'database',
     'mapHereQr' => 'database',
     'searchAliases' => 'database',
+    'stalls' => 'database',
     'login' => 'auth',
     'projects' => 'content',
     'timeline' => 'content',
@@ -193,6 +194,13 @@ $parentLink = static fn(string $id): string => 'nav-link' . ($openMenu === $id ?
                     <a href="./map-here-qr.php" class="<?= $link('mapHereQr') ?>">
                       <i class="nav-icon bi bi-qr-code"></i>
                       <p data-i18n="side.mapHereQr">現在地の QR</p>
+                    </a>
+                  </li>
+                  <?php // 屋台(2026-10-30。lib/stalls.php。屋台ごとの鍵とメニュー・混み具合) ?>
+                  <li class="nav-item">
+                    <a href="./stalls.php" class="<?= $link('stalls') ?>">
+                      <i class="nav-icon bi bi-shop"></i>
+                      <p data-i18n="side.stalls">屋台</p>
                     </a>
                   </li>
                   <?php // 読み・別名(2026-10-30。lib/search-aliases.php。検索・案内チャット・アプリの検索に入る) ?>

@@ -4785,7 +4785,7 @@ function km_check_hardening(): void
     check_bool('proxy-web.conf に proxy_read_timeout を書かない(location で重複すると起動しない)', !str_contains((string) preg_replace('/^\s*#.*$/m', '', $file('nginx/km/proxy-web.conf')), 'proxy_read_timeout'));
     // 2 つ目は Soketi の WebSocket(/ws/app/。2026-10-19 に 6001 番から移した。1 本を長く張る)
     check('443 で 300s を許すのは downloads.php と /ws/app/ だけ', 2, substr_count($https, 'proxy_read_timeout 300s;'));
-    check_bool('未認証で重い口を km_api で絞る(メソッドを問わない)', str_contains($https, 'location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update|positioning-params|learning|poster-image|poster-event|table|node-extras|display-defaults|user-map-data|map-events|poster-like)|logto_me)\.php$ {') && str_contains($https, 'limit_req zone=km_api burst=120 nodelay;'));
+    check_bool('未認証で重い口を km_api で絞る(メソッドを問わない)', str_contains($https, 'location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update|positioning-params|learning|poster-image|poster-event|table|node-extras|display-defaults|user-map-data|map-events|poster-like|stall|stalls|app-schedule)|logto_me)\.php$ {') && str_contains($https, 'limit_req zone=km_api burst=120 nodelay;'));
     check_bool('アプリの地図は km_appmap で絞る', preg_match('#location = /api/app-map\.php \{\s*limit_req zone=km_appmap burst=30 nodelay;#', $https) === 1);
     check_bool('callback.php は認可コードをログに残さない', preg_match('#location = /callback\.php \{\s*access_log [^;]+ km_no_query;#', $https) === 1);
     /*
@@ -8358,7 +8358,7 @@ function km_check_layout(): void
             return $exception->getMessage();
         }
     };
-    check('スケジュールの入力: 番号と日時をそろえる・空は null', ['A-1', '展示', null, null, '2026-11-03 10:00:00', '2026-11-03 11:30:00', true],
+    check('スケジュールの入力: 番号と日時をそろえる・空は null・見せる相手は「一般に出す」から', ['A-1', '展示', null, null, '2026-11-03 10:00:00', '2026-11-03 11:30:00', true, 'public', null],
         array_values(km_event_schedule_validate(['projectNo' => 'a-1', 'title' => ' 展示 ', 'startsAt' => '2026-11-03T10:00', 'endsAt' => '2026-11-03 11:30', 'isPublic' => true])));
     check_bool('スケジュールの入力: 名前・始まりは要る・終わりは始まりより後・番号と日付の形を見る', $scheduleError(['title' => '', 'startsAt' => '2026-11-03 10:00']) !== ''
         && $scheduleError(['title' => 'a']) !== '' && $scheduleError(['title' => 'a', 'startsAt' => '2026-11-03 10:00', 'endsAt' => '2026-11-03 09:00']) !== ''
@@ -8377,7 +8377,7 @@ function km_check_layout(): void
          km_map_event_node_visible(['type' => 'facility', 'name' => '男子トイレ'], false), km_map_event_node_visible(['type' => 'road'], false),
          km_map_event_node_visible(['type' => 'room', 'name' => '講義室'], false), km_map_event_node_visible(['type' => 'facility', 'name' => '体育館'], false)]);
     check_bool('地図データ: イベントの地点だけを出すのは有効なイベントがあり ON のとき・隠すのは印だけ(経路は通れる)・スケジュールとポスターは出している地点だけ', str_contains($mapDataForEvents, "if (\$overlay['events'] !== [] && (\$overlay['onlyEventNodes'] ?? false) && empty(\$node['hidden'])")
-        && str_contains($mapDataForEvents, "'schedule' => km_event_schedule_public(\$pdo, \$shownProjectNodes, \$projectPois),")
+        && str_contains($mapDataForEvents, "'schedule' => km_event_schedule_public(\$pdo, \$shownProjectNodes, \$projectPois, \$member, array_filter(\$nodesById, static fn (array \$n): bool => empty(\$n['hidden']))),")
         && str_contains($mapDataForEvents, "km_map_project_nodes(\$projectsById, array_filter(\$nodesById, static fn (array \$n): bool => empty(\$n['hidden'])))")
         && strpos($mapDataForEvents, "'schedule' =>") > strpos($mapDataForEvents, 'if (!$viewUnlocked) {'));
     $eventsLib = (string) file_get_contents(__DIR__ . '/../lib/map-events.php');
@@ -9410,6 +9410,146 @@ function km_check_layout(): void
         && str_contains($answerMessages[0]['content'], '店・場所は今回の「データ」にあるものだけを使ってください'));
     check_bool('画面: 直前の会話 2 往復を送り、道のりをカードに出す', str_contains((string) file_get_contents(__DIR__ . '/../Main/guide-chat.js'), 'history: history.slice(-2)')
         && str_contains((string) file_get_contents(__DIR__ . '/../Main/guide-chat.js'), "meta.push('🚶 ' + card.distance);"));
+
+    km_check_heading('スケジュール: 会場・見せる相手・CSV・会場 × 時間(2026-10-30、振り返りのフェーズ 5 の 1)');
+    require_once __DIR__ . '/../lib/event-schedule.php';
+    check('見せる相手: 値と言葉のどちらでも・知らなければ null', ['public', 'staff', 'hidden', 'staff', 'hidden', null],
+        [km_event_schedule_audience('一般'), km_event_schedule_audience('staff'), km_event_schedule_audience('出さない'), km_event_schedule_audience(' スタッフ '), km_event_schedule_audience('0'), km_event_schedule_audience('全員')]);
+    $venueA = str_repeat('a', 32);
+    $venueB = str_repeat('b', 32);
+    $scheduleInput = ['title' => 'a', 'startsAt' => '2026-11-03 10:00'];
+    check('入力: スタッフだけは「一般に出す」の印を立てない・会場は 32 字の 16 進(大文字はそろえる)', [false, 'staff', $venueA],
+        (static fn (array $v): array => [$v['isPublic'], $v['audience'], $v['venueNodeId']])(km_event_schedule_validate($scheduleInput + ['audience' => 'スタッフだけ', 'venueNodeId' => strtoupper($venueA)])));
+    check_bool('入力: 知らない見せる相手・形の違う会場は断る', $scheduleError($scheduleInput + ['audience' => '全員']) !== '' && $scheduleError($scheduleInput + ['venueNodeId' => '../x']) !== '');
+    $scheduleRows = [
+        ['id' => 1, 'projectNo' => 'A-1', 'title' => '一般', 'organizer' => '', 'description' => '', 'startsAt' => 'x', 'endsAt' => null, 'isPublic' => true, 'audience' => 'public', 'venueNodeId' => $venueA],
+        ['id' => 2, 'projectNo' => null, 'title' => '係', 'organizer' => '', 'description' => '', 'startsAt' => 'x', 'endsAt' => null, 'isPublic' => false, 'audience' => 'staff', 'venueNodeId' => $venueB],
+        ['id' => 3, 'projectNo' => null, 'title' => '出さない', 'organizer' => '', 'description' => '', 'startsAt' => 'x', 'endsAt' => null, 'isPublic' => false, 'audience' => 'hidden', 'venueNodeId' => null],
+    ];
+    check('公開: 来場者には一般だけ・会場を先頭の地点に', [[1, [$venueA, 'n1'], false]],
+        array_map(static fn (array $r): array => [$r['id'], $r['nodeIds'], isset($r['staffOnly'])], km_event_schedule_public_rows($scheduleRows, ['A-1' => ['n1']])));
+    check('公開: 教職員にはスタッフだけの行も(印を付ける)・隠した会場は付けない・出さない行は誰にも出さない', [[1, [$venueA, 'n1'], false, $venueA], [2, [], true, null]],
+        array_map(static fn (array $r): array => [$r['id'], $r['nodeIds'], isset($r['staffOnly']), $r['venueNodeId'] ?? null],
+            km_event_schedule_public_rows($scheduleRows, ['A-1' => ['n1']], [], true, [$venueA => true])));
+    check_bool('公開: 見せる相手と一般に出す印を返さない', !array_key_exists('audience', km_event_schedule_public_rows($scheduleRows, [])[0]) && !array_key_exists('isPublic', km_event_schedule_public_rows($scheduleRows, [])[0]));
+    check('CSV: 式で始まる値は頭に \' を付け、取り込みで外す(そうでない値は触らない)', ["'=1+1", "'@SUM(A1)", 'たこ焼き', '=1+1', "'普通"],
+        [km_event_schedule_csv_cell('=1+1'), km_event_schedule_csv_cell('@SUM(A1)'), km_event_schedule_csv_cell('たこ焼き'), km_event_schedule_csv_uncell("'=1+1"), km_event_schedule_csv_uncell("'普通")]);
+    $venueNames = [$venueA => '第一体育館', $venueB => '講義室', str_repeat('c', 32) => '講義室'];
+    $exportRows = [
+        ['id' => 4, 'projectNo' => 'A-1', 'title' => '=HYPERLINK("x")', 'organizer' => '電算部', 'description' => "1 行目\n2 行目, \"引用\"", 'startsAt' => '2026-11-03 10:00:00', 'endsAt' => '2026-11-03 11:30:00', 'audience' => 'staff', 'venueNodeId' => $venueA],
+        ['id' => 5, 'projectNo' => null, 'title' => '閉会', 'organizer' => '', 'description' => '', 'startsAt' => '2026-11-04 15:00:00', 'endsAt' => null, 'audience' => 'public', 'venueNodeId' => null],
+    ];
+    $exported = km_event_schedule_csv_export($exportRows, $venueNames);
+    check_bool('CSV の書き出し: BOM・CRLF・見出し・式の値を守る', str_starts_with($exported, "\xEF\xBB\xBF" . implode(',', KM_SCHEDULE_CSV_HEADERS) . "\r\n")
+        && str_contains($exported, "\"'=HYPERLINK(\"\"x\"\")\"") && str_contains($exported, ",第一体育館,スタッフだけ\r\n"));
+    $reparsed = km_event_schedule_csv_parse($exported, $venueNames, [4 => true, 5 => true]);
+    check('CSV: 書き出して読み戻すと同じ中身(id・式・改行・会場・見せる相手)', [[], [4, 5], '=HYPERLINK("x")', "1 行目\n2 行目, \"引用\"", $venueA, 'staff', null, 'public', '2026-11-03 11:30:00'],
+        [$reparsed['errors'], array_column($reparsed['rows'], 'id'), $reparsed['rows'][0]['fields']['title'], $reparsed['rows'][0]['fields']['description'],
+            $reparsed['rows'][0]['fields']['venueNodeId'], $reparsed['rows'][0]['fields']['audience'], $reparsed['rows'][1]['fields']['venueNodeId'], $reparsed['rows'][1]['fields']['audience'], $reparsed['rows'][0]['fields']['endsAt']]);
+    $excelCsv = mb_convert_encoding("催しの名前,始まり,終わり,会場,見せる相手\r\n開会式,2026/11/3 9:00,2026/11/3 9:30,第一体育館,\r\n", 'SJIS-win', 'UTF-8');
+    $excelParsed = km_event_schedule_csv_parse($excelCsv, $venueNames, []);
+    check('CSV: Excel の Shift_JIS・「2026/11/3 9:00」の日時・列の順は問わない・会場は名前でも・見せる相手が空なら一般', [[], null, '開会式', '2026-11-03 09:00:00', $venueA, 'public'],
+        [$excelParsed['errors'], $excelParsed['rows'][0]['id'], $excelParsed['rows'][0]['fields']['title'], $excelParsed['rows'][0]['fields']['startsAt'], $excelParsed['rows'][0]['fields']['venueNodeId'], $excelParsed['rows'][0]['fields']['audience']]);
+    $badParsed = km_event_schedule_csv_parse("id,催しの名前,始まり,会場,見せる相手\n99,a,2026-11-03 10:00,,\n,b,2026-11-03 10:00,講義室,\n,c,2026-11-03 10:00,屋上,\n,d,2026-11-03 10:00,,全員\n,e,あした,,\n,f,2026-11-03 10:00,,\n", $venueNames, [4 => true]);
+    check('CSV: 誤りは行ごと(無い id・同じ名前の会場・無い会場・見せる相手・日時)。正しい行だけ残る', [['2 行目', '3 行目', '4 行目', '5 行目', '6 行目'], ['f']],
+        [array_map(static fn (string $e): string => explode(':', $e)[0], $badParsed['errors']), array_map(static fn (array $r): string => $r['fields']['title'], $badParsed['rows'])]);
+    check('CSV: 見出しが無ければ読まない・空は空', [1, [], 1],
+        [count(km_event_schedule_csv_parse("名前,時間\nx,y\n", $venueNames, [])['errors']), km_event_schedule_csv_parse("催しの名前,始まり\n", $venueNames, [])['rows'], count(km_event_schedule_csv_parse('', $venueNames, [])['errors'])]);
+    check('CSV: ' . KM_SCHEDULE_CSV_MAX_ROWS . ' 行を超えたら止める', true,
+        in_array('行が多すぎます(' . KM_SCHEDULE_CSV_MAX_ROWS . ' 行まで)。', km_event_schedule_csv_parse("催しの名前,始まり\n" . str_repeat("a,2026-11-03 10:00\n", KM_SCHEDULE_CSV_MAX_ROWS + 1), $venueNames, [])['errors'], true));
+    $schedulePage5 = (string) file_get_contents(__DIR__ . '/../admin/schedule.php');
+    check_bool('管理画面: 取り込みは 2 段(読むだけ → 合言葉と 10 分で入れる)・大きさの上限・会場は地図の地点だけ・記録に文言', str_contains($schedulePage5, "if (\$formAction === 'import_preview') {")
+        && str_contains($schedulePage5, "!hash_equals((string) \$pending['token'], (string) (\$_POST['token'] ?? '')) || time() - (int) \$pending['at'] > 600")
+        && str_contains($schedulePage5, "unset(\$_SESSION[KM_SCHEDULE_IMPORT_SESSION]);") && str_contains($schedulePage5, '(int) $file[\'size\'] > KM_SCHEDULE_CSV_MAX_BYTES')
+        && str_contains($schedulePage5, "if (\$form['venueNodeId'] !== '' && !isset(\$venueNames[\$form['venueNodeId']])) {")
+        && isset(KM_ADMIN_LOG_ACTION_LABELS['schedule.export'], KM_ADMIN_LOG_ACTION_LABELS['schedule.import']));
+    $scheduleJs = (string) file_get_contents(__DIR__ . '/../Main/event-schedule.js');
+    $scheduleIndex = (string) file_get_contents(__DIR__ . '/../index.php');
+    check_bool('公開: 会場 × 時間の表は schedule-grid.js を先に読み、位置は CSSOM(style の属性を書かない)・一覧と切り替える', strpos($scheduleIndex, "Main/schedule-grid.js')") !== false
+        && strpos($scheduleIndex, "Main/schedule-grid.js')") < strpos($scheduleIndex, "Main/event-schedule.js')")
+        && str_contains($scheduleJs, "box.style.gridRow = (cellInfo.rowStart + 1) + ' / ' + (cellInfo.rowEnd + 1);") && !str_contains($scheduleJs, "setAttribute('style'")
+        && str_contains($scheduleJs, "[['list', '一覧'], ['grid', '会場 × 時間']]") && str_contains($scheduleJs, 'if (entry.staffOnly) item.appendChild(staffTag());'));
+    check_bool('地図データ: 教職員のときだけスタッフだけの行・地図のデータは保存させない', str_contains((string) file_get_contents(__DIR__ . '/../lib/map-data.php'), 'km_event_schedule_public($pdo, $shownProjectNodes, $projectPois, $member,')
+        && str_contains((string) file_get_contents(__DIR__ . '/../api/map-data.php'), 'no-store'));
+
+    km_check_heading('屋台: 鍵・メニューと混み具合・古い値・公開の形(2026-10-30、振り返りのフェーズ 5 の 2。lib/stalls.php)');
+    require_once __DIR__ . '/../lib/stalls.php';
+    [$stallKey, $stallHash, $stallHint] = km_stall_new_key();
+    check_bool('鍵: kms_ + 32 字の 16 進・表には SHA-256 と末尾 4 字だけ・形の違う鍵は表に当てない', km_stall_key_valid($stallKey) && $stallHash === hash('sha256', $stallKey)
+        && $stallHint === substr($stallKey, -4) && !km_stall_key_valid('kms_' . str_repeat('g', 32)) && !km_stall_key_valid(strtoupper($stallKey)) && km_stall_new_key()[0] !== $stallKey);
+    check('鍵は Authorization: Bearer から(大文字小文字は問わない・無ければ空)', [$stallKey, $stallKey, '', ''],
+        [km_stall_key_from_header('Bearer ' . $stallKey), km_stall_key_from_header('bearer  ' . $stallKey . ' '), km_stall_key_from_header('Basic abc'), km_stall_key_from_header('')]);
+    $stallError = static function (array $input): string {
+        try {
+            km_stall_validate_post($input);
+            return '';
+        } catch (InvalidArgumentException $exception) {
+            return $exception->getMessage();
+        }
+    };
+    check('送る値: 名前の制御文字を空白に・値段は整数か null・売り切れは true だけ・送らない項目は null(前の値)・"" で消す',
+        [['menu' => [['name' => 'たこ 焼き', 'price' => 300, 'soldOut' => false], ['name' => 'ラムネ', 'price' => null, 'soldOut' => true]], 'waiting' => null, 'note' => null],
+            ['menu' => null, 'waiting' => false, 'note' => false], ['menu' => null, 'waiting' => 0, 'note' => '焼きたて']],
+        [km_stall_validate_post(['menu' => [['name' => "たこ\n焼き", 'price' => 300, 'soldOut' => 'yes'], ['name' => 'ラムネ', 'soldOut' => true]]]),
+            km_stall_validate_post(['waiting' => '', 'note' => null]), km_stall_validate_post(['waiting' => 0, 'note' => ' 焼きたて '])]);
+    check_bool('送る値: 空・品が多すぎ・名前が長い・値段が字や負・人数が大きいか字・ひとことが長い・並びでない menu は断る', $stallError([]) !== ''
+        && $stallError(['menu' => array_fill(0, KM_STALL_MENU_MAX_ITEMS + 1, ['name' => 'a'])]) !== '' && $stallError(['menu' => [['name' => str_repeat('あ', KM_STALL_MENU_NAME_MAX + 1)]]]) !== ''
+        && $stallError(['menu' => [['name' => 'a', 'price' => '300']]]) !== '' && $stallError(['menu' => [['name' => 'a', 'price' => -1]]]) !== ''
+        && $stallError(['waiting' => KM_STALL_WAITING_MAX + 1]) !== '' && $stallError(['waiting' => '12']) !== '' && $stallError(['note' => str_repeat('あ', KM_STALL_NOTE_MAX + 1)]) !== ''
+        && $stallError(['menu' => ['a' => ['name' => 'x']]]) !== '' && $stallError(['menu' => [['name' => '']]]) !== '');
+    $stallNow = strtotime('2026-11-03 12:00:00');
+    $stallStatus = ['menu' => '[{"name":"たこ焼き","price":300,"soldOut":false}]', 'waiting' => 12, 'note' => '焼きたて', 'menu_at' => '2026-11-03 11:00:00', 'waiting_at' => '2026-11-03 11:45:00', 'posted_at' => '2026-11-03 11:45:00'];
+    check('古い値: 待ちは 30 分・メニューとひとことは 12 時間で出さない(行は残す)', [[12, 1, '焼きたて'], [null, 1, '焼きたて'], [null, 0, ''], [null, 0, '']],
+        array_map(static fn (array $f): array => [$f['waiting'], count($f['menu']), $f['note']], [
+            km_stall_fresh($stallStatus, $stallNow), km_stall_fresh($stallStatus, $stallNow + 20 * 60), km_stall_fresh($stallStatus, strtotime('2026-11-04 00:00:01')), km_stall_fresh(null, $stallNow)]));
+    $stallRows = [
+        ['id' => 1, 'name' => 'たこ焼き', 'project_no' => '21', 'node_id' => null] + $stallStatus,
+        ['id' => 2, 'name' => '隠した地点', 'project_no' => null, 'node_id' => str_repeat('b', 32), 'posted_at' => null],
+        ['id' => 3, 'name' => '会場', 'project_no' => '21', 'node_id' => str_repeat('a', 32), 'posted_at' => null],
+    ];
+    check('公開: 場所は番号の地点・一時地点と選んだ地点(出している地点だけ)・場所が無ければ出さない', [[1, ['n1'], [7]], [3, [str_repeat('a', 32), 'n1'], [7]]],
+        array_map(static fn (array $s): array => [$s['id'], $s['nodeIds'], $s['poiIds']], km_stalls_public_rows($stallRows, ['21' => ['n1']], ['21' => [7]], [str_repeat('a', 32) => true], $stallNow)));
+    check('読み直しの形: 場所を持たない', ['id', 'menu', 'waiting', 'note', 'menuAt', 'waitingAt'], array_keys(km_stalls_status_rows($stallRows, $stallNow)[0]));
+    check('一行の要約(待ち・最初の品・ほか何品・売り切れ・ひとこと)', ['12 人待ち・たこ焼き 300 円 ほか 1 品・焼きたて', '待ちなし', '売り切れ', ''],
+        [km_stall_summary(['waiting' => 12, 'menu' => [['name' => 'たこ焼き', 'price' => 300], ['name' => 'ラムネ', 'price' => null], ['name' => 'x', 'soldOut' => true]], 'note' => '焼きたて']),
+            km_stall_summary(['waiting' => 0, 'menu' => []]), km_stall_summary(['waiting' => null, 'menu' => [['name' => 'x', 'soldOut' => true]]]), km_stall_summary([])]);
+    check('管理画面のメニューの字: 1 行 1 品・値段は数字だけ(全角も)・× で売り切れ・名前の x は売り切れにしない・戻すと同じ',
+        [[['たこ焼き', 300, false], ['ラムネ', 150, true], ['Xmas', null, false]], "たこ焼き,300\n×ラムネ,150\nXmas"],
+        [array_map(static fn (array $m): array => [$m['name'], $m['price'], $m['soldOut']], km_stall_menu_from_text("たこ焼き,300円\n\n× ラムネ、１５０\nXmas")),
+            km_stall_menu_to_text(km_stall_menu_from_text("たこ焼き,300円\n× ラムネ、１５０\nXmas"))]);
+    $stallApi = (string) file_get_contents(__DIR__ . '/../api/stall.php');
+    $stallsApi = (string) file_get_contents(__DIR__ . '/../api/stalls.php');
+    $stallsAdmin = (string) file_get_contents(__DIR__ . '/../admin/stalls.php');
+    check_bool('送る口: POST・鍵は見出しだけ(URL を読まない)・本文 8KB・5 秒に 1 回(429)', str_contains($stallApi, "require_method('POST');") && str_contains($stallApi, "\$_SERVER['HTTP_AUTHORIZATION']")
+        && !str_contains($stallApi, '$_GET') && str_contains($stallApi, 'km_api_json_body(8 * 1024)') && str_contains($stallApi, "=== 'limited'") && str_contains($stallApi, ', 429);'));
+    check_bool('読む口: 錠が掛かっていれば空・場所を返さない・控えは端末の中だけ', str_contains($stallsApi, "if (!km_map_view_unlocked(km_map_access_config())) {")
+        && str_contains($stallsApi, 'km_stalls_status_rows(') && str_contains($stallsApi, "header('Cache-Control: private, max-age=15');"));
+    check_bool('nginx: 屋台の 2 つの口とアプリの予定を km_api で絞る',str_contains((string) file_get_contents(dirname(__DIR__, 2) . '/nginx/default.conf.template'), '|map-events|poster-like|stall|stalls|app-schedule)|logto_me)\.php$ {'));
+    check_bool('管理画面: guard・CSRF・鍵は 1 度だけ(セッションから出して消す。URL に載せない)・書き込みの権限・記録に文言・サイドバー', str_contains($stallsAdmin, "require __DIR__ . '/_inc/guard.php';")
+        && str_contains($stallsAdmin, 'km_csrf_verify()') && str_contains($stallsAdmin, 'unset($_SESSION[KM_STALL_FLASH]);') && !preg_match('/Location: [^\n]*\$(key|newKey)/', $stallsAdmin)
+        && str_contains($stallsAdmin, '<?php if ($KM_ADMIN_CAN_WRITE): ?>')
+        && isset(KM_ADMIN_LOG_ACTION_LABELS['stall.create'], KM_ADMIN_LOG_ACTION_LABELS['stall.rekey'], KM_ADMIN_LOG_ACTION_LABELS['stall.revoke'], KM_ADMIN_LOG_ACTION_LABELS['stall.delete'], KM_ADMIN_LOG_ACTION_LABELS['stall.status'])
+        && str_contains((string) file_get_contents(__DIR__ . '/../admin/_inc/partials/sidebar.php'), './stalls.php'));
+    $stallsJs = (string) file_get_contents(__DIR__ . '/../Main/stalls.js');
+    check_bool('公開: 地図のデータに屋台・詳細の枠・見えている間だけ 30 秒ごとに読み直す・値はエスケープ', str_contains((string) file_get_contents(__DIR__ . '/../lib/map-data.php'), "'stalls' => (static function () use (")
+        && str_contains((string) file_get_contents(__DIR__ . '/../Main/app.js'), '${stallSlotHtml(id)}') && str_contains($stallsJs, "if (document.visibilityState !== 'visible') return;")
+        && str_contains($stallsJs, 'const POLL_MS = 30000;') && str_contains($stallsJs, "<span>' + escapeHtml(item.name) + '</span>'")
+        && str_contains((string) file_get_contents(__DIR__ . '/../index.php'), "Main/stalls.js')"));
+    $stallCatalog = km_guide_catalog(['nodes' => [], 'eventPois' => [['id' => 7, 'name' => '21', 'floor' => '1', 'category' => 'food', 'anchorNodeId' => '', 'note' => '']],
+        'stalls' => [['id' => 1, 'name' => 'たこ焼き', 'nodeIds' => [], 'poiIds' => [7], 'menu' => [['name' => '焼きそば', 'price' => 400, 'soldOut' => false]], 'waiting' => 3, 'note' => '']], 'event' => ['id' => 1]]);
+    $stallShop = $stallCatalog['shops'][0] ?? [];
+    check('案内チャット: メニューの品で探せる・カードと LLM に屋台の今', [true, '3 人待ち・焼きそば 400 円', '3 人待ち・焼きそば 400 円'],
+        [in_array('焼きそば', $stallShop['extras'] ?? [], true), km_guide_card($stallShop)['stall'] ?? null, km_guide_record_for_llm($stallShop)['屋台の今(待ち・メニュー)'] ?? null]);
+
+    $nodeExtrasApi = (string) file_get_contents(__DIR__ . '/../api/node-extras.php');
+    $nodeExtrasLib = (string) file_get_contents(__DIR__ . '/../lib/node-extras.php');
+    $appScheduleApi = (string) file_get_contents(__DIR__ . '/../api/app-schedule.php');
+    check_bool('アプリ: 部屋の詳細に一般の予定と屋台(教員室・研究室は出さない)', str_contains($nodeExtrasApi, "'schedule' => \$schedule, 'stalls' => \$stalls]")
+        && str_contains($nodeExtrasLib, 'km_event_schedule_public($pdo, $projectNodes, [], false, [$node[\'id\'] => true])')
+        && substr_count($nodeExtrasLib, "if (\$node === null || km_map_node_is_restricted(\$node)) {") >= 3);
+    check_bool('アプリ: 予定の口はアクセスコード(本文)・一般の行だけ・場所はアプリの uuid・教員室と研究室は場所に入れない', str_contains($appScheduleApi, "km_learning_code_allowed(\$pdo, (string) (\$input['code'] ?? ''))")
+        && str_contains($appScheduleApi, "require_method('POST');") && str_contains($appScheduleApi, 'km_event_schedule_public($pdo, $projectNodes, [], false, $places)')
+        && str_contains($appScheduleApi, "if (!km_map_node_is_restricted(\$node) && (string) (\$row['uuid'] ?? '') !== '') {"));
 
     km_check_heading('map: 曲がる所の目印・階段の上り下り(2026-10-30、振り返りのフェーズ 3 の 3)');
     $routeViewJs = (string) file_get_contents(__DIR__ . '/../Main/route-view.js');

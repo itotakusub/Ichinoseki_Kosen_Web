@@ -35,6 +35,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/settings.php';
 require_once __DIR__ . '/test-mode.php';
 require_once __DIR__ . '/guide-distance.php';
+require_once __DIR__ . '/stalls.php';
 
 const KM_GUIDE_ENABLED_SETTING = 'guide_chat_enabled';
 const KM_GUIDE_SUB_SETTING = 'guide_chat_sub';
@@ -472,6 +473,7 @@ function km_guide_catalog(array $mapData): array
     $pois = is_array($mapData['eventPois'] ?? null) ? $mapData['eventPois'] : [];
     $posters = is_array($mapData['posters'] ?? null) ? $mapData['posters'] : [];
     $schedule = is_array($mapData['schedule'] ?? null) ? $mapData['schedule'] : [];
+    $stalls = is_array($mapData['stalls'] ?? null) ? $mapData['stalls'] : [];
     $eventOn = ($mapData['event'] ?? null) !== null;
 
     // ポスターと予定を、地点・一時地点ごとに束ねる
@@ -499,7 +501,20 @@ function km_guide_catalog(array $mapData): array
             $scheduleFor['p:' . (int) $poiId][] = $row;
         }
     }
-    $decorate = static function (array $item, string $key) use ($postersFor, $scheduleFor): array {
+    // 屋台のメニューと混み具合(2026-10-30、振り返りのフェーズ 5 の 2。lib/stalls.php。古い値は地図のデータの時点で外れている)
+    $stallsFor = [];
+    foreach ($stalls as $stall) {
+        if (!is_array($stall)) {
+            continue;
+        }
+        foreach ((array) ($stall['nodeIds'] ?? []) as $nodeId) {
+            $stallsFor['n:' . $nodeId][] = $stall;
+        }
+        foreach ((array) ($stall['poiIds'] ?? []) as $poiId) {
+            $stallsFor['p:' . (int) $poiId][] = $stall;
+        }
+    }
+    $decorate = static function (array $item, string $key) use ($postersFor, $scheduleFor, $stallsFor): array {
         $likes = 0;
         foreach ($postersFor[$key] ?? [] as $poster) {
             $item['extras'][] = (string) ($poster['title'] ?? '');
@@ -519,6 +534,16 @@ function km_guide_catalog(array $mapData): array
         foreach ($scheduleFor[$key] ?? [] as $row) {
             $item['extras'][] = (string) ($row['title'] ?? '');
             $item['times'][] = trim((string) ($row['startsAt'] ?? '') . '〜' . (string) ($row['endsAt'] ?? ''));
+        }
+        foreach ($stallsFor[$key] ?? [] as $stall) {
+            // メニューの品の名前でも探せるように(「焼きそば どこ」)
+            foreach ((array) ($stall['menu'] ?? []) as $menuItem) {
+                $item['extras'][] = (string) ($menuItem['name'] ?? '');
+            }
+            $summary = km_stall_summary($stall);
+            if ($summary !== '') {
+                $item['stall'] = isset($item['stall']) ? $item['stall'] . ' / ' . $summary : $summary;
+            }
         }
         $item['likes'] = $likes;
         $item['extras'] = array_values(array_filter($item['extras'], static fn (string $s): bool => trim($s) !== ''));
@@ -604,6 +629,8 @@ function km_guide_card(array $item): array
         'relevance' => isset($item['relevance']) ? (int) $item['relevance'] : null,
         // 今いる場所からの道のり(2026-10-30。近い順に並べたときだけ)
         'distance' => isset($item['distancePx']) ? km_guide_distance_label((float) $item['distancePx']) : null,
+        // 屋台の今(2026-10-30。「12 人待ち・たこ焼き 300 円 ほか 2 品」)
+        'stall' => isset($item['stall']) ? (string) $item['stall'] : null,
     ];
 }
 
@@ -619,6 +646,7 @@ function km_guide_record_for_llm(array $item): array
         '時間' => ($item['times'] ?? []) !== [] ? implode('、', array_slice($item['times'], 0, 3)) : null,
         '質問との関係' => isset($item['relevance']) ? (int) $item['relevance'] . '%' : null,
         '今いる場所からの道のり' => isset($item['distancePx']) ? km_guide_distance_label((float) $item['distancePx']) : null,
+        '屋台の今(待ち・メニュー)' => isset($item['stall']) ? (string) $item['stall'] : null,
     ], static fn ($v): bool => $v !== null && $v !== '');
 }
 

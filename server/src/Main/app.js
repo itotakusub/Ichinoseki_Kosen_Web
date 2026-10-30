@@ -1278,6 +1278,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     <span class="km-detail-floor">${escapeHtml(floorLabel)}</span>
                 </div>
                 ${rows}
+                ${stallSlotHtml(id)}
                 ${schedule}
                 ${posters}
                 ${enter}
@@ -1317,6 +1318,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     window.kmScheduleIsNow = scheduleIsNow;
 
+    /**
+     * 屋台のメニューと混み具合(2026-10-30、振り返りのフェーズ 5 の 2)。中身は Main/stalls.js が作り、
+     * 30 秒ごとに読み直したら、開いている詳細の枠(data-km-stall)の中を描き直す。鍵は地点の id か 'poi:<一時地点の id>'
+     */
+    function stallSlotHtml(key) {
+        const html = typeof window.kmStallHtml === 'function' ? window.kmStallHtml(key) : '';
+        return `<div class="km-stall-slot" data-km-stall="${escapeHtml(key)}">${html}</div>`;
+    }
+
     /** 地点の詳細に出す「この場所の予定」(2026-10-23)。開催中には印を付ける */
     function scheduleListHtml(nodeId) {
         const list = scheduleByNode.get(nodeId) || [];
@@ -1327,6 +1337,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             return `<div class="km-schedule-item${live ? ' is-live' : ''}">
                 <span class="km-schedule-time">${escapeHtml(scheduleTimeLabel(entry))}${live ? ' <em>開催中</em>' : ''}</span>
                 <b class="km-schedule-title">${escapeHtml(entry.title)}</b>
+                ${entry.staffOnly ? '<span class="km-schedule-staff">スタッフだけ</span>' : ''}
                 ${entry.organizer ? `<span class="km-schedule-org">${escapeHtml(entry.organizer)}</span>` : ''}
                 ${entry.description ? `<span class="km-schedule-desc">${escapeHtml(entry.description)}</span>` : ''}
             </div>`;
@@ -2920,6 +2931,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     <span class="km-detail-floor">${escapeHtml(floorLabel)}</span>
                 </div>
                 ${rows}
+                ${stallSlotHtml('poi:' + poi.id)}
                 ${scheduleListHtml('poi:' + poi.id)}
                 ${posterListHtml('poi:' + poi.id)}
                 ${actions}
