@@ -7,7 +7,8 @@ declare(strict_types=1);
  *
  *   POST {"code":"…","node":"<地点の uuid>","device":"<32 桁の 16 進>"}               写真といいねの数を読む
  *   POST {"code":"…","node":"…","device":"…","like":true|false}                      いいねを付ける・外す(そのあとの数を返す)
- *   → {"success":true,"posters":[…],"likes":{"count":N,"liked":bool},"likeable":bool}
+ *   → {"success":true,"posters":[…],"likes":{"count":N,"liked":bool},"likeable":bool,"schedule":[…],"stalls":[…]}
+ *   schedule・stalls は 2026-10-30(振り返りのフェーズ 5)。この地点の一般の予定と、屋台のメニュー・混み具合
  *
  * - **地図のアクセスコードが要る**(地図を持つ人だけ。照合は学習データと同じ km_learning_code_allowed)。コードは URL に載せない
  * - 端末の印は鍵つきの印にしてだけ持つ。IP は持たない(回数を絞る印だけ)
@@ -70,9 +71,11 @@ try {
         }
     }
     $likes = $restricted ? ['count' => 0, 'liked' => false] : km_node_like_state($pdo, $nodeUuid, $voter);
+    $schedule = km_node_extras_schedule($pdo, $node);
+    $stalls = km_node_extras_stalls($pdo, $node);
 } catch (Throwable $exception) {
     error_log('api/node-extras.php failed: ' . $exception->getMessage());
     respond(['success' => false, 'message' => '読めませんでした。'], 500);
 }
 
-respond(['success' => true, 'posters' => $posters, 'likes' => $likes, 'likeable' => $likeable]);
+respond(['success' => true, 'posters' => $posters, 'likes' => $likes, 'likeable' => $likeable, 'schedule' => $schedule, 'stalls' => $stalls]);

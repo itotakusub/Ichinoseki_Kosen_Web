@@ -415,6 +415,83 @@ if [ -n "$LOGTO_IMAGE" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# 脆弱性(2026-10-30、高専祭の振り返りのフェーズ 6 の 2。決まりは src/lib/security-audit.php)
+# ---------------------------------------------------------------------------
+# 像の更新とは別に、**中で使っている部品の勧告**を見る。PHP の版(php.net)・composer audit・
+# Soketi の npm audit(どちらも GitHub のセキュリティ勧告を引く)・ホストの Ubuntu の USN。
+# カーネルの穴(CVE-2026-98432)はコンテナの外なので、USN を見ないと誰も知らせなかった。
+#
+# **1 度知らせた勧告は二度と送らない**(VULN_SEEN_FILE に鍵を覚える。送れてから覚える)。
+# 像の更新の 7 日ごとの念押しとは別の扱い。聞けなかったものは「保留」と出し、送らない
+VULN_SEEN_FILE="$STATE_DIR/vulns-seen"
+NEW_VULN_KEYS=""
+
+vuln_seen() {
+  if [ -f "$VULN_SEEN_FILE" ] && grep -qxF "$1" "$VULN_SEEN_FILE" 2>/dev/null; then
+    return 0
+  fi
+  return 1
+}
+
+# security-audit.php の行(鍵<TAB>名前<TAB>いま<TAB>直したもの / HOLD<TAB>理由)を読む。
+# **パイプで while を回さない**(サブシェルになり ITEMS が消える)。一時ファイルから < で読む
+VULN_TMP="$(mktemp 2>/dev/null || echo /tmp/kosenmap-vulns.$$)"
+trap 'rm -f "$VULN_TMP"' EXIT
+read_vulns() {
+  # $1 = 見出し
+  _label="$1"
+  _found=0
+  _tab="$(printf '\t')"
+  printf '%s\n' "$VULN_OUTPUT" > "$VULN_TMP"
+  while IFS="$_tab" read -r _key _name _cur _avail; do
+    if [ -z "$_key" ]; then
+      continue
+    fi
+    _found=1
+    if [ "$_key" = "HOLD" ]; then
+      echo "  $_label  $_name(判定を保留)"
+      continue
+    fi
+    if vuln_seen "$_key"; then
+      echo "  $_label  $_name(知らせ済み)"
+      continue
+    fi
+    echo "  $_label  ★ $_name"
+    add_item "$_name" "$_cur" "$_avail" vuln
+    NEW_VULN_KEYS="$NEW_VULN_KEYS$_key
+"
+  done < "$VULN_TMP"
+  if [ "$_found" -eq 0 ]; then
+    echo "  $_label  勧告なし"
+  fi
+}
+echo ""
+echo "== 脆弱性 =="
+
+VULN_OUTPUT="$(docker compose exec -T web php scripts/security-audit.php php 2>/dev/null || echo "HOLD	web で調べられませんでした")"
+read_vulns "PHP"
+
+VULN_OUTPUT="$(docker compose exec -T web php scripts/security-audit.php composer 2>/dev/null || echo "HOLD	web で調べられませんでした")"
+read_vulns "composer"
+
+# Soketi の部品。像は読むだけなので、npm の置き場は /tmp(tmpfs)へ。registry に届かなければ保留
+_npm_json="$(docker compose exec -T -e npm_config_cache=/tmp/npm-audit soketi \
+  sh -c 'cd /app && npm audit --omit=dev --json --package-lock-only' 2>/dev/null || true)"
+VULN_OUTPUT="$(printf '%s' "$_npm_json" | docker compose exec -T web php scripts/security-audit.php npm 2>/dev/null || echo "HOLD	web で調べられませんでした")"
+read_vulns "npm(Soketi)"
+
+# ホストの Ubuntu。入っている部品の名前と USN の一覧を web へ渡して突き合わせる
+_release="$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release 2>/dev/null | head -n 1)"
+_usn_json="$(curl -fsS --max-time 20 "https://ubuntu.com/security/notices.json?release=${_release}&limit=40&order=newest" 2>/dev/null || true)"
+if [ -z "$_release" ] || [ -z "$_usn_json" ] || ! command -v dpkg-query >/dev/null 2>&1; then
+  echo "  Ubuntu(USN)  聞けませんでした(判定を保留)"
+else
+  VULN_OUTPUT="$( { dpkg-query -W -f='${Package} ${Version}\n' 2>/dev/null; echo '---KM-USN---'; printf '%s' "$_usn_json"; } \
+    | docker compose exec -T web php scripts/security-audit.php usn "$_release" 2>/dev/null || echo "HOLD	web で調べられませんでした")"
+  read_vulns "Ubuntu(USN)"
+fi
+
+# ---------------------------------------------------------------------------
 # 知らせる
 # ---------------------------------------------------------------------------
 if [ "$NOTIFY" -eq 0 ]; then
@@ -437,6 +514,10 @@ FINGERPRINT="$(printf '%s' "$ITEMS" | md5sum 2>/dev/null | awk '{print $1}' || t
 should_send() {
   # 月に一度の便りは必ず出す。**ここを抑えると沈黙が正常に見える**
   if [ "$HEARTBEAT" -eq 1 ]; then
+    return 0
+  fi
+  # まだ知らせていない脆弱性があれば必ず送る(2026-10-30)
+  if [ -n "$NEW_VULN_KEYS" ]; then
     return 0
   fi
   if [ ! -f "$STATE_FILE" ] || [ -z "$FINGERPRINT" ]; then
@@ -476,6 +557,10 @@ echo "== メールを送ります =="
 if printf '%s' "$REPORT" | docker compose exec -T web php scripts/notify-update.php; then
   if mkdir -p "$STATE_DIR" 2>/dev/null; then
     printf '%s\n%s\n' "$FINGERPRINT" "$(date +%s)" > "$STATE_FILE" 2>/dev/null || true
+    # 知らせた脆弱性を覚える(二度と送らない)
+    if [ -n "$NEW_VULN_KEYS" ]; then
+      printf '%s' "$NEW_VULN_KEYS" >> "$VULN_SEEN_FILE" 2>/dev/null || true
+    fi
   fi
   exit 0
 fi

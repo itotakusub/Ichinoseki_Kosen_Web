@@ -417,7 +417,9 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
      * 読み・別名(2026-10-30、振り返りのフェーズ 4 の 1。lib/search-aliases.php)を、出している地点・一時地点・ポスターにだけ付ける。表が無ければ付けない
      */
     require_once __DIR__ . '/search-aliases.php';
-    return km_search_aliases_apply([
+    // 英語の名前(2026-10-30、振り返りのフェーズ 6 の 1。lib/english-names.php)。英語で見るとき Main/i18n.js が名前と入れ替える
+    require_once __DIR__ . '/english-names.php';
+    return km_english_names_apply(km_search_aliases_apply([
         'floors' => $floors,
         'nodes' => $nodesById,
         'edges' => $edges,
@@ -437,7 +439,13 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
          * 企画のスケジュール(2026-10-23。lib/event-schedule.php)。一般に出す印の行だけ。場所は企画の番号から引き、
          * 出している地点だけを指す(錠・イベントで隠した地点の場所を漏らさない)
          */
-        'schedule' => km_event_schedule_public($pdo, $shownProjectNodes, $projectPois),
+        // 会場(2026-10-30)は出している地点だけ。スタッフだけの行は教職員の組織のアカウントにだけ(この応答はキャッシュしない。api/map-data.php の no-store)
+        'schedule' => km_event_schedule_public($pdo, $shownProjectNodes, $projectPois, $member, array_filter($nodesById, static fn (array $n): bool => empty($n['hidden']))),
+        // 屋台のメニューと混み具合(2026-10-30、振り返りのフェーズ 5 の 2。lib/stalls.php)。場所は出している地点だけ。今の値は Main/stalls.js が api/stalls.php で読み直す
+        'stalls' => (static function () use ($pdo, $shownProjectNodes, $projectPois, $nodesById): array {
+            require_once __DIR__ . '/stalls.php';
+            return km_stalls_public($pdo, $shownProjectNodes, $projectPois, array_filter($nodesById, static fn (array $n): bool => empty($n['hidden'])));
+        })(),
         'buildings' => km_map_building_overlays($pdo),
         /*
          * 建物の階(2026-09-24。lib/building-floors.php)。**平面図 1 枚が 1 つの階。**
@@ -456,7 +464,7 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
             $stored = km_route_weights_stored($pdo);
             return $stored === null ? null : km_route_weights_for_web($stored);
         })(),
-    ], km_search_aliases_all($pdo));
+    ], km_search_aliases_all($pdo)), km_english_names_all($pdo));
 }
 
 /**

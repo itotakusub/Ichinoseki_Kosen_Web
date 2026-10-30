@@ -1278,6 +1278,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     <span class="km-detail-floor">${escapeHtml(floorLabel)}</span>
                 </div>
                 ${rows}
+                ${stallSlotHtml(id)}
                 ${schedule}
                 ${posters}
                 ${enter}
@@ -1317,6 +1318,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     window.kmScheduleIsNow = scheduleIsNow;
 
+    /**
+     * 屋台のメニューと混み具合(2026-10-30、振り返りのフェーズ 5 の 2)。中身は Main/stalls.js が作り、
+     * 30 秒ごとに読み直したら、開いている詳細の枠(data-km-stall)の中を描き直す。鍵は地点の id か 'poi:<一時地点の id>'
+     */
+    function stallSlotHtml(key) {
+        const html = typeof window.kmStallHtml === 'function' ? window.kmStallHtml(key) : '';
+        return `<div class="km-stall-slot" data-km-stall="${escapeHtml(key)}">${html}</div>`;
+    }
+
     /** 地点の詳細に出す「この場所の予定」(2026-10-23)。開催中には印を付ける */
     function scheduleListHtml(nodeId) {
         const list = scheduleByNode.get(nodeId) || [];
@@ -1327,6 +1337,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             return `<div class="km-schedule-item${live ? ' is-live' : ''}">
                 <span class="km-schedule-time">${escapeHtml(scheduleTimeLabel(entry))}${live ? ' <em>開催中</em>' : ''}</span>
                 <b class="km-schedule-title">${escapeHtml(entry.title)}</b>
+                ${entry.staffOnly ? '<span class="km-schedule-staff">スタッフだけ</span>' : ''}
                 ${entry.organizer ? `<span class="km-schedule-org">${escapeHtml(entry.organizer)}</span>` : ''}
                 ${entry.description ? `<span class="km-schedule-desc">${escapeHtml(entry.description)}</span>` : ''}
             </div>`;
@@ -2920,6 +2931,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     <span class="km-detail-floor">${escapeHtml(floorLabel)}</span>
                 </div>
                 ${rows}
+                ${stallSlotHtml('poi:' + poi.id)}
                 ${scheduleListHtml('poi:' + poi.id)}
                 ${posterListHtml('poi:' + poi.id)}
                 ${actions}
@@ -4594,6 +4606,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         event: { allPoi: true, projects: true },
     };
 
+    /** 種類で集めるジャンルが「別の種類」とみなす地点の種類(アプリの EntryGenres.kt の NODE_TYPE_LABELS と同じ) */
+    const KM_GENRE_KIND_TYPES = { room: true, facility: true, stairs: true, entrance: true };
+
     /** そのジャンルに入る場所。group は小さい分類の名前(見出しにする) */
     function genreResults(key) {
         const genre = KM_GENRES[key];
@@ -4612,7 +4627,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             const isProject = Array.isArray(node.projects) && node.projects.length > 0;
             const byProject = genre.projects && isProject;
             const byType = (genre.types || []).includes(String(node.type));
-            const byName = genre.pattern && (genre.pattern.test(node.name || '') || genre.pattern.test(shownName || '') || genre.pattern.test(node.type2 || ''));
+            // 種類で集めるジャンル(階段・教室・建物)は、名前が当たっても別の種類の地点は入れない(2026-10-30、アプリの実機で「建物」に階段が並んだ)
+            const otherKind = (genre.types || []).length > 0 && Object.prototype.hasOwnProperty.call(KM_GENRE_KIND_TYPES, node.type) && !genre.types.includes(String(node.type));
+            const byName = !otherKind && genre.pattern && (genre.pattern.test(node.name || '') || genre.pattern.test(shownName || '') || genre.pattern.test(node.type2 || ''));
             if (!byProject && !byType && !byName) continue;
             if (seen.has(id)) continue;
             seen.add(id);
