@@ -30,7 +30,7 @@ declare(strict_types=1);
 const KM_UPDATE_NOTICE_MAX_ITEMS = 20;
 
 /**
- * 通知の1件。`kind` は下の4つ。
+ * 通知の1件。`kind` は下の5つ。
  *
  * - `release` … 新しい版が公開された(Logto の GitHub リリース)。**人が読める版番号**
  * - `digest`  … 動くタグ(`latest` や `alpine`)の中身が入れ替わった。
@@ -40,13 +40,16 @@ const KM_UPDATE_NOTICE_MAX_ITEMS = 20;
  * - `base`    … 自前でビルドするもの(web / soketi)の**ビルド元**が入れ替わった。
  *               pull では変わらないので、ビルドし直すまで当たらない
  *
+ * - `vuln`    … 脆弱性の勧告(2026-10-30、振り返りのフェーズ 6 の 2。lib/security-audit.php)。PHP の版・composer・
+ *               Soketi の npm・ホストの Ubuntu(USN)。**件名の一番前に出す**(「脆弱性が出ました。対処してください」)
+ *
  * **混ぜない。** 打つ手が違う。
  *
  * series と base は 2026-09-13 に足した。それまで check-updates.sh は
  * `latest|alpine|stable|main|edge` しか比べておらず、DB 系とビルド元は
  * **固定もされず、見張られてもいなかった** —— 修正版が出ても誰も知らなかった。
  */
-const KM_UPDATE_NOTICE_KINDS = ['release', 'digest', 'series', 'base'];
+const KM_UPDATE_NOTICE_KINDS = ['vuln', 'release', 'digest', 'series', 'base'];
 
 /**
  * 受け取った JSON を検証して整える。**壊れた入力で送らない。**
@@ -109,6 +112,11 @@ function km_update_notice_subject(array $items, bool $heartbeat = false): string
         ? ' ほか ' . (count($items) - count($shown)) . '件'
         : '';
 
+    // 脆弱性は何より先(2026-10-30)
+    $vulns = $pick('vuln');
+    if ($vulns !== []) {
+        return '[KosenMap] 脆弱性が出ました。対処してください (' . count($vulns) . '件)' . $others($vulns);
+    }
     $releases = $pick('release');
     if ($releases !== []) {
         return '[KosenMap] 新しい版が出ています: '
@@ -162,6 +170,7 @@ function km_update_notice_body(
      * 種類ごとに「何が起きたか」を一言添え、今と新しいものは別の行に、値はさらに次の行に置く。
      */
     $labels = [
+        'vuln' => ['脆弱性が出ました。対処してください', 'いま', '直した版・勧告'],
         'release' => ['新しい版が出ました', 'いま使っている版', '新しく出た版'],
         'digest' => ['同じタグの中身が入れ替わりました(気づかないうちに上がりうるものです)', 'いま使っているもの', 'タグの今の中身'],
         'series' => ['修正版が出ました(同じ系列のタグの中身が新しくなりました)', 'いま使っているもの', '新しく出たもの'],
@@ -210,6 +219,15 @@ function km_update_notice_body(
         $step++;
         $lines[] = $step . '. ホストでビルドし直して入れ替える';
         $lines[] = '       docker compose build --pull web soketi && docker compose up -d';
+        $step++;
+    }
+    if (in_array('vuln', $kinds, true)) {
+        $lines[] = $step . '. 脆弱性は、名前の頭で当て方が変わる';
+        $lines[] = '       PHP の版 … docker/php/Dockerfile の php:8.4-apache の digest を書き換えて build し直す(公式の像が出るまで待つことがある)';
+        $lines[] = '       composer の部品 … 手元の src で composer update <部品> を流し、check.php を通してから配備する';
+        $lines[] = '       Soketi の部品 … フォーク(aloware/soketi)の新しい像を待ち、docker/soketi/Dockerfile の digest を書き換える';
+        $lines[] = '       Ubuntu(USN) … unattended-upgrades が当てる。急ぐなら sudo apt-get update && sudo apt-get upgrade。';
+        $lines[] = '                      カーネル(linux-…)は再起動するまで効かない。外から突ける穴なら、直るまで止めることも考える';
         $step++;
     }
     $lines[] = $step . '. 最後に、実際にログインできることを1回確かめる';

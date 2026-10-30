@@ -129,6 +129,12 @@
             a.append(el('span', 'km-entry-icon', '📢'), el('span', 'km-entry-label', 'お知らせ'));
             foot.appendChild(a);
         }
+        // 言語の切り替え(2026-10-30。Main/i18n.js が押したときを拾い、英語のときは「🌐 日本語」に書き換える)
+        const langSwitch = el('button', 'km-entry-link km-lang-switch', '🌐 English');
+        langSwitch.type = 'button';
+        langSwitch.setAttribute('data-km-lang-switch', '');
+        langSwitch.setAttribute('translate', 'no');
+        foot.appendChild(langSwitch);
         if (!testMode) {
             const label = el('label', 'km-entry-skip');
             const box = el('input');

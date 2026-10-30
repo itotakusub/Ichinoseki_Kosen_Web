@@ -4143,6 +4143,23 @@ body.km-topbar-auto:not(.km-topbar-peek) .km-account {
     cursor: pointer;
 }
 .km-entry-link .km-entry-icon { font-size: 1.15rem; }
+/* 言語の切り替え(2026-10-30、振り返りのフェーズ 6 の 1。Main/i18n.js)。アカウントの欄の一番上 */
+.km-account-menu .km-lang-switch {
+    display: block;
+    width: 100%;
+    margin: 0 0 0.5rem;
+    min-height: var(--km-touch);
+    padding: 0 14px;
+    border-radius: 999px;
+    border: 1px solid var(--border-strong);
+    background: var(--glass-heavy);
+    color: var(--text);
+    font: inherit;
+    font-weight: 700;
+    text-align: left;
+    cursor: pointer;
+}
+.km-account-menu .km-lang-switch:focus-visible { outline: 3px solid var(--primary); outline-offset: 2px; }
 .km-entry-skip {
     display: flex;
     align-items: center;

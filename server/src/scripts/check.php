@@ -7634,7 +7634,7 @@ function km_check_layout(): void
     // 「ダウンロード・設定」の中だけだと、スマホで引き出しを開いている間 ⚙️ ごと隠れて届かなかった(高専祭の振り返り)
     check_bool('ログインの欄は 1 回だけ組み立てる', substr_count($index, 'id="km-auth-links"') === 1 && str_contains($index, '$kmAuthLinksHtml = (string) ob_get_clean();'));
     check('ログインの欄を出すのは 1 か所だけ', 1, substr_count($index, '<?= $kmAuthLinksHtml ?>'));
-    check_bool('出す所は右上のアカウントの欄(テストモードで囲まない)', str_contains($index, '<div class="km-account-menu glass-panel"><?= $kmAuthLinksHtml ?></div>')
+    check_bool('出す所は右上のアカウントの欄(テストモードで囲まない)', str_contains($index, '<div class="km-account-menu glass-panel">') && str_contains($index, 'translate="no">🌐 English</button><?= $kmAuthLinksHtml ?></div>')
         && preg_match('/<\?php if \(\$kmTestMode[^)]*\): \?>\s*<details class="km-account"/', $index) === 0);
     $kmCss = (string) file_get_contents(__DIR__ . '/../Main/styles.css');
     check_bool('アカウントの欄は引き出し・シートより手前で、シートが開いても隠さない', preg_match('/^\.km-account \{[^}]*z-index: 1350;/m', $kmCss) === 1
@@ -9357,7 +9357,7 @@ function km_check_layout(): void
     $aliasCatalog = km_guide_catalog(['nodes' => ['n1' => ['type' => 'room', 'name' => "Let's play Densan!", 'floor' => '1', 'readings' => ['れっつぷれいでんさん', '電算部']]], 'eventPois' => [], 'posters' => []]);
     check('案内チャットの一覧にも読み(「電算部」で Let\'s play Densan! が当たる)', ["Let's play Densan!"], array_column(km_guide_search($aliasCatalog['places'], ['電算部'], null, 3, false), 'name'));
     $mapDataSrc = (string) file_get_contents(__DIR__ . '/../lib/map-data.php');
-    check_bool('公開の地図データ・アプリへの配信で読みを付ける', str_contains($mapDataSrc, 'return km_search_aliases_apply([') && str_contains($mapDataSrc, '], km_search_aliases_all($pdo));')
+    check_bool('公開の地図データ・アプリへの配信で読みを付ける', str_contains($mapDataSrc, 'return km_english_names_apply(km_search_aliases_apply([') && str_contains($mapDataSrc, '], km_search_aliases_all($pdo))')
         && substr_count((string) file_get_contents(__DIR__ . '/../lib/app-map-publish.php'), 'km_search_aliases_apply_app($map, km_search_aliases_all($pdo));') === 2);
     $aliasAdmin = (string) file_get_contents(__DIR__ . '/../admin/search-aliases.php');
     check_bool('管理画面: CSRF・変えた行だけ保存・1 度に 150 行まで(max_input_vars)', str_contains($aliasAdmin, 'if (!km_csrf_verify()) {')
@@ -9551,6 +9551,86 @@ function km_check_layout(): void
         && str_contains($appScheduleApi, "require_method('POST');") && str_contains($appScheduleApi, 'km_event_schedule_public($pdo, $projectNodes, [], false, $places)')
         && str_contains($appScheduleApi, "if (!km_map_node_is_restricted(\$node) && (string) (\$row['uuid'] ?? '') !== '') {"));
 
+    km_check_heading('脆弱性のメール: PHP・composer・npm・Ubuntu の USN(2026-10-30、振り返りのフェーズ 6 の 2。lib/security-audit.php)');
+    require_once __DIR__ . '/../lib/security-audit.php';
+    require_once __DIR__ . '/../lib/update-notice.php';
+    $phpItem = km_security_php_item('8.4.14', '{"version":"8.4.15","tags":["security"]}');
+    check('PHP: 同じ系列の新しい版(セキュリティの印)・同じか古ければ null', ['php:8.4.15', true, null, null],
+        [$phpItem['key'] ?? null, str_contains($phpItem['name'] ?? '', 'セキュリティ'), km_security_php_item('8.4.15', '{"version":"8.4.15","tags":[]}'), km_security_php_item('8.4.16', '{"version":"8.4.15"}')]);
+    $phpBad = false;
+    try {
+        km_security_php_item('8.4.14', '<html>');
+    } catch (InvalidArgumentException $exception) {
+        $phpBad = true;
+    }
+    check_bool('PHP: php.net の答えが読めなければ例外(「無い」と言わない)', $phpBad);
+    $composerItems = km_security_composer_items('{"advisories":{"firebase/php-jwt":[{"advisoryId":"PKSA-abc","packageName":"firebase/php-jwt","affectedVersions":"<6.10.1","title":"Key confusion","cve":"CVE-2024-1","link":"https://github.com/advisories/GHSA-x"}]},"abandoned":[]}');
+    check('composer audit: 勧告ごとに鍵・名前に CVE・当たる版・勧告の URL', [['composer:PKSA-abc', 'firebase/php-jwt: Key confusion(CVE-2024-1)', '当たる版: <6.10.1', 'https://github.com/advisories/GHSA-x']],
+        array_map('array_values', $composerItems));
+    check('composer audit: 勧告が無ければ空', [], km_security_composer_items('{"advisories":[]}'));
+    $npmItems = km_security_npm_items('{"vulnerabilities":{"ws":{"name":"ws","severity":"high","via":[{"title":"DoS","url":"https://github.com/advisories/GHSA-w"}],"range":"<8.17.1"},"debug":{"severity":"low","via":["x"],"range":"*"},"uws":{"severity":"moderate","via":["ws"],"range":"*"}}}');
+    check('npm audit: moderate 以上だけ・勧告の題と URL・部品を通して当たるものも', [['npm:ws@<8.17.1', true], ['npm:uws@*', true]],
+        array_map(static fn (array $i): array => [$i['key'], str_contains($i['name'], 'Soketi')], $npmItems));
+    $usnItems = km_security_usn_items('{"notices":[{"id":"USN-7100-1","title":"Linux kernel vulnerabilities","cves_ids":["CVE-2026-98432"],"release_packages":{"noble":[{"name":"linux-image-6.8.0-90-generic","version":"6.8.0-90.91"},{"name":"linux-image-generic","version":"6.8.0-90.91"}]}},{"id":"USN-7101-1","title":"nginx","cves_ids":[],"release_packages":{"noble":[{"name":"nginx","version":"1"}]}},{"id":"USN-7102-1","title":"x","release_packages":{"jammy":[{"name":"openssl"}]}}]}',
+        "linux-image-generic 6.8.0-88.89\nnginx 1.1\nopenssl 3.0.13-0ubuntu3\n", 'noble');
+    check('USN: 入っている版が直した版より古いものだけ(もう当たっていれば出さない)・同じリリースだけ・CVE を名前に', [['usn:USN-7100-1', true]],
+        array_map(static fn (array $i): array => [$i['key'], str_contains($i['name'], 'CVE-2026-98432')], $usnItems));
+    check('Debian の版の比べ方(dpkg --compare-versions と同じ)', [-1, -1, 1, -1, 0, -1, 1, -1],
+        array_map(static fn (array $p): int => km_security_deb_compare($p[0], $p[1]) <=> 0, [
+            ['6.8.0-88.89', '6.8.0-90.91'], ['6.8.0-90.91', '6.8.0-100.1'], ['1:1.0', '2.0'], ['1.0~rc1', '1.0'], ['1.0-1', '1.0-1'],
+            ['3.0.13-0ubuntu3', '3.0.13-0ubuntu3.1'], ['1.2.3-0ubuntu1~24.04.2', '1.2.3-0ubuntu1~24.04.1'], ['1.0a', '1.0b']]));
+    check('1 行の形: タブと改行を空白にして 4 つに', "k\ta b\tc\td", km_security_line(['key' => 'k', 'name' => "a\tb", 'current' => "c\n", 'available' => 'd']));
+    check('メール: 脆弱性は件名の一番前・種類として受ける', ['[KosenMap] 脆弱性が出ました。対処してください (1件) ほか 1件', 1],
+        [km_update_notice_subject([['name' => 'PHP 8.4.15', 'current' => '8.4.14', 'available' => '8.4.15', 'kind' => 'vuln'], ['name' => 'logto', 'current' => '1', 'available' => '2', 'kind' => 'release']]),
+            count(km_update_notice_parse('{"items":[{"name":"Ubuntu USN-1","kind":"vuln"}]}')['items'])]);
+    check_bool('メール: 当て方(PHP・composer・Soketi・Ubuntu とカーネルの再起動)を書く', str_contains(km_update_notice_body([['name' => 'x', 'current' => '', 'available' => '', 'kind' => 'vuln']], 'h'), 'カーネル(linux-…)は再起動するまで効かない'));
+    $updatesForVulns = (string) @file_get_contents(dirname(__DIR__, 2) . '/scripts/check-updates.sh');
+    if ($updatesForVulns === '') {
+        check_skip('check-updates.sh の脆弱性の欄', '配備先には scripts/ が無い');
+    } else {
+        check_bool('check-updates.sh: 4 つを見る・新しい勧告は必ず送る・送れてから覚えて二度と送らない・パイプで while を回さない',
+            str_contains($updatesForVulns, 'scripts/security-audit.php php') && str_contains($updatesForVulns, 'scripts/security-audit.php composer')
+            && str_contains($updatesForVulns, 'scripts/security-audit.php npm') && str_contains($updatesForVulns, 'scripts/security-audit.php usn "$_release"')
+            && str_contains($updatesForVulns, "  if [ -n \"\$NEW_VULN_KEYS\" ]; then\n    return 0")
+            && strpos($updatesForVulns, '>> "$VULN_SEEN_FILE"') > strpos($updatesForVulns, 'php scripts/notify-update.php; then')
+            && str_contains($updatesForVulns, 'done < "$VULN_TMP"'));
+    }
+
+    km_check_heading('英語の公開ページ: 画面の辞書・英語の名前(2026-10-30、振り返りのフェーズ 6 の 1。Main/i18n.js・lib/english-names.php)');
+    require_once __DIR__ . '/../lib/english-names.php';
+    check('英語の名前: 制御文字と前後の空白(全角も)を落とし、80 字で切る', ['Library 2', 80, ''],
+        [km_english_name_clean("　Library\t2 "), mb_strlen(km_english_name_clean(str_repeat('a', 200))), km_english_name_clean(" \x01 ")]);
+    $enMap = km_english_names_apply(
+        ['nodes' => ['aa' => ['name' => '図書館'], 'bb' => ['name' => '講義室']], 'eventPois' => [['id' => 'p1', 'name' => '受付']], 'posters' => [['id' => '7', 'title' => 'ロボ']]],
+        ['node' => ['aa' => 'Library', 'zz' => 'Hidden'], 'poi' => ['p1' => 'Reception'], 'poster' => ['7' => 'Robots']]);
+    check('地図データ: 地点・一時地点は nameEn、ポスターは titleEn。無い地点・出していない地点には足さない', ['Library', false, false, 'Reception', 'Robots'],
+        [$enMap['nodes']['aa']['nameEn'] ?? null, isset($enMap['nodes']['bb']['nameEn']), isset($enMap['nodes']['zz']), $enMap['eventPois'][0]['nameEn'] ?? null, $enMap['posters'][0]['titleEn'] ?? null]);
+    $enApp = json_decode('{"nodes":[{"uuid":"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"},{"uuid":"b"}]}');
+    km_english_names_apply_app($enApp, ['node' => [str_repeat('a', 32) => 'Library']]);
+    check('アプリの地図: uuid を 32 字の小文字にして titleEn を付ける', ['Library', false], [$enApp->nodes[0]->titleEn ?? null, isset($enApp->nodes[1]->titleEn)]);
+    $enLib = (string) file_get_contents(__DIR__ . '/../lib/english-names.php');
+    $enAdmin = (string) file_get_contents(__DIR__ . '/../admin/search-aliases.php');
+    $enMapData = (string) file_get_contents(__DIR__ . '/../lib/map-data.php');
+    $enPublish = (string) file_get_contents(__DIR__ . '/../lib/app-map-publish.php');
+    check_bool('別の表に持つ(ALTER しない)・保存は読み・別名と同じ対象の決まり・空なら行を消す',
+        str_contains($enLib, 'CREATE TABLE IF NOT EXISTS km_english_names') && !str_contains($enLib, 'ALTER TABLE')
+        && str_contains($enLib, 'km_search_alias_target_valid($kind, $id)') && str_contains($enLib, 'DELETE FROM km_english_names WHERE target_kind = ? AND target_id = ?'));
+    check_bool('管理画面「読み・別名」に英語の名前の欄・変えた行だけ保存・長さの上限',
+        str_contains($enAdmin, 'name="e[<?= km_e($row[\'id\']) ?>]"') && str_contains($enAdmin, 'name="eo[<?= km_e($row[\'id\']) ?>]"')
+        && str_contains($enAdmin, 'km_english_name_save($pdo, $kind, $id, $text);') && str_contains($enAdmin, 'maxlength="<?= KM_ENGLISH_NAME_MAX ?>"'));
+    check_bool('公開の地図データとアプリへの配信の両方に英語の名前を付ける',
+        str_contains($enMapData, 'km_english_names_all($pdo));') && str_contains($enPublish, 'km_english_names_apply_app($map, km_english_names_all($pdo));'));
+    $i18nJs = (string) file_get_contents(__DIR__ . '/../Main/i18n.js');
+    $indexForEn = (string) file_get_contents(__DIR__ . '/../index.php');
+    $entryForEn = (string) file_get_contents(__DIR__ . '/../Main/entry.js');
+    check_bool('i18n.js は app.js より前に読む(地図データの名前を先に入れ替える)・アカウントの欄に切り替え',
+        ($enPos = strpos($indexForEn, "km_public_asset('Main/i18n.js')")) !== false && $enPos < (int) strpos($indexForEn, "<script defer src=\"<?= km_home_e(km_public_asset('Main/app.js')) ?>\">")
+        && str_contains($indexForEn, '<button type="button" class="km-lang-switch" data-km-lang-switch translate="no">'));
+    check_bool('最初の画面にも切り替え・切り替えの札は訳さない',
+        str_contains($entryForEn, "langSwitch.setAttribute('data-km-lang-switch', '');") && str_contains($entryForEn, "'translate', 'no'"));
+    check_bool('i18n.js: 日本語のときは何もしない・入力欄やコードは訳さない・言語は端末に覚える(URL に個人の情報を載せない)',
+        str_contains($i18nJs, "if (lang !== 'en')") && str_contains($i18nJs, 'textarea,code,pre,[translate="no"]')
+        && str_contains($i18nJs, "const KEY = 'km-lang';") && !preg_match('/innerHTML\s*=/', $i18nJs));
     km_check_heading('map: 曲がる所の目印・階段の上り下り(2026-10-30、振り返りのフェーズ 3 の 3)');
     $routeViewJs = (string) file_get_contents(__DIR__ . '/../Main/route-view.js');
     check_bool('角度の決まりはアプリと同じ(20° / 60° / 135°)', str_contains($routeViewJs, 'const STRAIGHT_DEGREES = 20;') && str_contains($routeViewJs, 'const SLIGHT_TURN_DEGREES = 60;')

@@ -142,6 +142,9 @@ function km_app_map_publish(
     // 読み・別名(2026-10-30、振り返りのフェーズ 4 の 1。lib/search-aliases.php)。アプリの検索に入る
     require_once __DIR__ . '/search-aliases.php';
     km_search_aliases_apply_app($map, km_search_aliases_all($pdo));
+    // 英語の名前(2026-10-30。lib/english-names.php)。アプリの英語の画面で使う
+    require_once __DIR__ . '/english-names.php';
+    km_english_names_apply_app($map, km_english_names_all($pdo));
 
     $json = json_encode($map, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     if (!is_string($json)) {
@@ -338,6 +341,9 @@ function km_app_map_publish_event(
         $eventSkipped = $events['skipped'];
         require_once __DIR__ . '/search-aliases.php';
         km_search_aliases_apply_app($map, km_search_aliases_all($pdo));
+    // 英語の名前(2026-10-30。lib/english-names.php)。アプリの英語の画面で使う
+    require_once __DIR__ . '/english-names.php';
+    km_english_names_apply_app($map, km_english_names_all($pdo));
     } else {
         $activeEventUuid = km_app_map_pick_event_uuid($map);
     }

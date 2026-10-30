@@ -417,7 +417,9 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
      * 読み・別名(2026-10-30、振り返りのフェーズ 4 の 1。lib/search-aliases.php)を、出している地点・一時地点・ポスターにだけ付ける。表が無ければ付けない
      */
     require_once __DIR__ . '/search-aliases.php';
-    return km_search_aliases_apply([
+    // 英語の名前(2026-10-30、振り返りのフェーズ 6 の 1。lib/english-names.php)。英語で見るとき Main/i18n.js が名前と入れ替える
+    require_once __DIR__ . '/english-names.php';
+    return km_english_names_apply(km_search_aliases_apply([
         'floors' => $floors,
         'nodes' => $nodesById,
         'edges' => $edges,
@@ -462,7 +464,7 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
             $stored = km_route_weights_stored($pdo);
             return $stored === null ? null : km_route_weights_for_web($stored);
         })(),
-    ], km_search_aliases_all($pdo));
+    ], km_search_aliases_all($pdo)), km_english_names_all($pdo));
 }
 
 /**

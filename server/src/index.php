@@ -586,7 +586,7 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
                 <svg class="km-account-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="8" r="4.2"/><path d="M3.8 20.5c0-4.3 3.7-6.6 8.2-6.6s8.2 2.3 8.2 6.6z"/></svg>
                 <span class="km-account-label"><?= $loggedIn ? km_home_e($displayName) . ' さん' : 'ログイン' ?></span>
             </summary>
-            <div class="km-account-menu glass-panel"><?= $kmAuthLinksHtml ?></div>
+            <div class="km-account-menu glass-panel"><?php /* 言語の切り替え(Main/i18n.js。2026-10-30) */ ?><button type="button" class="km-lang-switch" data-km-lang-switch translate="no">🌐 English</button><?= $kmAuthLinksHtml ?></div>
         </details>
 
         <?php
@@ -1244,6 +1244,8 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
      * `defer` は書いた順に実行されるので、この並びで足りる。
      */
     ?>
+    <?php /* 英語の画面(2026-10-30、振り返りのフェーズ 6 の 1)。**どの画面の JS より先に読む**(app.js が読む前に地図データの名前を英語に入れ替える) */ ?>
+    <script defer src="<?= km_home_e(km_public_asset('Main/i18n.js')) ?>"></script>
     <?php /* 左の引き出しと、検索の一致率(2026-10-23)。どちらも app.js・map-tuning.js より先に読む */ ?>
     <script defer src="<?= km_home_e(km_public_asset('Main/km-sheet.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/search-rank.js')) ?>"></script>

@@ -7,12 +7,14 @@ require __DIR__ . '/_inc/guard.php';
 require_once dirname(__DIR__) . '/lib/db.php';
 require_once dirname(__DIR__) . '/lib/admin-log.php';
 require_once dirname(__DIR__) . '/lib/search-aliases.php';
+require_once dirname(__DIR__) . '/lib/english-names.php';
 
 /**
  * 読み・別名(2026-10-30、高専祭の振り返りのフェーズ 4 の 1。lib/search-aliases.php)。
  *
  * 地点・一時地点・ポスターごとに「れっつぷれいでんさん、レッツプレイ電算、電算部」のような読み・別名を入れる。
  * 公開の地図の検索・最初の画面・案内チャット・アプリの検索で、名前と同じように探せる(名前より少し下に並ぶ)。
+ * 英語の名前(2026-10-30、振り返りのフェーズ 6 の 1。lib/english-names.php)も同じ行で入れる。公開の地図を英語で見るときの名前(無ければ日本語のまま)。
  * 一度に出すのは絞り込んだ 150 件まで(入力欄の数が PHP の上限 max_input_vars を超えないように)。変えた行だけ保存する。
  */
 
@@ -41,11 +43,13 @@ $onlyFilled = ($_GET['filled'] ?? '') === '1';
 $errors = [];
 $rows = [];
 $aliases = ['node' => [], 'poi' => [], 'poster' => []];
+$englishNames = ['node' => [], 'poi' => [], 'poster' => []];
 $floorLabels = [];
 
 try {
     $pdo = km_db();
     km_search_aliases_ensure_table($pdo);
+    km_english_names_ensure_table($pdo);
 
     if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         if (!km_csrf_verify()) {
@@ -64,6 +68,18 @@ try {
                 km_search_alias_save($pdo, $kind, $id, $text);
                 $saved++;
             }
+            // 英語の名前(変えた行だけ)
+            $newEn = is_array($_POST['e'] ?? null) ? $_POST['e'] : [];
+            $oldEn = is_array($_POST['eo'] ?? null) ? $_POST['eo'] : [];
+            foreach ($newEn as $id => $text) {
+                $id = (string) $id;
+                $text = is_string($text) ? $text : '';
+                if (!km_search_alias_target_valid($kind, $id) || $text === (string) ($oldEn[$id] ?? '')) {
+                    continue;
+                }
+                km_english_name_save($pdo, $kind, $id, $text);
+                $saved++;
+            }
             if ($saved > 0) {
                 km_admin_log_record('content', 'search-aliases.save', $kind . ' ' . $saved);
             }
@@ -73,6 +89,7 @@ try {
     }
 
     $aliases = km_search_aliases_all($pdo);
+    $englishNames = km_english_names_all($pdo);
     foreach ($pdo->query('SELECT id, label FROM km_map_floors ORDER BY sort_order, id')->fetchAll() as $row) {
         $floorLabels[(string) $row['id']] = (string) $row['label'];
     }
@@ -106,8 +123,8 @@ try {
 
 // 絞り込み(名前・読みのどちらかに含む)と、読みのある行だけ
 $needle = mb_strtolower($query);
-$rows = array_values(array_filter($rows, static function (array $row) use ($needle, $onlyFilled, $aliases, $kind): bool {
-    $current = implode('、', $aliases[$kind][$row['id']] ?? []);
+$rows = array_values(array_filter($rows, static function (array $row) use ($needle, $onlyFilled, $aliases, $englishNames, $kind): bool {
+    $current = trim(implode('、', $aliases[$kind][$row['id']] ?? []) . ' ' . ($englishNames[$kind][$row['id']] ?? ''));
     if ($onlyFilled && $current === '') {
         return false;
     }
@@ -138,7 +155,8 @@ require __DIR__ . '/_inc/partials/page-header.php';
                 漢字の読み・英語の名前のカタカナ・部活の呼び名などを入れると、地図の検索・最初の画面・案内チャット・アプリの検索で探せます
                 (例: Let's play Densan! に「れっつぷれいでんさん、レッツプレイ電算、電算部」)。<br>
                 区切りは読点「、」かカンマ・改行。1 件に <?= KM_SEARCH_ALIAS_MAX_COUNT ?> 個・1 つ <?= KM_SEARCH_ALIAS_MAX_LENGTH ?> 字まで。
-                名前で当たったものより少し下に並びます。打ち間違い(体育舘 → 体育館)は「もしかして」が拾うので、入れなくて構いません。
+                名前で当たったものより少し下に並びます。打ち間違い(体育舘 → 体育館)は「もしかして」が拾うので、入れなくて構いません。<br>
+                「英語の名前」は、公開の地図を英語(右上のアカウントの欄か最初の画面の「🌐 English」)で見るときの名前です。空なら日本語のまま出します。
               </div>
             </div>
             <form method="get" action="./search-aliases.php" class="d-flex flex-wrap align-items-center gap-2 mb-3">
@@ -148,7 +166,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
                 <?php endforeach; ?>
               </div>
               <input type="hidden" name="kind" value="<?= km_e($kind) ?>">
-              <input type="search" class="form-control w-auto" name="q" value="<?= km_e($query) ?>" placeholder="名前・読みで絞る" aria-label="名前・読みで絞る">
+              <input type="search" class="form-control w-auto" name="q" value="<?= km_e($query) ?>" placeholder="名前・読み・英語で絞る" aria-label="名前・読み・英語で絞る">
               <div class="form-check mb-0">
                 <input class="form-check-input" type="checkbox" name="filled" value="1" id="km-alias-filled"<?= $onlyFilled ? ' checked' : '' ?>>
                 <label class="form-check-label" for="km-alias-filled">読みのあるものだけ</label>
@@ -163,10 +181,10 @@ require __DIR__ . '/_inc/partials/page-header.php';
               <div class="card mb-3">
                 <div class="card-body p-0">
                   <table class="table table-sm align-middle mb-0">
-                    <thead><tr><th scope="col">名前</th><th scope="col">場所</th><th scope="col">読み・別名</th></tr></thead>
+                    <thead><tr><th scope="col">名前</th><th scope="col">場所</th><th scope="col">読み・別名</th><th scope="col">英語の名前</th></tr></thead>
                     <tbody>
                       <?php if ($rows === []): ?>
-                        <tr><td colspan="3" class="text-body-secondary">ありません。</td></tr>
+                        <tr><td colspan="4" class="text-body-secondary">ありません。</td></tr>
                       <?php endif; ?>
                       <?php foreach ($rows as $row): ?>
                         <?php $current = implode('、', $aliases[$kind][$row['id']] ?? []); ?>
@@ -176,6 +194,11 @@ require __DIR__ . '/_inc/partials/page-header.php';
                           <td>
                             <input type="text" class="form-control form-control-sm" id="alias-<?= km_e($row['id']) ?>" name="a[<?= km_e($row['id']) ?>]" value="<?= km_e($current) ?>" maxlength="<?= KM_SEARCH_ALIAS_TEXT_MAX ?>">
                             <input type="hidden" name="o[<?= km_e($row['id']) ?>]" value="<?= km_e($current) ?>">
+                          </td>
+                          <?php $currentEn = $englishNames[$kind][$row['id']] ?? ''; ?>
+                          <td>
+                            <input type="text" class="form-control form-control-sm" name="e[<?= km_e($row['id']) ?>]" value="<?= km_e($currentEn) ?>" maxlength="<?= KM_ENGLISH_NAME_MAX ?>" lang="en" aria-label="<?= km_e($row['name']) ?> の英語の名前" placeholder="(日本語のまま)">
+                            <input type="hidden" name="eo[<?= km_e($row['id']) ?>]" value="<?= km_e($currentEn) ?>">
                           </td>
                         </tr>
                       <?php endforeach; ?>
