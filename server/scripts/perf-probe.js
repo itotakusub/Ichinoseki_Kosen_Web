@@ -9,7 +9,10 @@
  *   - 読み込み: 最初の応答・DOMContentLoaded・load・転送量・要求の数
  *   - 画面の部品の数: DOM 全体・地点の印・札
  *   - ズームの出し入れ 8 回と横への移動 8 回の間のコマの間隔(中央値・95%・最大・50ms を超えたコマ)と長い処理(longtask)
+ *   - **端末の速さに左右されない数**(2026-10-30 に足した): その間に要素の大きさを測った回数(getBoundingClientRect)・
+ *     読んだ床の画像の枚数と大きさ・拡大中の札の数。速い PC ではコマの間隔に差が出ないので、こちらで前後を比べる
  *
+ * 測る前に 1 階を開いておく(建物の中が一番札が多い)。
  * 地図を動かすだけで、何も送らない・保存しない(結果はコンソールに出すだけ)。
  */
 (async () => {
@@ -33,6 +36,15 @@
         // longtask を測れないブラウザ(Safari など)。コマの間隔だけ出す
     }
 
+    // 大きさを測った回数(終わったら元に戻す)
+    const originalRect = Element.prototype.getBoundingClientRect;
+    let rectMeasures = 0;
+    Element.prototype.getBoundingClientRect = function () {
+        rectMeasures++;
+        return originalRect.call(this);
+    };
+    let maxLabels = 0;
+
     const gaps = [];
     let last = performance.now();
     let running = true;
@@ -52,6 +64,7 @@
         map.setZoom(z, { animate: true });
         await once('zoomend');
         await sleep(400);
+        maxLabels = Math.max(maxLabels, document.querySelectorAll('.km-label').length);
     }
     for (let i = 0; i < 8; i++) {
         map.panBy([i % 2 === 0 ? 240 : -240, 0], { animate: true });
@@ -68,7 +81,10 @@
     const elapsed = performance.now() - started;
     running = false;
     if (observer) observer.disconnect();
+    await sleep(300);   // 最後の並べ直し(120ms 後)まで数える
+    Element.prototype.getBoundingClientRect = originalRect;
     map.setView(center, startZoom, { animate: false });
+    const floorImages = resources.filter((r) => /floor-image/.test(r.name));
 
     const sorted = gaps.slice(1).sort((a, b) => a - b);
     const pick = (q) => (sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))] : 0);
@@ -84,11 +100,14 @@
             loadMs: Math.round(nav.loadEventEnd || 0),
             transferKB: Math.round((resources.reduce((s, r) => s + (r.transferSize || 0), 0) + (nav.transferSize || 0)) / 1024),
             requests: resources.length + 1,
+            floorImages: floorImages.length,
+            floorImageKB: Math.round(floorImages.reduce((s, r) => s + (r.decodedBodySize || 0), 0) / 1024),
         },
         dom: {
             nodes: document.getElementsByTagName('*').length,
             markers: document.querySelectorAll('.leaflet-marker-icon').length,
             labels: document.querySelectorAll('.leaflet-tooltip').length,
+            maxLabelsWhileZoomed: maxLabels,
         },
         motion: {
             seconds: round(elapsed / 1000),
@@ -100,6 +119,7 @@
             framesOver50ms: sorted.filter((g) => g > 50).length,
             longTasks: longTasks.length,
             longTaskMsTotal: Math.round(longTasks.reduce((s, d) => s + d, 0)),
+            rectMeasures: rectMeasures,
         },
     };
     console.log(JSON.stringify(result, null, 2));

@@ -1928,7 +1928,7 @@ function km_check_guide_chat(): void
         // 案内チャットの経路では入れない(AI の出発地より先に Densan からの経路を引かない。2026-10-25、利用者の指示)
         && str_contains((string) file_get_contents(__DIR__ . '/../Main/guide-chat.js'), "window.setAsLocation(route.to.nodeId, 'end', Object.assign(opts(route.to), { noTestStart: true }));")
         && str_contains($startApp, "if (!node || startId === endId || !isRoutableNode(node)) return;"));
-    check_bool('口: 案内チャットに出発地を渡す・管理画面で選ぶ(一覧の地点だけ)', str_contains((string) file_get_contents(__DIR__ . '/../api/guide-chat.php'), '$result = km_guide_answer($catalog, $question, $llm, $startNodeId);')
+    check_bool('口: 案内チャットに出発地を渡す・管理画面で選ぶ(一覧の地点だけ)', str_contains((string) file_get_contents(__DIR__ . '/../api/guide-chat.php'), '$result = km_guide_answer($catalog, $question, $llm, $startNodeId, $history, $lengths);')
         && str_contains($startAdmin, "if (\$startNode !== '' && !in_array(\$startNode, array_column(km_poster_node_options(\$pdo), 'id'), true)) {")
         && str_contains($startAdmin, 'km_setting_set($pdo, KM_TEST_START_SETTING, $startNode);'));
 
@@ -1975,7 +1975,7 @@ function km_check_guide_chat(): void
     km_check_heading('guide-chat: 口・設定・画面');
     $api = (string) file_get_contents(__DIR__ . '/../api/guide-chat.php');
     // 通す順: CSRF → 使える人 → 本文 → 回数 → LLM
-    $order = [strpos($api, 'km_csrf_verify()'), strpos($api, 'km_guide_allowed($_SESSION'), strpos($api, 'km_api_json_body(2048)'), strpos($api, 'km_guide_rate_check('), strpos($api, 'km_guide_answer(')];
+    $order = [strpos($api, 'km_csrf_verify()'), strpos($api, 'km_guide_allowed($_SESSION'), strpos($api, 'km_api_json_body(8192)'), strpos($api, 'km_guide_rate_check('), strpos($api, 'km_guide_answer(')];
     $sorted = $order;
     sort($sorted);
     check_bool('通す順: CSRF → 使える人 → 本文 → 回数 → LLM', !in_array(false, $order, true) && $order === $sorted);
@@ -1992,8 +1992,8 @@ function km_check_guide_chat(): void
         && !str_contains((string) file_get_contents(__DIR__ . '/../Main/guide-chat.js'), 'KM_GUIDE_LLM'));
     $root = km_check_repo_root();
     $guideNginx = (string) @file_get_contents($root . '/nginx/default.conf.template');
-    check_bool('nginx: 専用の zone で IP ごとに絞る・本文 4k・LLM を待つ 90 秒', str_contains($guideNginx, 'limit_req_zone $binary_remote_addr zone=km_guide:10m rate=10r/m;')
-        && preg_match('/location = \/api\/guide-chat\.php \{\s*client_max_body_size 4k;\s*limit_req zone=km_guide burst=5 nodelay;\s*include \/etc\/nginx\/km\/proxy-web\.conf;\s*proxy_set_header X-Forwarded-Port \$\{KM_APP_PORT\};\s*proxy_read_timeout 90s;/', $guideNginx) === 1);
+    check_bool('nginx: 専用の zone で IP ごとに絞る・本文 12k(直前の会話 2 往復)・LLM を待つ 90 秒', str_contains($guideNginx, 'limit_req_zone $binary_remote_addr zone=km_guide:10m rate=10r/m;')
+        && preg_match('/location = \/api\/guide-chat\.php \{\s*client_max_body_size 12k;\s*limit_req zone=km_guide burst=5 nodelay;\s*include \/etc\/nginx\/km\/proxy-web\.conf;\s*proxy_set_header X-Forwarded-Port \$\{KM_APP_PORT\};\s*proxy_read_timeout 90s;/', $guideNginx) === 1);
     $compose = (string) @file_get_contents($root . '/compose.yaml');
     $envExample = (string) @file_get_contents($root . '/.env.example');
     foreach (['KM_GUIDE_LLM_URL', 'KM_GUIDE_LLM_KEY', 'KM_GUIDE_LLM_MODEL'] as $name) {
@@ -2633,7 +2633,7 @@ function km_check_map_vertical(): void
     km_check_heading('map: ラベルの重なりをほどく');
     // 置き方の計算は Main/label-layout.js(2026-10-14。引き出し線)
     check_bool('ずらしてから隠す', str_contains($src('Main/label-layout.js'), 'const NUDGES = [0, -14, 14, -30, 30];'));
-    check_bool('大事なものから順に置く', str_contains($app, "KM_LABEL_PRIORITY = { facility: 0, entrance: 1, stairs: 2"));
+    check_bool('大事なものから順に置く', str_contains($app, "KM_LABEL_PRIORITY = { facility: 1, entrance: 1, stairs: 2"));
     check_bool('隠すのは文字だけ(点は残す)', str_contains($src('Main/styles.css'), '.km-label.km-label-hidden'));
     check_bool('編集画面では間引かない', str_contains($app, 'if (window.isAdmin) return;'));
     check_bool('測り直す前に前回の結果を戻す', ($reset = strpos($app, 'all.forEach(clearLabelLayout);')) !== false && $reset < (int) strpos($app, 'layoutApi.layout(items'));
@@ -4918,6 +4918,11 @@ function km_check_hardening(): void
     check_bool('check-updates.sh は「タグ@digest」の修正版を知らせ、Logto の版を digest の前から読む', str_contains($checkUpdatesCode, 'compare_pinned "$_image" series ""') && str_contains($checkUpdatesCode, 'compare_pinned "$_base" base') && str_contains($checkUpdatesCode, '_logto_ref="${LOGTO_IMAGE%@*}"'));
     $phpDockerfileCode = $yamlCode($file('docker/php/Dockerfile'));
     check_bool('web のイメージに使わない拡張(pdo_pgsql・libpq)を入れない(§7 の 14)', !str_contains($phpDockerfileCode, 'pdo_pgsql') && !str_contains($phpDockerfileCode, 'libpq'));
+    // GD(2026-10-30、利用者の指示。ポスターの縮小版・差し替えた床の WebP)。-dev は残さず、入ったことを作るときに確かめる
+    check_bool('web の GD は WebP・JPEG 付きで、-dev を外し、作るときに imagewebp を確かめる', str_contains($phpDockerfileCode, 'docker-php-ext-configure gd --with-jpeg --with-webp;')
+        && str_contains($phpDockerfileCode, 'apt-get purge -y --auto-remove') && str_contains($phpDockerfileCode, 'function_exists("imagewebp")'));
+    check_bool('縮小版・WebP の写しは cache/ に置く(/tmp は 64MB の tmpfs でアップロードと取り合う)', str_contains($file('src/lib/floor-webp.php'), "return __DIR__ . '/../cache/floor-webp';")
+        && str_contains($file('src/lib/image-thumb.php'), "return __DIR__ . '/../cache/image-thumb';"));
     $srcMounts = [
         './src:/var/www/html:ro',
         './src/uploads:/var/www/html/uploads',
@@ -8685,6 +8690,15 @@ function km_check_layout(): void
         && str_contains($lookApp, "\${isEnd ? '<span class=\"km-dest-pulse\" aria-hidden=\"true\"></span>' : ''}")
         && str_contains($lookCss, 'font-size: 17px;') && str_contains($lookCss, '.km-dest-pulse { animation: none;'));
 
+    // 2026-10-30(振り返りのフェーズ 2「ズームがカクつく」): 横へ動かしただけでは札を測り直さない・書くのはコマに分ける・書き終えてから経路の重なり
+    check_bool('軽さ: 移動だけなら札を測り直さない(拡大率・階・札の数が同じ)・拡大と外からの呼び出しは必ず測る',
+        str_contains($shareApp, "window.map.on('moveend', () => scheduleDeclutter(false));") && str_contains($shareApp, 'scheduleDeclutter(true);')
+        && str_contains($shareApp, "if (force !== true && declutterKey() === lastDeclutterKey) return;")
+        && str_contains($shareApp, 'window.kmDeclutterLabels = function () { scheduleDeclutter(true); };'));
+    check_bool('軽さ: 札の置き方はコマに分けて書く・次の並べ直しが始まったら古い分は書かない・書き終えたら経路の重なりを塗り直す',
+        str_contains($shareApp, 'window.requestAnimationFrame(writeChunk);') && str_contains($shareApp, 'if (generation !== declutterGeneration) return;')
+        && str_contains($shareApp, 'if (routeLineRuns.length > 0) routeLineRuns.forEach(paintRouteRun);'));
+
     km_check_heading('地図: 札は 6 文字 + …・イベントの地点の見分け・経路の線(2026-10-24)');
     $viewCss = (string) file_get_contents(__DIR__ . '/../Main/styles.css');
     check_bool('札はすべて縮める(地点・一時地点)', str_contains($shareApp, 'escapeHtml(shortPoiName(project ? project.name : displayNameFor(node)));')
@@ -8704,7 +8718,9 @@ function km_check_layout(): void
     check_bool('線が重なる所は 70% 透かす', str_contains($shareApp, 'const ROUTE_OVERLAP_OPACITY = 0.3;')
         && str_contains($shareApp, 'view.splitRouteByObstacles(points, routeObstacleRects(), ROUTE_OVERLAP_PAD)')
         && str_contains($shareApp, "container.querySelectorAll('.leaflet-marker-pane .km-node, .leaflet-tooltip-pane .km-label')"));
-    check_bool('動き終えたら塗り直す・経路を消したら忘れる', str_contains($shareApp, "window.map.on('moveend', refreshRouteOverlap);")
+    // 2026-10-30: 塗り直すのは拡大率が変わったときだけ(横へ動かしただけでは重なる所は変わらない)
+    check_bool('拡大し終えたら塗り直す・横へ動かしただけでは塗り直さない・経路を消したら忘れる', str_contains($shareApp, "window.map.on('zoomend', refreshRouteOverlap);")
+        && !str_contains($shareApp, "window.map.on('moveend', refreshRouteOverlap);")
         && preg_match('/function clearRoute\(\) \{[^}]*routeLineRuns = \[\];/s', $shareApp) === 1);
     check_bool('route-view.js を app.js より先に読む', ($rv = strpos($shareIndex, "Main/route-view.js')")) !== false
         && $rv < (int) strpos($shareIndex, "<script defer src=\"<?= km_home_e(km_public_asset('Main/app.js'))"));
@@ -8738,7 +8754,8 @@ function km_check_layout(): void
         && preg_match("/<\?php if \(\\\$kmSwitches\['tutorial'\]\): \?>\s*<button type=\"button\" class=\"secondary-btn\" data-km-tutorial-open>/", $shareIndex) === 1);
     // 広告はチュートリアルの終わりから出していた。止めたら「はじめに」を閉じたときに出す
     check_bool('チュートリアル OFF でも広告は出す(「はじめに」を閉じたとき)', str_contains($shareIndex, "<?= \$kmSwitches['tutorial'] ? '' : ' data-tutorial=\"off\"' ?>")
-        && str_contains((string) file_get_contents(__DIR__ . '/../Main/welcome.js'), "if (dialog.dataset.tutorial === 'off' && typeof window.kmShowAd === 'function') {"));
+        // 2026-10-30 から最初の画面(entry.js)があるときは、そちらの「すぐ地図へ」で出す
+        && str_contains((string) file_get_contents(__DIR__ . '/../Main/welcome.js'), "if (dialog.dataset.tutorial === 'off' && !window.kmEntry && typeof window.kmShowAd === 'function') {"));
     check_bool('お知らせ OFF: 最初の画面に出さない・一覧へのボタンを出さない', str_contains($shareIndex, "if (\$kmSwitches['notices']) {")
         && preg_match("/<\?php if \(\\\$kmSwitches\['notices'\]\): \?>\s*<a href=\"\/notice\.php\" class=\"secondary-btn\">お知らせ<\/a>/", $shareIndex) === 1);
     $switchNoticePage = (string) file_get_contents(__DIR__ . '/../notice.php');
@@ -9177,8 +9194,286 @@ function km_check_layout(): void
     check_bool('管理画面に CSRF と記録の消去の確認', str_contains((string) file_get_contents(__DIR__ . '/../admin/test-mode.php'), "!km_csrf_verify()")
         && str_contains((string) file_get_contents(__DIR__ . '/../admin/test-mode.php'), 'data-km-confirm="テスト用アカウントの記録を全部消します。'));
 
-    km_check_heading('layout: ラベルの重なり(屋外は消す・屋内は消さない。2026-09-25 / 引き出し線 2026-10-14)');
-    check_bool('屋内では消さない(屋外だけ hideWhenCrowded)', str_contains($appJs, 'hideWhenCrowded: outdoors') && str_contains($appJs, "const outdoors = String(window.currentFloor) === 'outside';"));
+    km_check_heading('layout: ラベルの重なり(引き出し線 2026-10-14 / 建物の中も隠す 2026-10-30)');
+    // 2026-10-30、利用者の判断「B」: 建物の中でも置けない札は隠す。選んだ場所の札(keep)だけは隠さない
+    check_bool('建物の中も置けない札は隠す', str_contains($appJs, 'hideWhenCrowded: true,') && !str_contains($appJs, 'hideWhenCrowded: outdoors'));
+    check_bool('選んだ場所の札は隠さない(keep)', str_contains($appJs, 'keep: !!(selectedAt && marker && marker.getLatLng && marker.getLatLng().equals(selectedAt)),')
+        && str_contains((string) file_get_contents(__DIR__ . '/../Main/label-layout.js'), 'if (!hide || item.keep) {'));
+    check_bool('選び直したら札を並べ直す', substr_count($appJs, "scheduleDeclutter(true);\n    }") >= 1 && str_contains($appJs, "selectionRing = null;\n        scheduleDeclutter(true);"));
+    // 上下のずらしは Leaflet の margin-top(-6px)に足す。dy だけ書くと 6px 下へ落ちて隣と重なっていた(試し場で 1 階の重なり 2〜8 組 → 0)
+    km_check_heading('map: 拡大したら地図以外を隠す(2026-10-30、振り返りのフェーズ 2 の 3)');
+    $chromeCss = (string) file_get_contents(__DIR__ . '/../Main/styles.css');
+    check_bool('全体の 4 倍(2 段)より拡大したら隠す・基準は階の全体が入る倍率', str_contains($appJs, 'const KM_CHROME_HIDE_STEPS = 2;') && str_contains($appJs, 'floorFitZoom = fitZoom;')
+        && str_contains($appJs, 'const deep = window.map.getZoom() - floorFitZoom >= KM_CHROME_HIDE_STEPS;'));
+    check_bool('隠すのは利用者が自分で拡大したときだけ(検索の候補で飛んだときは隠さない)', str_contains($appJs, 'Date.now() - mapInputAt < KM_CHROME_INPUT_MS && !chromeInUse()'));
+    check_bool('縮める・地図をたたく・Tab/Esc で戻す', str_contains($appJs, "if (!deep) {\n            setChromeHidden(false);")
+        && str_contains($appJs, "window.map.on('click', function () { setChromeHidden(false); });") && str_contains($appJs, "if (event.key === 'Tab' || event.key === 'Escape') setChromeHidden(false);"));
+    check_bool('隠すときは押せなくする(visibility も落とす)。階・経路の帯・ズームは残す', preg_match('/body\.km-chrome-hidden \.km-action-bar \{\s*opacity: 0;\s*visibility: hidden;\s*pointer-events: none;/', $chromeCss) === 1
+        && !str_contains($chromeCss, 'body.km-chrome-hidden .floor-nav') && !str_contains($chromeCss, 'body.km-chrome-hidden .km-route-bar'));
+
+    km_check_heading('map: 床の画像を可逆の WebP で配る(2026-10-30、振り返りのフェーズ 2 の 5。lib/floor-webp.php)');
+    require_once __DIR__ . '/../lib/floor-webp.php';
+    check_bool('WebP: Accept に image/webp があるときだけ・q=0 は断り', km_floor_webp_accepted('image/avif,image/webp,image/apng,*/*;q=0.8')
+        && !km_floor_webp_accepted('image/png,*/*') && !km_floor_webp_accepted('image/webp;q=0') && km_floor_webp_accepted('IMAGE/WEBP;q=0.5'));
+    $floorPngForWebp = __DIR__ . '/../Main/Picture/１階.png';
+    if (function_exists('imagewebp') && is_file($floorPngForWebp)) {
+        $webpDir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'km-check-webp-' . bin2hex(random_bytes(4));
+        $webpFile = km_floor_webp_file($floorPngForWebp, $webpDir);
+        $pngImage = @imagecreatefrompng($floorPngForWebp);
+        $webpImage = $webpFile !== null ? @imagecreatefromwebp($webpFile) : false;
+        $sameSize = $pngImage !== false && $webpImage !== false && imagesx($pngImage) === imagesx($webpImage) && imagesy($pngImage) === imagesy($webpImage);
+        // 可逆: 何か所か画素を比べる(パレットの PNG は真色に直して比べる)
+        $samePixels = $sameSize;
+        if ($sameSize) {
+            imagepalettetotruecolor($pngImage);
+            for ($i = 0; $i < 400 && $samePixels; $i++) {
+                $px = ($i * 397) % imagesx($pngImage);
+                $py = ($i * 131) % imagesy($pngImage);
+                $samePixels = imagecolorsforindex($pngImage, imagecolorat($pngImage, $px, $py)) == imagecolorsforindex($webpImage, imagecolorat($webpImage, $px, $py));
+            }
+        }
+        check_bool('WebP: 1 階の床は小さくなり、画素は同じ(可逆)', $webpFile !== null && filesize($webpFile) < filesize($floorPngForWebp) && $samePixels);
+        check_bool('WebP: 2 回目は作った写しを使う', $webpFile !== null && km_floor_webp_file($floorPngForWebp, $webpDir) === $webpFile);
+        foreach (glob($webpDir . DIRECTORY_SEPARATOR . '*') ?: [] as $leftover) {
+            @unlink($leftover);
+        }
+        @rmdir($webpDir);
+    } else {
+        check_skip('WebP: 1 階の床は小さくなり、画素は同じ(可逆)', 'GD に WebP が無い');
+    }
+    // 本番の PHP には GD が無いので、組み込みの床は手元で作った横の写しを配る(src/scripts/make-floor-webp.php)
+    $staleWebp = [];
+    foreach (array_merge(glob(__DIR__ . '/../Main/Picture/*.png') ?: [], glob(__DIR__ . '/../Main/Picture/bldg/*.png') ?: []) as $builtinPng) {
+        if (km_floor_webp_sibling($builtinPng) === null) {
+            $staleWebp[] = basename($builtinPng);
+        }
+    }
+    check_bool('WebP: 組み込みの床すべてに PNG より新しい写し(無ければ php src/scripts/make-floor-webp.php)' . ($staleWebp === [] ? '' : ' 足りない: ' . implode('・', $staleWebp)), $staleWebp === []);
+    check_bool('WebP: 横の写しを先に使い、無ければ GD で作る', str_contains((string) file_get_contents(__DIR__ . '/../lib/floor-webp.php'), 'return km_floor_webp_sibling($pngPath) ?? km_floor_webp_file($pngPath);')
+        && str_contains((string) file_get_contents(__DIR__ . '/../api/floor-image.php'), '$webp = km_floor_webp_for($path);'));
+    check_bool('WebP: PNG ではないもの・無いファイルは null(PNG のまま配る)', km_floor_webp_file(__DIR__ . '/../index.php') === null && km_floor_webp_file(__DIR__ . '/nope.png') === null);
+    $floorImageForWebp = (string) file_get_contents(__DIR__ . '/../api/floor-image.php');
+    check_bool('WebP: 錠を見た後で・PNG のときだけ写しに替え、Vary: Accept と別の ETag', ($wp = strpos($floorImageForWebp, "if (\$contentType === 'image/png' && km_floor_webp_accepted(")) !== false
+        && $wp > (int) strpos($floorImageForWebp, 'if (!$viewUnlocked) {') && str_contains($floorImageForWebp, "header('Vary: Accept');")
+        && str_contains($floorImageForWebp, "(string) \$modified . \$variant), 0, 32)"));
+
+    km_check_heading('ポスター: 一覧・候補は縮小版(2026-10-30、振り返りのフェーズ 2 の 5。lib/image-thumb.php)');
+    require_once __DIR__ . '/../lib/image-thumb.php';
+    check_bool('縮小: 幅は決まった値だけ(好きな幅で縮小を走らせない)', km_image_thumb_width('640') === 640 && km_image_thumb_width('641') === 0
+        && km_image_thumb_width(['640']) === 0 && km_image_thumb_width('0640') === 0 && km_image_thumb_width(null) === 0);
+    if (function_exists('imagewebp') && function_exists('imagejpeg')) {
+        $thumbDir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'km-check-thumb-' . bin2hex(random_bytes(4));
+        @mkdir($thumbDir, 0700, true);
+        $bigJpeg = $thumbDir . DIRECTORY_SEPARATOR . 'big.jpg';
+        $canvas = imagecreatetruecolor(1600, 900);
+        for ($i = 0; $i < 60; $i++) {
+            imagefilledrectangle($canvas, $i * 26, 0, $i * 26 + 13, 900, imagecolorallocate($canvas, ($i * 37) % 256, ($i * 91) % 256, ($i * 53) % 256));
+        }
+        imagejpeg($canvas, $bigJpeg, 92);
+        imagedestroy($canvas);
+        $thumbFile = km_image_thumb_file($bigJpeg, 640, $thumbDir);
+        $thumbSize = $thumbFile !== null ? getimagesize($thumbFile) : false;
+        check_bool('縮小: 1600×900 の JPEG → 幅 640・縦横比そのままの WebP で小さく', $thumbSize !== false && $thumbSize[0] === 640 && $thumbSize[1] === 360
+            && $thumbSize['mime'] === 'image/webp' && filesize($thumbFile) < filesize($bigJpeg));
+        check_bool('縮小: 元が幅 640 以下なら縮めない(元を配る)', km_image_thumb_file(__DIR__ . '/../Main/Picture/bldg/bldg_gym1.png', 640, $thumbDir) === null || getimagesize(__DIR__ . '/../Main/Picture/bldg/bldg_gym1.png')[0] > 640);
+        foreach (glob($thumbDir . DIRECTORY_SEPARATOR . '*') ?: [] as $leftover) {
+            @unlink($leftover);
+        }
+        @rmdir($thumbDir);
+    } else {
+        check_skip('縮小: 1600×900 の JPEG → 幅 640・縦横比そのままの WebP で小さく', 'GD に WebP / JPEG が無い');
+    }
+    $posterLibForThumb = (string) file_get_contents(__DIR__ . '/../lib/posters.php');
+    check_bool('縮小: 公開の口は ?w= を受け、WebP を読める端末だけ縮小版(Vary: Accept)', str_contains((string) file_get_contents(__DIR__ . '/../api/poster-image.php'), '$thumbWidth = km_image_thumb_width($_GET[\'w\'] ?? null);')
+        && str_contains($posterLibForThumb, "header('Vary: Accept');") && str_contains($posterLibForThumb, "\$poster['thumbUrl'] = \$poster['imageUrl'] . '&w=640';"));
+    check_bool('縮小: 一覧・検索の候補・地点のポスターは thumbUrl', str_contains((string) file_get_contents(__DIR__ . '/../posters.php'), "\$poster['thumbUrl'] ?? \$poster['imageUrl']")
+        && str_contains($appJs, 'img.src = item.poster.thumbUrl || item.poster.imageUrl;') && str_contains($appJs, 'escapeHtml(poster.thumbUrl || poster.imageUrl)'));
+
+    km_check_heading('map: 最初の画面(2026-10-30、振り返りのフェーズ 3 の 1。Main/entry.js)');
+    $entryJs = (string) file_get_contents(__DIR__ . '/../Main/entry.js');
+    $homeForEntry = (string) file_get_contents(__DIR__ . '/../index.php');
+    check_bool('最初の画面: はじめにの後・tutorial.js より先に読む', ($ep = strpos($homeForEntry, "km_public_asset('Main/entry.js')")) !== false
+        && $ep > (int) strpos($homeForEntry, "km_public_asset('Main/welcome.js')") && $ep < (int) strpos($homeForEntry, "km_public_asset('Main/tutorial.js')"));
+    check_bool('最初の画面: 5 つの探し方(番号・キーワード・部屋・ジャンル・すぐ地図へ)', str_contains($entryJs, "'ポスター・企画の番号から'") && str_contains($entryJs, "'キーワードから'")
+        && str_contains($entryJs, "'部屋の名前から'") && str_contains($entryJs, "'ジャンルから'") && str_contains($entryJs, "'すぐ地図へ'"));
+    check_bool('最初の画面: 共有から来た人・次から出さない人・地図が開けないときは出さない', str_contains($entryJs, 'if (window.isAdmin || fromShare || skipped()) return;')
+        && str_contains($entryJs, "document.body.classList.contains('km-map-unavailable')"));
+    check_bool('最初の画面: 展示の PC では「次から出さない」を覚えない', str_contains($entryJs, "if (testMode) return false;") && str_contains($entryJs, 'if (!testMode) {'));
+    check_bool('最初の画面: 地図の検索と同じ一致率(app.js の kmEntryApi)・道順は案内できる所だけ', str_contains($appJs, 'window.kmEntryApi = {') && str_contains($entryJs, 'if (item.routable) {'));
+    check_bool('チュートリアルは最初の画面があれば自動で始めない・広告は「すぐ地図へ」のときだけ', str_contains((string) file_get_contents(__DIR__ . '/../Main/tutorial.js'), 'if (window.kmEntry) return;')
+        && str_contains((string) file_get_contents(__DIR__ . '/../Main/welcome.js'), "!window.kmEntry && typeof window.kmShowAd === 'function'")
+        && str_contains($entryJs, "if (toMap && typeof window.kmShowAd === 'function')"));
+    check_bool('操作の帯の「🏠 はじめ」から開き直せる', str_contains($homeForEntry, 'data-km-entry-open') && str_contains($entryJs, "document.querySelectorAll('[data-km-entry-open]')"));
+
+    km_check_heading('map: 現在地の QR(2026-10-30、振り返りのフェーズ 3 の 6。lib/here-qr.php)');
+    require_once __DIR__ . '/../lib/here-qr.php';
+    $hereId = '2735e277ed554b74963e82baa0b6a641';
+    check('QR の URL は ?here=<32 字の 16 進>(ハイフンは外す・形が違えば作らない)', ['https://ito4.jp/?here=' . $hereId, null],
+        [km_here_qr_url('https://ito4.jp/', '2735e277-ed55-4b74-963e-82baa0b6a641'), km_here_qr_url('https://ito4.jp', 'x"><script>')]);
+    $hereCandidates = km_here_qr_candidates([
+        ['id' => $hereId, 'floor' => '1', 'name' => '第二実習室', 'type' => 'room'],
+        ['id' => str_repeat('a', 32), 'floor' => '1', 'name' => '', 'type' => 'room'],
+        ['id' => str_repeat('b', 32), 'floor' => '1', 'name' => '道', 'type' => 'road'],
+        ['id' => str_repeat('c', 32), 'floor' => '9', 'name' => '無い階', 'type' => 'room'],
+        ['id' => str_repeat('d', 32), 'floor' => '1', 'name' => 'A階段', 'type' => 'stairs'],
+    ], ['1' => '1F', '2' => '2F']);
+    check('選べるのは名前のある部屋・建物・出入口・階段だけ(階ごと・名前の順・空の階は出さない)', ['1' => ['A階段', '第二実習室']],
+        array_map(static fn (array $list): array => array_column($list, 'name'), $hereCandidates));
+    check('印刷に選んだ id は候補に在るものだけ・重ねない', [$hereId], km_here_qr_selected([$hereId, $hereId, str_repeat('b', 32), ['x']], $hereCandidates));
+    $homeForHere = (string) file_get_contents(__DIR__ . '/../index.php');
+    check_bool('公開ページ: ?here= は字の形だけ確かめて meta で渡し、共有のリンクとは数えない', str_contains($homeForHere, "\$kmHere = \$kmNodeIdParam('here');")
+        && str_contains($homeForHere, '<meta name="km-here" content="<?= km_home_e($kmHere) ?>">') && !preg_match('/\$kmFromShare = [^;]*kmHere/s', $homeForHere));
+    check_bool('今いる場所はタブの間だけ(sessionStorage)・出発地が空なら展示の場所より先に使う', str_contains($appJs, "window.sessionStorage.setItem(KM_HERE_KEY, id);")
+        && str_contains($appJs, "const startId = hereNodeId() || (meta ? meta.getAttribute('content') : '');"));
+    check_bool('「位置の更新」で選んだ所も今いる場所にする', str_contains($appJs, "        setHere(nodeId);\n        const goalId = currentRoutePath[currentRoutePath.length - 1];"));
+    check_bool('最初の画面: 今いる場所から・QR の読み方(カメラは使わない)', str_contains((string) file_get_contents(__DIR__ . '/../Main/entry.js'), "'今いる場所(' + here.name + ')から'")
+        && str_contains((string) file_get_contents(__DIR__ . '/../Main/entry.js'), "'校内の QR を読む'") && !str_contains((string) file_get_contents(__DIR__ . '/../Main/entry.js'), 'getUserMedia'));
+    check_bool('案内チャット: 今いる場所を送り、サーバーは字の形を確かめて展示の場所より先に使う', str_contains((string) file_get_contents(__DIR__ . '/../Main/guide-chat.js'), '{ here: window.kmHere().id }')
+        && str_contains((string) file_get_contents(__DIR__ . '/../api/guide-chat.php'), "preg_match('/^[0-9a-f]{32}\$/', \$hereParam) === 1"));
+    $hereQrAdmin = (string) file_get_contents(__DIR__ . '/../admin/map-here-qr.php');
+    check_bool('管理画面: QR はこのサーバーで作る(lib/qr.php)・印刷のページの style/script は nonce 付き', str_contains($hereQrAdmin, 'km_qr_svg(km_qr_matrix($url,')
+        && str_contains($hereQrAdmin, '<style<?= km_csp_nonce_attr() ?>>') && str_contains($hereQrAdmin, '<script<?= km_csp_nonce_attr() ?>>'));
+
+    km_check_heading('検索: 読み・別名(2026-10-30、振り返りのフェーズ 4 の 1。lib/search-aliases.php)');
+    require_once __DIR__ . '/../lib/search-aliases.php';
+    require_once __DIR__ . '/../lib/guide-chat.php';
+    check('区切りは読点・カンマ・改行(空白では割らない)・同じものは 1 つ・長いものは切る',
+        ['れっつぷれいでんさん', 'レッツプレイ電算', '電算部', "Let's play", 'ＡＢＣ', str_repeat('長', KM_SEARCH_ALIAS_MAX_LENGTH)],
+        km_search_alias_list("れっつぷれいでんさん、レッツプレイ電算, 電算部\n Let's play ／ＡＢＣ、abc、、" . str_repeat('長', 50)));
+    check('数の上限', KM_SEARCH_ALIAS_MAX_COUNT, count(km_search_alias_list(implode('、', range(1, 30)))));
+    check('対象の形(地点は 32 字の 16 進・一時地点とポスターは番号)', [true, false, true, false, false],
+        [km_search_alias_target_valid('node', str_repeat('a', 32)), km_search_alias_target_valid('node', '1'), km_search_alias_target_valid('poster', '12'),
+            km_search_alias_target_valid('poi', '0'), km_search_alias_target_valid('other', '1')]);
+    $aliasMap = km_search_aliases_apply(
+        ['nodes' => ['n1' => ['name' => '第二実習室']], 'eventPois' => [['id' => 3, 'name' => '99']], 'posters' => [['id' => 9, 'title' => 'たこ焼き']]],
+        ['node' => ['n1' => ['でんさん'], 'n9' => ['出していない地点']], 'poi' => ['3' => ['けんけつ']], 'poster' => ['9' => ['たこやき']]]
+    );
+    check('公開の地図: 出している地点・一時地点・ポスターにだけ readings', [['でんさん'], ['けんけつ'], ['たこやき'], false],
+        [$aliasMap['nodes']['n1']['readings'], $aliasMap['eventPois'][0]['readings'], $aliasMap['posters'][0]['readings'], isset($aliasMap['nodes']['n9'])]);
+    $aliasApp = json_decode('{"nodes":[{"uuid":"2735E277-ED55-4B74-963E-82BAA0B6A641"},{"uuid":"x"}],"events":[{"places":[{"uuid":"web-poi-3"},{"uuid":"web-poi-4"}]}]}');
+    km_search_aliases_apply_app($aliasApp, ['node' => ['2735e277ed554b74963e82baa0b6a641' => ['でんさん']], 'poi' => ['3' => ['けんけつ']]]);
+    check('アプリへの配信: 地点は uuid(ハイフン・大文字を外して)・一時地点は web-poi-<番号> で searchAliases', [['でんさん'], false, ['けんけつ'], false],
+        [$aliasApp->nodes[0]->searchAliases, isset($aliasApp->nodes[1]->searchAliases), $aliasApp->events[0]->places[0]->searchAliases, isset($aliasApp->events[0]->places[1]->searchAliases)]);
+    $aliasCatalog = km_guide_catalog(['nodes' => ['n1' => ['type' => 'room', 'name' => "Let's play Densan!", 'floor' => '1', 'readings' => ['れっつぷれいでんさん', '電算部']]], 'eventPois' => [], 'posters' => []]);
+    check('案内チャットの一覧にも読み(「電算部」で Let\'s play Densan! が当たる)', ["Let's play Densan!"], array_column(km_guide_search($aliasCatalog['places'], ['電算部'], null, 3, false), 'name'));
+    $mapDataSrc = (string) file_get_contents(__DIR__ . '/../lib/map-data.php');
+    check_bool('公開の地図データ・アプリへの配信で読みを付ける', str_contains($mapDataSrc, 'return km_search_aliases_apply([') && str_contains($mapDataSrc, '], km_search_aliases_all($pdo));')
+        && substr_count((string) file_get_contents(__DIR__ . '/../lib/app-map-publish.php'), 'km_search_aliases_apply_app($map, km_search_aliases_all($pdo));') === 2);
+    $aliasAdmin = (string) file_get_contents(__DIR__ . '/../admin/search-aliases.php');
+    check_bool('管理画面: CSRF・変えた行だけ保存・1 度に 150 行まで(max_input_vars)', str_contains($aliasAdmin, 'if (!km_csrf_verify()) {')
+        && str_contains($aliasAdmin, "\$text === (string) (\$old[\$id] ?? '')") && str_contains($aliasAdmin, 'const KM_SEARCH_ALIAS_PAGE_ROWS = 150;') && str_contains($aliasAdmin, '<?= km_csrf_field() ?>'));
+    check_bool('公開の検索: 読み・ポスターの説明・番号を引く・当たらなければもしかして', str_contains($appJs, '.concat(node.readings || [], node.projects || [], posters.map(p => p.title), posterSearchExtras(posters))')
+        && str_contains($appJs, 'numbers: node.projects || [],') && str_contains($appJs, 'const guess = suggestCandidate(query, onlyRoutable);')
+        && str_contains((string) file_get_contents(__DIR__ . '/../Main/entry.js'), "api.suggest(query, { types: conf.types"));
+
+    km_check_heading('案内チャット: 会話・近い順(2026-10-30、振り返りのフェーズ 4 の 4。lib/guide-distance.php)');
+    $distNodes = [
+        's' => ['type' => 'road', 'floor' => '1', 'name' => ''],
+        'a' => ['type' => 'road', 'floor' => '1', 'name' => ''],
+        't1' => ['type' => 'room', 'floor' => '1', 'name' => 'トイレ 北'],
+        't2' => ['type' => 'room', 'floor' => '1', 'name' => 'トイレ 南'],
+        'r' => ['type' => 'room', 'floor' => '1', 'name' => '講義室'],
+        't3' => ['type' => 'room', 'floor' => '1', 'name' => 'トイレ 奥'],
+        'st1' => ['type' => 'stairs', 'floor' => '1', 'name' => 'A階段'],
+        'st2' => ['type' => 'stairs', 'floor' => '2', 'name' => 'A階段'],
+        't4' => ['type' => 'room', 'floor' => '2', 'name' => 'トイレ 2F'],
+        'w' => ['type' => 'room', 'floor' => '1', 'name' => 'トイレ 壁の向こう'],
+        'c' => ['type' => 'room', 'floor' => '1', 'name' => 'トイレ 通行止め', 'closed' => true],
+    ];
+    $distEdges = [
+        ['source' => 's', 'target' => 'a', 'distance' => 100], ['source' => 'a', 'target' => 't1', 'distance' => 50],
+        ['source' => 's', 'target' => 't2', 'distance' => 300],
+        ['source' => 's', 'target' => 'r', 'distance' => 10], ['source' => 'r', 'target' => 't3', 'distance' => 10], ['source' => 'a', 'target' => 't3', 'distance' => 400],
+        ['source' => 's', 'target' => 'st1', 'distance' => 20], ['source' => 'st2', 'target' => 't4', 'distance' => 30],
+        ['source' => 's', 'target' => 'w', 'distance' => 5, 'wall' => true], ['source' => 's', 'target' => 'c', 'distance' => 5],
+    ];
+    $lengthsCheck = km_guide_route_lengths($distNodes, $distEdges, 's');
+    check('道のり: 線の長さ・部屋は通り抜けない・階段は 1 層 200・壁と通行止めは通らない', [150.0, 300.0, 500.0, 250.0, false, false],
+        [$lengthsCheck['t1'], $lengthsCheck['t2'], $lengthsCheck['t3'], $lengthsCheck['t4'], isset($lengthsCheck['w']), isset($lengthsCheck['c'])]);
+    check('道のりの言い方(5 m 刻み・100 m からは 10 m 刻み)', ['約 15 m', '約 5 m', '約 120 m'], [km_guide_distance_label(150), km_guide_distance_label(10), km_guide_distance_label(1234)]);
+    $distCatalog = km_guide_catalog(['nodes' => $distNodes, 'eventPois' => [], 'posters' => []]);
+    $nearAnswer = km_guide_answer($distCatalog, 'トイレ', null, 's', [], static fn (): array => $lengthsCheck);
+    check('トイレは今いる場所から近い順・道のりをカードに', [['トイレ 北', 'トイレ 2F', 'トイレ 南'], '約 15 m'],
+        [array_slice(array_column($nearAnswer['cards'], 'name'), 0, 3), $nearAnswer['cards'][0]['distance']]);
+    check_bool('今いる場所が無ければ近い順にしない(道のりも出さない)', km_guide_answer($distCatalog, 'トイレ', null, '', [], static fn (): array => $lengthsCheck)['cards'][0]['distance'] === null);
+    check('「他には？」の聞き方だけ続きとみなす', [true, true, true, true, false, false, false],
+        array_map('km_guide_is_follow_up', ['他には？', 'ほかにある?', 'もっと', '他のお店は？', '他の学校の話', '外のトイレ', 'トイレはどこ']));
+    $followAnswer = km_guide_answer($distCatalog, '他には？', null, 's', [['q' => 'トイレ', 'a' => '', 'cards' => ['トイレ 北']]], static fn (): array => $lengthsCheck);
+    check('「他には？」は直前の質問をもう一度探し、直前のカードを除く', ['トイレ 2F', 'トイレ 南'], array_slice(array_column($followAnswer['cards'], 'name'), 0, 2));
+    check('「そこへの行き方」の「そこ」は直前の最初のカード', ['図書館への行き方', 'そこへの行き方'],
+        [km_guide_resolve_that('そこへの行き方', [['q' => '図書館', 'a' => '', 'cards' => ['図書館']]]), km_guide_resolve_that('そこへの行き方', [])]);
+    $historyCheck = km_guide_history_input([['q' => '一つ目'], 'x', ['q' => ''], ['q' => '二つ目', 'a' => str_repeat('あ', 300), 'cards' => ['A', '', 'B']], ['q' => "三つ目\x01"]]);
+    check('直前の会話: 新しい 2 往復だけ・答えは 200 字・空のカードと制御文字は捨てる', [['二つ目', 200, ['A', 'B']], ['三つ目', 0, []]],
+        array_map(static fn (array $t): array => [$t['q'], mb_strlen($t['a']), $t['cards']], $historyCheck));
+    $answerMessages = km_guide_answer_messages('他には？', [], '状況', [['q' => 'トイレ', 'a' => 'トイレ北です', 'cards' => []]]);
+    check_bool('答えの LLM には前の往復を会話として渡し、店・場所は今回のデータだけと言う', $answerMessages[1]['content'] === 'トイレ' && $answerMessages[2]['content'] === 'トイレ北です'
+        && str_contains($answerMessages[0]['content'], '店・場所は今回の「データ」にあるものだけを使ってください'));
+    check_bool('画面: 直前の会話 2 往復を送り、道のりをカードに出す', str_contains((string) file_get_contents(__DIR__ . '/../Main/guide-chat.js'), 'history: history.slice(-2)')
+        && str_contains((string) file_get_contents(__DIR__ . '/../Main/guide-chat.js'), "meta.push('🚶 ' + card.distance);"));
+
+    km_check_heading('map: 曲がる所の目印・階段の上り下り(2026-10-30、振り返りのフェーズ 3 の 3)');
+    $routeViewJs = (string) file_get_contents(__DIR__ . '/../Main/route-view.js');
+    check_bool('角度の決まりはアプリと同じ(20° / 60° / 135°)', str_contains($routeViewJs, 'const STRAIGHT_DEGREES = 20;') && str_contains($routeViewJs, 'const SLIGHT_TURN_DEGREES = 60;')
+        && str_contains($routeViewJs, 'const TURN_BACK_DEGREES = 135;'));
+    check_bool('Web の地図は上が +y(左右を取り違えない)', str_contains($routeViewJs, 'const right = o.yDown ? turn > 0 : turn < 0;'));
+    check_bool('経路を引くたびに曲がる所を数え直し、消すときに印を外す', str_contains($appJs, 'routeTurnList = computeRouteTurns(path);') && str_contains($appJs, "routeTurnList = [];\n        routeStepIndex = 0;")
+        && str_contains($appJs, 'markRouteNodes(new Set());'));
+    check_bool('案内の帯に次の曲がり角', str_contains($appJs, "const turnHint = nextTurn ? `次: \${nextTurn.arrow} \${nextTurn.phrase} · ` : '';"));
+    check_bool('地図データに階段の向き(uuid は出さない)', str_contains((string) file_get_contents(__DIR__ . '/../lib/map-data.php'), "\$node['stairUpHeading'] = \$heading['up'];")
+        && str_contains((string) file_get_contents(__DIR__ . '/../lib/map-data.php'), "unset(\$node['uuid']);"));
+    check_bool('矢印の向きは CSSOM で入れる(style 属性は CSP で効かない)', str_contains($appJs, "arrow.style.setProperty('--km-heading', heading + 'deg');"));
+    check_bool('案内中は関係ない地点を薄く(Leaflet の opacity に勝つ)', preg_match('/body\.km-route-active \.leaflet-tooltip-pane \.km-label:not\(\.km-on-route\) \{[^}]*opacity: 0\.35 !important;/s', $chromeCss) === 1);
+    check_bool('札の文字は escapeHtml を通す', str_contains($appJs, '${escapeHtml(turn.phrase)}</span></span>`') && str_contains($appJs, '${escapeHtml(mark.text)}</span>`'));
+
+    km_check_heading('map: ジャンル(大 → 小)と一時地点の種類(2026-10-30、振り返りのフェーズ 3 の 2)');
+    require_once __DIR__ . '/../lib/map-events.php';
+    require_once __DIR__ . '/../lib/guide-chat.php';
+    require_once __DIR__ . '/../lib/map-event-import.php';
+    check('一時地点の種類に体験・休憩', true, in_array('experience', KM_MAP_EVENT_POI_CATEGORIES, true) && in_array('rest', KM_MAP_EVENT_POI_CATEGORIES, true));
+    check('案内チャットの種類は一時地点の種類と同じ', KM_MAP_EVENT_POI_CATEGORIES, KM_GUIDE_CATEGORIES);
+    check('アプリへ渡す言葉・取り込みの言葉に体験・休憩', true, isset(KM_APP_MAP_POI_CATEGORY_LABELS['experience'], KM_APP_MAP_POI_CATEGORY_LABELS['rest'], KM_MAP_EVENT_IMPORT_CATEGORY_WORDS['experience'], KM_MAP_EVENT_IMPORT_CATEGORY_WORDS['rest']));
+    $editorJsForPoi = (string) file_get_contents(__DIR__ . '/../admin/assets/js/map-editor.js');
+    $missingPoiLabels = array_values(array_filter(KM_MAP_EVENT_POI_CATEGORIES, static fn (string $c): bool => !str_contains($editorJsForPoi, "['{$c}', ") || !preg_match('/\b' . $c . ': \'/', $appJs)));
+    check('地図編集と公開の地図の言葉が種類をすべて持つ', [], $missingPoiLabels);
+    $homeForGenres = (string) file_get_contents(__DIR__ . '/../index.php');
+    $missingGenres = [];
+    preg_match_all('/data-km-category="([a-zA-Z]+)"/', $homeForGenres, $genreMatches);
+    foreach ($genreMatches[1] as $genreKey) {
+        if (!preg_match('/^\s+' . preg_quote($genreKey, '/') . ': \{/m', $appJs)) {
+            $missingGenres[] = $genreKey;
+        }
+    }
+    check('チップのジャンルはすべて KM_GENRES にある', [], $missingGenres);
+    check_bool('トイレのジャンルは臨時のトイレも拾う・当てはまらないチップは隠す', str_contains($appJs, "WC: { poi: ['toilet'],") && str_contains($appJs, 'chip.hidden = genreResults(key).length === 0;')
+        && str_contains((string) file_get_contents(__DIR__ . '/../Main/entry.js'), 'if (chip.hidden) return;'));
+
+    km_check_heading('map: 階の列の上でホイール・縦のスワイプ(2026-10-30、振り返りのフェーズ 3 の 4)');
+    check_bool('ホイールの上 = 上の階・地図の拡大へ渡さない・1 段ずつ', str_contains($appJs, "stepFloor(e.deltaY < 0 ? 1 : -1);") && str_contains($appJs, "}, { passive: false });")
+        && str_contains($appJs, 'if (now - floorStepAt < 250) return;'));
+    check_bool('はらうのは 30px 以上・一覧が送れるときは送る方を優先', str_contains($appJs, 'if (Math.abs(dy) < 30) return;') && str_contains($appJs, 'scroll.scrollHeight > scroll.clientHeight + 1'));
+
+    km_check_heading('ポスター: 地図で見る と 外のサイト を押し間違えない(2026-10-30、振り返りのフェーズ 3 の 5)');
+    $posterStatsJs = (string) file_get_contents(__DIR__ . '/../Main/poster-stats.js');
+    check_bool('外のサイトへ出る前に 1 度聞く・やめたら数えない', str_contains($posterStatsJs, "if (type === 'click' && !confirmLeave(link)) {")
+        && strpos($posterStatsJs, '!confirmLeave(link)') < strpos($posterStatsJs, "window.kmPosterStat(link.getAttribute('data-km-poster-link'), 'click');"));
+    $postersPageForLinks = (string) file_get_contents(__DIR__ . '/../posters.php');
+    check_bool('一覧: 地図は 🗺 の塗り・外は 🌐 ↗ の点線で右の端', str_contains($postersPageForLinks, '🗺 <?= count($places) > 1') && str_contains($postersPageForLinks, 'km-doc-link km-poster-external')
+        && str_contains($postersPageForLinks, '🌐 外のサイトで見る ↗'));
+    check_bool('地図の詳細・幕・広告も同じ言葉', substr_count($appJs, '🌐 外のサイトで見る ↗') === 2 && str_contains((string) file_get_contents(__DIR__ . '/../Main/tutorial-end.js'), "'🌐 外のサイトで見る ↗'"));
+
+    km_check_heading('map: 全画面・横画面の上の帯(2026-10-30、振り返りのフェーズ 2 の 4。アプリの TopBarController と同じ)');
+    $topBarJs = (string) file_get_contents(__DIR__ . '/../Main/top-bar.js');
+    $homeForTopBar = (string) file_get_contents(__DIR__ . '/../index.php');
+    check_bool('top-bar.js を app.js の後に読む', ($tb = strpos($homeForTopBar, "km_public_asset('Main/top-bar.js')")) !== false && $tb > (int) strpos($homeForTopBar, "km_public_asset('Main/app.js')"));
+    check_bool('全画面か横にしたスマホで帯を隠す', str_contains($topBarJs, "window.matchMedia('(orientation: landscape) and (max-height: 500px)')") && str_contains($topBarJs, 'return isFullscreen() || landscapePhone.matches;'));
+    check_bool('アプリと同じ数(4 秒・上の端 40px・24px 引く)', str_contains($topBarJs, 'const AUTO_HIDE_MS = 4000;') && str_contains($topBarJs, 'const EDGE_PX = 40;') && str_contains($topBarJs, 'const PULL_PX = 24;'));
+    check_bool('打っている間・欄が開いている間は隠さない', str_contains($topBarJs, 'if (barInUse()) {'));
+    check_bool('全画面のボタンは地図ができてから置く(km:map-ready)', str_contains($topBarJs, "window.addEventListener('km:map-ready', addFullscreenControl);") && str_contains($appJs, "window.dispatchEvent(new CustomEvent('km:map-ready'));"));
+    check_bool('取っ手は帯を隠しているときだけ出す', str_contains($chromeCss, 'body.km-topbar-auto:not(.km-topbar-peek) .km-topbar-handle {'));
+
+    check_bool('上下のずらしは元の margin-top に足す', str_contains($appJs, "el.style.marginTop = (baseMarginTop + p.dy) + 'px';"));
+    check_bool('イベントの地点を一番先・関係ない地点を一番後ろ', str_contains($appJs, "if (el.classList.contains('km-label-event')) return KM_LABEL_PRIORITY_EVENT;")
+        && str_contains($appJs, 'const KM_LABEL_PRIORITY_UNRELATED = 10;'));
     $labelLayoutJs = (string) file_get_contents(__DIR__ . '/../Main/label-layout.js');
     // 頭の preload にも app.js があるので、<script> の並びで比べる
     $scriptTag = static fn (string $file): string => '<script defer src="<?= km_home_e(km_public_asset(\'Main/' . $file . '\')) ?>"></script>';
@@ -9209,7 +9504,10 @@ function km_check_layout(): void
             'アプリも faded / hidden / shown',
             str_contains($kotlin, 'FADED("faded")') && str_contains($kotlin, 'HIDDEN("hidden")') && str_contains($kotlin, 'SHOWN("shown")')
         );
-        check_bool('アプリも屋外だけ間引く', str_contains((string) file_get_contents(dirname($renderer) . '/MapScreen.kt'), 'declutterLabels = currentFloor == OUTSIDE_FLOOR'));
+        // 2026-10-30 から屋内外とも間引く(利用者の判断「B」)。選んだ場所・目的地は隠さない(Website の keep と同じ)
+        $mapScreenKt = (string) file_get_contents(dirname($renderer) . '/MapScreen.kt');
+        check_bool('アプリも屋内外とも間引き、目的地は隠さない', str_contains($mapScreenKt, 'declutterLabels = true,') && str_contains($mapScreenKt, 'keepLabelUuids = setOfNotNull(destinationNode?.uuid),')
+            && str_contains($layoutKt ?? (string) @file_get_contents(dirname($renderer) . '/LabelLayout.kt'), 'if (!hideWhenCrowded || item.keep) {'));
         // 引き出し線の数(ずらし・横の間・線の間)がアプリと同じ
         $layoutKt = (string) @file_get_contents(dirname($renderer) . '/LabelLayout.kt');
         check_bool(

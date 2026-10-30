@@ -132,5 +132,17 @@ function placedBox(it, p) {
     check('部屋はずれる', true, r[0] !== null && (r[0].dx !== 0 || r[0].dy !== 0));
 }
 
+// 選んだ場所(keep)は隠さない。ほかより先に置き、置けなくても元の位置で重ねる(2026-10-30)
+{
+    const many = Array.from({ length: 40 }, function () { return item(100, 100, 0); });
+    const chosen = item(100, 100, 9);
+    chosen.keep = true;
+    const r = layoutApi.layout(many.concat([chosen]), { hideWhenCrowded: true, bounds: { left: 0, top: 0, right: 220, bottom: 220 } });
+    check('keep の札は大事な種類より先に元の位置', { dx: 0, dy: 0, leader: null }, r[40]);
+    check('ほかは混んでいれば隠れる', true, r.slice(0, 40).some(function (p) { return p === null; }));
+    const crowded = layoutApi.layout([item(100, 100, 0), Object.assign(item(100, 100, 9), { keep: true })], { nudges: [0], hideWhenCrowded: true });
+    check('keep の札は、大事な種類と重なっても出る', true, crowded[1] !== null);
+}
+
 console.log('  ' + (count - failures) + ' / ' + count + ' 件通りました');
 process.exit(failures === 0 ? 0 : 1);

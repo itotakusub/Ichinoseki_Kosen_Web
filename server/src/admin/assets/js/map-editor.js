@@ -122,7 +122,7 @@
   const eventId = EVENT ? EVENT.id : null;
 
   const POI_CATEGORIES = [
-    ['food', '模擬店'], ['exhibit', '展示'], ['reception', '受付'],
+    ['food', '模擬店'], ['exhibit', '展示'], ['experience', '体験'], ['rest', '休憩・座れる場所'], ['reception', '受付'],
     ['firstaid', '救護'], ['toilet', 'トイレ'], ['stage', 'ステージ'], ['other', 'その他'],
   ];
 

@@ -34,6 +34,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/settings.php';
 require_once __DIR__ . '/test-mode.php';
+require_once __DIR__ . '/guide-distance.php';
 
 const KM_GUIDE_ENABLED_SETTING = 'guide_chat_enabled';
 const KM_GUIDE_SUB_SETTING = 'guide_chat_sub';
@@ -62,6 +63,8 @@ const KM_GUIDE_DAILY_MAX = 1000;
 const KM_GUIDE_QUESTION_MAX = 200;
 /** セッションで 1 分に聞ける回数(nginx でも IP ごとに絞る) */
 const KM_GUIDE_PER_MINUTE = 6;
+/** 覚えておく直前の会話の往復(2026-10-30。km_guide_history_input) */
+const KM_GUIDE_HISTORY_TURNS = 2;
 /** 答えに付けるカードの数 */
 const KM_GUIDE_CARD_MAX = 5;
 /** 言葉で当たらなかったとき LLM に見せる名前の数の上限(地図の場所は 2026-10 で約 180・一時地点は約 35。門番の本文 64KB に収まる) */
@@ -74,9 +77,9 @@ const KM_GUIDE_RESOLVE_TOKENS = 80;
 /** LLM の返事の大きさの上限(バイト) */
 const KM_GUIDE_LLM_MAX_BYTES = 65536;
 /** 一時地点の種類(lib/map-events.php の KM_MAP_EVENT_POI_CATEGORIES と同じ) */
-const KM_GUIDE_CATEGORIES = ['food', 'exhibit', 'reception', 'firstaid', 'toilet', 'stage', 'other'];
+const KM_GUIDE_CATEGORIES = ['food', 'exhibit', 'experience', 'rest', 'reception', 'firstaid', 'toilet', 'stage', 'other'];
 const KM_GUIDE_CATEGORY_LABELS = [
-    'food' => '模擬店', 'exhibit' => '展示', 'reception' => '受付', 'firstaid' => '救護',
+    'food' => '模擬店', 'exhibit' => '展示', 'experience' => '体験', 'rest' => '休憩', 'reception' => '受付', 'firstaid' => '救護',
     'toilet' => 'トイレ', 'stage' => 'ステージ', 'other' => 'その他',
 ];
 const KM_GUIDE_INTENTS = ['shop', 'route', 'place', 'other'];
@@ -501,6 +504,10 @@ function km_guide_catalog(array $mapData): array
         foreach ($postersFor[$key] ?? [] as $poster) {
             $item['extras'][] = (string) ($poster['title'] ?? '');
             $item['extras'][] = (string) ($poster['description'] ?? '');
+            // 読み・別名(2026-10-30。lib/search-aliases.php)
+            foreach ((array) ($poster['readings'] ?? []) as $reading) {
+                $item['extras'][] = (string) $reading;
+            }
             if (($item['detail'] ?? '') === '' && trim((string) ($poster['description'] ?? '')) !== '') {
                 $item['detail'] = mb_substr(trim((string) $poster['description']), 0, 120);
             }
@@ -536,7 +543,7 @@ function km_guide_catalog(array $mapData): array
             'category' => $category,
             'floor' => $floorLabel((string) ($poi['floor'] ?? '')),
             'detail' => mb_substr(trim((string) ($poi['note'] ?? '')), 0, 120),
-            'extras' => [(string) ($poi['note'] ?? ''), KM_GUIDE_CATEGORY_LABELS[$category]],
+            'extras' => array_merge([(string) ($poi['note'] ?? ''), KM_GUIDE_CATEGORY_LABELS[$category]], array_map('strval', (array) ($poi['readings'] ?? []))),
             'times' => [],
         ], 'p:' . (int) $poi['id']);
         $shops[] = $item;
@@ -567,7 +574,7 @@ function km_guide_catalog(array $mapData): array
             'floor' => $floorLabel((string) ($node['floor'] ?? '')),
             'detail' => '',
             // 元の名前・部屋番号・企画の番号でも探せる
-            'extras' => array_merge([$name, (string) ($node['subtitle'] ?? '')], array_map(static fn (string $p): string => '企画' . $p, $projects), $projects),
+            'extras' => array_merge([$name, (string) ($node['subtitle'] ?? '')], array_map('strval', (array) ($node['readings'] ?? [])), array_map(static fn (string $p): string => '企画' . $p, $projects), $projects),
             'times' => [],
         ], 'n:' . $id);
         $places[] = $item;
@@ -595,6 +602,8 @@ function km_guide_card(array $item): array
         'poiId' => $item['poiId'],
         // 質問との関係の率(%)。LLM が付けたときだけ(言葉の一致で選んだときは null)
         'relevance' => isset($item['relevance']) ? (int) $item['relevance'] : null,
+        // 今いる場所からの道のり(2026-10-30。近い順に並べたときだけ)
+        'distance' => isset($item['distancePx']) ? km_guide_distance_label((float) $item['distancePx']) : null,
     ];
 }
 
@@ -609,7 +618,92 @@ function km_guide_record_for_llm(array $item): array
         '♡の数' => (int) ($item['likes'] ?? 0) > 0 ? (int) $item['likes'] : null,
         '時間' => ($item['times'] ?? []) !== [] ? implode('、', array_slice($item['times'], 0, 3)) : null,
         '質問との関係' => isset($item['relevance']) ? (int) $item['relevance'] . '%' : null,
+        '今いる場所からの道のり' => isset($item['distancePx']) ? km_guide_distance_label((float) $item['distancePx']) : null,
     ], static fn ($v): bool => $v !== null && $v !== '');
+}
+
+/**
+ * 近い順に並べる(2026-10-30)。長さの分かるものを近い順に先へ、分からないもの(着けない・地点の無い一時地点)は元の順で後ろへ。**純粋関数**
+ *
+ * @param array<string, float> $lengths 地点の id => px(km_guide_route_lengths)
+ */
+function km_guide_sort_by_length(array $found, array $lengths): array
+{
+    $known = [];
+    $unknown = [];
+    foreach (array_values($found) as $index => $item) {
+        $id = (string) ($item['nodeId'] ?? '');
+        if ($id !== '' && isset($lengths[$id])) {
+            $known[] = [$lengths[$id], $index, ['distancePx' => $lengths[$id]] + $item];
+        } else {
+            $unknown[] = $item;
+        }
+    }
+    usort($known, static fn (array $a, array $b): int => [$a[0], $a[1]] <=> [$b[0], $b[1]]);
+    return array_merge(array_column($known, 2), $unknown);
+}
+
+/**
+ * 直前の会話(2026-10-30、振り返りのフェーズ 4 の 4「直前の数往復を覚えて」)。Main/guide-chat.js が送る。**純粋関数**。
+ * 新しいものを後ろに、2 往復まで。質問 200 字・答え 200 字・カードの名前 5 つ(50 字)まで。形の合わないものは捨てる。
+ * **サーバーには残さない**(この頼みの間だけ使う)
+ *
+ * @return list<array{q:string, a:string, cards:list<string>}>
+ */
+function km_guide_history_input(mixed $value): array
+{
+    $clean = static function (mixed $text, int $max): string {
+        $text = is_string($text) ? trim((string) preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]+/', '', $text)) : '';
+        return mb_substr($text, 0, $max);
+    };
+    $history = [];
+    foreach (is_array($value) ? array_slice(array_values($value), -KM_GUIDE_HISTORY_TURNS) : [] as $turn) {
+        if (!is_array($turn)) {
+            continue;
+        }
+        $q = $clean($turn['q'] ?? null, KM_GUIDE_QUESTION_MAX);
+        if ($q === '') {
+            continue;
+        }
+        $cards = [];
+        foreach (is_array($turn['cards'] ?? null) ? array_slice($turn['cards'], 0, KM_GUIDE_CARD_MAX) : [] as $name) {
+            $name = $clean($name, 50);
+            if ($name !== '') {
+                $cards[] = $name;
+            }
+        }
+        $history[] = ['q' => $q, 'a' => $clean($turn['a'] ?? null, 200), 'cards' => $cards];
+    }
+    return $history;
+}
+
+/** 「他には？」「ほかにある？」「もっと」など、直前の答えの続きを聞く短い文か。**純粋関数** */
+function km_guide_is_follow_up(string $question): bool
+{
+    // そろえた形(カタカナはひらがな・記号なし)で、文全体が続きの聞き方のときだけ(「他の学校の話」「外のトイレ」は当てない)
+    $q = km_guide_normalize($question);
+    $tail = '(は|も)?(ある|あります|ありますか|あるの|あれば|ない|ないの|ないですか|ありませんか|どこ|どこですか|ですか|教えて|おしえて)?';
+    return preg_match('/^(他|ほか)(に|には|にも|は)?' . $tail . '$/u', $q) === 1
+        || preg_match('/^(もっと|それ以外|ほかの|他の|別の|べつの)(お店|おみせ|店|みせ|場所|ばしょ|ところ|もの)?' . $tail . '$/u', $q) === 1;
+}
+
+/** 近いものを聞いているか(トイレ・救護・休憩などは、聞き方によらず近い順)。**純粋関数** */
+function km_guide_wants_nearby(string $question): bool
+{
+    return preg_match('/近い|近く|ちかい|ちかく|最寄|もより|WC|トイレ|といれ|お手洗い|便所|救護|保健|休憩|休める|座れ|すわれ|ベンチ|自販機|自動販売/ui', $question) === 1;
+}
+
+/**
+ * 「そこへの行き方」「そこはどこ」の「そこ」を、直前の答えの最初のカードの名前に置き換える。**純粋関数**。
+ * 当てはまらなければそのまま
+ */
+function km_guide_resolve_that(string $question, array $history): string
+{
+    $last = $history[count($history) - 1] ?? null;
+    if ($last === null || $last['cards'] === []) {
+        return $question;
+    }
+    return (string) preg_replace('/(そこ|そちら|そっち|その場所|その店)(?=(へ|に|まで|は|の|って|から))/u', $last['cards'][0], $question, 1);
 }
 
 // ---------------------------------------------------------------- LLM への頼み方
@@ -635,15 +729,25 @@ function km_guide_classify_messages(string $question): array
     ];
 }
 
-/** 2 回目: 探した記録だけを渡して、答えの文を作らせる */
-function km_guide_answer_messages(string $question, array $records, string $situation): array
+/**
+ * 2 回目: 探した記録だけを渡して、答えの文を作らせる。
+ * 直前の会話(2026-10-30)は、話のつながりのためだけに前の往復として渡す(前の答えの店・場所をデータとして使わせない —— データは「データ」だけ)
+ */
+function km_guide_answer_messages(string $question, array $records, string $situation, array $history = []): array
 {
     $data = json_encode($records, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    $before = [];
+    foreach ($history as $turn) {
+        $before[] = ['role' => 'user', 'content' => $turn['q']];
+        $before[] = ['role' => 'assistant', 'content' => $turn['a'] !== '' ? $turn['a'] : '(地図に案内を出しました)'];
+    }
     return [
         ['role' => 'system', 'content' => "あなたは学校祭の会場案内です。下の「データ」に書かれている店・場所だけを使って、やさしい日本語で 3 文以内で答えてください。\n"
             . "- データに無い店・場所・値段・メニュー・待ち時間・順位は言わないでください(作らないでください)\n"
             . "- 道順の細かい説明はしないでください(地図に経路を出します)\n"
-            . "- データが空なら「登録されている中には見つかりませんでした」と答えてください"],
+            . "- データが空なら「登録されている中には見つかりませんでした」と答えてください\n"
+            . "- 前の会話は話のつながりのためだけに見てください。店・場所は今回の「データ」にあるものだけを使ってください"],
+        ...$before,
         ['role' => 'user', 'content' => "状況: {$situation}\nデータ: {$data}\n質問: {$question}"],
     ];
 }
@@ -1025,13 +1129,22 @@ function km_guide_fallback_words(string $question): array
  * $rate は、経路でない質問のときに、一覧に関係の率を付けるもの(km_guide_answer が LLM で付けさせる。2026-10-25)。
  * 戻すのは 位置 => 率 か null。null なら今までの言葉の一致で探す
  *
+ * $lengths は「近い順」に並べるときだけ渡す(2026-10-30、振り返りのフェーズ 4 の 4。lib/guide-distance.php)。
+ * 戻すのは 出発地からの長さ(地点の id => px)。$startNodeId からの長さで、トイレなどを近いものから出す。
+ * $excludeNames は「他には？」のときに、直前の答えで出したカードの名前(それを除いて出す)。
+ *
  * @param null|callable(list<array> $items, string $word): ?array $resolve
  * @param null|callable(list<array> $items): ?array $rate
+ * @param null|callable(): array<string, float> $lengths
+ * @param list<string> $excludeNames
  * @return array{cards:list<array>, records:list<array>, route:?array, situation:string}
  */
-function km_guide_plan(array $catalog, array $classification, ?callable $resolve = null, string $startNodeId = '', ?callable $rate = null): array
+function km_guide_plan(array $catalog, array $classification, ?callable $resolve = null, string $startNodeId = '', ?callable $rate = null, ?callable $lengths = null, array $excludeNames = []): array
 {
     $intent = $classification['intent'];
+    // 近い順・「他には？」のときは多めに拾ってから並べ替え・除いて、最後に数を絞る
+    $wide = ($lengths !== null && $startNodeId !== '') || $excludeNames !== [];
+    $cardLimit = KM_GUIDE_CARD_MAX;
     $route = null;
     $found = [];
     $records = null;
@@ -1103,7 +1216,7 @@ function km_guide_plan(array $catalog, array $classification, ?callable $resolve
                     : "出発地「{$from['name']}」から目的地「{$to['name']}」への経路を地図に出します"));
     } elseif ($rate !== null && ($scores = $rate($relevanceItems = km_guide_relevance_items($catalog))) !== null) {
         // 関係の率で選ぶ(2026-10-25)。店・場所・その他のどれに分けられても、一覧全体から選ぶ
-        $found = km_guide_rank_by_relevance($relevanceItems, $scores);
+        $found = km_guide_rank_by_relevance($relevanceItems, $scores, KM_GUIDE_RELEVANCE_MIN, $wide ? 50 : KM_GUIDE_CARD_MAX);
         if ($found !== []) {
             $situation = '登録されている店・場所の中から、質問と関係のあるものを、関係の率(データの「質問との関係」)の高い順に選びました。'
                 . '率が 80% 未満のものは「関係がありそうなもの」として控えめに紹介してください。カードの「地図で見る」で場所を、「経路」で行き方を出せます(まだ経路は出していません)';
@@ -1113,7 +1226,7 @@ function km_guide_plan(array $catalog, array $classification, ?callable $resolve
                 : '登録されている店・場所の中に、質問と関係のあるものはありませんでした';
         }
     } elseif ($intent === 'shop') {
-        $found = km_guide_search($catalog['shops'], $classification['keywords'], $classification['category']);
+        $found = km_guide_search($catalog['shops'], $classification['keywords'], $classification['category'], $wide ? 50 : KM_GUIDE_CARD_MAX);
         // 言葉で当たらなければ、LLM に一覧から選ばせる(読み方・書き方の違い)。それでも無ければ種類だけで探し直す
         $situation = '登録されている店・企画から探しました(並びは一致の度合いと♡の数)';
         if ($found === [] && $classification['keywords'] !== []) {
@@ -1127,13 +1240,30 @@ function km_guide_plan(array $catalog, array $classification, ?callable $resolve
             $situation = '登録されている店・企画の中に当たるものがありませんでした';
         }
     } elseif ($intent === 'place') {
-        $found = km_guide_search($catalog['places'], $classification['keywords'], null, 3, false);
+        $found = km_guide_search($catalog['places'], $classification['keywords'], null, $wide ? 50 : 3, false);
+        $cardLimit = 3;
         if ($found === [] && $classification['keywords'] !== []) {
             $found = array_values(array_filter([$guess($catalog['places'], $joined($classification['keywords']))]));
         }
         $situation = $found === [] ? '登録されている場所の中に見つかりませんでした' : '登録されている場所から探しました。カードの「地図で見る」で場所を、「経路」で行き方を出せます(まだ経路は出していません)';
     } else {
-        $situation = '店・場所・経路の質問ではありませんでした。地図の案内でできることを短く伝えてください';
+        // 関係の無い話(2026-10-30、振り返りのフェーズ 4 の 4「関係ない話には、案内の話へ戻す」)
+        $situation = '店・場所・経路の質問ではありませんでした。雑談や会場と関係の無い質問には答えず、地図の案内でできること(店・場所・行き方を聞ける)を短く伝えて、案内の話へ戻してください';
+    }
+    if ($intent !== 'route' && $found !== []) {
+        if ($excludeNames !== []) {
+            $found = array_values(array_filter($found, static fn (array $item): bool => !in_array(km_guide_card($item)['name'], $excludeNames, true)));
+            $situation = $found === []
+                ? '利用者は直前の答えに「ほかには？」と聞いています。直前に紹介したもの(' . implode('・', $excludeNames) . ')のほかには、登録されている中に見つかりませんでした'
+                : '利用者は直前の答えに「ほかには？」と聞いています。直前に紹介したもの(' . implode('・', $excludeNames) . ')は除いて、ほかのものを出しています。' . $situation;
+        }
+        if ($wide && $lengths !== null && $startNodeId !== '' && $found !== []) {
+            $found = km_guide_sort_by_length($found, $lengths());
+            if (isset($found[0]['distancePx'])) {
+                $situation .= '。今いる場所から近い順(地図の道のり)に並べました。データの「今いる場所からの道のり」を使って、近いものから案内してください';
+            }
+        }
+        $found = array_slice($found, 0, $cardLimit);
     }
     if ($guessed !== []) {
         $situation .= '。' . implode('。', $guessed) . '(違っていたら言い直してもらうよう、ひとこと添えてください)';
@@ -1316,13 +1446,39 @@ function km_guide_llm_select(array $config, string $model): string
  * @param string $startNodeId 出発地を言わなかったときの地点(テスト用アカウントの展示の場所。km_guide_plan)
  * @return array{answer:string, cards:list<array>, route:?array, fallback:bool}
  */
-function km_guide_answer(array $catalog, string $question, ?callable $llm, string $startNodeId = ''): array
+/**
+ * @param list<array{q:string, a:string, cards:list<string>}> $history 直前の会話(km_guide_history_input。2026-10-30)
+ * @param null|callable(): array<string, float> $lengths 今いる場所からの長さ(km_guide_route_lengths。近い順に使う)
+ */
+function km_guide_answer(array $catalog, string $question, ?callable $llm, string $startNodeId = '', array $history = [], ?callable $lengths = null): array
 {
-    $fallback = static function () use ($catalog, $question): array {
-        $found = km_guide_search($catalog['shops'], km_guide_fallback_words($question));
+    /*
+     * 会話にする(2026-10-30、振り返りのフェーズ 4 の 4)。
+     * - 「他には？」は、直前の質問をもう一度探し、直前に出したカードを除く
+     * - 「そこへの行き方」の「そこ」は、直前の答えの最初のカードの名前
+     * - トイレなど・「近い」は、今いる場所から近い順(展示の場所か現在地の QR があるときだけ)
+     */
+    $previous = $history[count($history) - 1] ?? null;
+    $excludeNames = [];
+    $asked = km_guide_resolve_that($question, $history);
+    if ($previous !== null && km_guide_is_follow_up($question)) {
+        $asked = $previous['q'];
+        $excludeNames = $previous['cards'];
+    }
+    $nearby = $lengths !== null && $startNodeId !== '' && km_guide_wants_nearby($asked) ? $lengths : null;
+    $fallback = static function () use ($catalog, $asked, $nearby, $excludeNames): array {
+        $wide = $nearby !== null || $excludeNames !== [];
+        $found = km_guide_search($catalog['shops'], km_guide_fallback_words($asked), null, $wide ? 50 : KM_GUIDE_CARD_MAX);
         if ($found === []) {
-            $found = km_guide_search($catalog['places'], km_guide_fallback_words($question), null, 3, false);
+            $found = km_guide_search($catalog['places'], km_guide_fallback_words($asked), null, $wide ? 50 : 3, false);
         }
+        if ($excludeNames !== []) {
+            $found = array_values(array_filter($found, static fn (array $item): bool => !in_array(km_guide_card($item)['name'], $excludeNames, true)));
+        }
+        if ($nearby !== null && $found !== []) {
+            $found = km_guide_sort_by_length($found, $nearby());
+        }
+        $found = array_slice($found, 0, KM_GUIDE_CARD_MAX);
         return [
             'answer' => $found === []
                 ? 'いま案内の AI が使えません。言葉で探しましたが、登録されている中には見つかりませんでした。地図の「場所を検索」も使えます。'
@@ -1354,7 +1510,7 @@ function km_guide_answer(array $catalog, string $question, ?callable $llm, strin
         return $fallback();
     }
     try {
-        $classification = km_guide_parse_classification($llm(km_guide_classify_messages($question), 160));
+        $classification = km_guide_parse_classification($llm(km_guide_classify_messages($asked), 160));
         if ($classification === null) {
             return $fallback();
         }
@@ -1381,19 +1537,19 @@ function km_guide_answer(array $catalog, string $question, ?callable $llm, strin
             return $index === null ? null : $items[$index];
         };
         // 関係の率(2026-10-25)。つまずいたら null を返し、言葉の一致に戻す(答えは止めない)
-        $rate = static function (array $items) use ($llm, $question): ?array {
+        $rate = static function (array $items) use ($llm, $asked): ?array {
             if ($items === []) {
                 return [];
             }
             try {
-                return km_guide_parse_relevance($llm(km_guide_relevance_messages($question, $items), KM_GUIDE_RELEVANCE_TOKENS), $items);
+                return km_guide_parse_relevance($llm(km_guide_relevance_messages($asked, $items), KM_GUIDE_RELEVANCE_TOKENS), $items);
             } catch (RuntimeException $exception) {
                 error_log('km_guide_answer: relevance skipped: ' . $exception->getMessage());
                 return null;
             }
         };
-        $plan = km_guide_plan($catalog, $classification, $resolve, $startNodeId, $rate);
-        $answer = $llm(km_guide_answer_messages($question, $plan['records'], $plan['situation']), 300);
+        $plan = km_guide_plan($catalog, $classification, $resolve, $startNodeId, $rate, $nearby, $excludeNames);
+        $answer = $llm(km_guide_answer_messages($question, $plan['records'], $plan['situation'], $history), 300);
         return [
             // 長すぎる答えは切る(画面に入る長さ)
             'answer' => mb_substr($answer, 0, 600),

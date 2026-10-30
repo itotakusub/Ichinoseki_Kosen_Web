@@ -368,6 +368,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const routeCloseBtn = document.getElementById('km-route-close');
     const routeTargetBtn = document.getElementById('km-route-target');
     let routeSteps = [];
+    // 曲がる所と目印(computeRouteTurns。2026-10-30、振り返りのフェーズ 3 の 3)
+    let routeTurnList = [];
     let routeStepIndex = 0;
     // 「位置の更新」で地点を選んでもらっている最中か(下の「位置の更新」の節)
     let pickingPosition = false;
@@ -529,8 +531,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     /*
      * 地図の初期化が終わったことを知らせる。**送出は残す** ——
-     * いまの購読者は居ないが、地図を触る側から見れば「使える状態になった」合図で、
-     * 退避した zoom.js を戻したときにもそのまま繋がる。
+     * 地図を触る側から見れば「使える状態になった」合図(Main/top-bar.js が全画面のボタンを置く。2026-10-30)。
      */
     window.dispatchEvent(new CustomEvent('km:map-ready'));
 
@@ -620,8 +621,8 @@ document.addEventListener('DOMContentLoaded', async () => {
      * 従来は changeFloor() のたびに new Image() でネットワークから読みに行っていた。
      * ブラウザキャッシュが効けば2回目以降は速いが、キャッシュが効かない環境
      * (キャッシュ無効化・初回切替など)では毎回ロード待ちが発生し、切替直後に
-     * 建物が一瞬崩れて見える原因になっていた。ここで全フロア分をバックグラウンドで
-     * 先読みしてサイズ込みでキャッシュしておき、切替時はキャッシュを最優先で使う。
+     * 建物が一瞬崩れて見える原因になっていた。ここで先読みしてサイズ込みでキャッシュしておき、
+     * 切替時はキャッシュを最優先で使う。**読むのはいまの階と隣の階だけ**(2026-10-30。下の neighborFloors)。
      */
     const preloadedImages = {}; // floor -> { src, bounds }
     const imagePreloadPromises = {};
@@ -686,15 +687,37 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     /**
-     * 全階の見取り図を読む。
+     * 隣の階(上下)。並びは 外 → 1F → 2F → …(外の隣は 1F)。数字でない階(足した建物など)はその後ろ。
+     * **先読みはいまの階と隣だけ**(2026-10-30、振り返りのフェーズ 2「軽くする」)。
+     * それまでは全階を読んでいた。遅い端末では 1600×1200 の絵を 6 枚ほどいて持つだけで重い
+     */
+    function neighborFloors(floor) {
+        const ordered = preloadOrder(floor).slice();
+        ordered.sort((a, b) => floorRank(a) - floorRank(b) || a.localeCompare(b));
+        const at = ordered.indexOf(String(floor));
+        if (at < 0) return [];
+        return [ordered[at - 1], ordered[at + 1]].filter(Boolean);
+    }
+    function floorRank(floor) {
+        if (floor === 'outside') return 0;
+        const n = Number(floor);
+        return Number.isFinite(n) ? n : 1000;
+    }
+    /** 切り替えた先の階の隣を、裏で読んでおく */
+    function preloadNeighborFloors(floor) {
+        neighborFloors(floor).forEach((next) => { preloadFloorImage(next); });
+    }
+
+    /**
+     * いまの階と隣の階の見取り図を読む(ほかの階は切り替えたときに読む)。
      *
      * @param {Function} onFirstReady 現在の階が読めた時点で呼ぶ。**ここで地図を見せる。**
      *   全階を待ってから見せていた頃は、1Mbps で「1階は6.0秒で揃っているのに
      *   読み込み画面が閉じるのは19.3秒」という状態だった(実測)。
-     * @returns {Promise<void>} 全階ぶん読み終えたら解決する(裏で進む)
+     * @returns {Promise<void>} 読み終えたら解決する(裏で進む)
      */
     async function preloadAllFloorImages(firstFloor, onProgress, onFirstReady) {
-        const queue = preloadOrder(firstFloor);
+        const queue = [String(firstFloor)].concat(neighborFloors(firstFloor)).filter(floor => floorImages[floor]);
         const total = queue.length;
         let loaded = 0;
         let next = 0;
@@ -845,13 +868,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     const poiMarkers = new Map();
 
     const KM_POI_ICONS = {
-        food: '🍢', exhibit: '🎨', reception: '📋',
+        food: '🍢', exhibit: '🎨', experience: '🧪', rest: '🪑', reception: '📋',
         firstaid: '🚑', toilet: '🚻', stage: '🎤', other: '📍',
     };
 
     /** 臨時の地点の種類の言葉(Website の値。lib/map-events.php の KM_MAP_EVENT_POI_CATEGORIES) */
     const KM_POI_LABELS = {
-        food: '模擬店', exhibit: '展示', reception: '受付',
+        food: '模擬店', exhibit: '展示', experience: '体験', rest: '休憩', reception: '受付',
         firstaid: '救護', toilet: 'トイレ', stage: 'ステージ', other: '臨時の地点',
     };
 
@@ -1325,12 +1348,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         return `<div class="km-poster-list" aria-label="ポスター">${list.map(function (poster) {
             const focused = Number(poster.id) === focusPosterId;
             const link = poster.linkUrl && /^https?:\/\//i.test(poster.linkUrl)
-                ? `<a class="km-poster-link" href="${escapeHtml(poster.linkUrl)}" target="_blank" rel="noopener noreferrer" data-km-poster-link="${Number(poster.id)}">くわしく見る ↗</a>`
+                ? `<a class="km-poster-link" href="${escapeHtml(poster.linkUrl)}" target="_blank" rel="noopener noreferrer" data-km-poster-link="${Number(poster.id)}">🌐 外のサイトで見る ↗</a>`
                 : '';
             return `<figure class="km-poster${focused ? ' is-focused' : ''}">
                 <button type="button" class="km-poster-thumb" data-km-poster-view="${escapeHtml(String(poster.id))}"
                         aria-label="${escapeHtml(poster.title)}(大きく見る)">
-                    <img src="${escapeHtml(poster.imageUrl)}" alt="" width="${Number(poster.width) || 0}" height="${Number(poster.height) || 0}">
+                    <img src="${escapeHtml(poster.thumbUrl || poster.imageUrl)}" alt="" width="${Number(poster.width) || 0}" height="${Number(poster.height) || 0}" loading="lazy">
                 </button>
                 <figcaption class="km-poster-caption">
                     <b class="km-poster-title">${escapeHtml(poster.title)}</b>
@@ -1551,6 +1574,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         window.map.fitBounds(L.latLngBounds(rawBounds), mapFitPadding());
     }
 
+    /** その階の全体が入る倍率(fitMinZoom が出す)。拡大したら部品を隠す所(下の「地図以外を隠す」)の基準 */
+    let floorFitZoom = null;
+
     /** その階の全体が入る倍率まで、ズームの下限を下げる(収めはしない。経路の途中で階を移るとき用。2026-10-23) */
     function fitMinZoom(rawBounds) {
         /*
@@ -1579,6 +1605,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             const scale = Math.min(available.x / width, available.y / height);
             // 下限は zoomSnap(0.25)の刻みに合わせて、必要なぶんだけ下げる
             const fitZoom = Math.floor(Math.log2(scale) * 4) / 4;
+            floorFitZoom = fitZoom;
             window.map.setMinZoom(Math.min(-1, fitZoom));
         }
     }
@@ -1720,6 +1747,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         renderEventOverlay();
         renderBuildingSwitcher();
         renderBuildingOverlays();
+        renderStairGuides();
+        renderHereMarker();
 
         if (currentRoutePath) {
             drawPath(currentRoutePath);
@@ -1735,6 +1764,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         const cached = preloadedImages[floor];
         if (cached) {
             applyFloorImage(cached.src, cached.bounds);
+            // 次に行きそうな階(上下)を裏で読んでおく。先読みは隣だけにした(neighborFloors)
+            preloadNeighborFloors(floor);
             return;
         }
 
@@ -1758,6 +1789,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             if (entry) {
                 applyFloorImage(entry.src, entry.bounds);
+                preloadNeighborFloors(floor);   // いまの階が載ってから(取り合わせない)
                 return;
             }
 
@@ -1880,6 +1912,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 loadFloorImageDynamic(window.currentFloor);
                 kmLoading.finish();
                 window.setTimeout(focusRoomFromUrl, 0);
+                window.setTimeout(hereFromUrl, 0);
             }
         );
 
@@ -1898,6 +1931,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 loadFloorImageDynamic(window.currentFloor);
                 kmLoading.finish();
                 window.setTimeout(focusRoomFromUrl, 0);
+                window.setTimeout(hereFromUrl, 0);
             }
         }, LOADING_TIMEOUT_MS);
 
@@ -1916,18 +1950,29 @@ document.addEventListener('DOMContentLoaded', async () => {
      *
      *   1. 大事なものから順に置く(施設 → 出入口 → 階段 → 部屋 → その他)
      *   2. 重なったら上下にずらす → 点の横・下に付ける → **点から離して線で結ぶ**(2026-10-14)
-     *   3. どこへ置いても重なるなら、屋外は**そのラベルは出さない**(点は出したまま。
-     *      押せば名前が読めるので、情報は失われない)。建物の中は元の位置のまま重ねる
+     *   3. どこへ置いても重なるなら、**そのラベルは出さない**(点は出したまま。
+     *      押せば名前が読めるので、情報は失われない)。2026-10-30 から建物の中も同じ(下の declutterLabels)
      *
      * 置き方の計算は `Main/label-layout.js`(アプリと同じ手順)。
      * ズームを上げると点どうしの間が開くので、隠れていたものから順に戻ってくる。
+     *
+     * **大事な順**(2026-10-30、振り返りのフェーズ 2「大事な地点だけ出す」): イベントの地点 > 施設・出入口 > 階段 > 部屋 > ほか。
+     * 中くらいの倍率では下の方から隠れる。イベントで関係ない地点(薄くしている)は一番後ろ
      */
-    const KM_LABEL_PRIORITY = { facility: 0, entrance: 1, stairs: 2, room: 3, wifi_router: 4, road: 5, wall: 6 };
+    const KM_LABEL_PRIORITY = { facility: 1, entrance: 1, stairs: 2, room: 3, wifi_router: 4, road: 5, wall: 6 };
+    const KM_LABEL_PRIORITY_EVENT = 0;
+    const KM_LABEL_PRIORITY_UNRELATED = 10;
     let declutterTimer = null;
+    let lastDeclutterKey = '';
+    let declutterGeneration = 0;
+    /** 1 コマに書く札の数(書くだけなので軽い。測るのは 1 回にまとめる) */
+    const DECLUTTER_CHUNK = 60;
 
     function labelPriority(el) {
+        if (el.classList.contains('km-label-event')) return KM_LABEL_PRIORITY_EVENT;
         const type = (el.className.match(/km-label-([a-z_]+)/) || [])[1];
-        return KM_LABEL_PRIORITY[type] === undefined ? 9 : KM_LABEL_PRIORITY[type];
+        const base = KM_LABEL_PRIORITY[type] === undefined ? 9 : KM_LABEL_PRIORITY[type];
+        return el.classList.contains('km-label-unrelated') ? KM_LABEL_PRIORITY_UNRELATED + base : base;
     }
 
     /** 札の要素 → その点のマーカー(点の中心を測って、線の根元にする) */
@@ -1971,10 +2016,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!layoutApi) return;
 
         /*
-         * 屋外は、置けない札を**出さない**。建物の中は**消さない**(2026-09-25、利用者の指示。
-         * 部屋名が 1 つでも欠けると探せなくなる)—— ずらしと線だけ使い、置けなければ元の位置で重ねる。
+         * 置けない札は**建物の中でも出さない**(2026-10-30、振り返りのフェーズ 2。利用者の判断「B」)。
+         * それまで建物の中は消さずに元の位置で重ねていたが(2026-09-25)、重なった札はどれも読めなかった。
+         * 点は残るので押せば名前が分かり、拡大すると出てくる。**選んだ場所の札だけは隠さない**(keep)
          */
-        const outdoors = String(window.currentFloor) === 'outside';
+        const selectedAt = selectionRing ? selectionRing.getLatLng() : null;
 
         /*
          * 薄く出している建物名は**数に入れない。** 下敷きの文字なので、
@@ -2011,51 +2057,90 @@ document.addEventListener('DOMContentLoaded', async () => {
                 anchor: r && r.width > 0 ? { x: (r.left + r.right) / 2, y: (r.top + r.bottom) / 2 } : null,
                 radius: r ? r.width / 2 : 0,
                 priority: labelPriority(el),
+                keep: !!(selectedAt && marker && marker.getLatLng && marker.getLatLng().equals(selectedAt)),
             });
             targets.push(el);
         });
+        /*
+         * 札の元の margin-top(leaflet.css の .leaflet-tooltip-top は -6px)。ずらす量はこれに**足して**書く。
+         * 2026-10-30 まで dy だけを書いて -6px を消していたので、上下にずらした札は 6px 下へ落ち、隣の札と重なっていた
+         */
+        const baseMarginTop = targets.length > 0 ? (parseFloat(window.getComputedStyle(targets[0]).marginTop) || 0) : 0;
         const c = window.map.getContainer().getBoundingClientRect();
         const placements = layoutApi.layout(items, {
-            hideWhenCrowded: outdoors,
+            hideWhenCrowded: true,
             bounds: { left: c.left, top: c.top, right: c.right, bottom: c.bottom },
             nodes: nodes,
         });
 
-        placements.forEach(function (p, i) {
-            const el = targets[i];
-            if (p === null) {
-                el.classList.add('km-label-hidden');
+        /*
+         * **書くのはコマに分ける**(2026-10-30、振り返りのフェーズ 2。利用者の案「数ミリ秒ずらす」)。建物の中は札が 200 を超え、
+         * 一度に書くとズームの直後に 1 コマ大きく止まった。DECLUTTER_CHUNK 個ずつ requestAnimationFrame で書く。
+         * 途中で次の並べ直しが始まったら、古い分は書かない(generation)
+         */
+        const generation = ++declutterGeneration;
+        let next = 0;
+        const writeChunk = function () {
+            if (generation !== declutterGeneration) return;
+            const end = Math.min(placements.length, next + DECLUTTER_CHUNK);
+            for (; next < end; next++) applyPlacement(placements[next], targets[next], items[next], baseMarginTop);
+            if (next < placements.length) {
+                window.requestAnimationFrame(writeChunk);
                 return;
             }
-            if (p.dy !== 0) el.style.marginTop = p.dy + 'px';
-            if (p.dx !== 0) el.style.marginLeft = p.dx + 'px';
-            if (p.leader) {
-                /*
-                 * 線は札の ::after で描く(styles.css の .km-label-led)。札と一緒に動くので、
-                 * 地図を動かしている間もずれない。始点は札の縁、向きは点の方。
-                 * **style 属性ではなく CSSOM で入れる**(CSP は style 属性を止めるが、JS からの代入は通す)。
-                 */
-                const box = items[i].box;
-                const left = box.left + p.dx;
-                const top = box.top + p.dy;
-                const vx = p.leader.x1 - p.leader.x2;
-                const vy = p.leader.y1 - p.leader.y2;
-                el.classList.add('km-label-led');
-                // 1.5px は札の枠。::after の left/top は枠の内側から測る
-                el.style.setProperty('--km-lead-x', (p.leader.x2 - left - 1.5).toFixed(1) + 'px');
-                el.style.setProperty('--km-lead-y', (p.leader.y2 - top - 1.5).toFixed(1) + 'px');
-                el.style.setProperty('--km-lead-len', Math.sqrt(vx * vx + vy * vy).toFixed(1) + 'px');
-                el.style.setProperty('--km-lead-ang', (Math.atan2(vy, vx) * 180 / Math.PI).toFixed(1) + 'deg');
-            }
-        });
+            // 札が落ち着いたので、経路の線の重なりを塗り直す(札の位置で透かす所が変わる)
+            if (routeLineRuns.length > 0) routeLineRuns.forEach(paintRouteRun);
+        };
+        writeChunk();
     }
 
-    /** 連続して呼ばれる(ズーム中・移動中)ので、落ち着いてから1回だけ測る。 */
-    function scheduleDeclutter() {
-        window.clearTimeout(declutterTimer);
-        declutterTimer = window.setTimeout(declutterLabels, 120);
+    /** 1 つの札に置き方を書く(declutterLabels がコマに分けて呼ぶ) */
+    function applyPlacement(p, el, item, baseMarginTop) {
+        if (p === null) {
+            el.classList.add('km-label-hidden');
+            return;
+        }
+        if (p.dy !== 0) el.style.marginTop = (baseMarginTop + p.dy) + 'px';
+        if (p.dx !== 0) el.style.marginLeft = p.dx + 'px';
+        if (p.leader) {
+            /*
+             * 線は札の ::after で描く(styles.css の .km-label-led)。札と一緒に動くので、
+             * 地図を動かしている間もずれない。始点は札の縁、向きは点の方。
+             * **style 属性ではなく CSSOM で入れる**(CSP は style 属性を止めるが、JS からの代入は通す)。
+             */
+            const box = item.box;
+            const left = box.left + p.dx;
+            const top = box.top + p.dy;
+            const vx = p.leader.x1 - p.leader.x2;
+            const vy = p.leader.y1 - p.leader.y2;
+            el.classList.add('km-label-led');
+            // 1.5px は札の枠。::after の left/top は枠の内側から測る
+            el.style.setProperty('--km-lead-x', (p.leader.x2 - left - 1.5).toFixed(1) + 'px');
+            el.style.setProperty('--km-lead-y', (p.leader.y2 - top - 1.5).toFixed(1) + 'px');
+            el.style.setProperty('--km-lead-len', Math.sqrt(vx * vx + vy * vy).toFixed(1) + 'px');
+            el.style.setProperty('--km-lead-ang', (Math.atan2(vy, vx) * 180 / Math.PI).toFixed(1) + 'deg');
+        }
     }
-    window.kmDeclutterLabels = scheduleDeclutter;
+
+    /*
+     * 連続して呼ばれる(ズーム中・移動中)ので、落ち着いてから1回だけ測る。
+     *
+     * **横へ動かしただけ(拡大率も階も札の数も同じ)なら測り直さない**(2026-10-30、振り返りのフェーズ 2「ズームがカクつく」)。
+     * 札と点は同じだけ動くので、ずらし方は変わらない。それまでは moveend のたびに全部の札を測り直していた(200 個 × 2 回の測り)
+     */
+    function declutterKey() {
+        return [window.map.getZoom(), String(window.currentFloor), document.querySelectorAll('.km-label').length].join('|');
+    }
+    function scheduleDeclutter(force) {
+        if (force !== true && declutterKey() === lastDeclutterKey) return;
+        window.clearTimeout(declutterTimer);
+        declutterTimer = window.setTimeout(function () {
+            lastDeclutterKey = declutterKey();
+            declutterLabels();
+        }, 120);
+    }
+    // 外から呼ばれるのは札の中身が変わったとき(表示調整・階の切り替えなど)。必ず測り直す
+    window.kmDeclutterLabels = function () { scheduleDeclutter(true); };
 
     // 部屋の詳細を開いた(テスト用アカウントの記録。createNodeMarker が marker.kmNodeId を付ける)
     window.map.on('popupopen', (e) => {
@@ -2067,9 +2152,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     window.map.on('zoomend', () => {
         renderGlobalLabels();
-        scheduleDeclutter();
+        scheduleDeclutter(true);
     });
-    window.map.on('moveend', scheduleDeclutter);
+    window.map.on('moveend', () => scheduleDeclutter(false));
 
     /*
      * 利用者が自分で拡大・移動したかを覚えておく。Leaflet はプログラムからの
@@ -2085,6 +2170,50 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!event || !event.originalEvent) return;   // fitBounds では畳まない
         userMovedMap = true;
         setFloorNavCollapsed(true);
+    });
+
+    /*
+     * ======== 拡大したら地図以外を隠す ========(2026-10-30、振り返りのフェーズ 2)
+     *
+     * スマホで部屋を探して拡大すると、上の検索・チップと下の操作の帯で地図の半分近くが埋まる。
+     * **利用者が自分で**その階の全体の 4 倍(2 段)より拡大したら、検索・チップ・アカウント・操作の帯を薄く消す。
+     * 縮めるか、地図の何もない所を軽くたたくと戻る。階のボタン・経路の帯・ズームのボタンは残す(今どこかと戻り方)。
+     *
+     * 「自分で」は、地図の上の操作(指・ホイール・ズームのボタン・キー)から 1.5 秒以内の拡大で見る。
+     * Leaflet はピンチやホイールの zoomstart に originalEvent を付けないので、上の zoomstart の判定は使えない。
+     * 検索の候補で飛んだとき(fitBounds)は隠さない
+     */
+    const KM_CHROME_HIDE_STEPS = 2;
+    const KM_CHROME_INPUT_MS = 1500;
+    let mapInputAt = 0;
+    ['pointerdown', 'wheel', 'touchstart', 'keydown'].forEach(function (type) {
+        window.map.getContainer().addEventListener(type, function () { mapInputAt = Date.now(); }, { passive: true });
+    });
+    function setChromeHidden(hidden) {
+        document.body.classList.toggle('km-chrome-hidden', hidden);
+    }
+    /** 使っている最中は隠さない(検索に打っている・候補・アカウントの欄・経路の欄が開いている) */
+    function chromeInUse() {
+        const active = document.activeElement;
+        if (active && active.closest && active.closest('#km-searchbox, #km-account, #km-category-chips, #km-action-bar')) return true;
+        const account = document.getElementById('km-account');
+        if (account && account.open) return true;
+        return document.body.classList.contains('km-route-panel-open');
+    }
+    window.map.on('zoomend', function () {
+        if (floorFitZoom === null) return;
+        const deep = window.map.getZoom() - floorFitZoom >= KM_CHROME_HIDE_STEPS;
+        if (!deep) {
+            setChromeHidden(false);
+        } else if (Date.now() - mapInputAt < KM_CHROME_INPUT_MS && !chromeInUse()) {
+            setChromeHidden(true);
+        }
+    });
+    // 地図の何もない所をたたく(点を押したときは点が止めるので来ない)
+    window.map.on('click', function () { setChromeHidden(false); });
+    // キーで動かす人は、隠れたボタンへ Tab で行けない。Tab・Esc で戻す
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Tab' || event.key === 'Escape') setChromeHidden(false);
     });
 
     // 画面サイズが変わったら収め直す。連続発火するので落ち着いてから1回だけ。
@@ -2262,6 +2391,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                  * 経路が変われば、それまでの「いま何番目」は別の経路の番号になる。
                  */
                 routeSteps = buildRouteSteps(path);
+                routeTurnList = computeRouteTurns(path);
                 routeStepIndex = 0;
                 renderRouteBar();
                 if (window.innerWidth <= 768 && searchPanel) {
@@ -2334,10 +2464,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     function clearRoute() {
         currentRoutePath = null;
         routeSteps = [];
+        routeTurnList = [];
         routeStepIndex = 0;
         currentMarkers.forEach(m => window.map.removeLayer(m));
         currentMarkers = [];
         routeLineRuns = [];
+        markRouteNodes(new Set());
+        renderStairGuides();
+        renderHereMarker();
         renderRouteBar();
     }
 
@@ -2473,6 +2607,52 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         syncFloorToggle();
         startFloorIdleTimer();
+
+        /*
+         * ======== 階の列の上でホイール・縦のスワイプ ========(2026-10-30、振り返りのフェーズ 3 の 4)
+         *
+         * 畳んだ丸(いまの階)の上でホイールを回すか、指で上下にはらうと、上下の階へ移る。上へ = 上の階(外 → 1F → 2F …)。
+         * 開いた一覧が縦に送れる(階が多くてはみ出している)ときは、一覧を送る方を優先する。
+         * 地図の上のホイールは拡大なので、列の上では地図へ渡さない(preventDefault)。続けて回しても 1 段ずつ(250ms)
+         */
+        const floorStepOrder = () => Array.from(floorBtns)
+            .map(b => String(b.dataset.floor || ''))
+            .filter(f => f !== '' && floorImages[f])
+            .sort((a, b) => floorRank(a) - floorRank(b) || a.localeCompare(b));
+        let floorStepAt = 0;
+        function stepFloor(direction) {
+            const now = Date.now();
+            if (now - floorStepAt < 250) return;
+            const order = floorStepOrder();
+            const at = order.indexOf(String(window.currentFloor));
+            const next = order[at + direction];
+            if (at < 0 || !next) return;
+            floorStepAt = now;
+            changeFloor(next);
+        }
+        const floorListScrolls = () => {
+            const scroll = floorNavEl.querySelector('.floor-scroll');
+            return !floorNavEl.classList.contains('is-collapsed') && !!scroll && scroll.scrollHeight > scroll.clientHeight + 1;
+        };
+        floorNavEl.addEventListener('wheel', (e) => {
+            if (floorListScrolls() || Math.abs(e.deltaY) < Math.abs(e.deltaX) || e.deltaY === 0) return;
+            e.preventDefault();
+            e.stopPropagation();
+            stepFloor(e.deltaY < 0 ? 1 : -1);
+        }, { passive: false });
+        let floorSwipeY = null;
+        floorNavEl.addEventListener('touchstart', (e) => {
+            floorSwipeY = e.touches.length === 1 && !floorListScrolls() ? e.touches[0].clientY : null;
+        }, { passive: true });
+        floorNavEl.addEventListener('touchend', (e) => {
+            if (floorSwipeY === null || e.changedTouches.length !== 1) return;
+            const dy = e.changedTouches[0].clientY - floorSwipeY;
+            floorSwipeY = null;
+            // 30px 以上はらったときだけ(軽く触っただけなら、今までどおり押した扱い)
+            if (Math.abs(dy) < 30) return;
+            e.preventDefault();   // はらった指で取っ手を「押した」ことにしない(一覧が開かない)
+            stepFloor(dy < 0 ? 1 : -1);
+        });
     }
 
     // 種類でまとめて探すのは、検索の窓の下のチップ(下の「種類でまとめて探す」。2026-10-23)
@@ -2669,6 +2849,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (!window.map.hasLayer(group)) group.addTo(window.map);
         });
         activeMarkerGroups = wanted;
+        // 地図へ載せ直した印は作り直されるので、案内中の「濃く出す」印を付け直す(下の markRouteNodes)
+        if (window.kmReapplyRouteMarks) window.kmReapplyRouteMarks();
     }
 
 
@@ -3118,7 +3300,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         return rects;
     }
 
-    // 動き終えたら塗り直す。札の並べ直し(kmDeclutterLabels)が先に済むよう、少し待つ
+    /*
+     * 拡大率が変わったら塗り直す。札の並べ直し(kmDeclutterLabels)が先に済むよう、少し待つ(並べ直しが書き終えたときにも塗り直す)。
+     * **横へ動かしただけでは塗り直さない**(2026-10-30、振り返りのフェーズ 2)。線と札は同じだけ動くので重なる所は変わらない。
+     * それまでは moveend のたびに全部の印と札の箱を測っていた
+     */
     let routeOverlapTimer = null;
     function refreshRouteOverlap() {
         if (routeOverlapTimer) window.clearTimeout(routeOverlapTimer);
@@ -3127,7 +3313,149 @@ document.addEventListener('DOMContentLoaded', async () => {
             routeLineRuns.forEach(paintRouteRun);
         }, 250);
     }
-    window.map.on('moveend', refreshRouteOverlap);
+    window.map.on('zoomend', refreshRouteOverlap);
+
+    /*
+     * ======== 曲がる所の目印・階段の上り下り・案内中は関係ない地点を薄く ========(2026-10-30、振り返りのフェーズ 3 の 3)
+     *
+     * 振り返り: 「どこで曲がるのか分からない」「階段を上るのか下りるのか」「案内中も地図がごちゃごちゃ」。
+     * - 曲がる所: 角度の決まりはアプリと同じ(Main/route-view.js の routeTurns)。近くの名前のある地点を目印にして
+     *   「講義室1を目印に右へ」を、その角に札で出す。案内の帯にも、次の曲がり角を出す
+     * - 階段: 経路が通る階段に「▲ 2F へ上る」「▼ 1F へ下りる」「2F から到着」(アプリの StairGuide.kt と同じ)。
+     *   上り口・下り口の向き(地図データの stairUpHeading / stairDownHeading。管理アプリで入れる)があれば矢印を向ける
+     * - 拡大すると、階段に行ける階(▲上行き 2〜5F / ▼下行き 1F / エレベーターは ⇅)を出す(renderStairGuides)
+     * - 案内中は、経路の地点と目印だけを濃く、ほかの地点と札を薄くする(body.km-route-active と .km-on-route。styles.css)
+     */
+    const KM_LANDMARK_TYPES = ['room', 'facility', 'entrance', 'stairs'];
+    /** 目印を探す範囲(地図の座標。床の画像は横 1600。廊下 2〜3 本分) */
+    const KM_LANDMARK_DISTANCE = 60;
+
+    function computeRouteTurns(pathNodeIds) {
+        const view = window.KmRouteView;
+        if (!view || !view.routeTurns) return [];
+        const points = pathNodeIds.map((id) => {
+            const node = graphData.nodes[id];
+            return { id: id, x: node.x, y: node.y, floor: String(node.floor) };
+        });
+        const candidatesByFloor = new Map();
+        const candidatesOn = (floor) => {
+            if (!candidatesByFloor.has(floor)) {
+                candidatesByFloor.set(floor, (nodesByFloor.get(floor) || [])
+                    .filter(([, n]) => !n.hidden && KM_LANDMARK_TYPES.includes(String(n.type)) && String(n.alias || n.name || '').trim() !== '')
+                    .map(([id, n]) => ({ id: id, name: n.alias || n.name, x: n.x, y: n.y, floor: floor })));
+            }
+            return candidatesByFloor.get(floor);
+        };
+        return view.routeTurns(points).map((turn) => {
+            const point = points[turn.index];
+            const landmark = view.turnLandmark(point, candidatesOn(point.floor), KM_LANDMARK_DISTANCE);
+            return Object.assign({}, turn, {
+                floor: point.floor,
+                landmarkId: landmark ? landmark.id : null,
+                phrase: view.turnPhrase(turn.turn, landmark ? landmark.name : ''),
+                arrow: view.turnArrow(turn.turn),
+            });
+        });
+    }
+
+    /** 案内中に濃く出す地点(経路の地点と目印)。前に付けた印は外す */
+    let routeMarkedIds = new Set();
+    function markRouteNodes(ids) {
+        const apply = (id, on) => {
+            // 'poi:<番号>' は一時地点の印(出発地・目的地に選んだとき)
+            const marker = String(id).startsWith('poi:') ? poiMarkers.get(Number(String(id).slice(4))) : markersById.get(id);
+            if (!marker) return;
+            const icon = marker.getElement && marker.getElement();
+            if (icon) icon.classList.toggle('km-on-route', on);
+            const tip = marker.getTooltip && marker.getTooltip();
+            const tipEl = tip && tip.getElement && tip.getElement();
+            if (tipEl) tipEl.classList.toggle('km-on-route', on);
+        };
+        routeMarkedIds.forEach((id) => { if (!ids.has(id)) apply(id, false); });
+        ids.forEach((id) => apply(id, true));
+        routeMarkedIds = ids;
+    }
+    window.kmReapplyRouteMarks = () => { if (routeMarkedIds.size > 0) markRouteNodes(new Set(routeMarkedIds)); };
+
+    /** 地図の上の札(divIcon)。向き(度)があれば ↑ の矢印をその向きへ回す(style 属性は CSP で効かないので CSSOM で入れる) */
+    function guideMarker(latlng, className, html, heading) {
+        const marker = L.marker(latlng, {
+            icon: L.divIcon({ className: 'km-guide-pin ' + className, html: html, iconSize: null }),
+            pane: 'kmRoutePins',
+            interactive: false,
+            keyboard: false,
+        }).addTo(window.map);
+        const arrow = marker.getElement() && marker.getElement().querySelector('.km-guide-arrow');
+        if (arrow) {
+            if (typeof heading === 'number') arrow.style.setProperty('--km-heading', heading + 'deg');
+            else arrow.remove();
+        }
+        return marker;
+    }
+
+    function drawRouteGuides(pathNodeIds) {
+        renderStairGuides();   // 経路の階段の「行ける階」を外す
+        renderHereMarker();    // 今いる場所から始まる経路なら、出発のピンと重ねない
+        const view = window.KmRouteView;
+        const floor = String(window.currentFloor);
+        const onRoute = new Set();
+        pathNodeIds.forEach((id) => {
+            const node = graphData.nodes[id];
+            if (node && node.type !== 'road' && String(node.floor) === floor) onRoute.add(id);
+        });
+        if (routeStartPoi !== null) onRoute.add('poi:' + routeStartPoi);
+        if (routeEndPoi !== null) onRoute.add('poi:' + routeEndPoi);
+        routeTurnList.filter((turn) => turn.floor === floor).forEach((turn) => {
+            const node = graphData.nodes[turn.id];
+            if (turn.landmarkId) onRoute.add(turn.landmarkId);
+            currentMarkers.push(guideMarker([node.y, node.x], 'km-turn-pin',
+                `<span class="km-guide-chip km-turn" title="${escapeHtml(turn.phrase)}"><b aria-hidden="true">${escapeHtml(turn.arrow)}</b><span class="km-guide-text">${escapeHtml(turn.phrase)}</span></span>`));
+        });
+        if (view && view.routeStairMarks) {
+            const pathNodes = pathNodeIds.map((id) => Object.assign({ id: id }, graphData.nodes[id]));
+            view.routeStairMarks(pathNodes, floor, floorLabelFor, Dijkstra.isElevator).forEach((mark) => {
+                const node = graphData.nodes[mark.id];
+                if (!node) return;
+                const heading = mark.arriving ? null : (mark.goingUp === true ? node.stairUpHeading : mark.goingUp === false ? node.stairDownHeading : null);
+                const tone = mark.arriving ? 'is-arriving' : mark.goingUp === true ? 'is-up' : mark.goingUp === false ? 'is-down' : '';
+                currentMarkers.push(guideMarker([node.y, node.x], 'km-stair-pin ' + tone,
+                    `<span class="km-guide-chip km-stair-mark"><span class="km-guide-arrow" aria-hidden="true">↑</span>${escapeHtml(mark.text)}</span>`,
+                    typeof heading === 'number' ? heading : null));
+            });
+        }
+        markRouteNodes(onRoute);
+    }
+
+    /** 拡大したときの、階段の行ける階(経路が無くても出す)。階・拡大率が変わるたびに描き直す */
+    const KM_STAIR_GUIDE_MIN_ZOOM = 0.5;
+    let stairGuideMarkers = [];
+    let allStairs = null;
+    /** 引いて見ているとき(階の全体から 1.5 段未満)は、曲がる所の札を矢印だけにする(札どうし・出発のピンと重なる) */
+    const KM_GUIDE_TEXT_STEPS = 1.5;
+    function renderStairGuides() {
+        window.map.getContainer().classList.toggle('km-guides-compact', floorFitZoom !== null && window.map.getZoom() - floorFitZoom < KM_GUIDE_TEXT_STEPS);
+        stairGuideMarkers.forEach((m) => window.map.removeLayer(m));
+        stairGuideMarkers = [];
+        const view = window.KmRouteView;
+        if (window.isAdmin || !view || !view.stairReach || window.map.getZoom() < KM_STAIR_GUIDE_MIN_ZOOM) return;
+        if (!allStairs) allStairs = Object.entries(graphData.nodes).filter(([, n]) => n.type === 'stairs').map(([id, n]) => Object.assign({ id: id }, n));
+        const floor = String(window.currentFloor);
+        // 経路が通る階段は「▲ 2F へ上る」の札(drawRouteGuides)の方を出す。重ねない
+        const routeIds = new Set(currentRoutePath || []);
+        allStairs.filter((s) => String(s.floor) === floor && !s.hidden && !routeIds.has(s.id)).forEach((stair) => {
+            const reach = view.stairReach(stair, allStairs, Dijkstra.stairKey, Dijkstra.isElevator);
+            const here = view.floorNumber(stair.floor);
+            if (!reach || here === null) return;
+            view.stairReachLines(reach, here).forEach((line, index) => {
+                const heading = line.kind === 'up' ? stair.stairUpHeading : line.kind === 'down' ? stair.stairDownHeading : null;
+                const marker = guideMarker([stair.y, stair.x], 'km-reach-pin is-' + line.kind + ' is-line-' + index,
+                    `<span class="km-guide-chip km-reach"><span class="km-guide-arrow" aria-hidden="true">↑</span>${escapeHtml(line.text)}</span>`,
+                    typeof heading === 'number' ? heading : null);
+                stairGuideMarkers.push(marker);
+            });
+        });
+    }
+    window.map.on('zoomend', renderStairGuides);
 
     function drawPath(pathNodeIds) {
         currentMarkers.forEach(m => window.map.removeLayer(m));
@@ -3196,6 +3524,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             currentMarkers.push(polyline);
             pathBoundsGroup.addLayer(polyline);
         }
+        drawRouteGuides(pathNodeIds);
         /*
          * 寄せるのは**経路を引いた直後の 1 回だけ**(2026-10-23、利用者の指摘「別の階に行くと拡大率がリセットされて面倒」)。
          * 階を移ったあと(案内の帯・階のボタン)は拡大率をそのままにして、その階の経路の始まりへ動かすだけ。
@@ -3324,13 +3653,98 @@ document.addEventListener('DOMContentLoaded', async () => {
      * 目的地と同じ所・地図に無い所・経路に使えない所なら入れない(いつもどおり出発地を選んでもらう)
      */
     function applyTestStart(endId) {
+        // 現在地の QR で決めた「今いる場所」が先(下の hereNodeId)。無ければ展示の場所
         const meta = document.querySelector('meta[name="km-test-start"]');
-        const startId = meta ? meta.getAttribute('content') : '';
+        const startId = hereNodeId() || (meta ? meta.getAttribute('content') : '');
         const node = startId ? graphData.nodes[startId] : null;
         if (!node || startId === endId || !isRoutableNode(node)) return;
         routeStartId = startId;
         routeStartPoi = null;
         if (startInput) startInput.value = getLabelForNode(startId, node);
+    }
+
+    /*
+     * ======== 今いる場所(現在地の QR)========(2026-10-30、振り返りのフェーズ 3 の 6)
+     *
+     * Website は現在地を測れない。校内に貼った QR(`/?here=<地点>`。管理画面「現在地の QR」で印刷)を読むと、その地点を
+     * 「今いる場所」にする。**このタブの間だけ**覚える(sessionStorage。サーバーへは送らない。読めない環境ではこの画面の間だけ)。
+     * 使う所: 経路の出発地が空のとき(applyTestStart)・最初の画面の「今いる場所から」・案内チャットの「現在地」(Main/guide-chat.js)。
+     * 「位置の更新」で選んだ地点も今いる場所にする(本人が「ここにいる」と言った所なので)
+     */
+    const KM_HERE_KEY = 'km-here';
+    let hereMemory = '';
+    function hereNodeId() {
+        let id = hereMemory;
+        try {
+            id = window.sessionStorage.getItem(KM_HERE_KEY) || hereMemory;
+        } catch (e) {
+            // 覚えられない環境。この画面の間だけ
+        }
+        const node = id ? graphData.nodes[id] : null;
+        return node && !node.hidden && isRoutableNode(node) ? id : '';
+    }
+    function setHere(id) {
+        const node = graphData.nodes[id];
+        if (!node || node.hidden || !isRoutableNode(node)) return false;
+        hereMemory = id;
+        try {
+            window.sessionStorage.setItem(KM_HERE_KEY, id);
+        } catch (e) {
+            // この画面の間だけ覚える
+        }
+        renderHereMarker();
+        return true;
+    }
+    /** 最初の画面(Main/entry.js)・案内チャットが使う。無ければ null */
+    window.kmHere = function () {
+        const id = hereNodeId();
+        if (!id) return null;
+        const node = graphData.nodes[id];
+        return { kind: 'node', id: id, name: routeNodeLabel(node), floor: String(node.floor), type: String(node.type), routable: true };
+    };
+
+    let hereMarker = null;
+    function renderHereMarker() {
+        if (hereMarker) window.map.removeLayer(hereMarker);
+        hereMarker = null;
+        const id = hereNodeId();
+        const node = id ? graphData.nodes[id] : null;
+        // 経路が今いる場所から始まるなら、出発のピンがその印になる(重ねない)
+        if (!node || String(node.floor) !== String(window.currentFloor) || (currentRoutePath && currentRoutePath[0] === id)) return;
+        hereMarker = guideMarker([node.y, node.x], 'km-here-pin', '<span class="km-guide-chip km-here">📍 今いる場所</span>');
+    }
+
+    /** `/?here=` で開いたとき: 今いる場所にして、その階を開いて寄せる。出さない地点なら知らせる */
+    let hereFromUrlDone = false;
+    function hereFromUrl() {
+        if (hereFromUrlDone) return;
+        hereFromUrlDone = true;
+        const meta = document.querySelector('meta[name="km-here"]');
+        const id = meta ? meta.getAttribute('content') : '';
+        if (!id) {
+            renderHereMarker();
+            return;
+        }
+        if (!setHere(id)) {
+            showRoomNotice('この QR の場所は今は案内していません。地図から探してください。');
+            return;
+        }
+        const node = graphData.nodes[id];
+        let done = false;
+        const center = () => {
+            if (done) return;
+            done = true;
+            userMovedMap = true;
+            window.map.setView([node.y, node.x], Math.max(window.map.getZoom(), 1));
+            renderHereMarker();
+        };
+        if (String(node.floor) !== String(window.currentFloor) && floorImages[String(node.floor)]) {
+            window.map.once('moveend', center);
+            window.setTimeout(center, 700);
+            changeFloor(String(node.floor));
+        } else {
+            center();
+        }
     }
 
     /**
@@ -3538,9 +3952,16 @@ document.addEventListener('DOMContentLoaded', async () => {
             : `${step.kind === 'goal' ? goalLabel(node) : routeNodeLabel(node)}に向かう`;
         const where = floorLabelFor(step.floor);
         const counter = `${routeStepIndex + 1}/${routeSteps.length}`;
+        /*
+         * 次の曲がり角(2026-10-30、振り返りのフェーズ 3 の 3)。経路はいつも今いる所(出発地か「位置の更新」で選んだ所)から始まるので、
+         * いま目指している所までの最初の曲がり角が「次」。曲がらずに着くなら出さない
+         */
+        const stepAt = currentRoutePath ? currentRoutePath.indexOf(step.nodeId) : -1;
+        const nextTurn = routeTurnList.find((turn) => stepAt < 0 || turn.index < stepAt);
+        const turnHint = nextTurn ? `次: ${nextTurn.arrow} ${nextTurn.phrase} · ` : '';
         routeSub.textContent = step.kind === 'goal'
-            ? `${counter} · ${where} · 目的地`
-            : `${counter} · ${where} · 着いたら ${floorLabelFor(step.nextFloor)} へ`;
+            ? `${turnHint}${counter} · ${where} · 目的地`
+            : `${turnHint}${counter} · ${where} · 着いたら ${floorLabelFor(step.nextFloor)} へ`;
     }
 
     /*
@@ -3659,6 +4080,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!isRoutableNode(node)) return false;
 
         stopPositionPick();
+        // 本人が「ここにいる」と選んだ所。今いる場所にもする(現在地の QR と同じ。最初の画面・案内チャットで使う)
+        setHere(nodeId);
         const goalId = currentRoutePath[currentRoutePath.length - 1];
         if (nodeId === goalId) {
             // 目的地に居る。引き直すものが無い
@@ -3732,10 +4155,14 @@ document.addEventListener('DOMContentLoaded', async () => {
                 iconAnchor: [22, 48],
             }),
         }).addTo(window.map);
+        // 選んだ場所の札は隠さない(declutterLabels の keep)。重なりで隠れていたら出す
+        scheduleDeclutter(true);
     }
     function clearSelected() {
-        if (selectionRing) window.map.removeLayer(selectionRing);
+        if (!selectionRing) return;
+        window.map.removeLayer(selectionRing);
         selectionRing = null;
+        scheduleDeclutter(true);
     }
 
     /** 引き出しが隠している所を避けて、その点が見えるように動かす(拡大率は変えない) */
@@ -3870,7 +4297,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     const rankApi = window.KmSearchRank || null;
     let searchItems = null;
 
-    /** 候補にするもの。地点(人が行く所)・臨時の地点。名前のほかに別名(ポスターの見出し・部屋番号・分類・企画の番号)も引く */
+    /**
+     * 候補にするもの。地点(人が行く所)・臨時の地点。名前のほかに別名(ポスターの見出し・説明・部屋番号・分類・企画の番号)も引く。
+     * 読み・別名(readings。2026-10-30、振り返りのフェーズ 4 の 1。管理画面「読み・別名」)も別名に入れる。
+     * 企画の番号は numbers にも入れ、番号だけで打ったときに先頭へ出す(Main/search-rank.js)
+     */
     function buildSearchItems() {
         const items = [];
         for (const [id, node] of Object.entries(graphData.nodes)) {
@@ -3885,8 +4316,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 floor: String(node.floor),
                 name: project ? project.name : (node.alias || node.name),
                 extras: [node.name, node.alias, node.title, node.subtitle, node.type2, mapStyle.LABELS[node.type]]
-                    .concat(node.projects || [], posters.map(p => p.title))
+                    .concat(node.readings || [], node.projects || [], posters.map(p => p.title), posterSearchExtras(posters))
                     .filter(Boolean),
+                numbers: node.projects || [],
                 type: String(node.type || 'room'),
                 routable: isRoutableNode(node),
                 poster: posters[0] || null,
@@ -3901,13 +4333,26 @@ document.addEventListener('DOMContentLoaded', async () => {
                 id: poi.anchorNodeId || '',
                 floor: String(poi.floor),
                 name: shown.name,
-                extras: [poi.name, KM_POI_LABELS[poi.category] || '', poi.note || ''].concat(posters.map(p => p.title)).filter(Boolean),
+                extras: [poi.name, KM_POI_LABELS[poi.category] || '', poi.note || '']
+                    .concat(poi.readings || [], posters.map(p => p.title), posterSearchExtras(posters)).filter(Boolean),
+                // 名前が番号の一時地点(「21」)は番号でもある
+                numbers: /^[0-9A-Za-z][0-9A-Za-z_-]{0,15}$/.test(String(poi.name || '').trim()) ? [String(poi.name).trim()] : [],
                 type: poiNodeType(poi),
                 routable: Boolean(poi.anchorNodeId && graphData.nodes[poi.anchorNodeId]),
                 poster: posters[0] || null,
             });
         });
         return items;
+    }
+
+    /** ポスターの説明と読み(2026-10-30、振り返りのフェーズ 4 の 1「ポスターの説明も検索に入れる」) */
+    function posterSearchExtras(posters) {
+        const out = [];
+        posters.forEach(p => {
+            if (p.description) out.push(p.description);
+            (p.readings || []).forEach(r => out.push(r));
+        });
+        return out;
     }
 
     function searchCandidates(query, onlyRoutable) {
@@ -3917,13 +4362,53 @@ document.addEventListener('DOMContentLoaded', async () => {
         return rankApi.rank(pool, query, { floor: String(window.currentFloor), limit: 8 });
     }
 
+    /** 何も当たらなかったときの「もしかして」(2026-10-30、振り返りのフェーズ 4 の 2。AI を使わない)。無ければ null */
+    function suggestCandidate(query, onlyRoutable, types) {
+        if (!rankApi || typeof rankApi.suggest !== 'function') return null;
+        if (!searchItems) searchItems = buildSearchItems();
+        const pool = searchItems.filter(item => (!onlyRoutable || item.routable) && (!types || types.indexOf(item.type) >= 0));
+        return rankApi.suggest(pool, query);
+    }
+
+    /*
+     * 最初の画面(Main/entry.js。2026-10-30、振り返りのフェーズ 3 の 1)が使う口。地図の検索と同じ一致率・同じアイコン。
+     * opts.types は種類で絞る(「部屋の名前から」は room だけ)。opts.onlyRoutable は出発地を選ぶとき
+     */
+    window.kmEntryApi = {
+        search(query, opts) {
+            const o = opts || {};
+            if (!rankApi || String(query || '').trim() === '') return [];
+            if (!searchItems) searchItems = buildSearchItems();
+            const pool = searchItems.filter(item => (!o.onlyRoutable || item.routable) && (!o.types || o.types.indexOf(item.type) >= 0));
+            return rankApi.rank(pool, String(query).trim(), { floor: String(window.currentFloor), limit: o.limit || 12 });
+        },
+        /** 当たらないときの「もしかして」(1 件か null) */
+        suggest(query, opts) {
+            const o = opts || {};
+            return String(query || '').trim() === '' ? null : suggestCandidate(String(query).trim(), !!o.onlyRoutable, o.types);
+        },
+        icon: candidateIcon,
+        sub(item) {
+            return [floorText(item.floor), item.kind === 'poi' ? '臨時' : (mapStyle.LABELS[item.type] || '')].filter(Boolean).join(' · ');
+        },
+        open(item) {
+            if (item.kind === 'poi') goToPlace({ poiId: item.poiId });
+            else goToPlace({ nodeId: item.id });
+        },
+        route(to, from) {
+            window.setAsLocation(to.id, 'end', Object.assign(to.kind === 'poi' ? { poiId: to.poiId } : {}, { noTestStart: !!from }));
+            if (from) window.setAsLocation(from.id, 'start', from.kind === 'poi' ? { poiId: from.poiId } : undefined);
+        },
+    };
+
     /** 候補のアイコン。ポスターがあればその画像、無ければ種類の色と形(地図の点と同じ) */
     function candidateIcon(item) {
         const box = document.createElement('span');
         box.className = 'km-result-icon';
         if (item.poster && item.poster.imageUrl) {
             const img = document.createElement('img');
-            img.src = item.poster.imageUrl;
+            // 小さなアイコンなので縮小版(2026-10-30。lib/image-thumb.php)
+            img.src = item.poster.thumbUrl || item.poster.imageUrl;
             img.alt = '';
             img.loading = 'lazy';
             img.decoding = 'async';
@@ -3977,10 +4462,15 @@ document.addEventListener('DOMContentLoaded', async () => {
             list.innerHTML = '';
             if (query === '') { close(); return; }
             if (items.length === 0) {
+                // もしかして(2026-10-30)。一番近いものを 1 件だけ候補に出す(押せばそれを選ぶ)
+                const guess = suggestCandidate(query, onlyRoutable);
                 const empty = document.createElement('li');
                 empty.className = 'km-result-empty';
-                empty.textContent = '見つかりませんでした。別の言葉で探すか、下の種類のボタンを使ってください。';
+                empty.textContent = guess
+                    ? '見つかりませんでした。もしかして、こちらですか？'
+                    : '見つかりませんでした。別の言葉で探すか、下の種類のボタンを使ってください。';
                 list.appendChild(empty);
+                if (guess) items = [guess];
             }
             items.forEach((item, index) => {
                 const li = document.createElement('li');
@@ -4080,42 +4570,82 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     /* ---------------- 種類でまとめて探す(チップ) ---------------- */
 
-    const CATEGORY_PATTERNS = {
-        WC: /WC|トイレ|便所|お手洗い/i,
-        stairs: /階段|エレベーター|EV/i,
-        room: /室|教室|実験|講義|ラボ/i,
-        facility: /棟|館|ホール|センター/i,
+    /*
+     * ======== ジャンル(大 → 小) ========(2026-10-30、振り返りのフェーズ 3 の 2)
+     *
+     * 振り返り: 「トイレの一時地点が 🚻 に出ない」「食べる所・休める所を探したい」。それまでのチップは地点(恒久)だけを見て、
+     * 一時地点(模擬店・救護・臨時のトイレ)を拾っていなかった。
+     * 大きなジャンルごとに、入る一時地点の種類(poi)・地点の種類(types)・名前の言葉(pattern)・企画の地点(projects)を決める。
+     * 結果は小さい分類(一時地点の種類・地点の種類)ごとに見出しを付けて並べる(大 → 小)。
+     * 当てはまる所が 1 つも無いジャンルはチップを出さない(会期の外に「食べる・飲む」が空で並ばないように)。
+     * 最初の画面(Main/entry.js)の「ジャンルから」は、出ているチップをそのまま並べる。
+     */
+    const KM_GENRES = {
+        WC: { poi: ['toilet'], pattern: /WC|トイレ|便所|お手洗い/i, label: 'トイレ' },
+        food: { poi: ['food'], pattern: /食堂|売店|カフェ|喫茶|模擬店|自販機|自動販売/, label: '食堂・売店' },
+        exhibit: { poi: ['exhibit'], projects: true },
+        experience: { poi: ['experience'], pattern: /体験|ワークショップ/, label: '体験' },
+        rest: { poi: ['rest'], pattern: /休憩|ラウンジ|ロビー|ベンチ/, label: '休める所' },
+        help: { poi: ['reception', 'firstaid'], pattern: /受付|保健|救護|案内所/, label: '受付・保健室' },
+        stage: { poi: ['stage'], pattern: /ステージ/, label: 'ステージ' },
+        stairs: { types: ['stairs'], pattern: /階段|エレベーター|EV/i },
+        room: { types: ['room'], pattern: /室|教室|実験|講義|ラボ/i },
+        facility: { types: ['facility'], pattern: /棟|館|ホール|センター/i },
+        event: { allPoi: true, projects: true },
     };
+
+    /** そのジャンルに入る場所。group は小さい分類の名前(見出しにする) */
+    function genreResults(key) {
+        const genre = KM_GENRES[key];
+        if (!genre) return [];
+        const results = [];
+        const seen = new Set();
+        (graphData.eventPois || []).forEach(poi => {
+            const category = KM_POI_LABELS[poi.category] ? poi.category : 'other';
+            if (!genre.allPoi && !(genre.poi || []).includes(category)) return;
+            results.push({ poiId: Number(poi.id), name: poiDisplay(poi).name, floor: String(poi.floor), type: 'room', group: category === 'other' ? KM_POI_LABELS.other : '臨時の' + KM_POI_LABELS[category], poster: (postersByNode.get('poi:' + poi.id) || [])[0] || null });
+        });
+        for (const [id, node] of Object.entries(graphData.nodes)) {
+            // 人が行ける場所だけ。通路の点・壁・Wi-Fi ルーター・イベント中に出さない地点は出さない
+            if (node.type === 'road' || node.type === 'wall' || node.type === 'wifi_router' || node.type === 'area' || node.hidden) continue;
+            const shownName = node.alias || node.name;
+            const isProject = Array.isArray(node.projects) && node.projects.length > 0;
+            const byProject = genre.projects && isProject;
+            const byType = (genre.types || []).includes(String(node.type));
+            const byName = genre.pattern && (genre.pattern.test(node.name || '') || genre.pattern.test(shownName || '') || genre.pattern.test(node.type2 || ''));
+            if (!byProject && !byType && !byName) continue;
+            if (seen.has(id)) continue;
+            seen.add(id);
+            const project = isProject ? projectDisplayFor(id, node) : null;
+            results.push({
+                id: id,
+                name: project ? project.name : shownName,
+                floor: String(node.floor),
+                type: String(node.type),
+                // 常設の場所はジャンルの言葉(トイレなら「トイレ」)。階段・教室・建物のジャンルは地点の種類の言葉
+                group: byProject ? '企画' : (genre.label || mapStyle.LABELS[node.type] || '場所'),
+                poster: (postersByNode.get(id) || [])[0] || null,
+            });
+        }
+        // 小さい分類の順(最初に出てきた順)→ いまの階を先に → 階の順 → 名前の順
+        const groupOrder = [];
+        results.forEach(r => { if (!groupOrder.includes(r.group)) groupOrder.push(r.group); });
+        const current = String(window.currentFloor);
+        results.sort((a, b) => groupOrder.indexOf(a.group) - groupOrder.indexOf(b.group)
+            || (a.floor === current ? 0 : 1) - (b.floor === current ? 0 : 1)
+            || String(a.floor).localeCompare(String(b.floor), 'ja', { numeric: true })
+            || String(a.name).localeCompare(String(b.name), 'ja'));
+        return results;
+    }
+
     document.querySelectorAll('[data-km-category]').forEach((chip) => {
+        const key = chip.dataset.kmCategory;
+        // 当てはまる所が無いジャンルは出さない(イベントのチップは index.php が会期中だけ置く)
+        chip.hidden = genreResults(key).length === 0;
         chip.addEventListener('click', () => {
-            const type = chip.dataset.kmCategory;
             const title = chip.textContent.trim();
             testLog('category', { text: title });
-            const results = [];
-            if (type === 'event') {
-                (graphData.eventPois || []).forEach(poi => results.push({ poiId: Number(poi.id), name: poiDisplay(poi).name, floor: String(poi.floor), type: 'room', poster: (postersByNode.get('poi:' + poi.id) || [])[0] || null }));
-                for (const [id, node] of Object.entries(graphData.nodes)) {
-                    if (node.hidden || !Array.isArray(node.projects) || node.projects.length === 0) continue;
-                    const project = projectDisplayFor(id, node);
-                    results.push({ id: id, name: project ? project.name : displayNameFor(node), floor: String(node.floor), type: String(node.type), poster: (postersByNode.get(id) || [])[0] || null });
-                }
-            } else {
-                const pattern = CATEGORY_PATTERNS[type];
-                for (const [id, node] of Object.entries(graphData.nodes)) {
-                    // 人が行ける場所だけ。通路の点・壁・Wi-Fi ルーター・イベント中に出さない地点は出さない
-                    if (node.type === 'road' || node.type === 'wall' || node.type === 'wifi_router' || node.hidden) continue;
-                    const shownName = node.alias || node.name;
-                    if (node.type === type || (pattern && (pattern.test(node.name) || pattern.test(shownName)))) {
-                        results.push({ id: id, name: shownName, floor: String(node.floor), type: String(node.type), poster: (postersByNode.get(id) || [])[0] || null });
-                    }
-                }
-            }
-            // いまの階を先に、そのあと階の順・名前の順
-            const current = String(window.currentFloor);
-            results.sort((a, b) => (a.floor === current ? 0 : 1) - (b.floor === current ? 0 : 1)
-                || String(a.floor).localeCompare(String(b.floor), 'ja', { numeric: true })
-                || String(a.name).localeCompare(String(b.name), 'ja'));
-            showCategoryResults(title, results);
+            showCategoryResults(title, genreResults(key));
         });
     });
 
@@ -4130,7 +4660,18 @@ document.addEventListener('DOMContentLoaded', async () => {
         box.appendChild(count);
         const list = document.createElement('ul');
         list.className = 'km-category-list';
+        // 小さい分類が 2 つ以上なら見出しを入れる(大 → 小。genreResults が分類の順に並べてある)
+        const groups = new Set(results.map(item => item.group).filter(Boolean));
+        let lastGroup = null;
         results.forEach(item => {
+            if (groups.size > 1 && item.group !== lastGroup) {
+                lastGroup = item.group;
+                const heading = document.createElement('li');
+                heading.className = 'km-category-group';
+                heading.setAttribute('role', 'presentation');
+                heading.textContent = `${item.group}(${results.filter(r => r.group === item.group).length})`;
+                list.appendChild(heading);
+            }
             const li = document.createElement('li');
             const button = document.createElement('button');
             button.type = 'button';
@@ -4241,7 +4782,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             link.href = poster.linkUrl;
             link.target = '_blank';
             link.rel = 'noopener noreferrer';
-            link.textContent = 'くわしく見る ↗';
+            link.textContent = '🌐 外のサイトで見る ↗';
             // 押したら数える(Main/poster-stats.js。同じ端末は 1 人)
             link.setAttribute('data-km-poster-link', String(Number(poster.id)));
             actions.appendChild(link);

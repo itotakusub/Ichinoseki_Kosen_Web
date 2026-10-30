@@ -10,7 +10,11 @@
  *   1. 元の位置(点の真上)と、上下に少しずらした位置
  *   2. 点の右・左・下にぴったり付けた位置(線は要らない)
  *   3. 点から離した位置(8 方向・2 段の距離)。**点と札を細い線で結ぶ**
- *   4. それでも置けないとき: 屋外は札を出さない(点は残る)/ 建物の中は元の位置のまま重ねる
+ *   4. それでも置けないとき: 札を出さない(点は残る。押せば名前が分かり、拡大すると出てくる)
+ *
+ * 2026-10-30 から**建物の中でも隠す**(振り返りのフェーズ 2、利用者の判断「B」。重なった札で部屋名がどれも読めなかった)。
+ * それまでは建物の中だけ元の位置のまま重ねていた(2026-09-25)。`hideWhenCrowded: false` でその動きに戻る。
+ * **keep の札(選んだ場所)は隠さない**: 誰よりも先に置き、置けなければ元の位置で重ねる。
  *
  * 2 と 3 では、ほかの点も避ける(札で点を隠すと、押せる物が見えなくなる)。
  * 線はほかの札を横切らせない(どの札の線か分からなくなる)。線どうしの交差は許す。
@@ -135,7 +139,7 @@
     }
 
     /**
-     * @param items [{ box:{left,top,right,bottom}, anchor:{x,y}|null, radius, priority }]
+     * @param items [{ box:{left,top,right,bottom}, anchor:{x,y}|null, radius, priority, keep? }]
      * @param options { hideWhenCrowded, bounds?, nodes?:[{x,y,radius}], nudges?, margin? }
      * @return 入力と同じ並びで { dx, dy, leader:{x1,y1,x2,y2}|null }。**null は「札を出さない」**
      */
@@ -149,6 +153,8 @@
         });
 
         const order = items.map(function (_, i) { return i; }).sort(function (a, b) {
+            const byKeep = (items[b].keep ? 1 : 0) - (items[a].keep ? 1 : 0);
+            if (byKeep !== 0) return byKeep;
             const byType = (items[a].priority === undefined ? 9 : items[a].priority)
                 - (items[b].priority === undefined ? 9 : items[b].priority);
             if (byType !== 0) return byType;
@@ -187,8 +193,8 @@
                 result[index] = { dx: c.dx, dy: c.dy, leader: leader };
                 return;
             }
-            if (!hide) {
-                // 建物の中: 消さずに元の位置で重ねる(部屋名が欠けると探せない)
+            if (!hide || item.keep) {
+                // 選んだ場所(keep)と、hideWhenCrowded: false のとき: 消さずに元の位置で重ねる
                 placed.push(item.box);
                 result[index] = { dx: 0, dy: 0, leader: null };
             }

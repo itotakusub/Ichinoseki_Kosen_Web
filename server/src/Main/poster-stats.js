@@ -48,11 +48,33 @@
         if (kind === 'click' || kind === 'impression') send(id, kind);
     };
 
+    /*
+     * 外のサイトへ出る前に 1 度確かめる(2026-10-30、振り返りのフェーズ 3 の 5「地図で見る と くわしく見る を押し間違える」)。
+     * 行き先のサイト名を出す。やめたら移らず、数えもしない。中ボタン(新しいタブ)は本人がタブを選んでいるので聞かない
+     */
+    function confirmLeave(link) {
+        let host = '';
+        try {
+            const url = new URL(link.href, window.location.href);
+            if (url.origin === window.location.origin) return true;
+            host = url.hostname;
+        } catch (error) {
+            return true;
+        }
+        return window.confirm('外のサイト(' + host + ')へ移ります。\n地図に戻るときは、このタブに戻ってください。');
+    }
+
     // 中ボタン(新しいタブで開く)も数える。捕まえる段階で受ける(地図の吹き出しは中で止めることがある)
     ['click', 'auxclick'].forEach(function (type) {
         document.addEventListener(type, function (event) {
             const link = event.target && event.target.closest ? event.target.closest('a[data-km-poster-link]') : null;
-            if (link) window.kmPosterStat(link.getAttribute('data-km-poster-link'), 'click');
+            if (!link) return;
+            if (type === 'click' && !confirmLeave(link)) {
+                event.preventDefault();
+                event.stopPropagation();
+                return;
+            }
+            window.kmPosterStat(link.getAttribute('data-km-poster-link'), 'click');
         }, true);
     });
 }());

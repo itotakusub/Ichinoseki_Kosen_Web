@@ -221,6 +221,13 @@ $kmNodeIdParam = static function (string $name): ?string {
 };
 $kmFocusFrom = $kmNodeIdParam('from');
 $kmFocusTo = $kmNodeIdParam('to');
+/*
+ * 校内に貼る「現在地の QR」(2026-10-30、振り返りのフェーズ 3 の 6)。`/?here=<地点の id>`。
+ * その地点を「今いる場所」にする(このタブの間だけ。Main/app.js が sessionStorage に覚える)。経路の出発地・案内チャットの「現在地」に使う。
+ * **共有のリンクとは数えない** —— 現在地の QR を読んだ人は、これから行き先を探す人なので、最初の画面(Main/entry.js)を出す。
+ * 印刷は管理画面「現在地の QR」(admin/map-here-qr.php)
+ */
+$kmHere = $kmNodeIdParam('here');
 $kmPoiParam = static function (string $name): ?string {
     $value = $_GET[$name] ?? '';
     return is_string($value) && preg_match('/^[1-9]\d{0,9}$/', $value) === 1 ? $value : null;
@@ -382,6 +389,10 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
     <?php endif; ?>
     <?php if ($kmFocusPoi !== null): ?>
         <meta name="km-focus-poi" content="<?= km_home_e($kmFocusPoi) ?>">
+    <?php endif; ?>
+    <?php if ($kmHere !== null): ?>
+        <?php /* 現在地の QR(上の $kmHere。32 字の 16 進だけ)。Main/app.js の hereFromUrl が読む */ ?>
+        <meta name="km-here" content="<?= km_home_e($kmHere) ?>">
     <?php endif; ?>
     <?php if ($kmFromShare): ?>
         <?php /* 共有のリンクから開いた印(上の $kmFromShare)。チュートリアル・はじめに・前回の経路を出さない。広告は出す(Main/tutorial-end.js の kmShowAd) */ ?>
@@ -588,14 +599,26 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
         ?>
         <div id="km-searchbox" class="km-searchbox glass-panel" role="search">
             <span class="km-searchbox-logo" aria-hidden="true" title="KosenMap">📍</span>
-            <input id="km-place-input" class="km-searchbox-input" type="search" placeholder="場所を検索" autocomplete="off" spellcheck="false"
+            <input id="km-place-input" class="km-searchbox-input" type="search" placeholder="場所・企画の番号で検索" autocomplete="off" spellcheck="false"
                    aria-label="場所を検索" role="combobox" aria-expanded="false" aria-controls="km-place-results" aria-autocomplete="list">
             <button id="km-place-clear" type="button" class="km-searchbox-btn" title="消す" aria-label="検索の言葉を消す" hidden>&times;</button>
             <button id="km-route-open" type="button" class="km-searchbox-btn km-searchbox-route" title="経路を調べる" aria-label="経路を調べる" aria-controls="search-panel">🧭</button>
             <ul id="km-place-results" class="km-search-results" role="listbox" aria-label="検索の候補" hidden></ul>
         </div>
-        <div id="km-category-chips" class="km-chips" role="toolbar" aria-label="種類でまとめて探す">
+        <?php
+        /*
+         * ジャンル(2026-10-30、振り返りのフェーズ 3 の 2)。中身は Main/app.js の KM_GENRES(一時地点の種類・地点の種類・名前の言葉)。
+         * 当てはまる所が無いジャンルは app.js が隠す(会期の外は「食べる・飲む」などが出ない)
+         */
+        ?>
+        <div id="km-category-chips" class="km-chips" role="toolbar" aria-label="ジャンルで探す">
             <button type="button" class="km-chip" data-km-category="WC">🚻 トイレ</button>
+            <button type="button" class="km-chip" data-km-category="food">🍢 食べる・飲む</button>
+            <button type="button" class="km-chip" data-km-category="exhibit">🎨 見る(展示)</button>
+            <button type="button" class="km-chip" data-km-category="experience">🧪 体験</button>
+            <button type="button" class="km-chip" data-km-category="rest">🪑 休む・座れる</button>
+            <button type="button" class="km-chip" data-km-category="help">📋 受付・救護</button>
+            <button type="button" class="km-chip" data-km-category="stage">🎤 ステージ</button>
             <button type="button" class="km-chip" data-km-category="stairs">🏃 階段・EV</button>
             <button type="button" class="km-chip" data-km-category="room">📖 教室</button>
             <button type="button" class="km-chip" data-km-category="facility">🏢 建物</button>
@@ -721,6 +744,11 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
          */
         ?>
         <div class="km-action-bar" id="km-action-bar">
+            <?php /* 最初の画面を開き直す(2026-10-30。Main/entry.js) */ ?>
+            <button type="button" class="km-action-btn" data-km-entry-open title="最初の画面(探し方を選ぶ)" aria-label="最初の画面を開く(探し方を選ぶ)">
+                <span class="km-action-icon" aria-hidden="true">🏠</span>
+                <span class="km-action-label">はじめ</span>
+            </button>
             <?php
             /*
              * ⚙️ ダウンロード・設定と 🖼️ ポスターも、上のバーからここへ移した(2026-10-23、利用者の指示)。
@@ -1233,12 +1261,16 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
         <script defer src="<?= km_home_e(km_public_asset('Main/test-mode.js')) ?>"></script>
     <?php endif; ?>
     <script defer src="<?= km_home_e(km_public_asset('Main/app.js')) ?>"></script>
+    <?php /* 全画面のボタンと、全画面・横画面で上の帯を隠す(2026-10-30、振り返りのフェーズ 2)。**app.js の後に**読む(地図の右下にボタンを置く) */ ?>
+    <script defer src="<?= km_home_e(km_public_asset('Main/top-bar.js')) ?>"></script>
     <?php /* 戻るボタンでメモリから戻った画面のサインインの状態が古ければ読み直す(2026-10-25、利用者「戻るボタンでログインが切れる」) */ ?>
     <script defer src="<?= km_home_e(km_public_asset('Main/back-refresh.js')) ?>"></script>
     <?php /* 企画のスケジュールの一覧(2026-10-23。lib/event-schedule.php)。一般に出す行があるときだけ「予定」を出す */ ?>
     <script defer src="<?= km_home_e(km_public_asset('Main/event-schedule.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/panel.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/welcome.js')) ?>"></script>
+    <?php /* 最初の画面(2026-10-30、振り返りのフェーズ 3 の 1)。「はじめに」の後・**tutorial.js より先に**読む(tutorial.js は window.kmEntry があれば自動で始めない) */ ?>
+    <script defer src="<?= km_home_e(km_public_asset('Main/entry.js')) ?>"></script>
     <?php /* 初回の操作案内(2026-10-15)。「はじめに」を閉じてから・地図が出てから始める。スイッチが OFF なら読まない(2026-10-24。lib/map-switches.php) */ ?>
     <?php if ($kmSwitches['tutorial']): ?>
         <script defer src="<?= km_home_e(km_public_asset('Main/tutorial.js')) ?>"></script>

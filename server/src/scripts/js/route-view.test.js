@@ -61,5 +61,48 @@ check('空・null は飛ばす', ['1', 'outside'], view.routeFloorSequence(['1',
 check('数でも文字にそろえる', ['1', '2'], view.routeFloorSequence([1, 1, 2]));
 check('配列でなければ空', [], view.routeFloorSequence(null));
 
+console.log('== route-view: 曲がる所(2026-10-30。アプリの RouteInstructions.kt と同じ角度) ==');
+const p = (id, x, y, floor) => ({ id, x, y, floor: floor || '1' });
+// 上が +y(Web の地図)。東へ進んでから北(上)へ = 左へ曲がる
+check('東 → 北は左(上が +y)', [{ index: 1, id: 'b', turn: 'left', degrees: 90 }], view.routeTurns([p('a', 0, 0), p('b', 10, 0), p('c', 10, 10)]));
+check('東 → 南は右', 'right', view.routeTurns([p('a', 0, 0), p('b', 10, 0), p('c', 10, -10)])[0].turn);
+check('アプリの向き(下が +y)なら同じ動きは左右が逆', 'right', view.routeTurns([p('a', 0, 0), p('b', 10, 0), p('c', 10, 10)], { yDown: true })[0].turn);
+check('19° は直進(手順にしない)', [], view.routeTurns([p('a', 0, 0), p('b', 10, 0), p('c', 20, 3.4)]));
+check('45° は斜め', 'slight-left', view.routeTurns([p('a', 0, 0), p('b', 10, 0), p('c', 20, 10)])[0].turn);
+check('150° は引き返す', 'back', view.routeTurns([p('a', 0, 0), p('b', 10, 0), p('c', 1.3, 5)])[0].turn);
+check('階が変わる所で向きを数え直す', [], view.routeTurns([p('a', 0, 0), p('b', 10, 0), p('s2', 10, 0, '2'), p('c', 10, 10, '2')]));
+check('短すぎる区間は向きに使わない(点のずれで曲がらない)', [], view.routeTurns([p('a', 0, 0), p('b', 10, 0), p('b2', 10, 1), p('c', 20, 1)]));
+
+const marks = [
+    { id: 'b', name: '', x: 10, y: 0, floor: '1' },
+    { id: 'r1', name: '講義室1', x: 14, y: 3, floor: '1' },
+    { id: 'r2', name: '遠い部屋', x: 200, y: 0, floor: '1' },
+    { id: 'r3', name: '上の階', x: 10, y: 1, floor: '2' },
+];
+check('目印: 近くの名前のある地点', 'r1', (view.turnLandmark(p('b', 10, 0), marks, 40) || {}).id);
+check('目印: 曲がる地点に名前があればそれ', 's', (view.turnLandmark(p('s', 10, 0), marks.concat([{ id: 's', name: 'A階段', x: 10, y: 0, floor: '1' }]), 40) || {}).id);
+check('目印: 遠い・別の階は使わない', null, view.turnLandmark(p('b', 100, 100), marks, 40));
+check('言い方: 目印あり', '講義室1を目印に右へ', view.turnPhrase('right', '講義室1'));
+check('言い方: 目印なし', '左へ曲がる', view.turnPhrase('left', ''));
+check('言い方: 引き返す', 'A階段で引き返す', view.turnPhrase('back', 'A階段'));
+
+console.log('== route-view: 階段の上り・下り(アプリの StairGuide.kt と同じ) ==');
+const key = (n) => n.group;
+const isEv = (n) => /エレベーター/.test(n.name || '');
+const s = (id, floor, group, name) => ({ id, type: 'stairs', floor, group, name: name || '' });
+const stairs = [s('a1', '1', 'A'), s('a2', '2', 'A'), s('a3', '3', 'A'), s('a5', '5', 'A'), s('e1', '1', 'E', 'エレベーター'), s('e3', '3', 'E', 'エレベーター')];
+check('行ける階: 上は近い順・下も近い順', { up: [3, 5], down: [1], elevator: false }, view.stairReach(stairs[1], stairs, key, isEv));
+check('階の並び: 続いていれば〜', '2〜5F', view.floorRangeLabel([5, 3, 2, 4]));
+check('階の並び: 飛んでいれば・', '3・5F', view.floorRangeLabel([5, 3]));
+check('札: 上行き・下行き', ['▲上行き 3・5F', '▼下行き 1F'], view.stairReachLines(view.stairReach(stairs[1], stairs, key, isEv), 2).map((l) => l.text));
+check('札: エレベーターは ⇅ 1 行(今の階も)', ['⇅ 1・3F'], view.stairReachLines(view.stairReach(stairs[4], stairs, key, isEv), 1).map((l) => l.text));
+check('組の無い階段は null', null, view.stairReach(s('z', '1', 'Z'), stairs, key, isEv));
+const label = (f) => (f === 'outside' ? '外' : f + 'F');
+const routeNodes = [{ id: 'r', type: 'room', floor: '1' }, stairs[0], stairs[1], { id: 'x', type: 'room', floor: '2' }];
+check('経路の札: 出発の階は「▲ 2F へ上る」', [{ id: 'a1', text: '▲ 2F へ上る', goingUp: true, arriving: false }], view.routeStairMarks(routeNodes, '1', label, isEv));
+check('経路の札: 着いた階は「1F から到着」', [{ id: 'a2', text: '1F から到着', goingUp: true, arriving: true }], view.routeStairMarks(routeNodes, '2', label, isEv));
+check('経路の札: 下りる', '▼ 1F へ下りる', view.routeStairMarks(routeNodes.slice().reverse(), '2', label, isEv)[0].text);
+check('経路の札: エレベーター', 'エレベーターで 3F へ', view.routeStairMarks([stairs[4], stairs[5]], '1', label, isEv)[0].text);
+
 console.log(`\n${count - failures} / ${count} 件通過`);
 if (failures > 0) process.exit(1);

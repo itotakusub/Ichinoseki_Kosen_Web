@@ -29,6 +29,8 @@ $openMenus = [
     'schedule' => 'database',
     'mapFloors' => 'database',
     'mapAreas' => 'database',
+    'mapHereQr' => 'database',
+    'searchAliases' => 'database',
     'login' => 'auth',
     'projects' => 'content',
     'timeline' => 'content',
@@ -184,6 +186,20 @@ $parentLink = static fn(string $id): string => 'nav-link' . ($openMenu === $id ?
                     <a href="./map-areas.php" class="<?= $link('mapAreas') ?>">
                       <i class="nav-icon bi bi-palette"></i>
                       <p data-i18n="side.mapAreas">地図の色分け</p>
+                    </a>
+                  </li>
+                  <?php // 校内に貼る現在地の QR(2026-10-30。/?here=<地点>。読むとそこを今いる場所にした地図が開く) ?>
+                  <li class="nav-item">
+                    <a href="./map-here-qr.php" class="<?= $link('mapHereQr') ?>">
+                      <i class="nav-icon bi bi-qr-code"></i>
+                      <p data-i18n="side.mapHereQr">現在地の QR</p>
+                    </a>
+                  </li>
+                  <?php // 読み・別名(2026-10-30。lib/search-aliases.php。検索・案内チャット・アプリの検索に入る) ?>
+                  <li class="nav-item">
+                    <a href="./search-aliases.php" class="<?= $link('searchAliases') ?>">
+                      <i class="nav-icon bi bi-alphabet"></i>
+                      <p data-i18n="side.searchAliases">読み・別名</p>
                     </a>
                   </li>
                   <?php // ポスター・広告と地点の URL(2026-10-21、lib/posters.php) ?>

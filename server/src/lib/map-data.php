@@ -223,6 +223,8 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
         'type2' => null,
         'note' => null,
         'transfer_group_id' => 'transferGroupId',
+        // 階段の向きを引くためだけに読む(下で外す。2026-10-30)
+        'uuid' => null,
     ];
     foreach ($optionalColumns as $column => $alias) {
         if (!in_array($column, $available, true)) {
@@ -237,6 +239,12 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
     // 企画の番号(2026-10-23。lib/map-node-projects.php。管理アプリで振る)。表が無ければ空
     require_once __DIR__ . '/map-node-projects.php';
     $projectsById = km_map_projects_with_aliases(km_map_projects_by_node_id($pdo), $overlay['aliases']);
+    /*
+     * 階段の上り口・下り口の向き(2026-10-30、振り返りのフェーズ 3 の 3。lib/map-node-stairs.php。管理アプリで入れる)。
+     * 経路の「▲ 2F へ上る」に矢印を添える(Main/app.js)。表が無ければ空。uuid で引き、uuid そのものは出さない
+     */
+    require_once __DIR__ . '/map-node-stairs.php';
+    $stairHeadings = km_map_node_stairs_all($pdo);
     $nodesById = [];
     $nodeTypes = [];
     foreach ($nodeStmt->fetchAll() as $node) {
@@ -273,6 +281,16 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
          */
         $node['x'] = (float) $node['x'];
         $node['y'] = (float) $node['y'];
+        if (array_key_exists('uuid', $node)) {
+            $heading = (string) ($node['type'] ?? '') === 'stairs' ? ($stairHeadings[(string) $node['uuid']] ?? null) : null;
+            if ($heading !== null && $heading['up'] !== null) {
+                $node['stairUpHeading'] = $heading['up'];
+            }
+            if ($heading !== null && $heading['down'] !== null) {
+                $node['stairDownHeading'] = $heading['down'];
+            }
+            unset($node['uuid']);
+        }
         $id = (string) $node['id'];
         $nodeTypes[$id] = (string) $node['type'];
         if (isset($overlay['closedNodes'][$id])) {
@@ -395,7 +413,11 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
         ];
     }
 
-    return [
+    /*
+     * 読み・別名(2026-10-30、振り返りのフェーズ 4 の 1。lib/search-aliases.php)を、出している地点・一時地点・ポスターにだけ付ける。表が無ければ付けない
+     */
+    require_once __DIR__ . '/search-aliases.php';
+    return km_search_aliases_apply([
         'floors' => $floors,
         'nodes' => $nodesById,
         'edges' => $edges,
@@ -434,7 +456,7 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
             $stored = km_route_weights_stored($pdo);
             return $stored === null ? null : km_route_weights_for_web($stored);
         })(),
-    ];
+    ], km_search_aliases_all($pdo));
 }
 
 /**

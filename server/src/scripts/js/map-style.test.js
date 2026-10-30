@@ -168,6 +168,16 @@ check('「そのまま」なら薄くしない', false, style.facilityFaded(show
 const noNames = Object.assign({}, tuning, { roomNames: false });
 check('建物名を消していれば出さない', false, style.isVisible(noNames, 'facility', 1, 'outside'));
 
+heading('軽い表示(2026-10-30、振り返りのフェーズ 2)');
+check('既定は自動', 'auto', style.DEFAULTS.liteMode);
+check('自動: メモリ 2GB は軽くする', true, style.liteActive({ liteMode: 'auto' }, { deviceMemory: 2, cores: 8 }));
+check('自動: 4 コアは軽くする', true, style.liteActive({ liteMode: 'auto' }, { cores: 4 }));
+check('自動: データ節約は軽くする', true, style.liteActive({ liteMode: 'auto' }, { saveData: true, cores: 8, deviceMemory: 8 }));
+check('自動: 8GB・8 コアは軽くしない', false, style.liteActive({ liteMode: 'auto' }, { deviceMemory: 8, cores: 8 }));
+check('自動: 分からなければ軽くしない(Safari は deviceMemory も無い)', false, style.liteActive({ liteMode: 'auto' }, {}));
+check('いつも軽く', true, style.liteActive({ liteMode: 'on' }, { deviceMemory: 8, cores: 8 }));
+check('軽くしない', false, style.liteActive({ liteMode: 'off' }, { deviceMemory: 1, cores: 2, saveData: true }));
+
 console.log('');
 if (failures === 0) {
     console.log(`すべて通過 (${count} 件)`);

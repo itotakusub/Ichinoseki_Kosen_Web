@@ -174,8 +174,24 @@ if ($contentType === null) {
     exit;
 }
 
+/*
+ * 読める端末には可逆の WebP の写しを配る(2026-10-30、振り返りのフェーズ 2。lib/floor-webp.php。3〜8 分の 1)。
+ * 組み込みの床は横に置いた写し(本番の PHP に GD が無いため手元で作る)、差し替えた床は GD があれば作る。無ければ PNG のまま。同じ URL で中身が変わるので Vary: Accept を付け、ETag も分ける
+ */
+require_once __DIR__ . '/../lib/floor-webp.php';
+$variant = '';
+if ($contentType === 'image/png' && km_floor_webp_accepted((string) ($_SERVER['HTTP_ACCEPT'] ?? ''))) {
+    $webp = km_floor_webp_for($path);
+    if ($webp !== null) {
+        $path = $webp;
+        $contentType = 'image/webp';
+        $variant = '|webp';
+    }
+}
+header('Vary: Accept');
+
 $modified = filemtime($path);
-$etag = '"' . substr(hash('sha256', $path . '|' . (string) $modified), 0, 32) . '"';
+$etag = '"' . substr(hash('sha256', $path . '|' . (string) $modified . $variant), 0, 32) . '"';
 
 /*
  * **private を付ける。** 錠が掛かっている構成では、共有プロキシに

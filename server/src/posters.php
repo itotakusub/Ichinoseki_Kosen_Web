@@ -201,6 +201,21 @@ $placesOf = static function (array $poster) use ($nodes, $eventPois): array {
             font-size: 0.85rem;
         }
 
+        /*
+         * 「地図で見る」(このサイトの中)と「外のサイトで見る」(企画のページ)を押し間違えない(2026-10-30、振り返りのフェーズ 3 の 5)。
+         * 地図は塗りの青 + 🗺 で左、外のサイトは灰色の縁 + 🌐 ↗ で右の端に離す。押すと「外のサイトへ移ります」と 1 度聞く(Main/poster-stats.js)
+         */
+        .km-poster-card-actions .km-poster-external {
+            margin-left: auto;
+            color: var(--text);
+            border-color: var(--secondary);
+            border-style: dashed;
+        }
+        .km-poster-card-actions .km-poster-external:hover {
+            background: var(--secondary);
+            color: var(--on-primary);
+        }
+
         .km-poster-empty {
             text-align: center;
             color: var(--secondary);
@@ -261,7 +276,7 @@ $placesOf = static function (array $poster) use ($nodes, $eventPois): array {
                         <a class="km-poster-card-image" href="<?= km_posters_e($imageHref) ?>" data-km-poster-open
                             <?= $imageExternal ? 'target="_blank" rel="noopener noreferrer"' : '' ?>
                             aria-label="<?= km_posters_e($poster['title'] . '(大きく見る)') ?>">
-                            <img src="<?= km_posters_e($poster['imageUrl']) ?>" alt="<?= km_posters_e($poster['title']) ?>" width="<?= (int) $poster['width'] ?>" height="<?= (int) $poster['height'] ?>" loading="lazy">
+                            <img src="<?= km_posters_e($poster['thumbUrl'] ?? $poster['imageUrl']) ?>" alt="<?= km_posters_e($poster['title']) ?>" width="<?= (int) $poster['width'] ?>" height="<?= (int) $poster['height'] ?>" loading="lazy">
                         </a>
                         <div class="km-poster-card-body">
                             <h2 class="km-poster-card-title"><?= km_posters_e($poster['title']) ?></h2>
@@ -274,13 +289,13 @@ $placesOf = static function (array $poster) use ($nodes, $eventPois): array {
                             <div class="km-poster-card-actions">
                                 <?php foreach ($places as $place): ?>
                                     <?php /* 結びつけた場所が 2 つ以上なら、どこへ行くかが分かるように名前を添える */ ?>
-                                    <a class="km-doc-button" href="<?= km_posters_e($place['href']) ?>"><?= count($places) > 1 ? '地図で見る: ' . km_posters_e($place['label']) : '地図で見る' ?></a>
+                                    <a class="km-doc-button" href="<?= km_posters_e($place['href']) ?>">🗺 <?= count($places) > 1 ? '地図で見る: ' . km_posters_e($place['label']) : '地図で見る' ?></a>
                                 <?php endforeach; ?>
                                 <?php /* ♡(2026-10-23。Main/posters-page.js → api/poster-like.php) */ ?>
                                 <button type="button" class="km-doc-link km-like-btn" data-km-poster-like="<?= (int) $poster['id'] ?>" aria-pressed="false">♡ <?= (int) ($poster['likes'] ?? 0) ?></button>
                                 <?php if ($poster['linkUrl'] !== ''): ?>
                                     <?php /* URL は lib/posters.php が http / https だけに確かめてある */ ?>
-                                    <a class="km-doc-link" href="<?= km_posters_e($poster['linkUrl']) ?>" target="_blank" rel="noopener noreferrer" data-km-poster-link="<?= (int) $poster['id'] ?>">くわしく見る ↗</a>
+                                    <a class="km-doc-link km-poster-external" href="<?= km_posters_e($poster['linkUrl']) ?>" target="_blank" rel="noopener noreferrer" data-km-poster-link="<?= (int) $poster['id'] ?>" aria-label="<?= km_posters_e($poster['title']) ?> のくわしいページ(外のサイト・別のタブ)">🌐 外のサイトで見る ↗</a>
                                 <?php endif; ?>
                             </div>
                         </div>

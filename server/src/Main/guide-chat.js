@@ -137,6 +137,8 @@
         node.appendChild(el('span', 'km-guide-card-sub', sub));
         if (card.detail) node.appendChild(el('span', 'km-guide-card-detail', card.detail));
         const meta = [];
+        // 今いる場所からの道のり(2026-10-30。近い順に並べたときだけ)
+        if (typeof card.distance === 'string' && card.distance) meta.push('🚶 ' + card.distance);
         // 質問との関係の率(2026-10-25。LLM が付けたときだけ)
         if (typeof card.relevance === 'number') meta.push('関係 ' + card.relevance + '%');
         if (card.likes > 0) meta.push('♡ ' + card.likes);
@@ -293,6 +295,9 @@
         if (route.from && route.from.nodeId) window.setAsLocation(route.from.nodeId, 'start', opts(route.from));
     }
 
+    /** 直前の会話(新しいものを後ろに 2 往復まで)。ページを開いている間だけ持つ */
+    const history = [];
+
     async function ask(question) {
         if (busy || question === '') return;
         if (question.length > QUESTION_MAX) {
@@ -311,7 +316,10 @@
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'X-KM-CSRF': csrf },
                 credentials: 'same-origin',
-                body: JSON.stringify({ question: question }),
+                // 今いる場所(現在地の QR。2026-10-30)があれば、「現在地から」「ここはどこ」に使ってもらう。地点の id だけ送る。
+                // 直前の会話 2 往復(「他には？」「そこへの行き方」のため。2026-10-30、振り返りのフェーズ 4 の 4)。サーバーには残らない
+                body: JSON.stringify(Object.assign({ question: question, history: history.slice(-2) },
+                    typeof window.kmHere === 'function' && window.kmHere() ? { here: window.kmHere().id } : {})),
             });
             const data = await response.json().catch(() => null);
             waiting.remove();
@@ -321,6 +329,12 @@
             }
             const answer = bubble(data.fallback ? 'bot km-guide-fallback' : 'bot', data.answer || '');
             log.appendChild(answer);
+            history.push({
+                q: question,
+                a: String(data.answer || '').slice(0, 200),
+                cards: (Array.isArray(data.cards) ? data.cards : []).slice(0, 5).map((card) => String(card.name || '').slice(0, 50)),
+            });
+            if (history.length > 2) history.shift();
             (Array.isArray(data.cards) ? data.cards : []).forEach((card) => log.appendChild(cardFor(card)));
             if (data.route) {
                 const go = el('button', 'primary-btn km-guide-route', data.route.from ? '地図に経路を出す' : '目的地にして出発地を選ぶ');
