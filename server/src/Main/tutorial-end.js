@@ -99,7 +99,7 @@
             link.href = poster.linkUrl;
             link.target = '_blank';
             link.rel = 'noopener noreferrer';
-            link.textContent = 'くわしく見る ↗';
+            link.textContent = '🌐 外のサイトで見る ↗';
             // 押したら数える(Main/poster-stats.js。同じ端末は 1 人)
             link.setAttribute('data-km-poster-link', String(poster.id));
             actions.append(link);

@@ -1346,7 +1346,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         return `<div class="km-poster-list" aria-label="ポスター">${list.map(function (poster) {
             const focused = Number(poster.id) === focusPosterId;
             const link = poster.linkUrl && /^https?:\/\//i.test(poster.linkUrl)
-                ? `<a class="km-poster-link" href="${escapeHtml(poster.linkUrl)}" target="_blank" rel="noopener noreferrer" data-km-poster-link="${Number(poster.id)}">くわしく見る ↗</a>`
+                ? `<a class="km-poster-link" href="${escapeHtml(poster.linkUrl)}" target="_blank" rel="noopener noreferrer" data-km-poster-link="${Number(poster.id)}">🌐 外のサイトで見る ↗</a>`
                 : '';
             return `<figure class="km-poster${focused ? ' is-focused' : ''}">
                 <button type="button" class="km-poster-thumb" data-km-poster-view="${escapeHtml(String(poster.id))}"
@@ -2596,6 +2596,52 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         syncFloorToggle();
         startFloorIdleTimer();
+
+        /*
+         * ======== 階の列の上でホイール・縦のスワイプ ========(2026-10-30、振り返りのフェーズ 3 の 4)
+         *
+         * 畳んだ丸(いまの階)の上でホイールを回すか、指で上下にはらうと、上下の階へ移る。上へ = 上の階(外 → 1F → 2F …)。
+         * 開いた一覧が縦に送れる(階が多くてはみ出している)ときは、一覧を送る方を優先する。
+         * 地図の上のホイールは拡大なので、列の上では地図へ渡さない(preventDefault)。続けて回しても 1 段ずつ(250ms)
+         */
+        const floorStepOrder = () => Array.from(floorBtns)
+            .map(b => String(b.dataset.floor || ''))
+            .filter(f => f !== '' && floorImages[f])
+            .sort((a, b) => floorRank(a) - floorRank(b) || a.localeCompare(b));
+        let floorStepAt = 0;
+        function stepFloor(direction) {
+            const now = Date.now();
+            if (now - floorStepAt < 250) return;
+            const order = floorStepOrder();
+            const at = order.indexOf(String(window.currentFloor));
+            const next = order[at + direction];
+            if (at < 0 || !next) return;
+            floorStepAt = now;
+            changeFloor(next);
+        }
+        const floorListScrolls = () => {
+            const scroll = floorNavEl.querySelector('.floor-scroll');
+            return !floorNavEl.classList.contains('is-collapsed') && !!scroll && scroll.scrollHeight > scroll.clientHeight + 1;
+        };
+        floorNavEl.addEventListener('wheel', (e) => {
+            if (floorListScrolls() || Math.abs(e.deltaY) < Math.abs(e.deltaX) || e.deltaY === 0) return;
+            e.preventDefault();
+            e.stopPropagation();
+            stepFloor(e.deltaY < 0 ? 1 : -1);
+        }, { passive: false });
+        let floorSwipeY = null;
+        floorNavEl.addEventListener('touchstart', (e) => {
+            floorSwipeY = e.touches.length === 1 && !floorListScrolls() ? e.touches[0].clientY : null;
+        }, { passive: true });
+        floorNavEl.addEventListener('touchend', (e) => {
+            if (floorSwipeY === null || e.changedTouches.length !== 1) return;
+            const dy = e.changedTouches[0].clientY - floorSwipeY;
+            floorSwipeY = null;
+            // 30px 以上はらったときだけ(軽く触っただけなら、今までどおり押した扱い)
+            if (Math.abs(dy) < 30) return;
+            e.preventDefault();   // はらった指で取っ手を「押した」ことにしない(一覧が開かない)
+            stepFloor(dy < 0 ? 1 : -1);
+        });
     }
 
     // 種類でまとめて探すのは、検索の窓の下のチップ(下の「種類でまとめて探す」。2026-10-23)
@@ -4373,7 +4419,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             link.href = poster.linkUrl;
             link.target = '_blank';
             link.rel = 'noopener noreferrer';
-            link.textContent = 'くわしく見る ↗';
+            link.textContent = '🌐 外のサイトで見る ↗';
             // 押したら数える(Main/poster-stats.js。同じ端末は 1 人)
             link.setAttribute('data-km-poster-link', String(Number(poster.id)));
             actions.appendChild(link);

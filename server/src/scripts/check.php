@@ -9283,6 +9283,20 @@ function km_check_layout(): void
     check_bool('縮小: 一覧・検索の候補・地点のポスターは thumbUrl', str_contains((string) file_get_contents(__DIR__ . '/../posters.php'), "\$poster['thumbUrl'] ?? \$poster['imageUrl']")
         && str_contains($appJs, 'img.src = item.poster.thumbUrl || item.poster.imageUrl;') && str_contains($appJs, 'escapeHtml(poster.thumbUrl || poster.imageUrl)'));
 
+    km_check_heading('map: 階の列の上でホイール・縦のスワイプ(2026-10-30、振り返りのフェーズ 3 の 4)');
+    check_bool('ホイールの上 = 上の階・地図の拡大へ渡さない・1 段ずつ', str_contains($appJs, "stepFloor(e.deltaY < 0 ? 1 : -1);") && str_contains($appJs, "}, { passive: false });")
+        && str_contains($appJs, 'if (now - floorStepAt < 250) return;'));
+    check_bool('はらうのは 30px 以上・一覧が送れるときは送る方を優先', str_contains($appJs, 'if (Math.abs(dy) < 30) return;') && str_contains($appJs, 'scroll.scrollHeight > scroll.clientHeight + 1'));
+
+    km_check_heading('ポスター: 地図で見る と 外のサイト を押し間違えない(2026-10-30、振り返りのフェーズ 3 の 5)');
+    $posterStatsJs = (string) file_get_contents(__DIR__ . '/../Main/poster-stats.js');
+    check_bool('外のサイトへ出る前に 1 度聞く・やめたら数えない', str_contains($posterStatsJs, "if (type === 'click' && !confirmLeave(link)) {")
+        && strpos($posterStatsJs, '!confirmLeave(link)') < strpos($posterStatsJs, "window.kmPosterStat(link.getAttribute('data-km-poster-link'), 'click');"));
+    $postersPageForLinks = (string) file_get_contents(__DIR__ . '/../posters.php');
+    check_bool('一覧: 地図は 🗺 の塗り・外は 🌐 ↗ の点線で右の端', str_contains($postersPageForLinks, '🗺 <?= count($places) > 1') && str_contains($postersPageForLinks, 'km-doc-link km-poster-external')
+        && str_contains($postersPageForLinks, '🌐 外のサイトで見る ↗'));
+    check_bool('地図の詳細・幕・広告も同じ言葉', substr_count($appJs, '🌐 外のサイトで見る ↗') === 2 && str_contains((string) file_get_contents(__DIR__ . '/../Main/tutorial-end.js'), "'🌐 外のサイトで見る ↗'"));
+
     km_check_heading('map: 全画面・横画面の上の帯(2026-10-30、振り返りのフェーズ 2 の 4。アプリの TopBarController と同じ)');
     $topBarJs = (string) file_get_contents(__DIR__ . '/../Main/top-bar.js');
     $homeForTopBar = (string) file_get_contents(__DIR__ . '/../index.php');
@@ -9326,7 +9340,10 @@ function km_check_layout(): void
             'アプリも faded / hidden / shown',
             str_contains($kotlin, 'FADED("faded")') && str_contains($kotlin, 'HIDDEN("hidden")') && str_contains($kotlin, 'SHOWN("shown")')
         );
-        check_bool('アプリも屋外だけ間引く', str_contains((string) file_get_contents(dirname($renderer) . '/MapScreen.kt'), 'declutterLabels = currentFloor == OUTSIDE_FLOOR'));
+        // 2026-10-30 から屋内外とも間引く(利用者の判断「B」)。選んだ場所・目的地は隠さない(Website の keep と同じ)
+        $mapScreenKt = (string) file_get_contents(dirname($renderer) . '/MapScreen.kt');
+        check_bool('アプリも屋内外とも間引き、目的地は隠さない', str_contains($mapScreenKt, 'declutterLabels = true,') && str_contains($mapScreenKt, 'keepLabelUuids = setOfNotNull(destinationNode?.uuid),')
+            && str_contains($layoutKt ?? (string) @file_get_contents(dirname($renderer) . '/LabelLayout.kt'), 'if (!hideWhenCrowded || item.keep) {'));
         // 引き出し線の数(ずらし・横の間・線の間)がアプリと同じ
         $layoutKt = (string) @file_get_contents(dirname($renderer) . '/LabelLayout.kt');
         check_bool(
