@@ -4065,6 +4065,9 @@ body.km-topbar-auto:not(.km-topbar-peek) .km-account {
 .km-entry-back,
 .km-entry-close {
     display: inline-flex;
+    /* 縮めない・折らない(2026-10-30、幅 375px で「もど/る」「地図/へ」と折れていた。縮むのは見出しの方) */
+    flex: 0 0 auto;
+    white-space: nowrap;
     align-items: center;
     gap: 4px;
     min-height: var(--km-touch);
@@ -4076,6 +4079,12 @@ body.km-topbar-auto:not(.km-topbar-peek) .km-account {
     font: inherit;
     font-weight: 700;
     cursor: pointer;
+}
+/* 狭い画面では、もどる・地図へを 1 行目の両端に、見出しを 2 行目に(2026-10-30、幅 375px で「ジャンルか/ら探す」と折れていた) */
+@media (max-width: 480px) {
+    .km-entry-head { flex-wrap: wrap; }
+    .km-entry-head .km-entry-close { margin-left: auto; }
+    .km-entry-head .km-entry-title { order: 3; flex-basis: 100%; }
 }
 .km-entry-lead { margin: 0 0 0.75rem; font-size: 1.05rem; }
 .km-entry-choices {
