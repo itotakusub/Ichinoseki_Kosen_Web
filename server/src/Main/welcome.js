@@ -76,7 +76,8 @@
              * 広告はチュートリアルの終わりから出していたので、止めると広告も出なくなっていた)。
              * 出すのはセッションで 1 回だけ(Main/tutorial-end.js の kmShowAd)
              */
-            if (dialog.dataset.tutorial === 'off' && typeof window.kmShowAd === 'function') {
+            // 最初の画面(Main/entry.js)があるときは出さない。そちらが「すぐ地図へ」で閉じたときに出す(2026-10-30)
+            if (dialog.dataset.tutorial === 'off' && !window.kmEntry && typeof window.kmShowAd === 'function') {
                 window.setTimeout(window.kmShowAd, 300);
             }
         }

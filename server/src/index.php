@@ -721,6 +721,11 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
          */
         ?>
         <div class="km-action-bar" id="km-action-bar">
+            <?php /* 最初の画面を開き直す(2026-10-30。Main/entry.js) */ ?>
+            <button type="button" class="km-action-btn" data-km-entry-open title="最初の画面(探し方を選ぶ)" aria-label="最初の画面を開く(探し方を選ぶ)">
+                <span class="km-action-icon" aria-hidden="true">🏠</span>
+                <span class="km-action-label">はじめ</span>
+            </button>
             <?php
             /*
              * ⚙️ ダウンロード・設定と 🖼️ ポスターも、上のバーからここへ移した(2026-10-23、利用者の指示)。
@@ -1241,6 +1246,8 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
     <script defer src="<?= km_home_e(km_public_asset('Main/event-schedule.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/panel.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/welcome.js')) ?>"></script>
+    <?php /* 最初の画面(2026-10-30、振り返りのフェーズ 3 の 1)。「はじめに」の後・**tutorial.js より先に**読む(tutorial.js は window.kmEntry があれば自動で始めない) */ ?>
+    <script defer src="<?= km_home_e(km_public_asset('Main/entry.js')) ?>"></script>
     <?php /* 初回の操作案内(2026-10-15)。「はじめに」を閉じてから・地図が出てから始める。スイッチが OFF なら読まない(2026-10-24。lib/map-switches.php) */ ?>
     <?php if ($kmSwitches['tutorial']): ?>
         <script defer src="<?= km_home_e(km_public_asset('Main/tutorial.js')) ?>"></script>

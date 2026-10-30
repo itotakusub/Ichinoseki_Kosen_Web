@@ -4094,6 +4094,32 @@ document.addEventListener('DOMContentLoaded', async () => {
         return rankApi.rank(pool, query, { floor: String(window.currentFloor), limit: 8 });
     }
 
+    /*
+     * 最初の画面(Main/entry.js。2026-10-30、振り返りのフェーズ 3 の 1)が使う口。地図の検索と同じ一致率・同じアイコン。
+     * opts.types は種類で絞る(「部屋の名前から」は room だけ)。opts.onlyRoutable は出発地を選ぶとき
+     */
+    window.kmEntryApi = {
+        search(query, opts) {
+            const o = opts || {};
+            if (!rankApi || String(query || '').trim() === '') return [];
+            if (!searchItems) searchItems = buildSearchItems();
+            const pool = searchItems.filter(item => (!o.onlyRoutable || item.routable) && (!o.types || o.types.indexOf(item.type) >= 0));
+            return rankApi.rank(pool, String(query).trim(), { floor: String(window.currentFloor), limit: o.limit || 12 });
+        },
+        icon: candidateIcon,
+        sub(item) {
+            return [floorText(item.floor), item.kind === 'poi' ? '臨時' : (mapStyle.LABELS[item.type] || '')].filter(Boolean).join(' · ');
+        },
+        open(item) {
+            if (item.kind === 'poi') goToPlace({ poiId: item.poiId });
+            else goToPlace({ nodeId: item.id });
+        },
+        route(to, from) {
+            window.setAsLocation(to.id, 'end', Object.assign(to.kind === 'poi' ? { poiId: to.poiId } : {}, { noTestStart: !!from }));
+            if (from) window.setAsLocation(from.id, 'start', from.kind === 'poi' ? { poiId: from.poiId } : undefined);
+        },
+    };
+
     /** 候補のアイコン。ポスターがあればその画像、無ければ種類の色と形(地図の点と同じ) */
     function candidateIcon(item) {
         const box = document.createElement('span');

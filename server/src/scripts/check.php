@@ -8754,7 +8754,8 @@ function km_check_layout(): void
         && preg_match("/<\?php if \(\\\$kmSwitches\['tutorial'\]\): \?>\s*<button type=\"button\" class=\"secondary-btn\" data-km-tutorial-open>/", $shareIndex) === 1);
     // 広告はチュートリアルの終わりから出していた。止めたら「はじめに」を閉じたときに出す
     check_bool('チュートリアル OFF でも広告は出す(「はじめに」を閉じたとき)', str_contains($shareIndex, "<?= \$kmSwitches['tutorial'] ? '' : ' data-tutorial=\"off\"' ?>")
-        && str_contains((string) file_get_contents(__DIR__ . '/../Main/welcome.js'), "if (dialog.dataset.tutorial === 'off' && typeof window.kmShowAd === 'function') {"));
+        // 2026-10-30 から最初の画面(entry.js)があるときは、そちらの「すぐ地図へ」で出す
+        && str_contains((string) file_get_contents(__DIR__ . '/../Main/welcome.js'), "if (dialog.dataset.tutorial === 'off' && !window.kmEntry && typeof window.kmShowAd === 'function') {"));
     check_bool('お知らせ OFF: 最初の画面に出さない・一覧へのボタンを出さない', str_contains($shareIndex, "if (\$kmSwitches['notices']) {")
         && preg_match("/<\?php if \(\\\$kmSwitches\['notices'\]\): \?>\s*<a href=\"\/notice\.php\" class=\"secondary-btn\">お知らせ<\/a>/", $shareIndex) === 1);
     $switchNoticePage = (string) file_get_contents(__DIR__ . '/../notice.php');
@@ -9287,6 +9288,22 @@ function km_check_layout(): void
         && str_contains($posterLibForThumb, "header('Vary: Accept');") && str_contains($posterLibForThumb, "\$poster['thumbUrl'] = \$poster['imageUrl'] . '&w=640';"));
     check_bool('縮小: 一覧・検索の候補・地点のポスターは thumbUrl', str_contains((string) file_get_contents(__DIR__ . '/../posters.php'), "\$poster['thumbUrl'] ?? \$poster['imageUrl']")
         && str_contains($appJs, 'img.src = item.poster.thumbUrl || item.poster.imageUrl;') && str_contains($appJs, 'escapeHtml(poster.thumbUrl || poster.imageUrl)'));
+
+    km_check_heading('map: 最初の画面(2026-10-30、振り返りのフェーズ 3 の 1。Main/entry.js)');
+    $entryJs = (string) file_get_contents(__DIR__ . '/../Main/entry.js');
+    $homeForEntry = (string) file_get_contents(__DIR__ . '/../index.php');
+    check_bool('最初の画面: はじめにの後・tutorial.js より先に読む', ($ep = strpos($homeForEntry, "km_public_asset('Main/entry.js')")) !== false
+        && $ep > (int) strpos($homeForEntry, "km_public_asset('Main/welcome.js')") && $ep < (int) strpos($homeForEntry, "km_public_asset('Main/tutorial.js')"));
+    check_bool('最初の画面: 5 つの探し方(番号・キーワード・部屋・ジャンル・すぐ地図へ)', str_contains($entryJs, "'ポスター・企画の番号から'") && str_contains($entryJs, "'キーワードから'")
+        && str_contains($entryJs, "'部屋の名前から'") && str_contains($entryJs, "'ジャンルから'") && str_contains($entryJs, "'すぐ地図へ'"));
+    check_bool('最初の画面: 共有から来た人・次から出さない人・地図が開けないときは出さない', str_contains($entryJs, 'if (window.isAdmin || fromShare || skipped()) return;')
+        && str_contains($entryJs, "document.body.classList.contains('km-map-unavailable')"));
+    check_bool('最初の画面: 展示の PC では「次から出さない」を覚えない', str_contains($entryJs, "if (testMode) return false;") && str_contains($entryJs, 'if (!testMode) {'));
+    check_bool('最初の画面: 地図の検索と同じ一致率(app.js の kmEntryApi)・道順は案内できる所だけ', str_contains($appJs, 'window.kmEntryApi = {') && str_contains($entryJs, 'if (item.routable) {'));
+    check_bool('チュートリアルは最初の画面があれば自動で始めない・広告は「すぐ地図へ」のときだけ', str_contains((string) file_get_contents(__DIR__ . '/../Main/tutorial.js'), 'if (window.kmEntry) return;')
+        && str_contains((string) file_get_contents(__DIR__ . '/../Main/welcome.js'), "!window.kmEntry && typeof window.kmShowAd === 'function'")
+        && str_contains($entryJs, "if (toMap && typeof window.kmShowAd === 'function')"));
+    check_bool('操作の帯の「🏠 はじめ」から開き直せる', str_contains($homeForEntry, 'data-km-entry-open') && str_contains($entryJs, "document.querySelectorAll('[data-km-entry-open]')"));
 
     km_check_heading('map: 階の列の上でホイール・縦のスワイプ(2026-10-30、振り返りのフェーズ 3 の 4)');
     check_bool('ホイールの上 = 上の階・地図の拡大へ渡さない・1 段ずつ', str_contains($appJs, "stepFloor(e.deltaY < 0 ? 1 : -1);") && str_contains($appJs, "}, { passive: false });")
