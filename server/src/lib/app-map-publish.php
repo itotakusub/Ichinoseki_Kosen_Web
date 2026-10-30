@@ -139,6 +139,9 @@ function km_app_map_publish(
     $overlay = $window['overlay'];
     $events = km_app_map_events_from_web($overlay, $map, $window['startsAt']);
     km_app_map_replace_events($map, $events['events']);
+    // 読み・別名(2026-10-30、振り返りのフェーズ 4 の 1。lib/search-aliases.php)。アプリの検索に入る
+    require_once __DIR__ . '/search-aliases.php';
+    km_search_aliases_apply_app($map, km_search_aliases_all($pdo));
 
     $json = json_encode($map, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     if (!is_string($json)) {
@@ -333,6 +336,8 @@ function km_app_map_publish_event(
         km_app_map_replace_events($map, $events['events']);
         $activeEventUuid = $events['activeEventUuid'];
         $eventSkipped = $events['skipped'];
+        require_once __DIR__ . '/search-aliases.php';
+        km_search_aliases_apply_app($map, km_search_aliases_all($pdo));
     } else {
         $activeEventUuid = km_app_map_pick_event_uuid($map);
     }

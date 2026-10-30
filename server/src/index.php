@@ -599,7 +599,7 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
         ?>
         <div id="km-searchbox" class="km-searchbox glass-panel" role="search">
             <span class="km-searchbox-logo" aria-hidden="true" title="KosenMap">📍</span>
-            <input id="km-place-input" class="km-searchbox-input" type="search" placeholder="場所を検索" autocomplete="off" spellcheck="false"
+            <input id="km-place-input" class="km-searchbox-input" type="search" placeholder="場所・企画の番号で検索" autocomplete="off" spellcheck="false"
                    aria-label="場所を検索" role="combobox" aria-expanded="false" aria-controls="km-place-results" aria-autocomplete="list">
             <button id="km-place-clear" type="button" class="km-searchbox-btn" title="消す" aria-label="検索の言葉を消す" hidden>&times;</button>
             <button id="km-route-open" type="button" class="km-searchbox-btn km-searchbox-route" title="経路を調べる" aria-label="経路を調べる" aria-controls="search-panel">🧭</button>

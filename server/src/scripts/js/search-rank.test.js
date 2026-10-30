@@ -45,6 +45,29 @@ check('上限で切る', 1, rank.rank(items, '室', { limit: 1 }).length);
 check('点数: 完全 1000 > 前方 800 > 語の頭 600 > 途中 400', [1000, 800, 600, 400],
     [rank.fieldScore('トイレ', 'といれ'), rank.fieldScore('トイレ前', 'といれ'), rank.fieldScore('1F トイレ', 'といれ'), rank.fieldScore('女子トイレ', 'といれ')]);
 
+console.log('== search-rank: 番号で探す(2026-10-30) ==');
+const numbered = [
+    { name: '講義室8', floor: '1' },
+    { name: '電算部', extras: ['8', '12'], numbers: ['8', '12'], floor: '2' },
+    { name: '写真部', extras: ['80'], numbers: ['80'], floor: '2' },
+    { name: 'A棟の展示', extras: ['A-1'], numbers: ['A-1'], floor: '3' },
+];
+check('番号そっくりが名前の一部より先・頭だけ(80)は後', ['電算部', '写真部', '講義室8'], names(rank.rank(numbered, '8')));
+check('全角・ハイフンの揺れでも番号', [['電算部'], ['A棟の展示']], [names(rank.rank(numbered, '１２')), names(rank.rank(numbered, 'a1')).slice(0, 1)]);
+
+console.log('== search-rank: もしかして(2026-10-30) ==');
+check('ローマ字にそろえる(拗音・促音・長音)', ['rettsupureidensan', 'chookyori', 'densan'],
+    [rank.romaji('レッツプレイでんさん'), rank.romaji('ちょーきょり'), rank.romaji('でんさん')]);
+const places = [
+    { name: '第一体育館', floor: 'outside' },
+    { name: 'Let\'s play Densan!', extras: ['第二実習室', 'でんさん'], floor: '1' },
+    { name: '図書館', floor: 'outside' },
+    { name: 'たこ焼き屋さん本舗', floor: 'outside' },
+];
+check('打ち間違い(体育舘)→ 第一体育館', '第一体育館', (rank.suggest(places, '体育舘') || {}).name);
+check('ローマ字で打った(densan)→ 読みの欄のでんさん', 'Let\'s play Densan!', (rank.suggest(places, 'densan') || {}).name);
+check('ひらがなの打ち間違い(でんさm)', 'Let\'s play Densan!', (rank.suggest(places, 'でんさｍ') || {}).name);
+check('遠いもの・短い言葉には出さない', [null, null], [rank.suggest(places, 'めろんぱん'), rank.suggest(places, 'え')]);
 console.log('');
 if (failures > 0) {
     console.log(`失敗 ${failures} 件(全 ${count} 件)`);

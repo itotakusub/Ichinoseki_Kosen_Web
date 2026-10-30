@@ -724,10 +724,10 @@ server {
         proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
     }
 
-    # 案内チャット(2026-10-24。lib/guide-chat.php)。本文は質問 1 つ(PHP でも 2KB で切る)。
+    # 案内チャット(2026-10-24。lib/guide-chat.php)。本文は質問 1 つと直前の会話 2 往復(2026-10-30。PHP でも 8KB で切る)。
     # LLM を待つので、返事の待ち時間は既定より長く取る(PHP の curl は 30 秒 × 2 回で切る)
     location = /api/guide-chat.php {
-        client_max_body_size 4k;
+        client_max_body_size 12k;
         limit_req zone=km_guide burst=5 nodelay;
         include /etc/nginx/km/proxy-web.conf;
         proxy_set_header X-Forwarded-Port ${KM_APP_PORT};

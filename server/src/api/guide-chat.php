@@ -46,7 +46,8 @@ if (!km_guide_allowed($_SESSION, time(), $settings)) {
     respond(['success' => false, 'message' => 'この案内は使えません。'], 403);
 }
 
-$input = km_api_json_body(2048);
+// 質問 1 つと、直前の会話 2 往復(2026-10-30。km_guide_history_input が字数を切る)
+$input = km_api_json_body(8192);
 
 /*
  * 評価(2026-10-25、利用者「評価も付けられるようにし、BAD だったら理由を聞く」)
@@ -91,7 +92,8 @@ try {
     }
     km_guide_count($pdo, $today, 'asked');
     // 公開の地図と同じデータ(錠・教員室・氏名の決まりもそのまま)。イベントの一時地点・ポスター・予定も入る
-    $catalog = km_guide_catalog(km_map_data($pdo));
+    $mapData = km_map_data($pdo);
+    $catalog = km_guide_catalog($mapData);
 } catch (Throwable $exception) {
     error_log('api/guide-chat.php prepare failed: ' . $exception->getMessage());
     respond(['success' => false, 'message' => '案内を準備できませんでした。'], 500);
@@ -146,7 +148,16 @@ $hereParam = $input['here'] ?? '';
 if (is_string($hereParam) && preg_match('/^[0-9a-f]{32}$/', $hereParam) === 1) {
     $startNodeId = $hereParam;
 }
-$result = km_guide_answer($catalog, $question, $llm, $startNodeId);
+/*
+ * 直前の会話(2026-10-30、振り返りのフェーズ 4 の 4)と、今いる場所からの道のり(トイレなどを近い順に。lib/guide-distance.php)。
+ * 道のりは要るときだけ測る(地点は約 1000・線は約 1500 なので 1 回は軽い)
+ */
+$history = km_guide_history_input($input['history'] ?? null);
+$lengths = static function () use ($mapData, $startNodeId): array {
+    static $cache = null;
+    return $cache ??= km_guide_route_lengths((array) ($mapData['nodes'] ?? []), (array) ($mapData['edges'] ?? []), $startNodeId);
+};
+$result = km_guide_answer($catalog, $question, $llm, $startNodeId, $history, $lengths);
 
 // 質問と答えを残す(2026-10-25、利用者「機能改善のために保存」)。誰が聞いたかは入れない。残せなくても答えは返す。
 // 評価の合言葉は画面に返し、ここにはハッシュだけを残す(残せなかったときは評価のボタンを出さない)

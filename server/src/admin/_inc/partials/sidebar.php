@@ -30,6 +30,7 @@ $openMenus = [
     'mapFloors' => 'database',
     'mapAreas' => 'database',
     'mapHereQr' => 'database',
+    'searchAliases' => 'database',
     'login' => 'auth',
     'projects' => 'content',
     'timeline' => 'content',
@@ -192,6 +193,13 @@ $parentLink = static fn(string $id): string => 'nav-link' . ($openMenu === $id ?
                     <a href="./map-here-qr.php" class="<?= $link('mapHereQr') ?>">
                       <i class="nav-icon bi bi-qr-code"></i>
                       <p data-i18n="side.mapHereQr">現在地の QR</p>
+                    </a>
+                  </li>
+                  <?php // 読み・別名(2026-10-30。lib/search-aliases.php。検索・案内チャット・アプリの検索に入る) ?>
+                  <li class="nav-item">
+                    <a href="./search-aliases.php" class="<?= $link('searchAliases') ?>">
+                      <i class="nav-icon bi bi-alphabet"></i>
+                      <p data-i18n="side.searchAliases">読み・別名</p>
                     </a>
                   </li>
                   <?php // ポスター・広告と地点の URL(2026-10-21、lib/posters.php) ?>

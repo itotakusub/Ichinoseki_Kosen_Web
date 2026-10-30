@@ -166,10 +166,15 @@
             list.replaceChildren();
             const query = input.value.trim();
             if (query === '' || !api) return;
-            const items = api.search(query, { types: conf.types, onlyRoutable: !!(opts && opts.onlyRoutable) });
+            let items = api.search(query, { types: conf.types, onlyRoutable: !!(opts && opts.onlyRoutable) });
             if (items.length === 0) {
-                list.appendChild(el('li', 'km-entry-empty', '見つかりませんでした。ほかの言葉か、もどって別の探し方を試してください。'));
-                return;
+                // もしかして(2026-10-30、振り返りのフェーズ 4 の 2)。近いものが 1 件あれば、それを候補に出す
+                const guess = typeof api.suggest === 'function' ? api.suggest(query, { types: conf.types, onlyRoutable: !!(opts && opts.onlyRoutable) }) : null;
+                list.appendChild(el('li', 'km-entry-empty', guess
+                    ? '見つかりませんでした。もしかして、こちらですか？'
+                    : '見つかりませんでした。ほかの言葉か、もどって別の探し方を試してください。'));
+                if (!guess) return;
+                items = [guess];
             }
             items.forEach(function (item) {
                 const li = el('li');

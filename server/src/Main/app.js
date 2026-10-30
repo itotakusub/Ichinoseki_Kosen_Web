@@ -4297,7 +4297,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     const rankApi = window.KmSearchRank || null;
     let searchItems = null;
 
-    /** 候補にするもの。地点(人が行く所)・臨時の地点。名前のほかに別名(ポスターの見出し・部屋番号・分類・企画の番号)も引く */
+    /**
+     * 候補にするもの。地点(人が行く所)・臨時の地点。名前のほかに別名(ポスターの見出し・説明・部屋番号・分類・企画の番号)も引く。
+     * 読み・別名(readings。2026-10-30、振り返りのフェーズ 4 の 1。管理画面「読み・別名」)も別名に入れる。
+     * 企画の番号は numbers にも入れ、番号だけで打ったときに先頭へ出す(Main/search-rank.js)
+     */
     function buildSearchItems() {
         const items = [];
         for (const [id, node] of Object.entries(graphData.nodes)) {
@@ -4312,8 +4316,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 floor: String(node.floor),
                 name: project ? project.name : (node.alias || node.name),
                 extras: [node.name, node.alias, node.title, node.subtitle, node.type2, mapStyle.LABELS[node.type]]
-                    .concat(node.projects || [], posters.map(p => p.title))
+                    .concat(node.readings || [], node.projects || [], posters.map(p => p.title), posterSearchExtras(posters))
                     .filter(Boolean),
+                numbers: node.projects || [],
                 type: String(node.type || 'room'),
                 routable: isRoutableNode(node),
                 poster: posters[0] || null,
@@ -4328,7 +4333,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                 id: poi.anchorNodeId || '',
                 floor: String(poi.floor),
                 name: shown.name,
-                extras: [poi.name, KM_POI_LABELS[poi.category] || '', poi.note || ''].concat(posters.map(p => p.title)).filter(Boolean),
+                extras: [poi.name, KM_POI_LABELS[poi.category] || '', poi.note || '']
+                    .concat(poi.readings || [], posters.map(p => p.title), posterSearchExtras(posters)).filter(Boolean),
+                // 名前が番号の一時地点(「21」)は番号でもある
+                numbers: /^[0-9A-Za-z][0-9A-Za-z_-]{0,15}$/.test(String(poi.name || '').trim()) ? [String(poi.name).trim()] : [],
                 type: poiNodeType(poi),
                 routable: Boolean(poi.anchorNodeId && graphData.nodes[poi.anchorNodeId]),
                 poster: posters[0] || null,
@@ -4337,11 +4345,29 @@ document.addEventListener('DOMContentLoaded', async () => {
         return items;
     }
 
+    /** ポスターの説明と読み(2026-10-30、振り返りのフェーズ 4 の 1「ポスターの説明も検索に入れる」) */
+    function posterSearchExtras(posters) {
+        const out = [];
+        posters.forEach(p => {
+            if (p.description) out.push(p.description);
+            (p.readings || []).forEach(r => out.push(r));
+        });
+        return out;
+    }
+
     function searchCandidates(query, onlyRoutable) {
         if (!rankApi) return [];
         if (!searchItems) searchItems = buildSearchItems();
         const pool = onlyRoutable ? searchItems.filter(item => item.routable) : searchItems;
         return rankApi.rank(pool, query, { floor: String(window.currentFloor), limit: 8 });
+    }
+
+    /** 何も当たらなかったときの「もしかして」(2026-10-30、振り返りのフェーズ 4 の 2。AI を使わない)。無ければ null */
+    function suggestCandidate(query, onlyRoutable, types) {
+        if (!rankApi || typeof rankApi.suggest !== 'function') return null;
+        if (!searchItems) searchItems = buildSearchItems();
+        const pool = searchItems.filter(item => (!onlyRoutable || item.routable) && (!types || types.indexOf(item.type) >= 0));
+        return rankApi.suggest(pool, query);
     }
 
     /*
@@ -4355,6 +4381,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (!searchItems) searchItems = buildSearchItems();
             const pool = searchItems.filter(item => (!o.onlyRoutable || item.routable) && (!o.types || o.types.indexOf(item.type) >= 0));
             return rankApi.rank(pool, String(query).trim(), { floor: String(window.currentFloor), limit: o.limit || 12 });
+        },
+        /** 当たらないときの「もしかして」(1 件か null) */
+        suggest(query, opts) {
+            const o = opts || {};
+            return String(query || '').trim() === '' ? null : suggestCandidate(String(query).trim(), !!o.onlyRoutable, o.types);
         },
         icon: candidateIcon,
         sub(item) {
@@ -4431,10 +4462,15 @@ document.addEventListener('DOMContentLoaded', async () => {
             list.innerHTML = '';
             if (query === '') { close(); return; }
             if (items.length === 0) {
+                // もしかして(2026-10-30)。一番近いものを 1 件だけ候補に出す(押せばそれを選ぶ)
+                const guess = suggestCandidate(query, onlyRoutable);
                 const empty = document.createElement('li');
                 empty.className = 'km-result-empty';
-                empty.textContent = '見つかりませんでした。別の言葉で探すか、下の種類のボタンを使ってください。';
+                empty.textContent = guess
+                    ? '見つかりませんでした。もしかして、こちらですか？'
+                    : '見つかりませんでした。別の言葉で探すか、下の種類のボタンを使ってください。';
                 list.appendChild(empty);
+                if (guess) items = [guess];
             }
             items.forEach((item, index) => {
                 const li = document.createElement('li');

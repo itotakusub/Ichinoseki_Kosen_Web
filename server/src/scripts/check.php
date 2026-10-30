@@ -1928,7 +1928,7 @@ function km_check_guide_chat(): void
         // 案内チャットの経路では入れない(AI の出発地より先に Densan からの経路を引かない。2026-10-25、利用者の指示)
         && str_contains((string) file_get_contents(__DIR__ . '/../Main/guide-chat.js'), "window.setAsLocation(route.to.nodeId, 'end', Object.assign(opts(route.to), { noTestStart: true }));")
         && str_contains($startApp, "if (!node || startId === endId || !isRoutableNode(node)) return;"));
-    check_bool('口: 案内チャットに出発地を渡す・管理画面で選ぶ(一覧の地点だけ)', str_contains((string) file_get_contents(__DIR__ . '/../api/guide-chat.php'), '$result = km_guide_answer($catalog, $question, $llm, $startNodeId);')
+    check_bool('口: 案内チャットに出発地を渡す・管理画面で選ぶ(一覧の地点だけ)', str_contains((string) file_get_contents(__DIR__ . '/../api/guide-chat.php'), '$result = km_guide_answer($catalog, $question, $llm, $startNodeId, $history, $lengths);')
         && str_contains($startAdmin, "if (\$startNode !== '' && !in_array(\$startNode, array_column(km_poster_node_options(\$pdo), 'id'), true)) {")
         && str_contains($startAdmin, 'km_setting_set($pdo, KM_TEST_START_SETTING, $startNode);'));
 
@@ -1975,7 +1975,7 @@ function km_check_guide_chat(): void
     km_check_heading('guide-chat: 口・設定・画面');
     $api = (string) file_get_contents(__DIR__ . '/../api/guide-chat.php');
     // 通す順: CSRF → 使える人 → 本文 → 回数 → LLM
-    $order = [strpos($api, 'km_csrf_verify()'), strpos($api, 'km_guide_allowed($_SESSION'), strpos($api, 'km_api_json_body(2048)'), strpos($api, 'km_guide_rate_check('), strpos($api, 'km_guide_answer(')];
+    $order = [strpos($api, 'km_csrf_verify()'), strpos($api, 'km_guide_allowed($_SESSION'), strpos($api, 'km_api_json_body(8192)'), strpos($api, 'km_guide_rate_check('), strpos($api, 'km_guide_answer(')];
     $sorted = $order;
     sort($sorted);
     check_bool('通す順: CSRF → 使える人 → 本文 → 回数 → LLM', !in_array(false, $order, true) && $order === $sorted);
@@ -1992,8 +1992,8 @@ function km_check_guide_chat(): void
         && !str_contains((string) file_get_contents(__DIR__ . '/../Main/guide-chat.js'), 'KM_GUIDE_LLM'));
     $root = km_check_repo_root();
     $guideNginx = (string) @file_get_contents($root . '/nginx/default.conf.template');
-    check_bool('nginx: 専用の zone で IP ごとに絞る・本文 4k・LLM を待つ 90 秒', str_contains($guideNginx, 'limit_req_zone $binary_remote_addr zone=km_guide:10m rate=10r/m;')
-        && preg_match('/location = \/api\/guide-chat\.php \{\s*client_max_body_size 4k;\s*limit_req zone=km_guide burst=5 nodelay;\s*include \/etc\/nginx\/km\/proxy-web\.conf;\s*proxy_set_header X-Forwarded-Port \$\{KM_APP_PORT\};\s*proxy_read_timeout 90s;/', $guideNginx) === 1);
+    check_bool('nginx: 専用の zone で IP ごとに絞る・本文 12k(直前の会話 2 往復)・LLM を待つ 90 秒', str_contains($guideNginx, 'limit_req_zone $binary_remote_addr zone=km_guide:10m rate=10r/m;')
+        && preg_match('/location = \/api\/guide-chat\.php \{\s*client_max_body_size 12k;\s*limit_req zone=km_guide burst=5 nodelay;\s*include \/etc\/nginx\/km\/proxy-web\.conf;\s*proxy_set_header X-Forwarded-Port \$\{KM_APP_PORT\};\s*proxy_read_timeout 90s;/', $guideNginx) === 1);
     $compose = (string) @file_get_contents($root . '/compose.yaml');
     $envExample = (string) @file_get_contents($root . '/.env.example');
     foreach (['KM_GUIDE_LLM_URL', 'KM_GUIDE_LLM_KEY', 'KM_GUIDE_LLM_MODEL'] as $name) {
@@ -9333,6 +9333,83 @@ function km_check_layout(): void
     $hereQrAdmin = (string) file_get_contents(__DIR__ . '/../admin/map-here-qr.php');
     check_bool('管理画面: QR はこのサーバーで作る(lib/qr.php)・印刷のページの style/script は nonce 付き', str_contains($hereQrAdmin, 'km_qr_svg(km_qr_matrix($url,')
         && str_contains($hereQrAdmin, '<style<?= km_csp_nonce_attr() ?>>') && str_contains($hereQrAdmin, '<script<?= km_csp_nonce_attr() ?>>'));
+
+    km_check_heading('検索: 読み・別名(2026-10-30、振り返りのフェーズ 4 の 1。lib/search-aliases.php)');
+    require_once __DIR__ . '/../lib/search-aliases.php';
+    require_once __DIR__ . '/../lib/guide-chat.php';
+    check('区切りは読点・カンマ・改行(空白では割らない)・同じものは 1 つ・長いものは切る',
+        ['れっつぷれいでんさん', 'レッツプレイ電算', '電算部', "Let's play", 'ＡＢＣ', str_repeat('長', KM_SEARCH_ALIAS_MAX_LENGTH)],
+        km_search_alias_list("れっつぷれいでんさん、レッツプレイ電算, 電算部\n Let's play ／ＡＢＣ、abc、、" . str_repeat('長', 50)));
+    check('数の上限', KM_SEARCH_ALIAS_MAX_COUNT, count(km_search_alias_list(implode('、', range(1, 30)))));
+    check('対象の形(地点は 32 字の 16 進・一時地点とポスターは番号)', [true, false, true, false, false],
+        [km_search_alias_target_valid('node', str_repeat('a', 32)), km_search_alias_target_valid('node', '1'), km_search_alias_target_valid('poster', '12'),
+            km_search_alias_target_valid('poi', '0'), km_search_alias_target_valid('other', '1')]);
+    $aliasMap = km_search_aliases_apply(
+        ['nodes' => ['n1' => ['name' => '第二実習室']], 'eventPois' => [['id' => 3, 'name' => '99']], 'posters' => [['id' => 9, 'title' => 'たこ焼き']]],
+        ['node' => ['n1' => ['でんさん'], 'n9' => ['出していない地点']], 'poi' => ['3' => ['けんけつ']], 'poster' => ['9' => ['たこやき']]]
+    );
+    check('公開の地図: 出している地点・一時地点・ポスターにだけ readings', [['でんさん'], ['けんけつ'], ['たこやき'], false],
+        [$aliasMap['nodes']['n1']['readings'], $aliasMap['eventPois'][0]['readings'], $aliasMap['posters'][0]['readings'], isset($aliasMap['nodes']['n9'])]);
+    $aliasApp = json_decode('{"nodes":[{"uuid":"2735E277-ED55-4B74-963E-82BAA0B6A641"},{"uuid":"x"}],"events":[{"places":[{"uuid":"web-poi-3"},{"uuid":"web-poi-4"}]}]}');
+    km_search_aliases_apply_app($aliasApp, ['node' => ['2735e277ed554b74963e82baa0b6a641' => ['でんさん']], 'poi' => ['3' => ['けんけつ']]]);
+    check('アプリへの配信: 地点は uuid(ハイフン・大文字を外して)・一時地点は web-poi-<番号> で searchAliases', [['でんさん'], false, ['けんけつ'], false],
+        [$aliasApp->nodes[0]->searchAliases, isset($aliasApp->nodes[1]->searchAliases), $aliasApp->events[0]->places[0]->searchAliases, isset($aliasApp->events[0]->places[1]->searchAliases)]);
+    $aliasCatalog = km_guide_catalog(['nodes' => ['n1' => ['type' => 'room', 'name' => "Let's play Densan!", 'floor' => '1', 'readings' => ['れっつぷれいでんさん', '電算部']]], 'eventPois' => [], 'posters' => []]);
+    check('案内チャットの一覧にも読み(「電算部」で Let\'s play Densan! が当たる)', ["Let's play Densan!"], array_column(km_guide_search($aliasCatalog['places'], ['電算部'], null, 3, false), 'name'));
+    $mapDataSrc = (string) file_get_contents(__DIR__ . '/../lib/map-data.php');
+    check_bool('公開の地図データ・アプリへの配信で読みを付ける', str_contains($mapDataSrc, 'return km_search_aliases_apply([') && str_contains($mapDataSrc, '], km_search_aliases_all($pdo));')
+        && substr_count((string) file_get_contents(__DIR__ . '/../lib/app-map-publish.php'), 'km_search_aliases_apply_app($map, km_search_aliases_all($pdo));') === 2);
+    $aliasAdmin = (string) file_get_contents(__DIR__ . '/../admin/search-aliases.php');
+    check_bool('管理画面: CSRF・変えた行だけ保存・1 度に 150 行まで(max_input_vars)', str_contains($aliasAdmin, 'if (!km_csrf_verify()) {')
+        && str_contains($aliasAdmin, "\$text === (string) (\$old[\$id] ?? '')") && str_contains($aliasAdmin, 'const KM_SEARCH_ALIAS_PAGE_ROWS = 150;') && str_contains($aliasAdmin, '<?= km_csrf_field() ?>'));
+    check_bool('公開の検索: 読み・ポスターの説明・番号を引く・当たらなければもしかして', str_contains($appJs, '.concat(node.readings || [], node.projects || [], posters.map(p => p.title), posterSearchExtras(posters))')
+        && str_contains($appJs, 'numbers: node.projects || [],') && str_contains($appJs, 'const guess = suggestCandidate(query, onlyRoutable);')
+        && str_contains((string) file_get_contents(__DIR__ . '/../Main/entry.js'), "api.suggest(query, { types: conf.types"));
+
+    km_check_heading('案内チャット: 会話・近い順(2026-10-30、振り返りのフェーズ 4 の 4。lib/guide-distance.php)');
+    $distNodes = [
+        's' => ['type' => 'road', 'floor' => '1', 'name' => ''],
+        'a' => ['type' => 'road', 'floor' => '1', 'name' => ''],
+        't1' => ['type' => 'room', 'floor' => '1', 'name' => 'トイレ 北'],
+        't2' => ['type' => 'room', 'floor' => '1', 'name' => 'トイレ 南'],
+        'r' => ['type' => 'room', 'floor' => '1', 'name' => '講義室'],
+        't3' => ['type' => 'room', 'floor' => '1', 'name' => 'トイレ 奥'],
+        'st1' => ['type' => 'stairs', 'floor' => '1', 'name' => 'A階段'],
+        'st2' => ['type' => 'stairs', 'floor' => '2', 'name' => 'A階段'],
+        't4' => ['type' => 'room', 'floor' => '2', 'name' => 'トイレ 2F'],
+        'w' => ['type' => 'room', 'floor' => '1', 'name' => 'トイレ 壁の向こう'],
+        'c' => ['type' => 'room', 'floor' => '1', 'name' => 'トイレ 通行止め', 'closed' => true],
+    ];
+    $distEdges = [
+        ['source' => 's', 'target' => 'a', 'distance' => 100], ['source' => 'a', 'target' => 't1', 'distance' => 50],
+        ['source' => 's', 'target' => 't2', 'distance' => 300],
+        ['source' => 's', 'target' => 'r', 'distance' => 10], ['source' => 'r', 'target' => 't3', 'distance' => 10], ['source' => 'a', 'target' => 't3', 'distance' => 400],
+        ['source' => 's', 'target' => 'st1', 'distance' => 20], ['source' => 'st2', 'target' => 't4', 'distance' => 30],
+        ['source' => 's', 'target' => 'w', 'distance' => 5, 'wall' => true], ['source' => 's', 'target' => 'c', 'distance' => 5],
+    ];
+    $lengthsCheck = km_guide_route_lengths($distNodes, $distEdges, 's');
+    check('道のり: 線の長さ・部屋は通り抜けない・階段は 1 層 200・壁と通行止めは通らない', [150.0, 300.0, 500.0, 250.0, false, false],
+        [$lengthsCheck['t1'], $lengthsCheck['t2'], $lengthsCheck['t3'], $lengthsCheck['t4'], isset($lengthsCheck['w']), isset($lengthsCheck['c'])]);
+    check('道のりの言い方(5 m 刻み・100 m からは 10 m 刻み)', ['約 15 m', '約 5 m', '約 120 m'], [km_guide_distance_label(150), km_guide_distance_label(10), km_guide_distance_label(1234)]);
+    $distCatalog = km_guide_catalog(['nodes' => $distNodes, 'eventPois' => [], 'posters' => []]);
+    $nearAnswer = km_guide_answer($distCatalog, 'トイレ', null, 's', [], static fn (): array => $lengthsCheck);
+    check('トイレは今いる場所から近い順・道のりをカードに', [['トイレ 北', 'トイレ 2F', 'トイレ 南'], '約 15 m'],
+        [array_slice(array_column($nearAnswer['cards'], 'name'), 0, 3), $nearAnswer['cards'][0]['distance']]);
+    check_bool('今いる場所が無ければ近い順にしない(道のりも出さない)', km_guide_answer($distCatalog, 'トイレ', null, '', [], static fn (): array => $lengthsCheck)['cards'][0]['distance'] === null);
+    check('「他には？」の聞き方だけ続きとみなす', [true, true, true, true, false, false, false],
+        array_map('km_guide_is_follow_up', ['他には？', 'ほかにある?', 'もっと', '他のお店は？', '他の学校の話', '外のトイレ', 'トイレはどこ']));
+    $followAnswer = km_guide_answer($distCatalog, '他には？', null, 's', [['q' => 'トイレ', 'a' => '', 'cards' => ['トイレ 北']]], static fn (): array => $lengthsCheck);
+    check('「他には？」は直前の質問をもう一度探し、直前のカードを除く', ['トイレ 2F', 'トイレ 南'], array_slice(array_column($followAnswer['cards'], 'name'), 0, 2));
+    check('「そこへの行き方」の「そこ」は直前の最初のカード', ['図書館への行き方', 'そこへの行き方'],
+        [km_guide_resolve_that('そこへの行き方', [['q' => '図書館', 'a' => '', 'cards' => ['図書館']]]), km_guide_resolve_that('そこへの行き方', [])]);
+    $historyCheck = km_guide_history_input([['q' => '一つ目'], 'x', ['q' => ''], ['q' => '二つ目', 'a' => str_repeat('あ', 300), 'cards' => ['A', '', 'B']], ['q' => "三つ目\x01"]]);
+    check('直前の会話: 新しい 2 往復だけ・答えは 200 字・空のカードと制御文字は捨てる', [['二つ目', 200, ['A', 'B']], ['三つ目', 0, []]],
+        array_map(static fn (array $t): array => [$t['q'], mb_strlen($t['a']), $t['cards']], $historyCheck));
+    $answerMessages = km_guide_answer_messages('他には？', [], '状況', [['q' => 'トイレ', 'a' => 'トイレ北です', 'cards' => []]]);
+    check_bool('答えの LLM には前の往復を会話として渡し、店・場所は今回のデータだけと言う', $answerMessages[1]['content'] === 'トイレ' && $answerMessages[2]['content'] === 'トイレ北です'
+        && str_contains($answerMessages[0]['content'], '店・場所は今回の「データ」にあるものだけを使ってください'));
+    check_bool('画面: 直前の会話 2 往復を送り、道のりをカードに出す', str_contains((string) file_get_contents(__DIR__ . '/../Main/guide-chat.js'), 'history: history.slice(-2)')
+        && str_contains((string) file_get_contents(__DIR__ . '/../Main/guide-chat.js'), "meta.push('🚶 ' + card.distance);"));
 
     km_check_heading('map: 曲がる所の目印・階段の上り下り(2026-10-30、振り返りのフェーズ 3 の 3)');
     $routeViewJs = (string) file_get_contents(__DIR__ . '/../Main/route-view.js');
