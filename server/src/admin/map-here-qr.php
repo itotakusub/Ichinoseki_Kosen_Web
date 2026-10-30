@@ -76,7 +76,8 @@ if (($_GET['print'] ?? '') === '1' && $selected !== []) {
         .name { font-size: 13pt; font-weight: 700; margin: 2mm 0 1mm; overflow-wrap: anywhere; }
         .floor { font-size: 10pt; margin: 0; }
         .hint { font-size: 8pt; color: #475569; margin: 2mm 0 0; }
-        @media print { .bar { display: none; } .sheet { padding: 0; } }
+        .url { font: 8pt ui-monospace, monospace; color: #475569; margin: 2mm 0 0; overflow-wrap: anywhere; user-select: all; }
+        @media print { .bar, .url { display: none; } .sheet { padding: 0; } }
     </style>
 </head>
 <body>
@@ -94,6 +95,8 @@ if (($_GET['print'] ?? '') === '1' && $selected !== []) {
                 <p class="name"><?= km_e($node['name']) ?></p>
                 <p class="floor"><?= km_e($floorLabels[$node['floor']] ?? $node['floor']) ?></p>
                 <p class="hint">スマホのカメラで読むと、ここから行き先までの道順を出せます</p>
+                <?php /* NFC のシールに書く URL(画面だけ。印刷には出さない。docs/plan.md「位置を自動で取る方法」) */ ?>
+                <p class="url"><?= km_e($url) ?></p>
             </div>
         <?php endforeach; ?>
     </div>
@@ -123,7 +126,8 @@ require __DIR__ . '/_inc/partials/page-header.php';
                 校内の壁や柱に貼る QR を印刷します。来場者がスマホのカメラで読むと、その場所を「今いる場所」にした地図が開き、
                 そこから行き先までの道順を出せます(Website は現在地を測れないため)。案内チャットの「現在地から」にも使います。<br>
                 貼る場所の地点を選んで「印刷用に並べる」を押してください(1 回に <?= KM_HERE_QR_MAX ?> 個まで。A4 に 12 個)。
-                QR の中身は <code><?= km_e($origin) ?>/?here=…</code> です。
+                QR の中身は <code><?= km_e($origin) ?>/?here=…</code> です。同じ URL を NFC のシールに書けば、かざすだけでも開きます
+                (印刷のページの画面に URL を出します。印刷には出ません)。
               </div>
             </div>
             <form method="get" action="./map-here-qr.php">
