@@ -1629,6 +1629,18 @@ function km_check_app_map_web_events(): void
     check_bool('渡さなければ今までどおり null', km_app_map_events_from_web($overlay, $map, null)['events'][0]['startAtMillis'] === null);
     check_bool('読めない時刻は入れない', km_app_map_events_from_web($overlay, $map, 'いつか')['events'][0]['startAtMillis'] === null);
 
+    // 2026-11-01: 企画の番号のポスターの見出しを臨時の名前に(利用者「アプリ側でも、上書きした部屋の名前に」。Website の projectDisplayFor と同じ)
+    $posterMap = json_decode('{"nodes":[{"uuid":"u-22","floor":"1","projectNumbers":["22"]},{"uuid":"u-23","floor":"1","projectNumbers":["23"]},{"uuid":"u-x","floor":"1"}]}');
+    $posterNamed = km_app_map_poster_names([['nameOverrides' => (object) ['u-23' => '臨時', 'u-x' => '別の名前']]], $posterMap, ['22' => ["Let's play Densan!"], '23' => ['見出しA', '見出しB']]);
+    check('番号のポスターの見出しが名前に', "Let's play Densan!", $posterNamed[0]['nameOverrides']->{'u-22'});
+    check('ポスターは臨時の名前より先・2 枚は「・」でつなぐ', '見出しA・見出しB', $posterNamed[0]['nameOverrides']->{'u-23'});
+    check('番号の無い地点の臨時の名前は残る', '別の名前', $posterNamed[0]['nameOverrides']->{'u-x'});
+    check_bool('イベントが無ければ何もしない', km_app_map_poster_names([], $posterMap, ['22' => ['x']]) === []);
+    $posterPublishLib = (string) file_get_contents(__DIR__ . '/../lib/app-map-publish.php');
+    check_bool('配信の 2 か所(Website の地図・イベント用の地図)で入れる',
+        substr_count($posterPublishLib, "km_app_map_poster_names(\$events['events'], \$map, km_app_map_poster_titles(\$pdo))") === 2);
+    check_bool('ポスターを出さない設定なら入れない', str_contains($posterPublishLib, 'if (!km_poster_mode_shows(km_poster_mode($pdo), true)) {'));
+
     check('通行止めの地点', [$uuidB], $event['closedNodeUuids']);
     // 両方向が畳まれ、階をまたぐものと知らない地点は落ちて、残るのは1本
     check('通行止めの線は1本', 1, count($event['closedLineKeys']));

@@ -82,6 +82,38 @@ function km_app_map_next_revision(array $config, string $slug): int
 }
 
 /**
+ * 出しているポスターの見出しを企画の番号ごとに(2026-11-01。km_app_map_poster_names へ渡す)。
+ * ポスターを出さない設定(off)・表が無いときは空。「イベント中だけ」の設定でも入れる ——
+ * アプリの臨時の名前はイベントの会期の間だけ効くので、Website の出し方と同じになる
+ *
+ * @return array<string, list<string>>
+ */
+function km_app_map_poster_titles(PDO $pdo): array
+{
+    require_once __DIR__ . '/posters.php';
+    if (!km_poster_mode_shows(km_poster_mode($pdo), true)) {
+        return [];
+    }
+    try {
+        $rows = $pdo->query(
+            'SELECT p.title, pp.project_no FROM km_posters p JOIN km_poster_projects pp ON pp.poster_id = p.id
+             WHERE p.is_enabled = 1 ORDER BY p.sort_order, p.id'
+        )->fetchAll();
+    } catch (Throwable $exception) {
+        // ポスターの表がまだ無い
+        return [];
+    }
+    $titles = [];
+    foreach ($rows as $row) {
+        $title = trim((string) $row['title']);
+        if ($title !== '' && (string) $row['project_no'] !== '') {
+            $titles[(string) $row['project_no']][] = $title;
+        }
+    }
+    return $titles;
+}
+
+/**
  * DB から配信用の JSON を作って置き、設定を書き換える。
  *
  * ## 出せないものがあれば、置く前に止める
@@ -138,6 +170,8 @@ function km_app_map_publish(
     $window = km_map_event_overlay_for_app($pdo);
     $overlay = $window['overlay'];
     $events = km_app_map_events_from_web($overlay, $map, $window['startsAt']);
+    // 企画の番号の地点はポスターの見出しで(2026-11-01。Website の札と同じ名前)
+    $events['events'] = km_app_map_poster_names($events['events'], $map, km_app_map_poster_titles($pdo));
     km_app_map_replace_events($map, $events['events']);
     // 読み・別名(2026-10-30、振り返りのフェーズ 4 の 1。lib/search-aliases.php)。アプリの検索に入る
     require_once __DIR__ . '/search-aliases.php';
@@ -336,6 +370,7 @@ function km_app_map_publish_event(
         // 折り込むのは「次に効く会期」(2026-10-24。km_app_map_publish と同じ)
         $window = km_map_event_overlay_for_app($pdo);
         $events = km_app_map_events_from_web($window['overlay'], $map, $window['startsAt']);
+        $events['events'] = km_app_map_poster_names($events['events'], $map, km_app_map_poster_titles($pdo));
         km_app_map_replace_events($map, $events['events']);
         $activeEventUuid = $events['activeEventUuid'];
         $eventSkipped = $events['skipped'];

@@ -1077,6 +1077,49 @@ function km_app_map_events_from_web(array $overlay, stdClass $map, ?string $star
 }
 
 /**
+ * 企画の番号のポスターの見出しを、アプリのイベントの臨時の名前(nameOverrides)に入れる(2026-11-01、利用者
+ * 「アプリ側でも、上書きした部屋の名前(第二実習室 → Let's play Densan!)に」)。**純粋関数**。
+ *
+ * Website はイベント中、企画の番号がある地点の札に番号のポスターの見出しを出す(Main/app.js の projectDisplayFor。
+ * ポスターは臨時の名前より先)。アプリは地点のポスターを開くまで知らないので、配信のときに名前として焼く。
+ * イベントが無ければ何もしない(Website も普段は部屋の名前のまま)。
+ *
+ * @param array<int, array> $events km_app_map_events_from_web() の events
+ * @param array<string, list<string>> $titlesByProject 企画の番号 → 出しているポスターの見出し
+ * @return array<int, array>
+ */
+function km_app_map_poster_names(array $events, stdClass $map, array $titlesByProject): array
+{
+    if ($events === [] || $titlesByProject === []) {
+        return $events;
+    }
+    $names = [];
+    foreach (($map->nodes ?? []) as $node) {
+        $uuid = $node instanceof stdClass ? (string) ($node->uuid ?? '') : '';
+        if ($uuid === '') {
+            continue;
+        }
+        $titles = [];
+        foreach (km_map_project_numbers($node->projectNumbers ?? null) as $number) {
+            foreach ($titlesByProject[$number] ?? [] as $title) {
+                $titles[] = $title;
+            }
+        }
+        if ($titles !== []) {
+            $names[$uuid] = implode('・', array_values(array_unique($titles)));
+        }
+    }
+    if ($names === []) {
+        return $events;
+    }
+    foreach ($events as $index => $event) {
+        // ポスターの見出しが臨時の名前より先(Website と同じ)
+        $events[$index]['nameOverrides'] = (object) array_merge((array) ($event['nameOverrides'] ?? []), $names);
+    }
+    return $events;
+}
+
+/**
  * 変換したイベントを地図へ差し込む。**引数を書き換える。**
  *
  * アプリ側で作ったイベントは**残さない**。混ざると、どちらが効いているのか
