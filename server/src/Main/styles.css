@@ -644,6 +644,11 @@ body {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
+    /*
+     * **右下のズーム(+/−)と全画面の列の手前で折り返す**(2026-11-01、利用者の指摘「スマホで + と − と不具合のボタンが被る」)。
+     * 右の限りが無いと、幅 375px で 🐞 が右端まで出て、ズームの列(幅 48px)の真下に入っていた
+     */
+    max-width: calc(100% - 2 * var(--km-edge) - 48px - 8px);
 }
 
 .km-action-btn {
@@ -1361,6 +1366,23 @@ input[type="text"] {
         grid-template-columns: repeat(3, auto);
         gap: 4px;
     }
+
+    /*
+     * **全画面のボタン(⛶)はズームの左に並べる**(2026-11-01)。10-30 に ⛶ をズームの上に足したので右下の列が 56px 伸び、
+     * 横にしたスマホ(740×360)で上から積んだ階の丸に 5px かぶった(実測)。横に並べれば列の高さはズームだけに戻る。
+     * 帰属表示(Leaflet)は下の段へ。操作の帯は、並べた 2 つの幅の手前で折り返す
+     */
+    /* flex の折り返しだと箱の幅が 3 つ横並びの幅になり、帰属表示が左へ伸びて操作の帯に重なった(実測)。grid なら幅は 2 つ分 */
+    .leaflet-bottom.leaflet-right {
+        display: grid;
+        grid-template-columns: auto auto;
+        justify-items: end;
+        align-items: end;
+        gap: 8px;
+    }
+    .leaflet-bottom.leaflet-right .km-fullscreen-control { margin: 0; }
+    .leaflet-bottom.leaflet-right .leaflet-control-attribution { grid-column: 1 / -1; margin: 0; }
+    .km-action-bar { max-width: calc(100% - 2 * var(--km-edge) - 2 * 48px - 2 * 8px); }
 }
 
 @media (min-width: 769px) {

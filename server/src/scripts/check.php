@@ -8704,6 +8704,19 @@ function km_check_layout(): void
         && !str_contains($shareApp, 'const r = icon.getBoundingClientRect();'));
     check_bool('札の並べ直し: 地図から外して消えかけている札(opacity 0)は数えない',
         str_contains($shareApp, "if (el.style.opacity === '0') return false;"));
+    $apacheConf = (string) @file_get_contents(dirname(__DIR__, 2) . '/docker/php/apache-km.conf');
+    if ($apacheConf === '') {
+        check_skip('Apache の KeepAlive', '配備先には docker/ が無い');
+    } else {
+        // 2026-11-01: nginx が web への接続を開けたままにし、prefork の子が 1 本ずつ握られて JS が 1〜4 秒待たされていた
+        check_bool('Apache は KeepAlive Off(前は nginx だけ。開いた接続が prefork の子を握り、同時の要求が 1 秒刻みで待たされた)',
+            (bool) preg_match('/^KeepAlive Off$/m', $apacheConf) && !preg_match('/^KeepAlive On$/m', $apacheConf));
+    }
+    $chromeCss = (string) file_get_contents(__DIR__ . '/../Main/styles.css');
+    check_bool('スマホ: 操作の帯は右下のズームの列(48px)の手前で折り返す(🐞 が +/− の下に入っていた)',
+        str_contains($chromeCss, 'max-width: calc(100% - 2 * var(--km-edge) - 48px - 8px);'));
+    check_bool('低い画面: ⛶ はズームの左に並べる(grid。帰属表示は下の段)・帯は 2 つ分の手前で折り返す',
+        (bool) preg_match('/@media \(max-height: 600px\) \{.*?\.leaflet-bottom\.leaflet-right \{\s*display: grid;\s*grid-template-columns: auto auto;.*?\.km-action-bar \{ max-width: calc\(100% - 2 \* var\(--km-edge\) - 2 \* 48px - 2 \* 8px\); \}/s', $chromeCss));
     check_bool('札を隠すのは visibility(display: none だと Leaflet が大きさ 0 で位置を決め、次の倍率で出た札が点の右下へずれる)',
         (bool) preg_match('/\.km-label\.km-label-hidden \{\s*visibility: hidden;\s*\}/', (string) file_get_contents(__DIR__ . '/../Main/styles.css')));
     check_bool('軽さ: 札の置き方はコマに分けて書く・次の並べ直しが始まったら古い分は書かない・書き終えたら経路の重なりを塗り直す',
