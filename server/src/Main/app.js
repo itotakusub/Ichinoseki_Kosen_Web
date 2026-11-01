@@ -1986,6 +1986,36 @@ document.addEventListener('DOMContentLoaded', async () => {
         return el.classList.contains('km-label-unrelated') ? KM_LABEL_PRIORITY_UNRELATED + base : base;
     }
 
+    /*
+     * **点と札の形は、測ったら覚える**(2026-11-01。本番で測り直したら、ズームのたびに点と札を全部測っていた: 1 回 230 回前後)。
+     * 点も札も大きさは px で決まり、点の位置からのずれもズームで変わらない(札は点の上に direction: 'top' で付く)。
+     * 1 度だけ測って「点の位置からのずれと大きさ」を覚え、あとは latLngToContainerPoint(計算だけ)から箱を出す。
+     * 要素が作り直されれば新しい要素として測る。**中身が変わったとき(kmDeclutterLabels)は全部忘れる**(文字の大きさ・階・表示調整)。
+     * 案内中・薄く出す建物名・軽い表示で変わるのは透け具合と影だけ(大きさは変わらない。styles.css)
+     */
+    let labelGeometry = new WeakMap();
+    function forgetLabelGeometry() {
+        labelGeometry = new WeakMap();
+    }
+    /** 点の位置(画面の座標)。containerRect は地図の箱(1 回の並べ直しで 1 回だけ測る) */
+    function markerAnchor(marker, containerRect) {
+        const p = window.map.latLngToContainerPoint(marker.getLatLng());
+        return { x: containerRect.left + p.x, y: containerRect.top + p.y };
+    }
+    /** 要素の箱。覚えていれば計算だけ、なければ 1 度測って覚える。出ていなければ(大きさ 0)覚えずに 0 の箱 */
+    function rectFromAnchor(el, anchor) {
+        let g = labelGeometry.get(el);
+        if (!g) {
+            const r = el.getBoundingClientRect();
+            if (r.width === 0 && r.height === 0) return r;
+            g = { dx: r.left - anchor.x, dy: r.top - anchor.y, width: r.width, height: r.height };
+            labelGeometry.set(el, g);
+        }
+        const left = anchor.x + g.dx;
+        const top = anchor.y + g.dy;
+        return { left: left, top: top, right: left + g.width, bottom: top + g.height, width: g.width, height: g.height };
+    }
+
     /** 札の要素 → その点のマーカー(点の中心を測って、線の根元にする) */
     function markersByLabel() {
         const byLabel = new Map();
@@ -2039,6 +2069,11 @@ document.addEventListener('DOMContentLoaded', async () => {
          */
         const faded = window.map.getContainer().classList.contains('km-facility-faded');
         const labels = all.filter(function (el) {
+            /*
+             * 地図から外した札は、Leaflet が opacity 0 にして 0.2 秒ほど残してから消す(fadeAnimation)。
+             * 数えると、もう無い札に押されて隣の札がずれる(2026-11-01。拡大で建物の札を外した直後に、試し場で 9 枚)
+             */
+            if (el.style.opacity === '0') return false;
             return !(faded && el.classList.contains('km-label-facility'));
         });
 
@@ -2050,19 +2085,27 @@ document.addEventListener('DOMContentLoaded', async () => {
         const items = [];
         const targets = [];
         const nodes = [];
+        // 点と札の箱は、覚えた形と点の位置から出す(上の labelGeometry。測るのは初めての要素だけ)
+        const c = window.map.getContainer().getBoundingClientRect();
+        // 覚えた形は CSS で消したことを知らない。消している点(引いた屋外の建物の図形。styles.css の .km-facility-faded)はここで外す
+        const shapeHidden = function (icon) {
+            return faded && icon.classList.contains('km-node-facility');
+        };
         forEachPointMarker(function (marker) {
             const icon = marker.getElement && marker.getElement();
-            if (!icon || !icon.isConnected) return;
-            const r = icon.getBoundingClientRect();
+            if (!icon || !icon.isConnected || shapeHidden(icon)) return;
+            const r = rectFromAnchor(icon, markerAnchor(marker, c));
             if (r.width === 0 && r.height === 0) return;
             nodes.push({ x: (r.left + r.right) / 2, y: (r.top + r.bottom) / 2, radius: r.width / 2 });
         });
         labels.forEach(function (el) {
-            const base = el.getBoundingClientRect();
-            if (base.width === 0 && base.height === 0) return;   // そもそも出ていない
             const marker = byLabel.get(el);
+            // 点の無い札(建物の名前など)は今までどおり毎回測る
+            const anchor = marker && marker.getLatLng ? markerAnchor(marker, c) : null;
+            const base = anchor ? rectFromAnchor(el, anchor) : el.getBoundingClientRect();
+            if (base.width === 0 && base.height === 0) return;   // そもそも出ていない
             const icon = marker && marker.getElement && marker.getElement();
-            const r = icon ? icon.getBoundingClientRect() : null;
+            const r = icon && anchor && !shapeHidden(icon) ? rectFromAnchor(icon, anchor) : null;
             items.push({
                 box: { left: base.left, top: base.top, right: base.right, bottom: base.bottom },
                 anchor: r && r.width > 0 ? { x: (r.left + r.right) / 2, y: (r.top + r.bottom) / 2 } : null,
@@ -2077,7 +2120,6 @@ document.addEventListener('DOMContentLoaded', async () => {
          * 2026-10-30 まで dy だけを書いて -6px を消していたので、上下にずらした札は 6px 下へ落ち、隣の札と重なっていた
          */
         const baseMarginTop = targets.length > 0 ? (parseFloat(window.getComputedStyle(targets[0]).marginTop) || 0) : 0;
-        const c = window.map.getContainer().getBoundingClientRect();
         const placements = layoutApi.layout(items, {
             hideWhenCrowded: true,
             bounds: { left: c.left, top: c.top, right: c.right, bottom: c.bottom },
@@ -2150,8 +2192,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             declutterLabels();
         }, 120);
     }
-    // 外から呼ばれるのは札の中身が変わったとき(表示調整・階の切り替えなど)。必ず測り直す
-    window.kmDeclutterLabels = function () { scheduleDeclutter(true); };
+    // 外から呼ばれるのは札の中身が変わったとき(表示調整・階の切り替えなど)。覚えた形も捨てて必ず測り直す
+    window.kmDeclutterLabels = function () {
+        forgetLabelGeometry();
+        scheduleDeclutter(true);
+    };
 
     // 部屋の詳細を開いた(テスト用アカウントの記録。createNodeMarker が marker.kmNodeId を付ける)
     window.map.on('popupopen', (e) => {

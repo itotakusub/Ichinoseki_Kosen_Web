@@ -8694,7 +8694,31 @@ function km_check_layout(): void
     check_bool('軽さ: 移動だけなら札を測り直さない(拡大率・階・札の数が同じ)・拡大と外からの呼び出しは必ず測る',
         str_contains($shareApp, "window.map.on('moveend', () => scheduleDeclutter(false));") && str_contains($shareApp, 'scheduleDeclutter(true);')
         && str_contains($shareApp, "if (force !== true && declutterKey() === lastDeclutterKey) return;")
-        && str_contains($shareApp, 'window.kmDeclutterLabels = function () { scheduleDeclutter(true); };'));
+        && str_contains($shareApp, "window.kmDeclutterLabels = function () {\n        forgetLabelGeometry();\n        scheduleDeclutter(true);\n    };"));
+    // 2026-11-01: 本番で測り直したら、ズームのたびに点と札を全部測っていた(1709 → 1737 回で減っていなかった)
+    check_bool('軽さ: 点と札の形は 1 度測って覚え、ズームでは latLngToContainerPoint から出す・中身が変わったら忘れる・CSS で消した建物の図形は外す',
+        str_contains($shareApp, 'let labelGeometry = new WeakMap();') && str_contains($shareApp, 'const p = window.map.latLngToContainerPoint(marker.getLatLng());')
+        && str_contains($shareApp, 'const r = rectFromAnchor(icon, markerAnchor(marker, c));')
+        && str_contains($shareApp, 'const base = anchor ? rectFromAnchor(el, anchor) : el.getBoundingClientRect();')
+        && str_contains($shareApp, "return faded && icon.classList.contains('km-node-facility');")
+        && !str_contains($shareApp, 'const r = icon.getBoundingClientRect();'));
+    check_bool('札の並べ直し: 地図から外して消えかけている札(opacity 0)は数えない',
+        str_contains($shareApp, "if (el.style.opacity === '0') return false;"));
+    $apacheConf = (string) @file_get_contents(dirname(__DIR__, 2) . '/docker/php/apache-km.conf');
+    if ($apacheConf === '') {
+        check_skip('Apache の KeepAlive', '配備先には docker/ が無い');
+    } else {
+        // 2026-11-01: nginx が web への接続を開けたままにし、prefork の子が 1 本ずつ握られて JS が 1〜4 秒待たされていた
+        check_bool('Apache は KeepAlive Off(前は nginx だけ。開いた接続が prefork の子を握り、同時の要求が 1 秒刻みで待たされた)',
+            (bool) preg_match('/^KeepAlive Off$/m', $apacheConf) && !preg_match('/^KeepAlive On$/m', $apacheConf));
+    }
+    $chromeCss = (string) file_get_contents(__DIR__ . '/../Main/styles.css');
+    check_bool('スマホ: 操作の帯は右下のズームの列(48px)の手前で折り返す(🐞 が +/− の下に入っていた)',
+        str_contains($chromeCss, 'max-width: calc(100% - 2 * var(--km-edge) - 48px - 8px);'));
+    check_bool('低い画面: ⛶ はズームの左に並べる(grid。帰属表示は下の段)・帯は 2 つ分の手前で折り返す',
+        (bool) preg_match('/@media \(max-height: 600px\) \{.*?\.leaflet-bottom\.leaflet-right \{\s*display: grid;\s*grid-template-columns: auto auto;.*?\.km-action-bar \{ max-width: calc\(100% - 2 \* var\(--km-edge\) - 2 \* 48px - 2 \* 8px\); \}/s', $chromeCss));
+    check_bool('札を隠すのは visibility(display: none だと Leaflet が大きさ 0 で位置を決め、次の倍率で出た札が点の右下へずれる)',
+        (bool) preg_match('/\.km-label\.km-label-hidden \{\s*visibility: hidden;\s*\}/', (string) file_get_contents(__DIR__ . '/../Main/styles.css')));
     check_bool('軽さ: 札の置き方はコマに分けて書く・次の並べ直しが始まったら古い分は書かない・書き終えたら経路の重なりを塗り直す',
         str_contains($shareApp, 'window.requestAnimationFrame(writeChunk);') && str_contains($shareApp, 'if (generation !== declutterGeneration) return;')
         && str_contains($shareApp, 'if (routeLineRuns.length > 0) routeLineRuns.forEach(paintRouteRun);'));
@@ -9575,6 +9599,15 @@ function km_check_layout(): void
         "linux-image-generic 6.8.0-88.89\nnginx 1.1\nopenssl 3.0.13-0ubuntu3\n", 'noble');
     check('USN: 入っている版が直した版より古いものだけ(もう当たっていれば出さない)・同じリリースだけ・CVE を名前に', [['usn:USN-7100-1', true]],
         array_map(static fn (array $i): array => [$i['key'], str_contains($i['name'], 'CVE-2026-98432')], $usnItems));
+    $usnMerged = json_decode(km_security_usn_merge(['{"notices":[{"id":"USN-1"},{"id":"USN-2"}]}', 'oops', '{"notices":[{"id":"USN-2"},{"id":"USN-3"}]}', '']), true);
+    check('USN: 何枚かを 1 つに(読めない枚は飛ばす・同じ USN は 1 つ)', ['USN-1', 'USN-2', 'USN-3'], array_column($usnMerged['notices'], 'id'));
+    $usnNone = false;
+    try {
+        km_security_usn_merge(['', '{"errors":"limit"}']);
+    } catch (InvalidArgumentException $exception) {
+        $usnNone = true;
+    }
+    check_bool('USN: 1 枚も読めなければ保留(無いとは言わない)', $usnNone);
     check('Debian の版の比べ方(dpkg --compare-versions と同じ)', [-1, -1, 1, -1, 0, -1, 1, -1],
         array_map(static fn (array $p): int => km_security_deb_compare($p[0], $p[1]) <=> 0, [
             ['6.8.0-88.89', '6.8.0-90.91'], ['6.8.0-90.91', '6.8.0-100.1'], ['1:1.0', '2.0'], ['1.0~rc1', '1.0'], ['1.0-1', '1.0-1'],
@@ -9594,6 +9627,10 @@ function km_check_layout(): void
             && str_contains($updatesForVulns, "  if [ -n \"\$NEW_VULN_KEYS\" ]; then\n    return 0")
             && strpos($updatesForVulns, '>> "$VULN_SEEN_FILE"') > strpos($updatesForVulns, 'php scripts/notify-update.php; then')
             && str_contains($updatesForVulns, 'done < "$VULN_TMP"'));
+        // ubuntu.com の notices.json は limit が 20 まで(40 は 422。10-30〜11-01 に USN を読めていなかった)
+        check_bool('check-updates.sh: USN は limit=20 で offset を変えて 2 枚(limit=40 は断られる)',
+            str_contains($updatesForVulns, 'limit=20&order=newest') && str_contains($updatesForVulns, '&offset=20')
+            && !preg_match('/notices\.json[^"\n]*limit=(?:[3-9]\d|2[1-9]|\d{3})/', $updatesForVulns));
     }
 
     km_check_heading('英語の公開ページ: 画面の辞書・英語の名前(2026-10-30、振り返りのフェーズ 6 の 1。Main/i18n.js・lib/english-names.php)');

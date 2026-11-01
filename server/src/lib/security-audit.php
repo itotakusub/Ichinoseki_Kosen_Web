@@ -183,6 +183,35 @@ function km_security_deb_compare(string $a, string $b): int
  * @param string $installed `dpkg-query -W -f='${Package} ${Version}\n'` の答え(1 行 1 部品)
  * @return list<array{key:string, name:string, current:string, available:string}>
  */
+/**
+ * USN の答えを何枚かまとめて 1 つにする(2026-11-01)。ubuntu.com の notices.json は 1 回に 20 件まで
+ * (limit=40 は 422 で断られ、本番で 10-30 から USN を読めていなかった)ので、offset を変えて 2 枚もらう。
+ * 読めない枚は飛ばし、同じ USN は 1 つにする。1 枚も読めなければ InvalidArgumentException
+ *
+ * @param list<string> $pages
+ */
+function km_security_usn_merge(array $pages): string
+{
+    $notices = [];
+    $read = false;
+    foreach ($pages as $page) {
+        $decoded = json_decode(trim($page), true);
+        if (!is_array($decoded) || !is_array($decoded['notices'] ?? null)) {
+            continue;
+        }
+        $read = true;
+        foreach ($decoded['notices'] as $notice) {
+            if (is_array($notice) && is_string($notice['id'] ?? null)) {
+                $notices[$notice['id']] ??= $notice;
+            }
+        }
+    }
+    if (!$read) {
+        throw new InvalidArgumentException('USN の答えを読めません');
+    }
+    return (string) json_encode(['notices' => array_values($notices)], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+}
+
 function km_security_usn_items(string $noticesJson, string $installed, string $release): array
 {
     $decoded = json_decode($noticesJson, true);
