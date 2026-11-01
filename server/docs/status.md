@@ -629,6 +629,19 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
     あわせて、経路のカードと目的地で、名前が番号だけの一時地点(「99」)は見出し(「献血」)にした。
     本物の Bionic で: 現在地はどこ → Densan(0 秒)、現在地から体育館 / ここから献血 → Densan から、第二体育館から図書館 → 第二体育館から、
     ここのトイレはどこ → トイレ。check.php 2409 件。
+- **本番を戻して、止めていた分を配備した(2026-11-01、利用者)**: つなぎ(IP オプション付きの TCP を捨てる・MPTCP を切る)を入れ、apt upgrade(docker-ce 29.9.2 へ)をして、`-Action up`。
+  カーネルは 6.8.0-147 のまま(直した版は未)。`km-ipopt` は active・enabled、`net.mptcp.enabled` は 0。コンテナ 10 個とも動いている。
+  - **本番で確かめた**:
+    - `Main/i18n.js` が出ている。`/?lang=en` で英語(検索の欄・チップ・ログイン・パスワードの画面)、`?lang=ja` で日本語。どちらもエラーなし。右上のアカウントの欄も出ている。
+    - `api/stalls.php` は 200(屋台は 0 件)。`api/stall.php` は鍵なしで 401、`api/app-schedule.php` はコード違いで 401(nginx の km_api を通って PHP まで届いている)。
+    - 地図は会期後の「隠す」(パスワードの錠)なので、地点・英語の名前・屋台のカード・予定・速さの比べはまだ見ていない。
+  - **脆弱性の点検を kmops で「調べるだけ」走らせた**(メールは送らない。状態のファイルは root のものなので読めない):
+    - PHP・composer: 勧告なし。
+    - Soketi の npm: high が 7 件ほど(axios・follow-redirects・js-yaml・basic-ftp・decode-uri-component・@pm2/agent・get-uri)と moderate(ip-address)。次の点検でメールが行く。
+    - **Ubuntu の USN が読めていなかった**: ubuntu.com の `notices.json` は `limit` が 20 までで、`limit=40` は 422 で断られていた(10-30 に書いたときから)。
+      → `check-updates.sh` は `limit=20` で `offset=0` と `20` の 2 枚をもらう。`security-audit.php usn` は区切りを挟んだ何枚でも読み、`km_security_usn_merge` で 1 つにする(読めない枚は飛ばす・同じ USN は 1 つ・1 枚も読めなければ保留)。
+      ホストの部品の一覧(719 行)と本物の 2 枚(40 件)で手元で通した: 当たり 0 件(apt upgrade の直後なので正しい)。libbrotli1 をわざと 0.0-0 にすると USN-8956-1 を出した。check.php 2583 件。
+      **web の作り直しと host-setup での check-updates.sh の配り直しが要る**(配備は利用者)。
 - **Linux カーネルの TCP の穴(CVE-2026-98432)でサーバーを止めた(2026-10-30、利用者)**: IPv4 の TCP のつなぎ始め(3 回の握手)で、解放したメモリを使う穴。
   認証なしで外から届く(カーネルの CNA は 9.8、Red Hat・Amazon などは 5.9〜8.1)。Anthropic が 10-27〜28 に「多経路 TCP(MPTCP)で待つサーバーで root を取れた」と公表した
   (実験室の話。出回っている攻撃の報告は 10-29 時点で無く、CISA の KEV にも無い)。IPv6 は対象外。

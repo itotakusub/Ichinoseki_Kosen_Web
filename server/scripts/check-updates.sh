@@ -482,11 +482,14 @@ read_vulns "npm(Soketi)"
 
 # ホストの Ubuntu。入っている部品の名前と USN の一覧を web へ渡して突き合わせる
 _release="$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release 2>/dev/null | head -n 1)"
-_usn_json="$(curl -fsS --max-time 20 "https://ubuntu.com/security/notices.json?release=${_release}&limit=40&order=newest" 2>/dev/null || true)"
+# **1 回に 20 件まで**(limit=40 は 422 で断られ、10-30 から読めていなかった。2026-11-01)。offset を変えて 2 枚、新しい 40 件
+_usn_url="https://ubuntu.com/security/notices.json?release=${_release}&limit=20&order=newest"
+_usn_json="$(curl -fsS --max-time 20 "${_usn_url}&offset=0" 2>/dev/null || true)"
+_usn_json2="$(curl -fsS --max-time 20 "${_usn_url}&offset=20" 2>/dev/null || true)"
 if [ -z "$_release" ] || [ -z "$_usn_json" ] || ! command -v dpkg-query >/dev/null 2>&1; then
   echo "  Ubuntu(USN)  聞けませんでした(判定を保留)"
 else
-  VULN_OUTPUT="$( { dpkg-query -W -f='${Package} ${Version}\n' 2>/dev/null; echo '---KM-USN---'; printf '%s' "$_usn_json"; } \
+  VULN_OUTPUT="$( { dpkg-query -W -f='${Package} ${Version}\n' 2>/dev/null; echo '---KM-USN---'; printf '%s\n' "$_usn_json"; echo '---KM-USN---'; printf '%s' "$_usn_json2"; } \
     | docker compose exec -T web php scripts/security-audit.php usn "$_release" 2>/dev/null || echo "HOLD	web で調べられませんでした")"
   read_vulns "Ubuntu(USN)"
 fi

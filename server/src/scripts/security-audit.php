@@ -10,7 +10,7 @@ declare(strict_types=1);
  *     docker compose exec -T web php scripts/security-audit.php composer   composer audit(composer.lock)
  *     … | docker compose exec -T web php scripts/security-audit.php npm    npm audit の JSON を標準入力から
  *     … | docker compose exec -T web php scripts/security-audit.php usn <release>
- *                                                                          dpkg の一覧(名前と版)+ 区切り + USN の JSON を標準入力から
+ *                                                                          dpkg の一覧(名前と版)+ 区切り + USN の JSON(区切りを挟んで何枚でも)を標準入力から
  *
  * 出すのは「鍵<TAB>名前<TAB>いま<TAB>直したもの」の行。聞けなければ「HOLD<TAB>理由」の行(**無いとは言わない**)。
  */
@@ -83,9 +83,11 @@ try {
                 echo "HOLD\tUbuntu のリリース名が分かりません\n";
                 break;
             }
-            $parts = explode(KM_SECURITY_USN_SEPARATOR, (string) stream_get_contents(STDIN), 2);
+            // dpkg の一覧 + 区切り + USN の JSON(1 回 20 件までなので、区切りを挟んで何枚か)
+            $parts = explode(KM_SECURITY_USN_SEPARATOR, (string) stream_get_contents(STDIN));
+            $installed = (string) array_shift($parts);
             try {
-                $emit(km_security_usn_items($parts[1] ?? '', $parts[0], $release));
+                $emit(km_security_usn_items(km_security_usn_merge($parts), $installed, $release));
             } catch (InvalidArgumentException $exception) {
                 echo "HOLD\tUbuntu の USN を読めませんでした\n";
             }

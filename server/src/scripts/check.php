@@ -9575,6 +9575,15 @@ function km_check_layout(): void
         "linux-image-generic 6.8.0-88.89\nnginx 1.1\nopenssl 3.0.13-0ubuntu3\n", 'noble');
     check('USN: 入っている版が直した版より古いものだけ(もう当たっていれば出さない)・同じリリースだけ・CVE を名前に', [['usn:USN-7100-1', true]],
         array_map(static fn (array $i): array => [$i['key'], str_contains($i['name'], 'CVE-2026-98432')], $usnItems));
+    $usnMerged = json_decode(km_security_usn_merge(['{"notices":[{"id":"USN-1"},{"id":"USN-2"}]}', 'oops', '{"notices":[{"id":"USN-2"},{"id":"USN-3"}]}', '']), true);
+    check('USN: 何枚かを 1 つに(読めない枚は飛ばす・同じ USN は 1 つ)', ['USN-1', 'USN-2', 'USN-3'], array_column($usnMerged['notices'], 'id'));
+    $usnNone = false;
+    try {
+        km_security_usn_merge(['', '{"errors":"limit"}']);
+    } catch (InvalidArgumentException $exception) {
+        $usnNone = true;
+    }
+    check_bool('USN: 1 枚も読めなければ保留(無いとは言わない)', $usnNone);
     check('Debian の版の比べ方(dpkg --compare-versions と同じ)', [-1, -1, 1, -1, 0, -1, 1, -1],
         array_map(static fn (array $p): int => km_security_deb_compare($p[0], $p[1]) <=> 0, [
             ['6.8.0-88.89', '6.8.0-90.91'], ['6.8.0-90.91', '6.8.0-100.1'], ['1:1.0', '2.0'], ['1.0~rc1', '1.0'], ['1.0-1', '1.0-1'],
@@ -9594,6 +9603,10 @@ function km_check_layout(): void
             && str_contains($updatesForVulns, "  if [ -n \"\$NEW_VULN_KEYS\" ]; then\n    return 0")
             && strpos($updatesForVulns, '>> "$VULN_SEEN_FILE"') > strpos($updatesForVulns, 'php scripts/notify-update.php; then')
             && str_contains($updatesForVulns, 'done < "$VULN_TMP"'));
+        // ubuntu.com の notices.json は limit が 20 まで(40 は 422。10-30〜11-01 に USN を読めていなかった)
+        check_bool('check-updates.sh: USN は limit=20 で offset を変えて 2 枚(limit=40 は断られる)',
+            str_contains($updatesForVulns, 'limit=20&order=newest') && str_contains($updatesForVulns, '&offset=20')
+            && !preg_match('/notices\.json[^"\n]*limit=(?:[3-9]\d|2[1-9]|\d{3})/', $updatesForVulns));
     }
 
     km_check_heading('英語の公開ページ: 画面の辞書・英語の名前(2026-10-30、振り返りのフェーズ 6 の 1。Main/i18n.js・lib/english-names.php)');
