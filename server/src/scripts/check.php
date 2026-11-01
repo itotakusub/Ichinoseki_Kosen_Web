@@ -1629,6 +1629,18 @@ function km_check_app_map_web_events(): void
     check_bool('渡さなければ今までどおり null', km_app_map_events_from_web($overlay, $map, null)['events'][0]['startAtMillis'] === null);
     check_bool('読めない時刻は入れない', km_app_map_events_from_web($overlay, $map, 'いつか')['events'][0]['startAtMillis'] === null);
 
+    // 2026-11-01: 企画の番号のポスターの見出しを臨時の名前に(利用者「アプリ側でも、上書きした部屋の名前に」。Website の projectDisplayFor と同じ)
+    $posterMap = json_decode('{"nodes":[{"uuid":"u-22","floor":"1","projectNumbers":["22"]},{"uuid":"u-23","floor":"1","projectNumbers":["23"]},{"uuid":"u-x","floor":"1"}]}');
+    $posterNamed = km_app_map_poster_names([['nameOverrides' => (object) ['u-23' => '臨時', 'u-x' => '別の名前']]], $posterMap, ['22' => ["Let's play Densan!"], '23' => ['見出しA', '見出しB']]);
+    check('番号のポスターの見出しが名前に', "Let's play Densan!", $posterNamed[0]['nameOverrides']->{'u-22'});
+    check('ポスターは臨時の名前より先・2 枚は「・」でつなぐ', '見出しA・見出しB', $posterNamed[0]['nameOverrides']->{'u-23'});
+    check('番号の無い地点の臨時の名前は残る', '別の名前', $posterNamed[0]['nameOverrides']->{'u-x'});
+    check_bool('イベントが無ければ何もしない', km_app_map_poster_names([], $posterMap, ['22' => ['x']]) === []);
+    $posterPublishLib = (string) file_get_contents(__DIR__ . '/../lib/app-map-publish.php');
+    check_bool('配信の 2 か所(Website の地図・イベント用の地図)で入れる',
+        substr_count($posterPublishLib, "km_app_map_poster_names(\$events['events'], \$map, km_app_map_poster_titles(\$pdo))") === 2);
+    check_bool('ポスターを出さない設定なら入れない', str_contains($posterPublishLib, 'if (!km_poster_mode_shows(km_poster_mode($pdo), true)) {'));
+
     check('通行止めの地点', [$uuidB], $event['closedNodeUuids']);
     // 両方向が畳まれ、階をまたぐものと知らない地点は落ちて、残るのは1本
     check('通行止めの線は1本', 1, count($event['closedLineKeys']));
@@ -8702,6 +8714,16 @@ function km_check_layout(): void
         && str_contains($shareApp, 'const base = anchor ? rectFromAnchor(el, anchor) : el.getBoundingClientRect();')
         && str_contains($shareApp, "return faded && icon.classList.contains('km-node-facility');")
         && !str_contains($shareApp, 'const r = icon.getBoundingClientRect();'));
+    // 2026-11-01: Pixel 7a で、ズームのたびに Leaflet の Tooltip._setPosition が札ごとに offsetWidth を読み、70〜130ms 止まっていた
+    check_bool('軽さ: Leaflet の上向きの札は大きさを覚える(中身・文字・世代が変わったら読み直す)・中身を変えたら忘れる・文字の大きさを変えたら世代を上げる',
+        str_contains($shareApp, "if (this.options.direction !== 'top' || !container) return originalSetPosition.call(this, pos);")
+        && str_contains($shareApp, 'if (!size || size.generation !== window.kmTooltipSizeGeneration || size.text !== text) {')
+        && str_contains($shareApp, "proto._updateContent = function () {\n        this._kmSize = null;")
+        && str_contains($shareApp, 'window.kmTooltipSizeGeneration++;')
+        && strpos($shareApp, '(function cacheTooltipSize() {') < strpos($shareApp, 'const kmLoading = ('));
+    check_bool('札の並べ直し: 初めて測る札・文字が変わった札は、測る前に Leaflet に置き直させる(英語の書き換えで幅が変わる)',
+        str_contains($shareApp, "if (tip && typeof tip._updatePosition === 'function' && tip._map) tip._updatePosition();")
+        && str_contains($shareApp, 'if (!g || g.text !== text) {'));
     check_bool('札の並べ直し: 地図から外して消えかけている札(opacity 0)は数えない',
         str_contains($shareApp, "if (el.style.opacity === '0') return false;"));
     $apacheConf = (string) @file_get_contents(dirname(__DIR__, 2) . '/docker/php/apache-km.conf');
