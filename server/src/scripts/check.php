@@ -8694,7 +8694,18 @@ function km_check_layout(): void
     check_bool('軽さ: 移動だけなら札を測り直さない(拡大率・階・札の数が同じ)・拡大と外からの呼び出しは必ず測る',
         str_contains($shareApp, "window.map.on('moveend', () => scheduleDeclutter(false));") && str_contains($shareApp, 'scheduleDeclutter(true);')
         && str_contains($shareApp, "if (force !== true && declutterKey() === lastDeclutterKey) return;")
-        && str_contains($shareApp, 'window.kmDeclutterLabels = function () { scheduleDeclutter(true); };'));
+        && str_contains($shareApp, "window.kmDeclutterLabels = function () {\n        forgetLabelGeometry();\n        scheduleDeclutter(true);\n    };"));
+    // 2026-11-01: 本番で測り直したら、ズームのたびに点と札を全部測っていた(1709 → 1737 回で減っていなかった)
+    check_bool('軽さ: 点と札の形は 1 度測って覚え、ズームでは latLngToContainerPoint から出す・中身が変わったら忘れる・CSS で消した建物の図形は外す',
+        str_contains($shareApp, 'let labelGeometry = new WeakMap();') && str_contains($shareApp, 'const p = window.map.latLngToContainerPoint(marker.getLatLng());')
+        && str_contains($shareApp, 'const r = rectFromAnchor(icon, markerAnchor(marker, c));')
+        && str_contains($shareApp, 'const base = anchor ? rectFromAnchor(el, anchor) : el.getBoundingClientRect();')
+        && str_contains($shareApp, "return faded && icon.classList.contains('km-node-facility');")
+        && !str_contains($shareApp, 'const r = icon.getBoundingClientRect();'));
+    check_bool('札の並べ直し: 地図から外して消えかけている札(opacity 0)は数えない',
+        str_contains($shareApp, "if (el.style.opacity === '0') return false;"));
+    check_bool('札を隠すのは visibility(display: none だと Leaflet が大きさ 0 で位置を決め、次の倍率で出た札が点の右下へずれる)',
+        (bool) preg_match('/\.km-label\.km-label-hidden \{\s*visibility: hidden;\s*\}/', (string) file_get_contents(__DIR__ . '/../Main/styles.css')));
     check_bool('軽さ: 札の置き方はコマに分けて書く・次の並べ直しが始まったら古い分は書かない・書き終えたら経路の重なりを塗り直す',
         str_contains($shareApp, 'window.requestAnimationFrame(writeChunk);') && str_contains($shareApp, 'if (generation !== declutterGeneration) return;')
         && str_contains($shareApp, 'if (routeLineRuns.length > 0) routeLineRuns.forEach(paintRouteRun);'));

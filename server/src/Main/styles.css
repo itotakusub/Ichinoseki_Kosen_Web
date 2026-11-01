@@ -2703,9 +2703,13 @@ a.icon-btn { text-decoration: none; color: inherit; }
 /*
  * 重なって読めないラベルは出さない(2026-09-22。app.js の declutterLabels)。
  * **点は出したまま** —— 押せば名前が読めるので、情報そのものは消えない。
+ *
+ * **display: none にしない**(2026-11-01)。Leaflet は札の位置を札の大きさ(offsetWidth)から決める(direction: 'top' は幅の半分と高さを引く)。
+ * 隠している間にズームすると大きさ 0 で位置を決め、次の倍率で出てきた札が点の右下へずれたまま残っていた
+ * (試し場の 1 階で、1 段の拡大で 78 枚)。visibility なら大きさが残り、押せないのも同じ
  */
 .km-label.km-label-hidden {
-    display: none;
+    visibility: hidden;
 }
 
 /*
