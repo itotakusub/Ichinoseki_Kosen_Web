@@ -716,7 +716,8 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
     来場者の画面(最初の画面・ジャンル・下の帯・地点の詳細・経路の案内と階段の札・予定・屋台・前回の経路)の文を「日本語と英語の対」(`ui(ja, en)`)にした。管理の画面と診断は日本語のまま。
     地点の名前は配信の `titleEn`(Website の「英語の名前」)を出し、検索でも引く。地図のデータは書き換えない(管理版が保存する地図に英語が混ざらない)。values-en/strings.xml も足した。
   - 確かめ: check.php 2579 件・JS の試験(i18n 39 ほか全部)・アプリの単体試験 914 件(両フレーバー)。**アプリの英語の画面は実機でまだ見ていない**。
-  - 配備のあとに要るもの: web の作り直し(新しい PHP・JS)。check-updates.sh は host-setup の HOST_SCRIPTS で配られる。表は開いたときに作る。- **フェーズ 5: 予定・屋台の情報(2026-10-30。Web は配備待ち・アプリは版 33 = 1000033・署名 d71fbf0a…。受け箱へ送った。本番は止めているので取りに行くのは戻してから)**
+  - 配備のあとに要るもの: web の作り直し(新しい PHP・JS)。check-updates.sh は host-setup の HOST_SCRIPTS で配られる。表は開いたときに作る。
+- **フェーズ 5: 予定・屋台の情報(2026-10-30。Web は配備待ち・アプリは版 33 = 1000033・署名 d71fbf0a…。受け箱へ送った。本番は止めているので取りに行くのは戻してから)**
   - **予定の会場と見せる相手**(lib/event-schedule.php・別表 km_event_schedule_extra(CREATE だけ)・管理画面「スケジュール」):
     - 会場 = 地点を 1 つ選べる(ステージの演目など番号の無い催し)。公開の地図では会場を場所の先頭にする(出している地点だけ)。
     - 見せる相手 = 一般 / スタッフだけ / 出さない(今の「一般に出す」の印は、一般のとき 1 のまま残す)。スタッフだけの行は **km_map_teacher_session**(教職員の組織のアカウントとお試しの閲覧リンク)の地図にだけ届き、「スタッフだけ」の札を付ける。
@@ -1097,7 +1098,9 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
   - **配備前の控えが落ちた**(2026-10-23): `tar: uploads/map-backups: Cannot open: Permission denied`。PHP が `uploads/map-backups` を 0750(グループ www-data)で作り、kmops が開けなかった。
     host-setup.sh の確認はファイルだけを見ており、開けないディレクトリの中は数えないので「読めないもの 0 件」と言っていた。
     → PHP が uploads の下に作るディレクトリ(map-backups・learning-backups・panoramas)を 0755 に。host-setup.sh が開けないディレクトリも見つけ、`--fix` でグループと g+rx を直す。
-    **配備の前に `.\host-setup.ps1 -Fix` を流す**(今あるディレクトリを直してから控えを取る)。  - 手元の PHP に `php.ini` を作った(`C:\Users\itota\Documents\php\php.ini`。curl fileinfo gd intl mbstring openssl pdo_sqlite)。update-containers.ps1 の自己検査が拡張の無さで exit 2 になっていた。- **段 D: 地図の履歴とブックマーク(2026-10-23、利用者の指示。版 20)**: ブックマーク・開いた場所・検索した言葉・経路・表示調整。ふだんは端末の中だけ、サインインしていれば `api/user-map-data.php`(表 `km_user_map_data`・退会で消える)で揃える。混ぜ方は項目ごとに新しい方(Kotlin・JS・PHP で同じ。check.php と UserMapDataTest)。
+    **配備の前に `.\host-setup.ps1 -Fix` を流す**(今あるディレクトリを直してから控えを取る)。
+  - 手元の PHP に `php.ini` を作った(`C:\Users\itota\Documents\php\php.ini`。curl fileinfo gd intl mbstring openssl pdo_sqlite)。update-containers.ps1 の自己検査が拡張の無さで exit 2 になっていた。
+- **段 D: 地図の履歴とブックマーク(2026-10-23、利用者の指示。版 20)**: ブックマーク・開いた場所・検索した言葉・経路・表示調整。ふだんは端末の中だけ、サインインしていれば `api/user-map-data.php`(表 `km_user_map_data`・退会で消える)で揃える。混ぜ方は項目ごとに新しい方(Kotlin・JS・PHP で同じ。check.php と UserMapDataTest)。
   経路の確かめ: 開いたとき「前回の経路」・サインイン時に経路があれば「アカウントに残すか / この端末だけ」・全部消すとき・ログアウトのとき。Web は `Main/user-history.js`(展示の PC では使わない)。利用規約 第4条・プライバシーポリシーに追記(教員室の決まりがアプリにも効くことも直した)。
   Pixel と手元の試しの作りで、☆・履歴の面・3 つの確かめ・前回の経路を確かめた。**同期は配備後に確かめる**。check.php 2137 件
 - **段 B・C: 色分けを手で決める・イベントで隠した地点の色分け・表示調整の既定を配る(2026-10-23、利用者の指示。版 19)**:
