@@ -771,10 +771,10 @@ $renderCodes = static function (string $slug) use ($codesBySlug, $newCode, $newC
                         <?php // 既定はオフ。添付する地図のイベントは、多くはアプリで作ってある ?>
                         <input class="form-check-input" type="checkbox" value="1" id="fold_web_events" name="fold_web_events">
                         <label class="form-check-label" for="fold_web_events"
-                               data-i18n="page.mapPublish.eventFold">Website のイベント(通行止め)も折り込む</label>
+                               data-i18n="page.mapPublish.eventFold">Website のイベント(通行止め・臨時の名前・ポスターの見出し)も折り込む</label>
                         <div class="form-text" data-i18n="page.mapPublish.eventFoldHint">
                           オフのときは、ファイルに入っているイベントをそのまま配ります。
-                          オンにすると「イベント」画面の内容で置き換えます。
+                          オンにすると「イベント」画面の内容で置き換え、企画の番号の地点にはポスターの見出しを名前として入れます(Website の地図と同じ名前)。
                         </div>
                       </div>
 
