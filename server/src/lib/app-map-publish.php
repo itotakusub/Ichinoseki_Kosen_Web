@@ -370,6 +370,11 @@ function km_app_map_publish_event(
         // 折り込むのは「次に効く会期」(2026-10-24。km_app_map_publish と同じ)
         $window = km_map_event_overlay_for_app($pdo);
         $events = km_app_map_events_from_web($window['overlay'], $map, $window['startsAt']);
+        /*
+         * 添付の地図に企画の番号が無い地点は、Website の表(km_map_node_projects)から足す(2026-11-01。管理アプリの書き出しに
+         * 番号が 1 つも無く、ポスターの見出しも「22 第二実習室」の番号も赤い縁も入らなかった)。添付に番号があればそちらのまま
+         */
+        km_map_projects_apply($map, array_diff_key(km_map_node_projects_all($pdo), km_map_projects_from_app($map)));
         $events['events'] = km_app_map_poster_names($events['events'], $map, km_app_map_poster_titles($pdo));
         km_app_map_replace_events($map, $events['events']);
         $activeEventUuid = $events['activeEventUuid'];

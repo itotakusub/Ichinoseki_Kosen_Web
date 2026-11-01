@@ -1640,6 +1640,16 @@ function km_check_app_map_web_events(): void
     check_bool('配信の 2 か所(Website の地図・イベント用の地図)で入れる',
         substr_count($posterPublishLib, "km_app_map_poster_names(\$events['events'], \$map, km_app_map_poster_titles(\$pdo))") === 2);
     check_bool('ポスターを出さない設定なら入れない', str_contains($posterPublishLib, 'if (!km_poster_mode_shows(km_poster_mode($pdo), true)) {'));
+    // 添付したイベント用の地図に番号が無いとき、Website の表から足してから見出しを入れる(添付の番号が先)
+    check_bool('イベント用の地図: 番号の無い地点に表の番号を足してから見出し',
+        strpos($posterPublishLib, 'km_map_projects_apply($map, array_diff_key(km_map_node_projects_all($pdo), km_map_projects_from_app($map)));')
+            < strpos($posterPublishLib, "km_app_map_poster_names(\$events['events'], \$map, km_app_map_poster_titles(\$pdo));\n        km_app_map_replace_events"));
+    $numberedMap = json_decode('{"nodes":[{"uuid":"u-22","floor":"1"},{"uuid":"u-own","floor":"1","projectNumbers":["9"]}]}');
+    km_map_projects_apply($numberedMap, array_diff_key(['u-22' => ['22'], 'u-own' => ['99']], km_map_projects_from_app($numberedMap)));
+    check('番号の無い地点に表の番号', ['22'], $numberedMap->nodes[0]->projectNumbers);
+    check('添付に番号があればそちらのまま', ['9'], $numberedMap->nodes[1]->projectNumbers);
+    check('足した番号でポスターの見出しが入る', "Let's play Densan!",
+        km_app_map_poster_names([['nameOverrides' => (object) []]], $numberedMap, ['22' => ["Let's play Densan!"]])[0]['nameOverrides']->{'u-22'});
 
     check('通行止めの地点', [$uuidB], $event['closedNodeUuids']);
     // 両方向が畳まれ、階をまたぐものと知らない地点は落ちて、残るのは1本
