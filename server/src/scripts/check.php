@@ -8702,6 +8702,16 @@ function km_check_layout(): void
         && str_contains($shareApp, 'const base = anchor ? rectFromAnchor(el, anchor) : el.getBoundingClientRect();')
         && str_contains($shareApp, "return faded && icon.classList.contains('km-node-facility');")
         && !str_contains($shareApp, 'const r = icon.getBoundingClientRect();'));
+    // 2026-11-01: Pixel 7a で、ズームのたびに Leaflet の Tooltip._setPosition が札ごとに offsetWidth を読み、70〜130ms 止まっていた
+    check_bool('軽さ: Leaflet の上向きの札は大きさを覚える(中身・文字・世代が変わったら読み直す)・中身を変えたら忘れる・文字の大きさを変えたら世代を上げる',
+        str_contains($shareApp, "if (this.options.direction !== 'top' || !container) return originalSetPosition.call(this, pos);")
+        && str_contains($shareApp, 'if (!size || size.generation !== window.kmTooltipSizeGeneration || size.text !== text) {')
+        && str_contains($shareApp, "proto._updateContent = function () {\n        this._kmSize = null;")
+        && str_contains($shareApp, 'window.kmTooltipSizeGeneration++;')
+        && strpos($shareApp, '(function cacheTooltipSize() {') < strpos($shareApp, 'const kmLoading = ('));
+    check_bool('札の並べ直し: 初めて測る札・文字が変わった札は、測る前に Leaflet に置き直させる(英語の書き換えで幅が変わる)',
+        str_contains($shareApp, "if (tip && typeof tip._updatePosition === 'function' && tip._map) tip._updatePosition();")
+        && str_contains($shareApp, 'if (!g || g.text !== text) {'));
     check_bool('札の並べ直し: 地図から外して消えかけている札(opacity 0)は数えない',
         str_contains($shareApp, "if (el.style.opacity === '0') return false;"));
     $apacheConf = (string) @file_get_contents(dirname(__DIR__, 2) . '/docker/php/apache-km.conf');

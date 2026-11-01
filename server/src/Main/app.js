@@ -1,5 +1,49 @@
 // app.js
 
+/*
+ * **Leaflet の札(L.Tooltip)の位置決めで、大きさを毎回読まない**(2026-11-01)。
+ *
+ * Pixel 7a の Chrome で測ると、ズームのたびに 70〜130ms の長い処理が出てコマが落ちていた(PC は速くて出ない)。
+ * CPU の記録では Leaflet の Tooltip._setPosition が 532ms、スタイルの計算し直し(UpdateLayoutTree)が 622 回。
+ * _setPosition は呼ばれるたびに offsetWidth / offsetHeight を読み、そのあと位置(transform)を書く。
+ * ズームのアニメーションではコマごとに札 1 枚ずつ呼ばれるので、「前の札が書いた分の計算し直し」が札の数(70〜80)だけ起きていた。
+ *
+ * 札の大きさは px で決まり、ズームでは変わらない。**上向きの札だけ**、大きさを 1 度読んで札に覚えさせる
+ * (このサイトの札はすべて direction: 'top')。中身を書き換えたら(_updateContent)忘れる。
+ * 文字の大きさなどを変えたとき(Main/app.js の kmDeclutterLabels → forgetLabelGeometry)は世代を上げて全部忘れる。
+ * 大きさ 0(出ていない)は覚えない。計算は Leaflet 1.9.4 の _setPosition の 'top' と同じ
+ */
+window.kmTooltipSizeGeneration = 0;
+(function cacheTooltipSize() {
+    const proto = window.L && L.Tooltip && L.Tooltip.prototype;
+    if (!proto || typeof proto._setPosition !== 'function' || proto._kmSizeCached) return;
+    proto._kmSizeCached = true;
+    const originalSetPosition = proto._setPosition;
+    const originalUpdateContent = proto._updateContent;
+    proto._updateContent = function () {
+        this._kmSize = null;
+        return originalUpdateContent.apply(this, arguments);
+    };
+    proto._setPosition = function (pos) {
+        const container = this._container;
+        if (this.options.direction !== 'top' || !container) return originalSetPosition.call(this, pos);
+        // 英語の画面では Main/i18n.js が札の文字を後から書き換える(「出入り口」→「Entrance」)。文字が変わったら読み直す
+        const text = container.textContent;
+        let size = this._kmSize;
+        if (!size || size.generation !== window.kmTooltipSizeGeneration || size.text !== text) {
+            size = { width: container.offsetWidth, height: container.offsetHeight, generation: window.kmTooltipSizeGeneration, text: text };
+            this._kmSize = size.width === 0 && size.height === 0 ? null : size;
+        }
+        const point = pos.subtract(L.point(size.width / 2, size.height, true))
+            .add(L.point(this.options.offset)).add(this._getAnchor());
+        L.DomUtil.removeClass(container, 'leaflet-tooltip-right');
+        L.DomUtil.removeClass(container, 'leaflet-tooltip-left');
+        L.DomUtil.removeClass(container, 'leaflet-tooltip-bottom');
+        L.DomUtil.addClass(container, 'leaflet-tooltip-top');
+        L.DomUtil.setPosition(container, point);
+    };
+})();
+
 /**
  * 読み込み画面(index.php の #km-loading)の進捗表示。
  *
@@ -1996,6 +2040,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     let labelGeometry = new WeakMap();
     function forgetLabelGeometry() {
         labelGeometry = new WeakMap();
+        // Leaflet の札が覚えた大きさも捨てる(このファイルの先頭の cacheTooltipSize)
+        window.kmTooltipSizeGeneration++;
     }
     /** 点の位置(画面の座標)。containerRect は地図の箱(1 回の並べ直しで 1 回だけ測る) */
     function markerAnchor(marker, containerRect) {
@@ -2004,11 +2050,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     /** 要素の箱。覚えていれば計算だけ、なければ 1 度測って覚える。出ていなければ(大きさ 0)覚えずに 0 の箱 */
     function rectFromAnchor(el, anchor) {
+        // 英語の画面では Main/i18n.js が札の文字を後から書き換える。文字が変わったら測り直す
+        const text = el.textContent;
         let g = labelGeometry.get(el);
-        if (!g) {
+        if (!g || g.text !== text) {
             const r = el.getBoundingClientRect();
             if (r.width === 0 && r.height === 0) return r;
-            g = { dx: r.left - anchor.x, dy: r.top - anchor.y, width: r.width, height: r.height };
+            g = { dx: r.left - anchor.x, dy: r.top - anchor.y, width: r.width, height: r.height, text: text };
             labelGeometry.set(el, g);
         }
         const left = anchor.x + g.dx;
@@ -2082,6 +2130,18 @@ document.addEventListener('DOMContentLoaded', async () => {
          * 札の数だけ組版をやり直させることになる(建物の中は 200 個を超える)。
          */
         const byLabel = markersByLabel();
+        /*
+         * 初めて測る札・文字が変わった札(英語の画面の書き換え)は、測る前に Leaflet に置き直させる。
+         * 文字が変わっても Leaflet は前の幅で置いたままなので、そのまま測ると点の真上からずれた位置を覚えてしまう。
+         * 置き直しは書くだけ(大きさは札が覚えた値。先頭の cacheTooltipSize)なので、ここで読み書きが交互にならない
+         */
+        labels.forEach(function (el) {
+            const g = labelGeometry.get(el);
+            if (g && g.text === el.textContent) return;
+            const marker = byLabel.get(el);
+            const tip = marker && marker.getTooltip && marker.getTooltip();
+            if (tip && typeof tip._updatePosition === 'function' && tip._map) tip._updatePosition();
+        });
         const items = [];
         const targets = [];
         const nodes = [];
