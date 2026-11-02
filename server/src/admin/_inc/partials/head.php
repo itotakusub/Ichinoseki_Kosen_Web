@@ -85,7 +85,7 @@ $KM_PAGE = ($KM_PAGE ?? []) + [
     <?php /* 出所は lib/site.php(APP_URL)。services.js とチャットの接続先がこれを見る。
              JS 側に直書きしていると、ドメインを変えたときにここだけ古い宛先を指し続ける。 */ ?>
     <script<?= km_csp_nonce_attr() ?>>
-      <?php /* <script> の中へ書くので HEX 系のフラグを付ける。値は設定由来でも、</script> を作らせない(chat.php と揃える) */ ?>
+      <?php /* <script> の中へ書くので HEX 系のフラグを付ける。値は設定由来でも、</script> を作らせない */ ?>
       window.KM_SITE_HOST = <?= json_encode(km_site_host(), JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
       /* 各サービスの URL とポートも PHP 側で決める。**JS でポート番号を組み立てない** —
          8080 / 9443 は校内 LAN 専用で、VPS では 80 / 443 になるため。 */
@@ -146,6 +146,9 @@ $KM_PAGE = ($KM_PAGE ?? []) + [
     <?php // CSP を厳格にして style="…" が使えなくなったぶんの行き先。km_asset() でキャッシュを破棄する ?>
     <link rel="stylesheet" href="<?= km_e(km_asset('./assets/css/km-admin.css')) ?>" />
     <!--end::KosenMap Admin-->
+    <?php // 配備のあとに「ページを更新してください」と出す(2026-11-02。公開ページと同じ lib/release.php・Main/release-watch.js) ?>
+    <?php require_once dirname(__DIR__, 3) . '/lib/release.php'; ?>
+    <?= km_release_tags() ?>
   </head>
   <!--end::Head-->
   <!--begin::Body-->

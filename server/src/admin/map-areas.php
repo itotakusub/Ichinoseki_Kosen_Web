@@ -22,7 +22,7 @@ $KM_PAGE = [
     'h1Key' => 'page.mapAreas.h1',
     'h1' => '地図の色分け',
     'crumbs' => [
-        ['key' => 'side.database', 'text' => 'データベース'],
+        ['key' => 'side.groupMap', 'text' => '地図'],
         ['key' => 'page.mapAreas.h1', 'text' => '地図の色分け'],
     ],
 ];

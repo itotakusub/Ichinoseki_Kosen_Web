@@ -5,7 +5,7 @@ declare(strict_types=1);
 /**
  * 問い合わせフォームの投稿(admin/forms.php が保存し、admin/mailbox.php が読む)。
  *
- * lib/chat.php / lib/tasks.php と同じ「初回アクセス時に CREATE TABLE IF NOT EXISTS」。
+ * lib/tasks.php と同じ「初回アクセス時に CREATE TABLE IF NOT EXISTS」。
  */
 
 require_once __DIR__ . '/db.php';

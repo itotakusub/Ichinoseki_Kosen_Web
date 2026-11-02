@@ -12,6 +12,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/lib/db.php';
 require_once __DIR__ . '/lib/qr-links.php';
 require_once __DIR__ . '/lib/assets.php';
+require_once __DIR__ . '/lib/release.php';   // km_release_tags(): 配備のあとに更新を促す(2026-11-02)
 require_once __DIR__ . '/lib/csp.php';
 
 km_csp_send('public');
@@ -58,6 +59,8 @@ function km_qr_e(?string $value): string
         .km-qr-link-desc { display: block; margin-top: 0.3rem; color: var(--secondary); line-height: 1.6; white-space: pre-wrap; }
         .km-qr-link-url { display: block; margin-top: 0.3rem; font-size: 0.8rem; color: var(--secondary); overflow-wrap: anywhere; }
     </style>
+    <?php // 配備のあとに「ページを更新してください」と出す(2026-11-02。lib/release.php・Main/release-watch.js) ?>
+    <?= km_release_tags() ?>
 </head>
 
 <body>

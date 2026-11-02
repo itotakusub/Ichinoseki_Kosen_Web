@@ -82,6 +82,66 @@ if ($postTooLarge) {
     $errors[] = 'ファイルが大きすぎます(上限 ' . (KM_APP_MAP_EVENT_MAX_BYTES / 1024 / 1024) . 'MB)。';
 } elseif (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && !km_csrf_verify()) {
     $errors[] = 'セッションの有効期限が切れています。ページを再読み込みしてからやり直してください。';
+} elseif (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && isset($_POST['map_action'])) {
+    /*
+     * 配信の停止 / 再開 / 削除(2026-11-02 に downloads.php から移した。カードは _inc/partials/map-releases.php)。
+     *
+     * **DB は使わない。** 設定ファイルと地図の実体だけで完結するので、
+     * DB が落ちていても止められる —— 止めたいのは大抵、何かがおかしいとき。
+     */
+    $mapAction = (string) $_POST['map_action'];
+    $mapSlug = (string) ($_POST['map_slug'] ?? '');
+
+    try {
+        $config = km_app_map_config();
+
+        if ($mapAction === 'pause' || $mapAction === 'resume') {
+            $paused = $mapAction === 'pause';
+            km_app_map_write_config(km_app_map_set_paused($config, $mapSlug, $paused));
+            km_admin_log_record('content', $paused ? 'map.pause' : 'map.resume', $mapSlug);
+            header('Location: ./map-publish.php?' . ($paused ? 'paused' : 'resumed') . '=1#map-releases', true, 302);
+            exit;
+        }
+
+        if ($mapAction === 'delete') {
+            /*
+             * **取り返しがつかないので、配信 ID を打たせる。**
+             * チェックボックスだと、押し慣れた場所を反射で押して消える。
+             * 打つ手間があると、少なくとも「どれを消すのか」は読むことになる。
+             */
+            if (trim((string) ($_POST['confirm_slug'] ?? '')) !== $mapSlug) {
+                $errors[] = '確認のため、配信 ID をそのまま入力してください。';
+            } else {
+                $removed = km_app_map_remove($config, $mapSlug);
+                // **設定を先に書く。** ファイルを先に消すと、書き込みに失敗したとき
+                // 「設定は残っているのに実体が無い」状態になる
+                km_app_map_write_config($removed['config']);
+
+                $deletedFile = false;
+                if ($removed['fileName'] !== null) {
+                    $path = km_app_map_storage_path($config, $removed['fileName']);
+                    if ($path !== null) {
+                        $deletedFile = @unlink($path);
+                    }
+                }
+                km_admin_log_record(
+                    'content',
+                    'map.delete',
+                    $mapSlug . ' コード=' . $removed['removedCodes'] . ' 実体=' . ($deletedFile ? '削除' : '無し')
+                );
+                header('Location: ./map-publish.php?mapdeleted=1#map-releases', true, 302);
+                exit;
+            }
+        }
+    } catch (Throwable $exception) {
+        error_log('map-publish.php map ' . $mapAction . ' failed: ' . $exception->getMessage());
+        /*
+         * **理由をそのまま出す。**「失敗しました」だけでは打つ手が分からない。
+         * ただし出すのは利用者向けに書いた文だけ(KmUserError と入力の検証)。
+         * 書き込みの失敗は lib/app-map.php が打つ手を KmUserError で添える(2026-09-14)。
+         */
+        $errors[] = km_admin_error_message($exception, '配信の設定を変えられませんでした。');
+    }
 } elseif (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
     // 地図の組み立てと書き出しは時間がかかる。PHP の既定(30 秒)で途中終了させない
     @set_time_limit(120);
@@ -324,6 +384,54 @@ $expiresDefault = static function (array $config, string $slug) use ($eventSlug,
     return ($parsed ?? new DateTimeImmutable('+30 days'))->format('Y-m-d\TH:i');
 };
 
+/*
+ * 配信中の地図の期限。
+ *
+ * **切れたことが、これまでどこにも出ていなかった。** 2026-08-27 に失効したのに
+ * 気づかれず、記録文書にだけ残り続けた。期限を短く保つのは正しい(会期が終わった
+ * 地図を配り続けない)ので、**切れる前に気づける場所**をここに置く。
+ *
+ * 設定ファイルを読むだけなので DB は要らない。失敗しても画面は出す。
+ */
+$mapReleases = [];
+try {
+    $mapReleases = km_app_map_release_report(km_app_map_config());
+} catch (Throwable $exception) {
+    error_log('map-publish.php map release status failed: ' . $exception->getMessage());
+}
+
+/*
+ * Website に「次に効く会期」があるか(2026-10-24、利用者の指摘「一般向けアプリでイベントが丸ごと効いていない」)。
+ *
+ * **配信は焼き付けた写し**で、一般向けアプリは配信に載っているイベントしか効かせない(管理ビルドは自分で選べる)。
+ * イベントを作ったあとに配信し直すのを忘れると、当日アプリには何も出ない —— それが画面のどこにも出ていなかった。
+ * 載っていなければ下で「配信し直してください」と出す。DB が無くても画面は出す
+ */
+$mapEventWindow = null;
+try {
+    require_once __DIR__ . '/../lib/map-events.php';
+    $window = km_map_event_overlay_for_app(km_db());
+    $windowEvents = $window['overlay']['events'] ?? [];
+    if ($windowEvents !== []) {
+        $mapEventWindow = [
+            'names' => implode(' / ', array_filter(array_map(
+                static fn (array $row): string => trim((string) ($row['name'] ?? '')),
+                $windowEvents
+            ))),
+            'startsAt' => $window['startsAt'],
+        ];
+    }
+} catch (Throwable $exception) {
+    error_log('map-publish.php website event window failed: ' . $exception->getMessage());
+}
+
+// 停止・再開・削除のあと(上の map_action から戻ってきたとき)
+foreach (['paused' => '配信を停止しました。', 'resumed' => '配信を再開しました。', 'mapdeleted' => '配信を削除しました。'] as $param => $text) {
+    if ($notice === null && isset($_GET[$param])) {
+        $notice = $text;
+    }
+}
+
 $KM_PAGE = [
     'nav' => 'mapPublish',
     'titleKey' => 'page.mapPublish.title',
@@ -331,7 +439,7 @@ $KM_PAGE = [
     'h1Key' => 'page.mapPublish.h1',
     'h1' => 'アプリへ地図を配信する',
     'crumbs' => [
-        ['key' => 'side.database', 'text' => 'データベース'],
+        ['key' => 'side.groupApp', 'text' => 'アプリ'],
         ['key' => 'page.mapPublish.h1', 'text' => 'アプリへ地図を配信する'],
     ],
 ];
@@ -442,7 +550,7 @@ $renderCurrent = static function (string $slug) use ($config, $report, $republis
           <?php endif; ?>
         <?php endif; ?>
         <p class="form-text mb-0 mt-3" data-i18n="page.mapPublish.pauseElsewhere">
-          停止と削除は「配布ファイル」の画面から行えます。
+          停止と削除は、このページの下の「アプリへ配信中の地図」で行えます。
         </p>
       </div>
     </div>
@@ -593,7 +701,7 @@ $renderCodes = static function (string $slug) use ($codesBySlug, $newCode, $newC
               <div class="alert alert-danger" role="alert"><?= km_e($error) ?></div>
             <?php endforeach; ?>
 
-            <div class="card mb-4">
+            <div class="card mb-4" id="republish-top">
               <div class="card-body">
                 <p class="mb-0" data-i18n="page.mapPublish.lead">
                   アプリへ配る地図は2つあります。「Website の正本」はこの Website の地図から作り、
@@ -923,6 +1031,9 @@ $renderCodes = static function (string $slug) use ($codesBySlug, $newCode, $newC
             </div>
             <?php $renderCodes($eventSlug); ?>
             <!--end::EventRelease-->
+
+            <?php // 期限・中身・停止・再開・削除(2026-11-02 に downloads.php から移した) ?>
+            <?php require __DIR__ . '/_inc/partials/map-releases.php'; ?>
           </div>
           <!--end::Container-->
         </div>

@@ -23,7 +23,7 @@ $KM_PAGE = [
     'h1Key' => 'page.qrLinks.h1',
     'h1' => 'QR のリンク集',
     'crumbs' => [
-        ['key' => 'side.content', 'text' => 'コンテンツ'],
+        ['key' => 'side.groupPublic', 'text' => '公開ページ'],
         ['key' => 'page.qrLinks.h1', 'text' => 'QR のリンク集'],
     ],
 ];

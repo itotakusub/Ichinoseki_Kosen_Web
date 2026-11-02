@@ -15,7 +15,7 @@ $KM_PAGE = [
     'h1Key' => 'page.mailbox.h1',
     'h1' => 'メール',
     'crumbs' => [
-        ['key' => 'side.content', 'text' => 'コンテンツ'],
+        ['key' => 'side.groupPeople', 'text' => '人'],
         ['key' => 'page.mailbox.h1', 'text' => 'メール'],
     ],
 ];

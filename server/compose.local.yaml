@@ -10,7 +10,7 @@
 # 本番の構成(compose.yaml + compose.vps.yaml)を LAN の検証機にそのまま持ち込むと、
 # Let's Encrypt の証明書が取れず(公開 DNS が無い)、**nginx が証明書を読めずに落ちる →
 # `restart: unless-stopped` で再起動を繰り返す**。MariaDB も certs/ の証明書が無いと同じく落ち、
-# web と phpMyAdmin は起動を待ったまま止まる。
+# web は起動を待ったまま止まる。
 #
 # 本番のファイルを複製してローカル用を作ると、**片方だけ直して食い違う**(read_only・網・上限…)。
 # そこで本番の 2 枚はそのままに、**この 1 枚を重ねて「証明書・メール・名前」だけを差し替える。**

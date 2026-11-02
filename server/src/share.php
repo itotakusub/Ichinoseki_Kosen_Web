@@ -20,6 +20,7 @@ require_once __DIR__ . '/lib/file-share.php';
 require_once __DIR__ . '/lib/csrf.php';
 require_once __DIR__ . '/lib/csp.php';
 require_once __DIR__ . '/lib/assets.php';
+require_once __DIR__ . '/lib/release.php';   // km_release_tags(): 配備のあとに更新を促す(2026-11-02)
 require_once __DIR__ . '/lib/admin-log.php';
 
 function km_share_e(string $value): string
@@ -79,6 +80,8 @@ km_csp_send('public');
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="<?= km_share_e(km_public_asset('Main/styles.css')) ?>">
     <link rel="stylesheet" href="<?= km_share_e(km_public_asset('Main/document.css')) ?>">
+    <?php // 配備のあとに「ページを更新してください」と出す(2026-11-02。lib/release.php・Main/release-watch.js) ?>
+    <?= km_release_tags() ?>
 </head>
 
 <body>

@@ -8,6 +8,8 @@ require_once dirname(__DIR__) . '/lib/db.php';
 require_once dirname(__DIR__) . '/lib/admin-log.php';
 require_once dirname(__DIR__) . '/lib/search-aliases.php';
 require_once dirname(__DIR__) . '/lib/english-names.php';
+// 地点の URL(km_node_link_*)。2026-11-02 にポスターの画面から移した
+require_once dirname(__DIR__) . '/lib/posters.php';
 
 /**
  * 読み・別名(2026-10-30、高専祭の振り返りのフェーズ 4 の 1。lib/search-aliases.php)。
@@ -16,17 +18,20 @@ require_once dirname(__DIR__) . '/lib/english-names.php';
  * 公開の地図の検索・最初の画面・案内チャット・アプリの検索で、名前と同じように探せる(名前より少し下に並ぶ)。
  * 英語の名前(2026-10-30、振り返りのフェーズ 6 の 1。lib/english-names.php)も同じ行で入れる。公開の地図を英語で見るときの名前(無ければ日本語のまま)。
  * 一度に出すのは絞り込んだ 150 件まで(入力欄の数が PHP の上限 max_input_vars を超えないように)。変えた行だけ保存する。
+ *
+ * **地点の URL もここ**(2026-11-02、利用者の指示「無理やり配置した項目を的確な場所へ」)。地点の詳細に出すリンクで、
+ * 以前はポスターの画面にあった(ポスターの出し方とは関係なく出る)。ページの名前は「地点の読み・別名・URL」。
  */
 
 $KM_PAGE = [
     'nav' => 'searchAliases',
     'titleKey' => 'page.searchAliases.title',
-    'title' => '読み・別名 | KosenMap 管理',
+    'title' => '地点の読み・別名・URL | KosenMap 管理',
     'h1Key' => 'page.searchAliases.h1',
-    'h1' => '読み・別名',
+    'h1' => '地点の読み・別名・URL',
     'crumbs' => [
-        ['key' => 'side.database', 'text' => 'データベース'],
-        ['key' => 'page.searchAliases.h1', 'text' => '読み・別名'],
+        ['key' => 'side.groupMap', 'text' => '地図'],
+        ['key' => 'page.searchAliases.h1', 'text' => '地点の読み・別名・URL'],
     ],
 ];
 
@@ -45,6 +50,9 @@ $rows = [];
 $aliases = ['node' => [], 'poi' => [], 'poster' => []];
 $englishNames = ['node' => [], 'poi' => [], 'poster' => []];
 $floorLabels = [];
+$links = [];
+$nodeOptions = [];
+$linkNotice = ['link' => '地点の URL を保存しました。', 'link_removed' => '地点の URL を外しました。'][(string) ($_GET['saved'] ?? '')] ?? null;
 
 try {
     $pdo = km_db();
@@ -52,8 +60,28 @@ try {
     km_english_names_ensure_table($pdo);
 
     if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
+        $formAction = (string) ($_POST['form_action'] ?? '');
         if (!km_csrf_verify()) {
             $errors[] = 'セッションの有効期限が切れています。ページを再読み込みしてからやり直してください。';
+        } elseif ($formAction === 'link_save') {
+            // 地点の URL(2026-10-21。2026-11-02 にポスターの画面から移した。記録の名前は前のまま)
+            km_posters_ensure_tables($pdo);
+            $nodeId = (string) ($_POST['node_id'] ?? '');
+            try {
+                km_node_link_set($pdo, $nodeId, (string) ($_POST['url'] ?? ''), (string) ($_POST['label'] ?? ''));
+                km_admin_log_record('content', 'map.node_link', $nodeId);
+                header('Location: ./search-aliases.php?saved=link#node-links', true, 303);
+                exit;
+            } catch (InvalidArgumentException $exception) {
+                $errors[] = $exception->getMessage();
+            }
+        } elseif ($formAction === 'link_delete') {
+            km_posters_ensure_tables($pdo);
+            $nodeId = (string) ($_POST['node_id'] ?? '');
+            km_node_link_delete($pdo, $nodeId);
+            km_admin_log_record('content', 'map.node_link', '外した ' . $nodeId);
+            header('Location: ./search-aliases.php?saved=link_removed#node-links', true, 303);
+            exit;
         } else {
             $saved = 0;
             $new = is_array($_POST['a'] ?? null) ? $_POST['a'] : [];
@@ -89,6 +117,9 @@ try {
     }
 
     $aliases = km_search_aliases_all($pdo);
+    km_posters_ensure_tables($pdo);
+    $links = km_node_links_all($pdo);
+    $nodeOptions = km_poster_node_options($pdo);
     $englishNames = km_english_names_all($pdo);
     foreach ($pdo->query('SELECT id, label FROM km_map_floors ORDER BY sort_order, id')->fetchAll() as $row) {
         $floorLabels[(string) $row['id']] = (string) $row['label'];
@@ -135,6 +166,17 @@ $total = count($rows);
 $rows = array_slice($rows, 0, KM_SEARCH_ALIAS_PAGE_ROWS);
 $done = isset($_GET['done']) ? (int) $_GET['done'] : null;
 
+$nodeNames = [];
+foreach ($nodeOptions as $option) {
+    $nodeNames[$option['id']] = $option['name'] . '(' . km_poster_floor_label($option['floor']) . ')';
+}
+$nodeLabel = static fn (string $id): string => $id === '' ? '—' : ($nodeNames[$id] ?? $id . '(地図に無い)');
+/** 地点を選ぶ欄(階ごと・名前で絞れる。絞り込みは assets/js/posters.js) */
+$nodeSelectByFloor = [];
+foreach ($nodeOptions as $option) {
+    $nodeSelectByFloor[km_poster_floor_label($option['floor'])][] = $option;
+}
+
 require __DIR__ . '/_inc/partials/head.php';
 require __DIR__ . '/_inc/partials/header.php';
 require __DIR__ . '/_inc/partials/sidebar.php';
@@ -146,6 +188,9 @@ require __DIR__ . '/_inc/partials/page-header.php';
             <?php foreach ($errors as $message): ?>
               <div class="alert alert-danger" role="alert"><?= km_e($message) ?></div>
             <?php endforeach; ?>
+            <?php if ($linkNotice !== null): ?>
+              <div class="alert alert-success" role="alert"><?= km_e($linkNotice) ?></div>
+            <?php endif; ?>
             <?php if ($done !== null): ?>
               <div class="alert alert-success" role="alert"><?= $done > 0 ? km_e($done . ' 件を保存しました。') : '変えた行はありませんでした。' ?></div>
             <?php endif; ?>
@@ -208,7 +253,79 @@ require __DIR__ . '/_inc/partials/page-header.php';
               </div>
               <button type="submit" class="btn btn-primary"<?= $rows === [] ? ' disabled' : '' ?>><i class="bi bi-save me-1" aria-hidden="true"></i>変えた行を保存</button>
             </form>
+
+            <div class="card mt-4 mb-4" id="node-links">
+              <div class="card-header"><h3 class="card-title">地点の URL(<?= count($links) ?> 件)</h3></div>
+              <div class="card-body">
+                <p class="fs-7 text-body-secondary">
+                  地点の詳細に、リンクを 1 本出します(研究室のページ・模擬店の案内など)。<strong>ポスターの出し方とは関係なく、いつも出ます。</strong>
+                  地図を取り込み直しても消えません(地点の番号が変わったときは付け直してください)。
+                </p>
+                <div class="row">
+                  <div class="col-12 col-xl-7">
+                    <?php if ($links === []): ?>
+                      <p class="text-body-secondary fs-7">まだありません。</p>
+                    <?php else: ?>
+                      <div class="table-responsive">
+                        <table class="table table-sm align-middle">
+                          <thead><tr><th scope="col">地点</th><th scope="col">URL・リンクの文字</th><th scope="col"></th></tr></thead>
+                          <tbody>
+                            <?php foreach ($links as $link): ?>
+                              <tr>
+                                <td><?= km_e($nodeLabel((string) $link['nodeId'])) ?></td>
+                                <td class="km-poster-url">
+                                  <a class="text-break" href="<?= km_e((string) $link['url']) ?>" target="_blank" rel="noopener noreferrer"><?= km_e((string) $link['url']) ?></a>
+                                  <div class="fs-7 text-body-secondary"><?= km_e((string) $link['label'] !== '' ? (string) $link['label'] : '(既定:くわしく見る)') ?></div>
+                                </td>
+                                <td>
+                                  <form method="post" action="./search-aliases.php" class="m-0" data-km-confirm="この地点の URL を外します。よろしいですか?">
+                                    <?= km_csrf_field() ?>
+                                    <input type="hidden" name="form_action" value="link_delete">
+                                    <input type="hidden" name="node_id" value="<?= km_e((string) $link['nodeId']) ?>">
+                                    <button type="submit" class="btn btn-sm btn-outline-danger">外す</button>
+                                  </form>
+                                </td>
+                              </tr>
+                            <?php endforeach; ?>
+                          </tbody>
+                        </table>
+                      </div>
+                    <?php endif; ?>
+                  </div>
+                  <div class="col-12 col-xl-5">
+                    <form method="post" action="./search-aliases.php">
+                      <?= km_csrf_field() ?>
+                      <input type="hidden" name="form_action" value="link_save">
+                      <div class="mb-2">
+                        <label class="form-label" for="km-link-node">地点</label>
+                        <input type="search" class="form-control form-control-sm mb-1" placeholder="地点の名前で絞り込む" data-km-node-filter="km-link-node" aria-label="地点を絞り込む">
+                        <select class="form-select" name="node_id" id="km-link-node" size="6" required>
+                          <?php foreach ($nodeSelectByFloor as $floorLabel => $options): ?>
+                            <optgroup label="<?= km_e($floorLabel) ?>">
+                              <?php foreach ($options as $option): ?>
+                                <option value="<?= km_e($option['id']) ?>"><?= km_e($option['name']) ?>(<?= km_e($floorLabel) ?>)</option>
+                              <?php endforeach; ?>
+                            </optgroup>
+                          <?php endforeach; ?>
+                        </select>
+                      </div>
+                      <div class="mb-2">
+                        <label class="form-label" for="km-link-url">URL</label>
+                        <input class="form-control" type="url" id="km-link-url" name="url" maxlength="<?= KM_POSTER_URL_MAX ?>" placeholder="https://…" required>
+                      </div>
+                      <div class="mb-3">
+                        <label class="form-label" for="km-link-label">リンクの文字(任意)</label>
+                        <input class="form-control" type="text" id="km-link-label" name="label" maxlength="<?= KM_NODE_LINK_LABEL_MAX ?>" placeholder="くわしく見る">
+                      </div>
+                      <button type="submit" class="btn btn-primary">保存(同じ地点なら置き換え)</button>
+                    </form>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
         <!--end::App Content-->
+        <?php /* 地点の選ぶ欄の絞り込み(ポスターの画面と同じもの。ポスターの入力欄が無ければそこで終わる) */ ?>
+        <script src="<?= km_e(km_asset('./assets/js/posters.js')) ?>"></script>
 <?php require __DIR__ . '/_inc/partials/footer.php'; ?>

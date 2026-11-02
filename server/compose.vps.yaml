@@ -19,8 +19,7 @@
 #   KM_CERT / KM_CERT_KEY  /etc/letsencrypt/live/${KM_DOMAIN}/fullchain.pem・privkey.pem
 #   LOGTO_ENDPOINT         https://${KM_AUTH_DOMAIN}(無ければ https://auth.${KM_DOMAIN}。2026-10-19 に :3001 から移した)
 #   KM_AUTH_DOMAIN(nginx)  auth.${KM_DOMAIN}(443 番の Logto の入口の名前。証明書と DNS が要る)
-#   LOGTO_ADMIN_ENDPOINT   https://${KM_DOMAIN}:3002
-#   PMA_ABSOLUTE_URI       https://${KM_DOMAIN}:8281/
+#   LOGTO_ADMIN_ENDPOINT   http://localhost:3002(2026-11-02 から。Console は SSH のトンネルで開く。compose.yaml の logto)
 #   MAIL_HOST / MAIL_PORT  mailserver / 587
 #   MAIL_FROM              noreply@${KM_DOMAIN}
 #   KM_API_RESOURCE        https://${KM_DOMAIN}/api(下の web の注記を読むこと。**Logto の API リソースの登録と揃える値**)
@@ -49,11 +48,11 @@ services:
   # **MariaDB を publish しない。**
   #
   # compose.yaml は `192.168.3.29:3306:3306` を publish している(校内 LAN でこの PC から
-  # phpMyAdmin 相当の作業をするため)。VPS には **その IP が存在しない**ので、
+  # DB を直接触るため)。VPS には **その IP が存在しない**ので、
   # そのままだと `cannot assign requested address` でコンテナが起動しない。
   #
   # かといって `3306:3306` に直すと、**データベースがインターネットに露出する**。
-  # 正解は「publish しない」。phpMyAdmin もアプリも同じ Docker ネットワークの中から
+  # 正解は「publish しない」。アプリは同じ Docker ネットワークの中から
   # `mariadb:3306` で届くので、外へ出す必要がまったく無い。
   mariadb:
     ports: !override []
@@ -136,18 +135,15 @@ services:
       MAIL_PORT: ${MAIL_PORT:-587}
       MAIL_FROM: ${MAIL_FROM:-noreply@${KM_DOMAIN}}
 
-  # Console と phpMyAdmin は**管理用のホスト名で開く**(2026-09-15)。ゲートが見るセッション Cookie は
-  # ホスト名ごとに分かれるため(lib/site.php の KM_SITE_ADMIN_SERVICES)。KM_ADMIN_DOMAIN が無ければ KM_DOMAIN。
-  # Console の戻り先は Logto が ADMIN_ENDPOINT から作るので、DB は書き換えなくてよい(scripts/logto-domain.php の注記)
+  # **Console は SSH のトンネルからだけ開く**(2026-11-02、利用者の指示。compose.yaml の logto の注記)。
+  # それまでは管理用のホスト名の 3002 番を nginx で外に出していた。
+  # Console の戻り先は Logto が ADMIN_ENDPOINT から作るので、DB は書き換えなくてよい(scripts/logto-domain.php の注記)。
+  # **開けなくなったときの戻し方**は docs/05-containers の Console の節(元の設定は Old/removed-2026-11-02/ にある)
   logto:
     environment:
       # web の LOGTO_ENDPOINT と同じ導き方(2026-10-19。443 番の auth.<ドメイン>)
       ENDPOINT: ${LOGTO_ENDPOINT:-https://${KM_AUTH_DOMAIN:-auth.${KM_DOMAIN}}}
-      ADMIN_ENDPOINT: ${LOGTO_ADMIN_ENDPOINT:-https://${KM_ADMIN_DOMAIN:-${KM_DOMAIN}}:3002}
-
-  phpmyadmin:
-    environment:
-      PMA_ABSOLUTE_URI: ${PMA_ABSOLUTE_URI:-https://${KM_ADMIN_DOMAIN:-${KM_DOMAIN}}:8281/}
+      ADMIN_ENDPOINT: ${LOGTO_ADMIN_ENDPOINT:-http://localhost:3002}
 
   # **本番では Mailpit を起動しない**(2026-09-14 の診断で追加。server-ops 11)。
   #
@@ -162,10 +158,14 @@ services:
     profiles: ["mailpit"]
 
   reverse-proxy:
-    # 公開するのは 2 つ(と下の管理系):
+    # 公開するのは 2 つだけ:
     #
     #   80    ACME(証明書更新)と HTTPS への転送
-    #   443   本体・管理画面・**サインイン(auth.<ドメイン>)・チャットと死活監視の WebSocket(/ws/app/)**
+    #   443   本体・管理画面・**サインイン(auth.<ドメイン>)**
+    #
+    # **管理系の 8281(phpMyAdmin)と 3002(Logto Console)は 2026-11-02 に閉じた**(利用者の指示)。
+    # phpMyAdmin は外し、Console は logto の 127.0.0.1:3002 を SSH のトンネルで開く。
+    # Soketi(/ws/app/)も同じ日に外した。下の「管理系も publish する」の段は、それまでの経緯として残す。
     #
     # **3001(Logto)と 6001(Soketi)は 2026-10-19 に外した。** 学校の回線は 443 番以外を通さないので、
     # サインインも WebSocket も 443 番に寄せた(nginx の auth の server と /ws/app/)。本番で切り替えて確かめたあと、
@@ -194,8 +194,6 @@ services:
     ports: !override
       - "80:80"
       - "443:443"
-      - "0.0.0.0:8281:8281"
-      - "0.0.0.0:3002:3002"
     # **8025(Mailpit の画面)は publish しない**(2026-09-18)。
     # 本番では Mailpit そのものを起動していない(下の profiles)ので、待ち受けても後ろには誰も居ない。
     # nginx のログイン判定が先に立つので危険ではなかったが、**誰も使わない口を開けておく理由が無い。**
@@ -206,11 +204,7 @@ services:
     depends_on: !override
       web:
         condition: service_started
-      phpmyadmin:
-        condition: service_started
       logto:
-        condition: service_started
-      soketi:
         condition: service_started
     # KM_DOMAIN から導く(一覧と理由はファイル先頭)。
     # **KM_DOMAIN だけは既定を持たない** —— 無ければ `docker compose config` の時点で止める。
@@ -430,7 +424,7 @@ services:
       DKIM_SELECTOR: mail
       # 既定は 10.0.0.0/8 と 192.168.0.0/16 も含むが、**ここでは使わない範囲**なので外す。
       # **認証なしで中継してよいのは mail の網(web と Logto)だけ**(2026-09-15)。以前は Docker の
-      # ブリッジ全体(172.16.0.0/12)で、nginx・phpMyAdmin・Soketi からも送れた。範囲は compose.yaml の networks:
+      # ブリッジ全体(172.16.0.0/12)で、nginx(と当時の phpMyAdmin・Soketi)からも送れた。範囲は compose.yaml の networks:
       POSTFIX_mynetworks: 127.0.0.0/8,172.30.4.0/24
       # **イメージの既定は「無制限」**(起動ログに `Using unlimited message size` と出る)。
       # 送るのは確認コードと問い合わせの通知だけなので、10 MB あれば充分。

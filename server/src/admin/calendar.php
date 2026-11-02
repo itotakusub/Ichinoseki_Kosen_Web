@@ -15,7 +15,7 @@ $KM_PAGE = [
     'h1Key' => 'page.calendar.h1',
     'h1' => 'カレンダー',
     'crumbs' => [
-        ['key' => 'side.extra', 'text' => 'その他ページ'],
+        ['key' => 'side.groupTeam', 'text' => 'チーム'],
         ['key' => 'page.calendar.h1', 'text' => 'カレンダー'],
     ],
 ];

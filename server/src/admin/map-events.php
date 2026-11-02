@@ -6,8 +6,9 @@ define('KM_ADMIN', true);
 require __DIR__ . '/_inc/guard.php';
 require_once dirname(__DIR__) . '/lib/db.php';
 require_once dirname(__DIR__) . '/lib/map-events.php';
-require_once dirname(__DIR__) . '/lib/map-event-import.php';
 require_once dirname(__DIR__) . '/lib/admin-log.php';
+// イベント中の来場者の操作の記録(km_event_collect_enabled)。2026-11-02 にテスト用アカウントの画面から移した
+require_once dirname(__DIR__) . '/lib/test-mode.php';
 
 /**
  * イベントモードの管理。
@@ -26,9 +27,7 @@ $events = [];
 $isolation = null;
 $cleanupMode = 'manual';
 $expiredForCleanup = [];
-$importPending = ['events' => [], 'projects' => null, 'uploadedAt' => null, 'error' => null];
-$importPreview = [];
-$importProjects = null;
+$eventCollect = true;
 
 try {
     $pdo = km_db();
@@ -41,50 +40,16 @@ try {
         $id = isset($_POST['id']) && $_POST['id'] !== '' ? (int) $_POST['id'] : null;
 
         try {
-            /*
-             * 管理アプリのイベントの取り込み(2026-10-14。lib/map-event-import.php)。
-             * 上げる → 差分を見る → 選んで入れる。入れたイベントは無効のまま(ON はこの画面で)。
-             */
-            if ($formAction === 'import_upload') {
-                $file = $_FILES['event_file'] ?? null;
-                if (!is_array($file) || ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK
-                    || !is_uploaded_file((string) ($file['tmp_name'] ?? ''))) {
-                    throw new InvalidArgumentException('ファイルを受け取れませんでした。選び直してください。');
-                }
-                $refused = km_map_event_import_store((string) $file['tmp_name'], (int) ($file['size'] ?? 0));
-                if ($refused !== null) {
-                    throw new InvalidArgumentException($refused);
-                }
-                $notice = 'ファイルを受け取りました。下の「取り込み待ち」で中身を確かめてから取り込んでください。';
-            } elseif ($formAction === 'import_discard') {
-                km_map_event_import_discard();
-                $notice = '取り込み待ちを捨てました。';
-            } elseif ($formAction === 'import_apply') {
-                $selected = array_map('strval', is_array($_POST['uuids'] ?? null) ? $_POST['uuids'] : []);
-                $pending = km_map_event_import_load();
-                if ($pending['error'] !== null) {
-                    throw new InvalidArgumentException($pending['error']);
-                }
-                $applied = [];
-                foreach ($pending['events'] as $pendingEvent) {
-                    if (!in_array(trim((string) $pendingEvent->uuid), $selected, true)) {
-                        continue;
-                    }
-                    $result = km_map_event_import_apply($pdo, $pendingEvent);
-                    $applied[] = $result['converted']['name'] . ($result['created'] ? '(新規・無効)' : '(入れ替え)');
-                }
-                // 教室などに振った企画の番号(2026-10-23。同じファイルの地図から。それまでここでは入らなかった)
-                if ($pending['projects'] !== null && ($_POST['import_projects'] ?? '') === '1') {
-                    km_map_event_import_apply_projects($pdo, $pending['projects']);
-                    $applied[] = '企画の番号 ' . count($pending['projects']) . ' 地点';
-                }
-                if ($applied === []) {
-                    throw new InvalidArgumentException('取り込むイベントを選んでください。');
-                }
-                km_map_event_import_discard();
-                km_admin_log_record('content', 'map.event_import', implode(' / ', $applied));
-                $notice = '取り込みました: ' . implode('、', $applied)
-                    . '。新しいイベントは無効のままです。期間と案内の文を確かめてから有効にしてください。';
+            // 管理アプリのイベントの取り込みは 2026-11-02 に map-sync.php へ移した(_inc/event-import.php)
+            if ($formAction === 'event_collect') {
+                /*
+                 * イベントモード中は来場者の操作も記録するか(2026-11-02 にテスト用アカウントの画面から移した。
+                 * 記録の名前はテスト用アカウントの設定のまま。lib/test-mode.php)
+                 */
+                $collect = isset($_POST['event_collect']);
+                km_setting_set($pdo, KM_EVENT_COLLECT_SETTING, $collect ? '1' : '0');
+                km_admin_log_record('settings', 'test.settings', 'イベント中の記録を' . ($collect ? '取る' : '取らない'));
+                $notice = $collect ? 'イベント中は来場者の操作も記録します。' : 'イベント中も来場者の操作は記録しません。';
             } elseif ($formAction === 'cleanup_mode') {
                 km_map_event_cleanup_mode_save($pdo, (string) ($_POST['cleanup_mode'] ?? ''));
                 km_admin_log_record(
@@ -182,17 +147,9 @@ try {
     }
 
     $expiredForCleanup = km_map_events_expired($pdo);
+    $eventCollect = km_event_collect_enabled($pdo);
     $events = km_map_events_all($pdo);
 
-    $importPending = km_map_event_import_load();
-    if ($importPending['events'] !== []) {
-        $importPreview = km_map_event_import_preview($pdo, $importPending['events']);
-    }
-    if ($importPending['projects'] !== null) {
-        $importProjects = km_map_event_import_projects_summary(
-            $importPending['projects'], km_map_event_import_known_nodes($pdo), km_map_node_projects_all($pdo)
-        );
-    }
 
     // いま重ねている内容で、到達できなくなる場所がどれだけあるか
     $overlay = km_map_event_overlay($pdo);
@@ -215,7 +172,7 @@ $KM_PAGE = [
     'h1Key' => 'page.mapEvents.h1',
     'h1' => 'イベントモード',
     'crumbs' => [
-        ['key' => 'side.database', 'text' => 'データベース'],
+        ['key' => 'side.groupEvent', 'text' => '会期'],
         ['key' => 'page.mapEvents.h1', 'text' => 'イベントモード'],
     ],
 ];
@@ -346,135 +303,32 @@ $fmt = static fn (?string $value): string => $value === null || $value === ''
             <?php endif; ?>
 
             <?php if ($dbError === null): ?>
-            <!-- ------------------------------------------------ 管理アプリのイベントの取り込み(2026-10-14) -->
-            <div class="card mb-4" id="km-event-import">
+            <?php
+            /*
+             * イベント中の記録(2026-11-02 にテスト用アカウントの画面から移した)。イベントモードの間だけ効くので、ここに置く
+             */
+            ?>
+            <div class="card mb-4" id="event-collect">
               <div class="card-header">
-                <h3 class="card-title">管理アプリのイベントを取り込む</h3>
+                <h3 class="card-title">イベント中の記録</h3>
               </div>
-              <div class="card-body">
-                <p class="text-body-secondary fs-7">
-                  管理アプリで作ったイベント(部屋の名前・表示しない地点・通行止め・一時地点)を入れます。
-                  アプリの「地図の書き出し」で作ったファイルを上げてください。
-                  同じイベントを取り込み直すと、中身は丸ごと入れ替わります。<strong>新しいイベントは無効のまま入る</strong>ので、期間と案内の文を確かめてから有効にしてください。
-                  取り込んだイベントも「地図編集」で直せます。直した内容は、管理アプリの設定のイベントの「Website から取り込む」でアプリへ戻せます。
-                </p>
-                <form method="post" enctype="multipart/form-data" class="row g-2 align-items-end">
-                  <?= km_csrf_field() ?>
-                  <input type="hidden" name="form_action" value="import_upload">
-                  <div class="col-12 col-md">
-                    <input class="form-control" type="file" name="event_file" accept=".json,application/json" required>
-                  </div>
-                  <div class="col-12 col-md-auto">
-                    <button type="submit" class="btn btn-outline-primary">上げて中身を見る</button>
-                  </div>
-                </form>
-
-                <?php if ($importPending['error'] !== null): ?>
-                  <div class="alert alert-warning mt-3 mb-0" role="alert"><?= km_e($importPending['error']) ?></div>
-                <?php endif; ?>
-
-                <?php if ($importPreview !== []): ?>
-                  <hr>
-                  <h4 class="h6">
-                    取り込み待ち
-                    <span class="text-body-secondary fs-7">(<?= km_e($fmt($importPending['uploadedAt'])) ?> に上げたもの)</span>
-                  </h4>
-                  <form method="post">
-                    <?= km_csrf_field() ?>
-                    <input type="hidden" name="form_action" value="import_apply">
-                    <div class="table-responsive">
-                      <table class="table table-sm align-middle">
-                        <thead>
-                          <tr>
-                            <th></th>
-                            <th>イベント</th>
-                            <th class="text-end">名前</th>
-                            <th class="text-end">表示しない</th>
-                            <th class="text-end">通行止め</th>
-                            <th class="text-end">一時地点</th>
-                            <th>注意</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                        <?php foreach ($importPreview as $index => $item): ?>
-                          <?php
-                            $c = $item['converted'];
-                            $existing = $item['existing'];
-                            $skip = $c['skipped'];
-                            $notes = [];
-                            if ($skip['unknownNode'] > 0) {
-                                $notes[] = "Website に無い地点 {$skip['unknownNode']} 件は飛ばします(先に「アプリの地図を取り込む」を)";
-                            }
-                            if ($skip['unknownFloor'] !== []) {
-                                $notes[] = '知らない階: ' . implode(', ', array_unique($skip['unknownFloor']));
-                            }
-                            if ($skip['staffOnly'] > 0) {
-                                $notes[] = "スタッフ限定の一時地点 {$skip['staffOnly']} 件は公開ページに出さないので入れません";
-                            }
-                            if ($skip['badLineKey'] > 0) {
-                                $notes[] = "読めない通行止めの線 {$skip['badLineKey']} 件";
-                            }
-                            // Website で直した内容がある(2026-10-23。取り込むとアプリの中身で置き換わる)
-                            if ($existing !== null && ($existing['webEditedAt'] ?? null) !== null) {
-                                $notes[] = 'Website で直した内容(' . $fmt($existing['webEditedAt']) . ')は、取り込むとアプリの中身で置き換わります。先に管理アプリの「Website から取り込む」で戻してください';
-                            }
-                            $closures = count($c['closedEdges']) + count($c['closedNodes']);
-                          ?>
-                          <tr>
-                            <td>
-                              <input class="form-check-input" type="checkbox" name="uuids[]" id="km-import-<?= (int) $index ?>"
-                                     value="<?= km_e($c['uuid']) ?>" checked>
-                            </td>
-                            <td>
-                              <label for="km-import-<?= (int) $index ?>" class="fw-semibold"><?= km_e($c['name']) ?></label>
-                              <div class="fs-7 text-body-secondary">
-                                <?php if ($existing === null): ?>
-                                  新しく作る(無効のまま)
-                                <?php else: ?>
-                                  「<?= km_e($existing['name']) ?>」を入れ替える(いま: 名前 <?= (int) $existing['aliasCount'] ?>・表示しない <?= (int) $existing['hiddenCount'] ?>・通行止め <?= (int) $existing['closureCount'] ?>・一時地点 <?= (int) $existing['poiCount'] ?>)
-                                <?php endif; ?>
-                              </div>
-                            </td>
-                            <td class="text-end"><?= count($c['aliases']) ?></td>
-                            <td class="text-end"><?= count($c['hidden']) ?></td>
-                            <td class="text-end"><?= $closures ?></td>
-                            <td class="text-end"><?= count($c['pois']) ?></td>
-                            <td class="fs-7"><?= $notes === [] ? '—' : km_e(implode(' / ', $notes)) ?></td>
-                          </tr>
-                        <?php endforeach; ?>
-                        </tbody>
-                      </table>
-                    </div>
-                    <?php if ($importProjects !== null): ?>
-                      <?php // 教室などに振った企画の番号(2026-10-23。一時地点とは別に、部屋の地点ごとに持つ) ?>
-                      <div class="form-check mb-3">
-                        <input class="form-check-input" type="checkbox" name="import_projects" value="1" id="km-import-projects" checked>
-                        <label class="form-check-label" for="km-import-projects">
-                          企画の番号も入れ替える(番号のある地点 <strong><?= (int) $importProjects['nodes'] ?></strong>・番号 <?= (int) $importProjects['numbers'] ?> 個。いま Website: <?= (int) $importProjects['current'] ?> 地点)
-                        </label>
-                        <div class="form-text">
-                          教室などの地点に管理アプリで振った番号です。一時地点の数(上の表)とは別に数えます。番号でポスターとスケジュールの場所が決まり、「イベントの地点だけ」のときも出る地点になります。
-                          <?php if ($importProjects['unknown'] > 0): ?>
-                            <span class="text-danger">Website に無い地点が <?= (int) $importProjects['unknown'] ?> あります(先に「アプリの地図を取り込む」を)。</span>
-                          <?php endif; ?>
-                        </div>
-                      </div>
-                    <?php endif; ?>
-                    <button type="submit" class="btn btn-primary">選んだイベントを取り込む</button>
-                  </form>
-                  <form method="post" class="mt-2">
-                    <?= km_csrf_field() ?>
-                    <input type="hidden" name="form_action" value="import_discard">
-                    <button type="submit" class="btn btn-outline-secondary btn-sm">取り込まずに捨てる</button>
-                  </form>
-                <?php endif; ?>
-              </div>
+              <form method="post" class="card-body">
+                <?= km_csrf_field() ?>
+                <input type="hidden" name="form_action" value="event_collect">
+                <div class="form-check mb-2">
+                  <input class="form-check-input" type="checkbox" id="event-collect-check" name="event_collect" value="1" <?= $eventCollect ? 'checked' : '' ?>>
+                  <label class="form-check-label" for="event-collect-check">
+                    イベントモード中は、来場者(ログインしていない人も)の操作も記録する
+                  </label>
+                  <div class="form-text">最初の画面で「情報を収集するのを許可します」(チェック済み)を出し、外した人の操作は記録しません。誰の操作かは残しません。記録は<a href="./test-mode.php">テスト用アカウント</a>の画面の「集めた記録」で見られます。</div>
+                </div>
+                <button type="submit" class="btn btn-primary btn-sm" data-i18n="common.save">保存</button>
+              </form>
             </div>
             <?php endif; ?>
 
             <div class="row">
-              <!-- ------------------------------------------------ 一覧 -->
-              <div class="col-12 col-xl-7">
+              <!-- ------------------------------------------------ 一覧 -->              <div class="col-12 col-xl-7">
                 <div class="card mb-4">
                   <div class="card-header">
                     <h3 class="card-title" data-i18n="page.mapEvents.listTitle">イベント一覧</h3>

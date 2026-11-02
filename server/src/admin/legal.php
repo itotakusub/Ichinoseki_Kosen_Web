@@ -35,7 +35,7 @@ $KM_PAGE = [
     'h1Key' => 'page.legal.h1',
     'h1' => '規約とポリシー',
     'crumbs' => [
-        ['key' => 'side.content', 'text' => 'コンテンツ'],
+        ['key' => 'side.groupPublic', 'text' => '公開ページ'],
         ['key' => 'page.legal.h1', 'text' => '規約とポリシー'],
     ],
 ];

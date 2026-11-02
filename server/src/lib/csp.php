@@ -92,9 +92,7 @@ function km_csp_policy(string $profile): string
     if ($profile === 'admin' || $profile === 'admin-geo') {
         // AdminLTE が差し込む reduce-motion 用の <style> を通す
         $style[] = "'" . KM_CSP_ADMINLTE_STYLE_HASH . "'";
-        // チャットと死活監視がブラウザから WebSocket を張る先(2026-10-19 から管理画面の 443 番の /ws/。lib/site.php の km_site_ws_host)。
-        // 'self' でも同じオリジンの wss は通るが、古いブラウザは ws/wss を 'self' に含めないので書いておく
-        $connect[] = km_site_ws_origin();
+        // WebSocket の宛先(Soketi の wss)は 2026-11-02 に Soketi ごと外した。管理画面がブラウザから張る WebSocket はもう無い
     }
 
     if ($profile === 'admin-geo') {

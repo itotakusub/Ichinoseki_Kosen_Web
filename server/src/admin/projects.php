@@ -15,7 +15,7 @@ $KM_PAGE = [
     'h1Key' => 'page.projects.h1',
     'h1' => 'プロジェクト状況',
     'crumbs' => [
-        ['key' => 'side.content', 'text' => 'コンテンツ'],
+        ['key' => 'side.groupTeam', 'text' => 'チーム'],
         ['key' => 'page.projects.h1', 'text' => 'プロジェクト状況'],
     ],
 ];

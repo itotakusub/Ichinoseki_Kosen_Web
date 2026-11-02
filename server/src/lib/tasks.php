@@ -9,7 +9,7 @@ declare(strict_types=1);
  * projects は status を4値(完了/進行中/要判断/未着手)として、kanban はそのうち3つを
  * レーンとして見る、という関係になっている。
  *
- * lib/chat.php / lib/admin-log.php と同じ「初回アクセス時に CREATE TABLE IF NOT EXISTS」。
+ * lib/admin-log.php と同じ「初回アクセス時に CREATE TABLE IF NOT EXISTS」。
  */
 
 require_once __DIR__ . '/db.php';

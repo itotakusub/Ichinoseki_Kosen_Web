@@ -155,6 +155,7 @@ function km_home_e(?string $value): string
  * ここも fail open — DB が読めなくても地図は出す(「無い」と扱うだけ)。
  */
 require_once __DIR__ . '/lib/assets.php';   // km_public_asset(): 更新時刻を付けてキャッシュを破棄する
+require_once __DIR__ . '/lib/release.php';   // km_release_tags(): 配備のあとに更新を促す(2026-11-02)
 require_once __DIR__ . '/lib/csp.php';
 require_once __DIR__ . '/lib/csrf.php';     // ログアウトのフォームに載せるトークン
 require_once __DIR__ . '/lib/site.php';     // 管理者ログインの入口を管理画面のオリジンに向ける
@@ -478,6 +479,8 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
     <style<?= km_csp_nonce_attr() ?>>
         .km-signout-form { display: contents; }
     </style>
+    <?php // 配備のあとに「ページを更新してください」と出す(2026-11-02。lib/release.php・Main/release-watch.js) ?>
+    <?= km_release_tags() ?>
 </head>
 
 <body>

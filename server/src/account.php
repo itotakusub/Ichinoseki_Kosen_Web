@@ -28,6 +28,7 @@ require_once __DIR__ . '/lib/csrf.php';
 require_once __DIR__ . '/lib/logto-account.php';
 require_once __DIR__ . '/lib/legal.php';   // km_legal_e()
 require_once __DIR__ . '/lib/assets.php';
+require_once __DIR__ . '/lib/release.php';   // km_release_tags(): 配備のあとに更新を促す(2026-11-02)
 require_once __DIR__ . '/lib/csp.php';
 require_once __DIR__ . '/lib/user-error.php';
 // 停止判定(km_logto_user_is_suspended)。管理画面の guard.php と同じ関数を使う
@@ -475,6 +476,8 @@ if ($signedIn) {
         .km-account-alert.err { background: #fee2e2; border: 1px solid #dc2626; color: #7f1d1d; }
         .km-account-alert.warn { background: #fef3c7; border: 1px solid #f59e0b; color: #78350f; }
     </style>
+    <?php // 配備のあとに「ページを更新してください」と出す(2026-11-02。lib/release.php・Main/release-watch.js) ?>
+    <?= km_release_tags() ?>
 </head>
 
 <body>

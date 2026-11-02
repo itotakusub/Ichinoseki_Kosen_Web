@@ -810,6 +810,42 @@ km_writable_dirs && tar --delay-directory-restore -xzf km-deploy.tar.gz && km_wr
 Write-Host '      展開しました'
 
 <#
+  **手元で外したファイルを、ホストでも退避する**(2026-11-02)。
+
+  tar は置くだけで、アーカイブに無いファイルを消さない(上の注記)。web は ./src をそのまま
+  mount しているので、手元で Old/ へ移したファイルも**ホストでは配信され続ける** ——
+  外部接続の API(src/api/table.php)のように、外したつもりの入口が開いたまま残る。
+
+  消さずに `<ホスト>/Old/retired/` へ移す(手元の Old/ と同じ考え。戻すときは mv で戻す)。
+  一覧に書くのは**外したものだけ**。名前は英数と / . - _ だけ(シェルに渡すので、ここで形を確かめる)。
+#>
+$retiredPaths = @(
+    # 2026-11-02: Soketi・チャット・サービス監視・外部接続 API・phpMyAdmin を外した(docs/status.md)
+    'docker/soketi', 'docker/phpmyadmin',
+    'src/lib/soketi.php', 'src/lib/chat.php', 'src/lib/table-api.php', 'src/api/table.php',
+    'src/admin/chat.php',
+    'src/admin/api/chat-auth.php', 'src/admin/api/chat-send.php', 'src/admin/api/chat-read.php', 'src/admin/api/chat-history.php',
+    'src/admin/vendor/pusher-js'
+)
+foreach ($retired in $retiredPaths) {
+    if ($retired -notmatch '^(src|docker)/[A-Za-z0-9/._-]+$' -or $retired.Contains('..')) {
+        throw "退避の一覧に使えない名前があります: $retired"
+    }
+}
+if ((Get-RemoteShell) -eq 'sh' -and $retiredPaths.Count -gt 0) {
+    $retireScript = @'
+set -u
+cd '__KM_REMOTE_PATH__' || exit 1
+for p in __KM_RETIRED__; do
+    if [ -e "$p" ]; then
+        mkdir -p "Old/retired/$(dirname "$p")" && rm -rf "Old/retired/$p" && mv "$p" "Old/retired/$p" && echo "      退避: $p"
+    fi
+done
+'@ -replace '__KM_REMOTE_PATH__', $RemotePath -replace '__KM_RETIRED__', ($retiredPaths -join ' ')
+    Invoke-KmSshStdin -Script $retireScript -TimeoutSec 60 | ForEach-Object { Write-Host $_ }
+}
+
+<#
   フロア画像(src/Main/Picture/１階.png など)はファイル名に全角文字を含む。両端とも
   同じ Windows のコードページなら往復するはずだが、ここが崩れると地図の画像だけが
   404 になり、しかもページ自体は表示されるので気づきにくい。展開後に実数を数えておく。
@@ -883,7 +919,12 @@ switch ($Action) {
   **データは移動しません。**
 "@
         }
-        Invoke-RemoteIn -Path $RemotePath -Command 'docker compose up -d' | ForEach-Object { Write-Host "      $_" }
+        <#
+          **--remove-orphans**(2026-11-02)。compose から外したサービス(soketi・phpmyadmin)のコンテナは、
+          付けないと**動いたまま残る** —— 入口(publish)ごと生き続ける。profile で止めているもの(mailpit)は
+          compose が知っているサービスなので、これでは消えない。
+        #>
+        Invoke-RemoteIn -Path $RemotePath -Command 'docker compose up -d --remove-orphans' | ForEach-Object { Write-Host "      $_" }
     }
     'restart' {
         if ($Services.Count -eq 0) { throw '-Action restart には -Services が要ります(例: -Services reverse-proxy)' }

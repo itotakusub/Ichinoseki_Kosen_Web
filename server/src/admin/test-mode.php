@@ -68,7 +68,6 @@ try {
             $survey = trim((string) ($_POST['survey_url'] ?? ''));
             $guide = str_replace("\r\n", "\n", trim((string) ($_POST['guide'] ?? '')));
             $idle = trim((string) ($_POST['idle_minutes'] ?? ''));
-            $collect = isset($_POST['event_collect']) ? '1' : '0';
             $startNode = trim((string) ($_POST['start_node'] ?? ''));
             if ($startNode !== '' && !in_array($startNode, array_column(km_poster_node_options($pdo), 'id'), true)) {
                 $errors[] = '出発地は一覧の地点から選んでください。';
@@ -81,7 +80,6 @@ try {
             } else {
                 km_setting_set($pdo, KM_TEST_SURVEY_SETTING, $survey);
                 km_setting_set($pdo, KM_TEST_IDLE_SETTING, (string) (int) $idle);
-                km_setting_set($pdo, KM_EVENT_COLLECT_SETTING, $collect);
                 km_setting_set($pdo, KM_TEST_START_SETTING, $startNode);
                 km_test_guide_set($pdo, $guide === '' ? KM_TEST_GUIDE_DEFAULT : $guide);
                 km_admin_log_record('settings', 'test.settings');
@@ -134,7 +132,6 @@ try {
     $surveyUrl = km_test_survey_url($pdo);
     $guideText = km_test_guide_text($pdo);
     $idleMinutes = km_test_idle_minutes($pdo);
-    $eventCollect = km_event_collect_enabled($pdo);
     $startNodeId = km_test_start_node($pdo);
     $startOptions = km_poster_node_options($pdo);
     $signoutPinSet = km_test_signout_pin_hash($pdo) !== '';
@@ -154,7 +151,6 @@ try {
     $surveyUrl = '';
     $guideText = KM_TEST_GUIDE_DEFAULT;
     $idleMinutes = KM_TEST_IDLE_DEFAULT;
-    $eventCollect = true;
     $startNodeId = '';
     $startOptions = [];
     $signoutPinSet = false;
@@ -319,13 +315,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
                         </select>
                         <div class="form-text">テスト用アカウントで開いたときだけ、経路の出発地が空ならここを入れます(地図の経路と案内チャット)。</div>
                       </div>
-                      <div class="form-check mb-3">
-                        <input class="form-check-input" type="checkbox" id="event-collect" name="event_collect" value="1" <?= $eventCollect ? 'checked' : '' ?>>
-                        <label class="form-check-label" for="event-collect">
-                          イベントモード中は、来場者(ログインしていない人も)の操作も記録する
-                        </label>
-                        <div class="form-text">最初の画面で「情報を収集するのを許可します」(チェック済み)を出し、外した人の操作は記録しません。誰の操作かは残しません。</div>
-                      </div>
+                      <p class="form-text">イベントモード中に来場者の操作も記録するかどうかは、<a href="./map-events.php#event-collect">イベントモード</a>の画面に移しました(2026-11-02)。</p>
                       <button type="submit" class="btn btn-primary">保存</button>
                     </form>
                     <form method="post" class="mt-2" data-km-confirm="操作方法を既定の文に戻します。よろしいですか?">

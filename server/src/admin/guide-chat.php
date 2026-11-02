@@ -29,7 +29,7 @@ $KM_PAGE = [
     'h1Key' => 'page.guideChat.h1',
     'h1' => '案内チャット',
     'crumbs' => [
-        ['key' => 'side.content', 'text' => 'コンテンツ'],
+        ['key' => 'side.groupEvent', 'text' => '会期'],
         ['key' => 'page.guideChat.h1', 'text' => '案内チャット'],
     ],
 ];

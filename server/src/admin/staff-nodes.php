@@ -86,6 +86,9 @@ $recent = [];
 $nodes = [];
 $currentFields = [];
 $dbError = null;
+// 教職員氏名の登録状況(2026-11-02 にチャートの画面から移した)
+$occupantWith = 0;
+$occupantWithout = 0;
 try {
     $pdo = km_db();
     // 割り当ての相手は「承認済みの教職員」だけ。同じ人の申請が複数あっても 1 人として並べる
@@ -95,6 +98,9 @@ try {
         }
     }
     $assignments = km_staff_node_assignments($pdo);
+    $totalNodes = (int) $pdo->query('SELECT COUNT(*) FROM km_map_nodes')->fetchColumn();
+    $occupantWith = (int) $pdo->query('SELECT COUNT(*) FROM km_map_nodes WHERE occupant_name IS NOT NULL')->fetchColumn();
+    $occupantWithout = max(0, $totalNodes - $occupantWith);
     // 名前・備考を地図に出してよいかの許可(2026-10-22。地点 × 先生)
     $consents = km_staff_node_consents_by_node($pdo);
     $edits = km_staff_node_edits($pdo);
@@ -130,6 +136,9 @@ $fieldValue = static fn (string $field, string $value): string => $field === KM_
     ? ($value === '1' ? '表示する(許可)' : '表示しない')
     : $value;
 $statusLabel = ['approved' => '承認', 'rejected' => '却下', 'withdrawn' => '取り下げ'];
+$occupantTotal = $occupantWith + $occupantWithout;
+$occupantWithPercent = $occupantTotal > 0 ? round($occupantWith / $occupantTotal * 100, 1) : 0.0;
+$occupantWithoutPercent = $occupantTotal > 0 ? round(100 - $occupantWithPercent, 1) : 0.0;
 
 require __DIR__ . '/_inc/partials/head.php';
 require __DIR__ . '/_inc/partials/header.php';
@@ -167,10 +176,40 @@ require __DIR__ . '/_inc/partials/page-header.php';
               </div>
             </div>
 
+            <?php
+            /*
+             * 教職員氏名の登録状況(地図の全地点のうち、教職員氏名が入っている数)。2026-11-02 にチャートの画面から移した。
+             * 割合だけが動くので data 属性で渡し、下のスクリプトが CSS 変数に入れる(style="…" は CSP で使えない)。
+             */
+            ?>
             <div class="card mb-4">
               <div class="card-header">
-                <h3 class="card-title mb-0" data-i18n="page.staffNodes.pendingTitle">確認待ちの変更</h3>
+                <h3 class="card-title" data-i18n="page.charts.donutTitle">教職員氏名の登録状況</h3>
               </div>
+              <div class="card-body d-flex align-items-center gap-4 flex-wrap">
+                <?php if ($occupantTotal === 0): ?>
+                  <p class="text-body-secondary fs-7 mb-0" data-i18n="page.charts.donutEmpty">地図データがまだ登録されていません。</p>
+                <?php else: ?>
+                  <div class="km-donut" data-km-donut="<?= (int) round($occupantWithPercent) ?>" role="img" aria-label="教職員氏名の登録状況" data-i18n-attr="aria-label:page.charts.donutTitle"></div>
+                  <ul class="list-unstyled mb-0 fs-7">
+                    <li class="mb-2">
+                      <span class="badge text-bg-danger">&nbsp;</span>
+                      <span data-i18n="page.charts.donutWith">氏名あり</span>
+                      <strong><?= $occupantWith ?> (<?= $occupantWithPercent ?>%)</strong>
+                    </li>
+                    <li>
+                      <span class="badge text-bg-primary">&nbsp;</span>
+                      <span data-i18n="page.charts.donutWithout">氏名なし</span>
+                      <strong><?= $occupantWithout ?> (<?= $occupantWithoutPercent ?>%)</strong>
+                    </li>
+                  </ul>
+                <?php endif; ?>
+              </div>
+            </div>
+
+            <div class="card mb-4">
+              <div class="card-header">
+                <h3 class="card-title mb-0" data-i18n="page.staffNodes.pendingTitle">確認待ちの変更</h3>              </div>
               <div class="card-body p-0">
                 <div class="table-responsive">
                   <table class="table align-middle mb-0">
@@ -357,6 +396,10 @@ require __DIR__ . '/_inc/partials/page-header.php';
 
         <script<?= km_csp_nonce_attr() ?>>
           (() => {
+            // ドーナツの割合(要素の style を JS から触るのは CSP の対象外)
+            document.querySelectorAll('[data-km-donut]').forEach((el) => {
+              el.style.setProperty('--km-donut', el.dataset.kmDonut + '%');
+            });
             document.querySelectorAll('.km-staff-form').forEach((form) => {
               form.addEventListener('submit', (event) => {
                 const key = form.dataset.kmConfirm || '';

@@ -13,7 +13,7 @@
 
   選べるもの:
     1. 更新を調べる(読むだけ。ホストの check-updates.sh)
-    2. 修正版を当てる —— Node(soketi の土台)・PHP(web の土台)・MariaDB・PostgreSQL など。
+    2. 修正版を当てる —— PHP(web の土台)・MariaDB・PostgreSQL など(soketi は 2026-11-02 に外した)。
        **同じ版(タグ)のまま中身だけ新しくする。** 一覧から番号で選ぶ
     3. Logto を次の版へ上げる(控え → 新しい像 → 移行の一覧 → 移行 → 立て直す)
     4. いまの様子を見る(読むだけ)
@@ -77,7 +77,6 @@ $PinFiles = @(
     @{ Path = 'compose.yaml'; Kind = 'compose' }
     @{ Path = 'compose.vps.yaml'; Kind = 'compose' }
     @{ Path = 'docker/php/Dockerfile'; Kind = 'build'; Service = 'web' }
-    @{ Path = 'docker/soketi/Dockerfile'; Kind = 'build'; Service = 'soketi' }
 )
 
 $LogtoRepo = 'ghcr.io/logto-io/logto'
@@ -224,7 +223,7 @@ for c in $(docker compose ps -a -q 2>/dev/null); do
   epoch=$(date -d "$created" +%s 2>/dev/null || echo 0)
   echo "KMRUN|${line%|*}|$epoch"
 done
-for f in docker/php/Dockerfile docker/soketi/Dockerfile; do
+for f in docker/php/Dockerfile; do
   echo "KMMTIME|$f|$(stat -c %Y "$f" 2>/dev/null || echo 0)"
   grep -E '^(FROM|COPY .*--from=)' "$f" 2>/dev/null | sed "s#^#KMFILE|$f|#"
 done
@@ -277,13 +276,10 @@ function Get-FriendlyName([string]$Ref) {
     $name = ($Ref -split ':')[0]
     if ($Ref -match '^ghcr\.io/') { $name = ($Ref -replace ':[^:/]+$', '') }
     switch -Regex ($name) {
-        '^node$' { return 'Node(soketi の土台)' }
-        'aloware/soketi$' { return 'soketi 本体(フォーク)' }
         '^php$' { return 'PHP(web の土台)' }
         '^composer$' { return 'composer(web のビルドで使う)' }
         '^postgres$' { return 'PostgreSQL(Logto の DB)' }
         '^mariadb$' { return 'MariaDB(地図などの DB)' }
-        '^phpmyadmin$' { return 'phpMyAdmin' }
         'logto-io/logto$' { return 'Logto(サインイン)' }
         'glances$' { return 'Glances(ホストの様子)' }
         default { return $name }
@@ -615,7 +611,7 @@ function Invoke-Recover($Backup, [switch]$AfterUp, [string[]]$BuildServices = @(
     if (-not (Invoke-Deploy -Rollback)) { Write-Warn '  元に戻す配備に失敗しました。上の表示を見てください。'; return }
     if ($AfterUp) {
         if ($BuildServices.Count) { [void](Invoke-HostWithRetry "docker compose build $($BuildServices -join ' ')") }
-        [void](Invoke-Host 'docker compose up -d' -AllowFailure)
+        [void](Invoke-Host 'docker compose up -d --remove-orphans' -AllowFailure)
         $still = Wait-Healthy
         if ($still.Count -eq 0) { Write-Host '  元に戻りました。' -ForegroundColor Green }
         else { Write-Warn "  戻しても起動しないもの: $($still -join ' ')。docs/06(もしものとき)を見てください。" }
@@ -624,7 +620,7 @@ function Invoke-Recover($Backup, [switch]$AfterUp, [string[]]$BuildServices = @(
     }
 }
 
-function Show-AfterChecklist([switch]$Logto, [switch]$Soketi) {
+function Show-AfterChecklist([switch]$Logto) {
     Write-Step '上げたあとに画面で見るもの(docs/05 §7)'
     $items = @(
         'https://ito4.jp/ が開き、地図が出る'
@@ -634,7 +630,6 @@ function Show-AfterChecklist([switch]$Logto, [switch]$Soketi) {
         $items += 'サインインのコードの画面で、1 つ目の枠に autocomplete="one-time-code" が付いている'
         $items += 'Android アプリでサインインできる'
     }
-    if ($Soketi) { $items += '管理画面のチャットと死活監視が「接続済み」になる' }
     $items += 'ファイル管理から実際にダウンロードできる'
     foreach ($t in $items) { Write-Host "  [ ] $t" }
 }
@@ -743,14 +738,11 @@ function Invoke-Refresh {
         Invoke-Recover $backup; return
     }
     # **1 つだけの up -d にしない**(depends_on が評価されない)
-    [void](Invoke-Host 'docker compose up -d' -AllowFailure)
+    [void](Invoke-Host 'docker compose up -d --remove-orphans' -AllowFailure)
     $bad = Wait-Healthy
     if ($bad.Count -gt 0) { Invoke-Recover $backup -AfterUp -BuildServices $buildServices; return }
     [void](Invoke-Host 'docker compose ps' -AllowFailure)
-    if ($buildServices -contains 'soketi') {
-        [void](Invoke-Host 'docker compose exec -T soketi node -v' -AllowFailure)
-    }
-    Show-AfterChecklist -Soketi:($buildServices -contains 'soketi')
+    Show-AfterChecklist
 }
 
 # ---------------------------------------------------------------- 3. Logto
@@ -913,7 +905,7 @@ function Invoke-LogtoUpgrade {
     }
 
     Write-Step '立て直す(全体の up -d)'
-    [void](Invoke-Host 'docker compose up -d' -AllowFailure)
+    [void](Invoke-Host 'docker compose up -d --remove-orphans' -AllowFailure)
     # Logto は起動のときに移行を確かめるので遅い。長めに待つ
     $bad = Wait-Healthy -TimeoutSec 300
     [void](Invoke-Host 'docker compose logs --tail 60 logto' -AllowFailure)
@@ -933,7 +925,6 @@ function Invoke-LogtoUpgrade {
 function Invoke-Status {
     Write-Step 'いまの様子(読むだけ)'
     [void](Invoke-Host 'docker compose ps' -AllowFailure)
-    [void](Invoke-Host 'docker compose exec -T soketi node -v' -AllowFailure)
     [void](Invoke-Host 'docker compose logs --tail 20 logto' -AllowFailure)
 }
 

@@ -25,7 +25,7 @@ $KM_PAGE = [
     'h1Key' => 'page.timeline.h1',
     'h1' => 'タイムライン',
     'crumbs' => [
-        ['key' => 'side.content', 'text' => 'コンテンツ'],
+        ['key' => 'side.groupRecords', 'text' => '記録と分析'],
         ['key' => 'page.timeline.h1', 'text' => 'タイムライン'],
     ],
 ];

@@ -24,7 +24,9 @@ $roleLabel = $user['roles'] ? implode(', ', $user['roles']) : '';
  */
 $unreadForms = null;
 $recentActions = null;
-$unreadChat = null;
+// 教職員の申請とアプリの受け箱の待ち(2026-11-02。チャットの未読はチャットごと外した)
+$staffWaiting = null;
+$apkWaiting = null;
 if ($user !== null) {
     try {
         require_once dirname(__DIR__, 3) . '/lib/db.php';
@@ -34,8 +36,10 @@ if ($user !== null) {
         $notifyPdo = km_db();
         $unreadForms = km_form_unread_count($notifyPdo);
         $recentActions = km_admin_log_count_since($notifyPdo, 1);
-        require_once dirname(__DIR__, 3) . '/lib/chat.php';
-        $unreadChat = km_chat_unread_badge((string) ($user['sub'] ?? ''));
+        require_once dirname(__DIR__, 3) . '/lib/staff-org.php';
+        $staffWaiting = km_staff_requests_pending_count($notifyPdo);
+        require_once dirname(__DIR__, 3) . '/lib/apk-inbox.php';
+        $apkWaiting = km_apk_inbox_waiting_count($notifyPdo);
     } catch (Throwable $exception) {
         error_log('header.php notifications failed (fail soft): ' . $exception->getMessage());
     }
@@ -48,9 +52,9 @@ if ($user !== null) {
  */
 require_once dirname(__DIR__, 3) . '/lib/profile.php';
 $avatarSrc = $user !== null ? km_profile_avatar_src($user) : KM_AVATAR_FALLBACK;
-// バッジは「手当てが要るもの」だけ = 未読の問い合わせとチャット。
+// バッジは「手当てが要るもの」だけ = 未読の問い合わせ・教職員の申請・公開を待つアプリ。
 // 操作件数は情報であって用件ではないので数えない。
-$notifyBadge = ($unreadForms ?? 0) + ($unreadChat ?? 0);
+$notifyBadge = ($unreadForms ?? 0) + ($staffWaiting ?? 0) + ($apkWaiting ?? 0);
 ?>
     <!--begin::App Wrapper-->
     <div class="app-wrapper">
@@ -92,9 +96,10 @@ $notifyBadge = ($unreadForms ?? 0) + ($unreadChat ?? 0);
               </a>
             </li>
             <li class="nav-item d-none d-md-block">
-              <a href="./monitor.php" class="nav-link">
-                <i class="bi bi-activity me-1" aria-hidden="true"></i>
-                <span data-i18n="nav.monitor">サービス監視</span>
+              <?php // サービス監視は 2026-11-02 にタスクマネージャーの「サービス」へまとめた ?>
+              <a href="./taskmgr.php" class="nav-link">
+                <i class="bi bi-cpu me-1" aria-hidden="true"></i>
+                <span data-i18n="nav.taskmgr">タスクマネージャー</span>
               </a>
             </li>
           </ul>
@@ -129,11 +134,19 @@ $notifyBadge = ($unreadForms ?? 0) + ($unreadChat ?? 0);
                   </span>
                 </a>
                 <div class="dropdown-divider"></div>
-                <a href="./chat.php" class="dropdown-item">
-                  <i class="bi bi-chat-dots me-2"></i>
-                  <span data-i18n="nav.notifications.unreadChat">未読のチャット</span>
+                <a href="./staff-requests.php" class="dropdown-item">
+                  <i class="bi bi-person-badge me-2"></i>
+                  <span data-i18n="nav.notifications.staffWaiting">教職員の申請(未処理)</span>
                   <span class="float-end text-secondary fs-7">
-                    <?= $unreadChat === null ? '&mdash;' : (int) $unreadChat ?>
+                    <?= $staffWaiting === null ? '&mdash;' : (int) $staffWaiting ?>
+                  </span>
+                </a>
+                <div class="dropdown-divider"></div>
+                <a href="./apk-inbox.php" class="dropdown-item">
+                  <i class="bi bi-inbox me-2"></i>
+                  <span data-i18n="nav.notifications.apkWaiting">公開を待つアプリ</span>
+                  <span class="float-end text-secondary fs-7">
+                    <?= $apkWaiting === null ? '&mdash;' : (int) $apkWaiting ?>
                   </span>
                 </a>
                 <div class="dropdown-divider"></div>
@@ -320,6 +333,8 @@ $notifyBadge = ($unreadForms ?? 0) + ($unreadChat ?? 0);
                 <!--end::Menu Body-->
                 <!--begin::Menu Footer-->
                 <li class="user-footer">
+                  <?php // プロフィール(パスワードの変更など)。サイドバーの「その他」の奥にしか無かったのでここへ出した(2026-11-02) ?>
+                  <a href="./profile.php" class="btn btn-outline-secondary" data-i18n="user.profile">プロフィール</a>
                   <a href="./settings.php" class="btn btn-outline-secondary" data-i18n="user.settings">設定</a>
                   <?php // POST + CSRF でだけ出られる(GET だと他サイトのリンクで追い出せた。sign-out.php の説明) ?>
                   <form method="post" action="/sign-out.php" class="d-inline float-end m-0">

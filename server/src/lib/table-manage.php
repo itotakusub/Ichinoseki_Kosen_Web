@@ -11,7 +11,7 @@ declare(strict_types=1);
  *   - テーブル名・カラム名は db.php の km_is_valid_identifier() を通す
  *   - カラム型は許可リストのみ(自由な SQL 断片を受け付けない)
  *   - 削除は DROP せず、削除済みテーブル名を記録する小さなメタテーブルに記録するだけにして
- *     一覧・操作の対象から外す(「論理削除」。実削除は phpMyAdmin で明示的に DROP する運用)
+ *     一覧・操作の対象から外す(「論理削除」。実削除はホストへ SSH で入って明示的に DROP する運用)
  *   - レコード操作のカラム名は information_schema から取得した実在カラムとの
  *     突き合わせでのみ許可する(ユーザー入力のカラム名を直接 SQL に埋め込まない)
  *
@@ -25,8 +25,8 @@ declare(strict_types=1);
  * "DROP, ALTER command denied" で失敗した。ALTER・DROP を新たに付与してもらう案もあるが、
  * 万一アプリ側にバグがあっても DB ユーザー自体が構造変更・削除を一切できない方が安全
  * (縦深防御)。そのため実テーブルには触れず、`km_table_manage_deleted` という小さな
- * メタテーブルに「削除済み」の印を付けるだけにした。物理的な DROP は今までどおり
- * phpMyAdmin から手動で行う。
+ * メタテーブルに「削除済み」の印を付けるだけにした。物理的な DROP はホストへ SSH で入って
+ * `docker exec -it km-mariadb mariadb` から手動で行う(phpMyAdmin は 2026-11-02 に外した)。
  */
 
 const KM_TABLE_PREFIX = 'kmt_';
@@ -182,7 +182,7 @@ function km_table_create(PDO $pdo, string $name, array $columns): void
 /**
  * 論理削除する: 物理的な DROP・RENAME は行わず、`km_table_manage_deleted` に印を付けて
  * 一覧・レコード操作の対象から外すだけ。データはそのまま残る。実際に消したい場合は
- * phpMyAdmin から明示的に DROP TABLE する運用にする。
+ * ホストへ SSH で入って明示的に DROP TABLE する運用にする。
  */
 function km_table_soft_delete(PDO $pdo, string $name): void
 {

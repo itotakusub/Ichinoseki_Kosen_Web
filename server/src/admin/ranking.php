@@ -27,7 +27,7 @@ $KM_PAGE = [
     'h1Key' => 'page.ranking.h1',
     'h1' => 'ランキングの語',
     'crumbs' => [
-        ['key' => 'side.content', 'text' => 'コンテンツ'],
+        ['key' => 'side.groupRecords', 'text' => '記録と分析'],
         ['key' => 'page.ranking.h1', 'text' => 'ランキングの語'],
     ],
 ];

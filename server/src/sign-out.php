@@ -160,7 +160,7 @@ if ($signingOutUser) {
  * 管理系ポートのゲート(admin/api/gate.php)が持っている「通過してよい」の印を消す。
  *
  * SDK の signOut() は**自分が保存したトークンしか消さない**(LogtoClient.php を確認済み)。
- * この印を残すと、ログアウトしたのに phpMyAdmin / Mailpit / Logto 管理へ
+ * この印を残すと、ログアウトしたのに管理系ポート(Mailpit など)へ
  * **最大60秒のあいだ入れてしまう**。ログアウトは即座に効かせる。
  *
  * 拒否を1回だけ記録するための印(km_admin_denied_logged / km_gate_denied_logged)も消す。

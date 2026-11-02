@@ -9,14 +9,15 @@ require_once dirname(__DIR__) . '/lib/posters.php';
 require_once dirname(__DIR__) . '/lib/poster-import.php';
 require_once dirname(__DIR__) . '/lib/map-events.php';
 require_once dirname(__DIR__) . '/lib/admin-log.php';
-require_once dirname(__DIR__) . '/lib/node-extras.php';
 
 /**
- * ポスター・広告と、地点の URL(2026-10-21、利用者の指示。lib/posters.php)。
+ * ポスター・広告(2026-10-21、利用者の指示。lib/posters.php)。
  *
  * - 出し方: 表示しない / イベント中のみ / 常に表示
  * - ポスター: 画像(ファイルか URL)・見出し・説明・URL・地点。保存の前にプレビューで見た目を確かめる
- * - 地点の URL: 地点の詳細に出すリンク(ポスターとは別。出し方の 3 段階に関わらず出る)
+ *
+ * 2026-11-02 に、ここにあった 3 つを的確な場所へ移した(利用者の指示「無理やり配置した項目を分かりやすく」):
+ * 地点の URL → search-aliases.php、チュートリアルの終わりの知らせ → notices.php、部屋のいいね → charts.php。
  *
  * 公開ページでの出方: 地点の詳細(地図)・地図の右上の「🖼 ポスター」・一覧のページ(/posters.php)。
  */
@@ -43,17 +44,6 @@ try {
                 km_poster_mode_save($pdo, $mode);
                 km_admin_log_record('settings', 'poster.mode', KM_POSTER_MODES[$mode]);
                 header('Location: ./posters.php?saved=mode', true, 303);
-                exit;
-            } catch (InvalidArgumentException $exception) {
-                $errors[] = $exception->getMessage();
-            }
-        }
-
-        if ($formAction === 'tutorial_end') {
-            try {
-                km_tutorial_end_save($pdo, (string) ($_POST['end_text'] ?? ''), (string) ($_POST['end_survey_url'] ?? ''), isset($_POST['end_phone_qr']));
-                km_admin_log_record('settings', 'poster.tutorial_end');
-                header('Location: ./posters.php?saved=tutorial_end#tutorial-end', true, 303);
                 exit;
             } catch (InvalidArgumentException $exception) {
                 $errors[] = $exception->getMessage();
@@ -114,30 +104,6 @@ try {
             }
         }
 
-        if ($formAction === 'link_save') {
-            $nodeId = (string) ($_POST['node_id'] ?? '');
-            try {
-                km_node_link_set($pdo, $nodeId, (string) ($_POST['url'] ?? ''), (string) ($_POST['label'] ?? ''));
-                km_admin_log_record('content', 'map.node_link', $nodeId);
-                header('Location: ./posters.php?saved=link#node-links', true, 303);
-                exit;
-            } catch (InvalidArgumentException $exception) {
-                $errors[] = $exception->getMessage();
-            }
-        }
-
-        // 部屋のいいねを 0 に戻す(2026-10-22。lib/node-extras.php)
-        if ($formAction === 'likes_reset') {
-            $likeNode = (string) ($_POST['node_uuid'] ?? '');
-            if (km_node_uuid_valid($likeNode)) {
-                km_node_likes_ensure_table($pdo);
-                $removed = km_node_likes_reset($pdo, $likeNode);
-                km_admin_log_record('content', 'node.likes_reset', $likeNode . '(' . $removed . ' 件)');
-            }
-            header('Location: ./posters.php?saved=likes_reset#node-likes', true, 303);
-            exit;
-        }
-
         // ポスターの ♡ を 0 に戻す(2026-10-23。lib/poster-likes.php)
         if ($formAction === 'poster_likes_reset') {
             $likePoster = (int) ($_POST['id'] ?? 0);
@@ -149,14 +115,6 @@ try {
             header('Location: ./posters.php?saved=likes_reset#posters', true, 303);
             exit;
         }
-
-        if ($formAction === 'link_delete') {
-            $nodeId = (string) ($_POST['node_id'] ?? '');
-            km_node_link_delete($pdo, $nodeId);
-            km_admin_log_record('content', 'map.node_link', '外した ' . $nodeId);
-            header('Location: ./posters.php?saved=link_removed#node-links', true, 303);
-            exit;
-        }
     }
 
     $notice = [
@@ -165,9 +123,6 @@ try {
         'updated' => 'ポスターを保存しました。',
         'toggled' => 'ポスターの出し入れを変えました。',
         'deleted' => 'ポスターを消しました(画像も消しました)。',
-        'link' => '地点の URL を保存しました。',
-        'link_removed' => '地点の URL を外しました。',
-        'tutorial_end' => 'チュートリアルの終わりの知らせを保存しました。',
         'likes_reset' => 'いいねを 0 に戻しました。',
     ][(string) ($_GET['saved'] ?? '')] ?? null;
 
@@ -179,7 +134,6 @@ try {
     }
     $showingNow = km_poster_mode_shows($mode, $activeEvents !== []);
     $posters = km_posters_all($pdo);
-    $links = km_node_links_all($pdo);
     $nodeOptions = km_poster_node_options($pdo);
     // 企画の番号 → 地点(2026-10-23。管理アプリで振った番号。lib/map-node-projects.php)
     require_once __DIR__ . '/../lib/map-node-projects.php';
@@ -187,10 +141,7 @@ try {
     $projectNodes = km_map_project_nodes(km_map_projects_for_admin($pdo));
     // 名前が番号の一時地点(2026-10-23)
     $projectPois = km_map_project_pois_all($pdo);
-    $tutorialEnd = km_tutorial_end_config($pdo);
     $stats = km_poster_stats_totals($pdo);
-    km_node_likes_ensure_table($pdo);
-    $likeTotals = km_node_likes_totals($pdo);
     // ポスターの ♡ の数(2026-10-23)
     require_once __DIR__ . '/../lib/poster-likes.php';
     $posterLikes = km_poster_like_counts($pdo);
@@ -201,13 +152,10 @@ try {
     $activeEvents = [];
     $showingNow = false;
     $posters = [];
-    $links = [];
     $nodeOptions = [];
     $projectNodes = [];
     $projectPois = [];
-    $tutorialEnd = ['text' => KM_TUTORIAL_END_TEXT_DEFAULT, 'ownSurveyUrl' => '', 'surveyUrl' => '', 'phoneQr' => true];
     $stats = [];
-    $likeTotals = [];
     $posterLikes = [];
 }
 // 広告(地点なし・出しているもの)の数と、1 件が選ばれる割合(全部同じ重みなので 1 / 件数。lib/posters.php)
@@ -256,7 +204,7 @@ $KM_PAGE = [
     ],
 ];
 
-/** 地点を選ぶ欄(ポスターと地点の URL で同じもの)。絞り込みは assets/js/posters.js */
+/** 地点を選ぶ欄。絞り込みは assets/js/posters.js(地点の URL の画面 search-aliases.php も同じ形) */
 $nodeSelect = static function (string $name, string $id, string $selected, bool $allowEmpty) use ($nodeOptions): void {
     $byFloor = [];
     foreach ($nodeOptions as $option) {
@@ -337,7 +285,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
                       <li>地図の右上の <strong>🖼️</strong>(出しているポスターがあるときだけ出ます)から、ポスターを並べた<strong>一覧のページ</strong>を開けます。画像を押すと、地図のその地点へ移って詳細を開きます。</li>
                       <li><strong>地点に置かないポスターは「広告」</strong>です。チュートリアル(操作の案内)が終わったときに<strong>必ず 1 件</strong>を出します。どれを出すかは<strong>同じ重み(<?= (int) KM_POSTER_AD_WEIGHT ?>%)</strong>で選ぶので、広告が 1 件なら 100%、2 件なら 50% です(利用規約の第 7 条)。<?= $adCount > 0 ? 'いまは出している広告が ' . $adCount . ' 件で、それぞれ ' . $adShare . '%。' : 'いま出している広告はありません。' ?>一覧のページにも出ます。</li>
                       <li>広告を出した回数と、リンクを押した人数(同じ端末は 1 人)を数えます(下の一覧の「数」。数だけで、誰のものかは残しません)。</li>
-                      <li>広告を閉じたら(広告が無いときはすぐ)、下の「チュートリアルの終わりの知らせ」を出します。</li>
+                      <li>広告を閉じたら(広告が無いときはすぐ)、「チュートリアルの終わりの知らせ」を出します(中身は<a href="./notices.php#tutorial-end">お知らせとチュートリアル</a>で決めます)。</li>
                     </ul>
                     <a class="btn btn-sm btn-outline-primary" href="<?= km_e(km_site_url(null, '/posters.php')) ?>" target="_blank" rel="noopener">一覧のページを開く</a>
                     <span class="text-body-secondary ms-1">(「表示しない」の間は「いまはありません」と出ます)</span>
@@ -581,131 +529,10 @@ require __DIR__ . '/_inc/partials/page-header.php';
               </form>
             </div>
 
-            <div class="card mb-4" id="tutorial-end">
-              <div class="card-header"><h3 class="card-title">チュートリアルの終わりの知らせ</h3></div>
-              <form method="post" class="card-body">
-                <?= km_csrf_field() ?>
-                <input type="hidden" name="form_action" value="tutorial_end">
-                <p class="fs-7 text-body-secondary">
-                  チュートリアルが終わったとき(最後まで進んだ・スキップした)に出します。広告を出したときは、広告を閉じたあとに出ます。
-                  見出しは「🎉 チュートリアルが終わりました」で固定です。<strong>ポスターの出し方(3 段階)とは関係なく出ます。</strong>
-                </p>
-                <div class="mb-3">
-                  <label class="form-label" for="km-end-text">本文</label>
-                  <textarea class="form-control" id="km-end-text" name="end_text" rows="2" maxlength="<?= KM_TUTORIAL_END_TEXT_MAX ?>"><?= km_e($tutorialEnd['text']) ?></textarea>
-                </div>
-                <div class="mb-3">
-                  <label class="form-label" for="km-end-survey">アンケートの URL(https)</label>
-                  <input class="form-control" type="url" id="km-end-survey" name="end_survey_url" maxlength="255" placeholder="https://forms.gle/…" value="<?= km_e($tutorialEnd['ownSurveyUrl']) ?>">
-                  <div class="form-text">
-                    「このページのアンケートを募集中です。こちら」と QR を出します。空なら <a href="./test-mode.php">テスト用アカウント</a>の画面で決めたアンケートの URL を使います
-                    <?php if ($tutorialEnd['ownSurveyUrl'] === '' && $tutorialEnd['surveyUrl'] !== ''): ?>(いまは <code><?= km_e($tutorialEnd['surveyUrl']) ?></code>)<?php elseif ($tutorialEnd['surveyUrl'] === ''): ?>(いまはどちらも空なので、アンケートの行は出しません)<?php endif; ?>。
-                  </div>
-                </div>
-                <div class="form-check mb-3">
-                  <input class="form-check-input" type="checkbox" id="km-end-phone" name="end_phone_qr" value="1" <?= $tutorialEnd['phoneQr'] ? 'checked' : '' ?>>
-                  <label class="form-check-label" for="km-end-phone">「スマホでもマップを見ることができます」と、地図の QR(<?= km_e(km_site_url(null, '/')) ?>)を出す</label>
-                </div>
-                <button type="submit" class="btn btn-primary">保存</button>
-              </form>
-            </div>
-
-            <div class="card mb-4" id="node-links">
-              <div class="card-header"><h3 class="card-title">地点の URL(<?= count($links) ?> 件)</h3></div>
-              <div class="card-body">
-                <p class="fs-7 text-body-secondary">
-                  地点の詳細に、リンクを 1 本出します(研究室のページ・模擬店の案内など)。<strong>ポスターの出し方とは関係なく、いつも出ます。</strong>
-                  地図を取り込み直しても消えません(地点の番号が変わったときは付け直してください)。
-                </p>
-                <div class="row">
-                  <div class="col-12 col-xl-7">
-                    <?php if ($links === []): ?>
-                      <p class="text-body-secondary fs-7">まだありません。</p>
-                    <?php else: ?>
-                      <div class="table-responsive">
-                        <table class="table table-sm align-middle">
-                          <thead><tr><th scope="col">地点</th><th scope="col">URL・リンクの文字</th><th scope="col"></th></tr></thead>
-                          <tbody>
-                            <?php foreach ($links as $link): ?>
-                              <tr>
-                                <td><?= km_e($nodeLabel((string) $link['nodeId'])) ?></td>
-                                <td class="km-poster-url">
-                                  <a class="text-break" href="<?= km_e((string) $link['url']) ?>" target="_blank" rel="noopener noreferrer"><?= km_e((string) $link['url']) ?></a>
-                                  <div class="fs-7 text-body-secondary"><?= km_e((string) $link['label'] !== '' ? (string) $link['label'] : '(既定:くわしく見る)') ?></div>
-                                </td>
-                                <td>
-                                  <form method="post" class="m-0" data-km-confirm="この地点の URL を外します。よろしいですか?">
-                                    <?= km_csrf_field() ?>
-                                    <input type="hidden" name="form_action" value="link_delete">
-                                    <input type="hidden" name="node_id" value="<?= km_e((string) $link['nodeId']) ?>">
-                                    <button type="submit" class="btn btn-sm btn-outline-danger">外す</button>
-                                  </form>
-                                </td>
-                              </tr>
-                            <?php endforeach; ?>
-                          </tbody>
-                        </table>
-                      </div>
-                    <?php endif; ?>
-                  </div>
-                  <div class="col-12 col-xl-5">
-                    <form method="post">
-                      <?= km_csrf_field() ?>
-                      <input type="hidden" name="form_action" value="link_save">
-                      <div class="mb-2">
-                        <label class="form-label" for="km-link-node">地点</label>
-                        <?php $nodeSelect('node_id', 'km-link-node', '', false); ?>
-                      </div>
-                      <div class="mb-2">
-                        <label class="form-label" for="km-link-url">URL</label>
-                        <input class="form-control" type="url" id="km-link-url" name="url" maxlength="<?= KM_POSTER_URL_MAX ?>" placeholder="https://…" required>
-                      </div>
-                      <div class="mb-3">
-                        <label class="form-label" for="km-link-label">リンクの文字(任意)</label>
-                        <input class="form-control" type="text" id="km-link-label" name="label" maxlength="<?= KM_NODE_LINK_LABEL_MAX ?>" placeholder="くわしく見る">
-                      </div>
-                      <button type="submit" class="btn btn-primary">保存(同じ地点なら置き換え)</button>
-                    </form>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div class="card mb-4" id="node-likes">
-              <div class="card-header"><h3 class="card-title">部屋のいいね(<?= count($likeTotals) ?> 地点)</h3></div>
-              <div class="card-body">
-                <p class="fs-7 text-body-secondary">
-                  Android アプリの部屋の詳細で付けられる「いいね」の数です(2026-10-22)。<strong>だれが付けたかは持っていません</strong>
-                  (端末ごとの印を鍵つきの印にしてだけ持ち、1 端末 1 地点 1 つ。同じ送り元から 1 時間に <?= KM_NODE_LIKE_SOURCE_LIMIT ?> まで)。
-                  部屋の詳細には、この画面で地点に置いたポスターが写真として出ます。
-                </p>
-                <?php if ($likeTotals === []): ?>
-                  <p class="text-body-secondary fs-7">まだありません。</p>
-                <?php else: ?>
-                  <div class="table-responsive">
-                    <table class="table table-sm align-middle">
-                      <thead><tr><th scope="col">地点</th><th scope="col" class="text-end">いいね</th><th scope="col"></th></tr></thead>
-                      <tbody>
-                        <?php foreach ($likeTotals as $likeRow): ?>
-                          <tr>
-                            <td><?= km_e($likeRow['name'] !== '' ? $likeRow['name'] : $likeRow['uuid'] . '(地図に無い)') ?></td>
-                            <td class="text-end"><?= (int) $likeRow['count'] ?></td>
-                            <td>
-                              <form method="post" class="m-0" data-km-confirm="この地点のいいねを 0 に戻します。よろしいですか?">
-                                <?= km_csrf_field() ?>
-                                <input type="hidden" name="form_action" value="likes_reset">
-                                <input type="hidden" name="node_uuid" value="<?= km_e($likeRow['uuid']) ?>">
-                                <button type="submit" class="btn btn-sm btn-outline-danger">0 に戻す</button>
-                              </form>
-                            </td>
-                          </tr>
-                        <?php endforeach; ?>
-                      </tbody>
-                    </table>
-                  </div>
-                <?php endif; ?>
-              </div>
-            </div>
+            <p class="fs-7 text-body-secondary">
+              地点の URL は<a href="./search-aliases.php#node-links">地点の読み・別名・URL</a>、チュートリアルの終わりの知らせは<a href="./notices.php#tutorial-end">お知らせとチュートリアル</a>、
+              部屋のいいねは<a href="./charts.php#node-likes">チャート</a>へ移しました(2026-11-02)。
+            </p>
           </div>
         </div>
         <!--end::App Content-->

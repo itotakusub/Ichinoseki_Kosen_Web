@@ -14,7 +14,7 @@ $KM_PAGE = [
     'h1Key' => 'page.kanban.h1',
     'h1' => 'カンバン',
     'crumbs' => [
-        ['key' => 'side.extra', 'text' => 'その他ページ'],
+        ['key' => 'side.groupTeam', 'text' => 'チーム'],
         ['key' => 'page.kanban.h1', 'text' => 'カンバン'],
     ],
 ];

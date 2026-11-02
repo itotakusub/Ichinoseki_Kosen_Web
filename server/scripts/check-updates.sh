@@ -156,7 +156,8 @@ pinned_tag() {
 # 動いている像(kosenmap-web など)はどのレジストリにも無いので、像そのものは比べられない。
 # 見るのは FROM と COPY --from= に書いた**ビルド元**。pull では変わらず、
 # `docker compose build --pull` し直すまで当たらない。
-BUILD_DOCKERFILES="web=docker/php/Dockerfile soketi=docker/soketi/Dockerfile"
+# soketi(docker/soketi)は 2026-11-02 に外した
+BUILD_DOCKERFILES="web=docker/php/Dockerfile"
 
 is_local_build() {
   for _pair in $BUILD_DOCKERFILES; do
@@ -417,8 +418,8 @@ fi
 # ---------------------------------------------------------------------------
 # 脆弱性(2026-10-30、高専祭の振り返りのフェーズ 6 の 2。決まりは src/lib/security-audit.php)
 # ---------------------------------------------------------------------------
-# 像の更新とは別に、**中で使っている部品の勧告**を見る。PHP の版(php.net)・composer audit・
-# Soketi の npm audit(どちらも GitHub のセキュリティ勧告を引く)・ホストの Ubuntu の USN。
+# 像の更新とは別に、**中で使っている部品の勧告**を見る。PHP の版(php.net)・composer audit(GitHub のセキュリティ勧告を引く)・
+# ホストの Ubuntu の USN。Soketi の npm audit は 2026-11-02 に Soketi ごと外した(11-02 のメール 15 件はすべてそこだった)。
 # カーネルの穴(CVE-2026-98432)はコンテナの外なので、USN を見ないと誰も知らせなかった。
 #
 # **1 度知らせた勧告は二度と送らない**(VULN_SEEN_FILE に鍵を覚える。送れてから覚える)。
@@ -473,12 +474,6 @@ read_vulns "PHP"
 
 VULN_OUTPUT="$(docker compose exec -T web php scripts/security-audit.php composer 2>/dev/null || echo "HOLD	web で調べられませんでした")"
 read_vulns "composer"
-
-# Soketi の部品。像は読むだけなので、npm の置き場は /tmp(tmpfs)へ。registry に届かなければ保留
-_npm_json="$(docker compose exec -T -e npm_config_cache=/tmp/npm-audit soketi \
-  sh -c 'cd /app && npm audit --omit=dev --json --package-lock-only' 2>/dev/null || true)"
-VULN_OUTPUT="$(printf '%s' "$_npm_json" | docker compose exec -T web php scripts/security-audit.php npm 2>/dev/null || echo "HOLD	web で調べられませんでした")"
-read_vulns "npm(Soketi)"
 
 # ホストの Ubuntu。入っている部品の名前と USN の一覧を web へ渡して突き合わせる
 _release="$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release 2>/dev/null | head -n 1)"

@@ -15,6 +15,7 @@ require_once __DIR__ . '/lib/db.php';
 require_once __DIR__ . '/lib/notices.php';
 require_once __DIR__ . '/lib/map-switches.php';
 require_once __DIR__ . '/lib/assets.php';
+require_once __DIR__ . '/lib/release.php';   // km_release_tags(): 配備のあとに更新を促す(2026-11-02)
 require_once __DIR__ . '/lib/csp.php';
 
 km_csp_send('public');
@@ -72,6 +73,8 @@ function km_notice_e(?string $value): string
         .km-notice-list { list-style: none; padding: 0; }
         .km-notice-list li { margin-bottom: 0.75rem; }
     </style>
+    <?php // 配備のあとに「ページを更新してください」と出す(2026-11-02。lib/release.php・Main/release-watch.js) ?>
+    <?= km_release_tags() ?>
 </head>
 
 <body>
