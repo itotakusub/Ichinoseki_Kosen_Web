@@ -161,6 +161,29 @@ if ($postTooLarge) {
                 $errors[] = km_admin_error_message($exception, '配信できませんでした。');
             }
         }
+    } elseif ($action === 'republish') {
+        // 最新の内容で配り直す(2026-11-02)。入力なし。前回の設定のまま版を上げる(km_app_map_republish)
+        if ($knownSlug === null) {
+            $errors[] = '配信先を選び直してください。';
+        } else {
+            try {
+                $published = km_app_map_republish(km_db(), $config, $knownSlug);
+                $publishedSlug = $knownSlug;
+                $config = $published['config'];
+                km_admin_log_record(
+                    'content',
+                    'map.publish',
+                    $knownSlug . " / 配り直し / 版{$published['revision']} / 地点{$published['nodes']} / 経路{$published['lines']}"
+                    . ' / イベント' . $published['events'] . ' / 期限' . $published['expiresAt']
+                );
+                $notice = ($knownSlug === $eventSlug ? 'イベント用の正本' : 'Website の正本')
+                    . ": 最新の内容で版 {$published['revision']} を配り直しました(期限 "
+                    . (new DateTimeImmutable($published['expiresAt']))->format('Y-m-d H:i')
+                    . ')。アプリは開いている間 15 分以内に受け取ります。';
+            } catch (Throwable $exception) {
+                $errors[] = km_admin_error_message($exception, '配り直せませんでした。');
+            }
+        }
     } elseif ($action === 'add_code') {
         if ($knownSlug === null) {
             $errors[] = '配信先を選び直してください。';
@@ -318,10 +341,36 @@ require __DIR__ . '/_inc/partials/header.php';
 require __DIR__ . '/_inc/partials/sidebar.php';
 require __DIR__ . '/_inc/partials/page-header.php';
 
-/** 配信の状態(版・期限・停止・コード数)。 */
-$renderCurrent = static function (string $slug) use ($config, $report): void {
+/*
+ * 「最新の内容で配り直す」で使う期限と、押せるかどうか(2026-11-02。km_app_map_republish と同じ決め方)。
+ * 押せないときは理由を出す(下の「配信する」へ回ってもらう)
+ */
+$republishPlan = [];
+foreach (KM_APP_MAP_SLUGS as $planSlug) {
+    $planMeta = $config['maps'][$planSlug] ?? null;
+    if (!is_array($planMeta)) {
+        continue;
+    }
+    $planExpires = km_app_map_republish_expiry($planSlug, $planMeta, $activeEventsEndsAt);
+    $planReason = null;
+    if ($planExpires === null) {
+        $planReason = '有効期限が過ぎているため、配り直せません。下の「配信する」で期限を選んでください。';
+    } elseif ($planSlug === $eventSlug && km_app_map_storage_path($config, KM_APP_MAP_EVENT_SOURCE_FILE) === null) {
+        $planReason = '前に添付した地図が残っていません(この機能より前の配信です)。一度だけ下から添付して配信すると、次から配り直せます。';
+    }
+    $republishPlan[$planSlug] = [
+        'expires' => $planExpires !== null ? (new DateTimeImmutable($planExpires))->format('Y-m-d H:i') : null,
+        'reason' => $planReason,
+        'next' => km_app_map_next_revision($config, $planSlug),
+        'fold' => ($planMeta['foldWebEvents'] ?? false) === true,
+    ];
+}
+
+/** 配信の状態(版・期限・停止・コード数)と「最新の内容で配り直す」。 */
+$renderCurrent = static function (string $slug) use ($config, $report, $republishPlan, $eventSlug): void {
     $current = $report[$slug] ?? null;
     $meta = $config['maps'][$slug] ?? [];
+    $plan = $republishPlan[$slug] ?? null;
     ?>
     <div class="card mb-4">
       <div class="card-header">
@@ -353,6 +402,43 @@ $renderCurrent = static function (string $slug) use ($config, $report): void {
           </dl>
           <?php if (($current['file']['error'] ?? null) !== null): ?>
             <div class="alert alert-danger mt-3 mb-0 fs-7"><?= km_e((string) $current['file']['error']) ?></div>
+          <?php endif; ?>
+          <?php if ($plan !== null): ?>
+            <?php
+            /*
+             * **ふだんはこれだけ押せばよい**(2026-11-02)。前回と同じ設定で、いまの Website の内容
+             * (イベント・ポスターの見出し・読み・英語の名前)を作り直して版を上げる。ファイルも期限も選ばない
+             */
+            ?>
+            <hr>
+            <?php if ($plan['reason'] === null): ?>
+              <form method="post"
+                    data-km-confirm="page.mapPublish.confirmRepublish"
+                    data-km-confirm-fallback="最新の内容で作り直して、版を上げて配ります。端末は次の確認で置き換わります。よろしいですか?">
+                <?= km_csrf_field() ?>
+                <input type="hidden" name="do_publish" value="republish">
+                <input type="hidden" name="slug" value="<?= km_e($slug) ?>">
+                <button type="submit" class="btn btn-success">
+                  <i class="bi bi-arrow-repeat me-1" aria-hidden="true"></i>
+                  <span data-i18n="page.mapPublish.republishButton">最新の内容で配り直す</span>
+                  (<span data-i18n="page.mapPublish.revision">版</span> <?= (int) $plan['next'] ?>)
+                </button>
+              </form>
+              <div class="form-text">
+                <span data-i18n="page.mapPublish.expiresAt">有効期限</span>: <?= km_e((string) $plan['expires']) ?>
+                <?php if ($slug === $eventSlug): ?>
+                  ・<span data-i18n="page.mapPublish.republishSource">前に添付した地図</span>
+                  <?php if ($plan['fold']): ?>
+                    <span data-i18n="page.mapPublish.republishFold">+ Website のイベントを折り込み直す</span>
+                  <?php endif; ?>
+                <?php endif; ?>
+              </div>
+              <div class="form-text" data-i18n="page.mapPublish.republishHint">
+                前回と同じ設定で、いまの Website の内容から作り直して配ります。アプリは開いている間 15 分ごとに版を確かめ、自動で入れ替えます。
+              </div>
+            <?php else: ?>
+              <div class="form-text text-warning-emphasis"><?= km_e($plan['reason']) ?></div>
+            <?php endif; ?>
           <?php endif; ?>
         <?php endif; ?>
         <p class="form-text mb-0 mt-3" data-i18n="page.mapPublish.pauseElsewhere">

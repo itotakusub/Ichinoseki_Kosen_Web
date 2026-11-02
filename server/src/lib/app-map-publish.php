@@ -394,6 +394,14 @@ function km_app_map_publish_event(
     }
 
     $fileName = km_app_map_write_release_file($config, $slug, $json);
+    /*
+     * 添付された元のファイルも残す(2026-11-02)。「最新の内容で配り直す」は、これに Website の内容を
+     * 折り込み直して配る(毎回ファイルを選び直させない)。残せなくても配信は止めない(配り直しが添付を求めるだけ)
+     */
+    $sourcePath = km_app_map_storage_dir($config) . DIRECTORY_SEPARATOR . KM_APP_MAP_EVENT_SOURCE_FILE;
+    if (@file_put_contents($sourcePath, $raw, LOCK_EX) === false) {
+        error_log('km_app_map_publish_event: 元のファイルを残せませんでした: ' . $sourcePath);
+    }
 
     $revision = km_app_map_next_revision($config, $slug);
     $config['maps'][$slug] = [
@@ -424,6 +432,82 @@ function km_app_map_publish_event(
         'skipped' => [],
         'config' => $config,
     ];
+}
+
+/** イベント用の正本の、添付された元のファイル(配り直しに使う。置き場は配信用のファイルと同じ uploads/) */
+const KM_APP_MAP_EVENT_SOURCE_FILE = 'app-map-kosen-event.source.json';
+
+/**
+ * 配り直すときの有効期限(ATOM)。**推測で埋めない** —— 決められなければ null(画面で選んでもらう)。純粋関数。
+ *
+ * - イベント用の正本 … 会期の終わりがまだ先ならそれ(2026-11-02 の「期限を会期の終わりに合わせる」と同じ)
+ * - それ以外・会期が無い … いまの期限がまだ先ならそれを引き継ぐ
+ * - どちらも過ぎている … null(過ぎた期限で配ると、受け取った端末がすぐ消す)
+ */
+function km_app_map_republish_expiry(string $slug, array $meta, ?string $eventEndsAt, ?DateTimeImmutable $now = null): ?string
+{
+    $now ??= new DateTimeImmutable('now');
+    if ($slug === KM_APP_MAP_EVENT_SLUG && is_string($eventEndsAt) && $eventEndsAt !== '') {
+        try {
+            $end = new DateTimeImmutable($eventEndsAt);
+            if ($end > $now) {
+                return $end->format(DateTimeInterface::ATOM);
+            }
+        } catch (Throwable $exception) {
+            // 読めない会期の終わりは使わない(いまの期限へ)
+        }
+    }
+    $current = km_app_map_parse_iso((string) ($meta['expiresAt'] ?? ''));
+
+    return $current !== null && $current > $now ? $current->format(DateTimeInterface::ATOM) : null;
+}
+
+/**
+ * **最新の内容で配り直す**(2026-11-02、利用者「アプリのマップ配信の版も簡単に更新できるように」)。
+ *
+ * 前回の設定(チェックサム・折り込み・元のファイル)のまま、いまの Website の内容で作り直して版を上げる。
+ * 入力は要らない。期限は [km_app_map_republish_expiry]。
+ * アプリは開いている間 15 分ごとに版を確かめるので(MapAutoCheck.kt)、押せば端末へも届く。
+ *
+ * @return array 呼んだ先(km_app_map_publish / km_app_map_publish_event)の戻り値に 'expiresAt' を足したもの
+ */
+function km_app_map_republish(PDO $pdo, array $config, string $slug, ?DateTimeImmutable $now = null): array
+{
+    $meta = $config['maps'][$slug] ?? null;
+    if (!in_array($slug, KM_APP_MAP_SLUGS, true) || !is_array($meta)) {
+        throw new KmUserError('まだ一度も配信していません。下の「配信する」から配ってください。');
+    }
+    require_once __DIR__ . '/map-events.php';
+    $window = km_map_event_overlay_for_app($pdo);
+    $expiresAt = km_app_map_republish_expiry($slug, $meta, $window['endsAt'], $now);
+    if ($expiresAt === null) {
+        throw new KmUserError('有効期限が過ぎています。下の「配信する」で期限を選んで配ってください。');
+    }
+    $withChecksum = ($meta['checksum'] ?? true) !== false;
+
+    if ($slug === KM_APP_MAP_EVENT_SLUG) {
+        $sourcePath = km_app_map_storage_path($config, KM_APP_MAP_EVENT_SOURCE_FILE);
+        $raw = $sourcePath !== null
+            ? (string) @file_get_contents($sourcePath, false, null, 0, KM_APP_MAP_EVENT_MAX_BYTES + 1)
+            : '';
+        if ($raw === '') {
+            throw new KmUserError('前に添付した地図が残っていません。一度だけ、下からファイルを添付して配信してください(次からはこのボタンで配り直せます)。');
+        }
+        $published = km_app_map_publish_event(
+            $pdo,
+            $config,
+            $raw,
+            $expiresAt,
+            $withChecksum,
+            ($meta['foldWebEvents'] ?? false) === true,
+            (string) ($meta['sourceName'] ?? '')
+        );
+    } else {
+        $published = km_app_map_publish($pdo, $config, $slug, $expiresAt, $withChecksum);
+    }
+    $published['expiresAt'] = $expiresAt;
+
+    return $published;
 }
 
 /**

@@ -1747,6 +1747,45 @@ function km_check_app_map_web_events(): void
             && str_contains($dictionary, 'page.mapPublish.expiresEventEnd"')
             && str_contains($dictionary, 'page.mapPublish.expiresEventEndHint'));
     }
+
+    /*
+     * 最新の内容で配り直す(2026-11-02、利用者「アプリのマップ配信の版も簡単に更新できるように」)。
+     * ファイルも期限も選ばず、前回の設定のまま版を上げる。アプリは開いている間 15 分ごとに確かめる(MapAutoCheck.kt)
+     */
+    km_check_heading('app-map: 最新の内容で配り直す(2026-11-02)');
+    require_once __DIR__ . '/../lib/app-map-publish.php';
+    $publishLib = (string) file_get_contents(__DIR__ . '/../lib/app-map-publish.php');
+    $republishNow = new DateTimeImmutable('2026-11-02T12:00:00+09:00');
+    $futureMeta = ['expiresAt' => '2026-12-01T00:00:00+09:00'];
+    $pastMeta = ['expiresAt' => '2026-11-01T00:00:00+09:00'];
+    check_bool('イベント用は会期の終わり', km_app_map_republish_expiry(KM_APP_MAP_EVENT_SLUG, $futureMeta, '2026-11-03 18:00:00', $republishNow)
+        === (new DateTimeImmutable('2026-11-03 18:00:00'))->format(DateTimeInterface::ATOM));
+    check_bool('会期が過ぎていれば、いまの期限を引き継ぐ', km_app_map_republish_expiry(KM_APP_MAP_EVENT_SLUG, $futureMeta, '2026-11-01 18:00:00', $republishNow)
+        === '2026-12-01T00:00:00+09:00');
+    check_bool('Website の正本は会期で切らない', km_app_map_republish_expiry(KM_APP_MAP_MAIN_SLUG, $futureMeta, '2026-11-03 18:00:00', $republishNow)
+        === '2026-12-01T00:00:00+09:00');
+    check_bool('期限が過ぎていれば推測で埋めない', km_app_map_republish_expiry(KM_APP_MAP_MAIN_SLUG, $pastMeta, null, $republishNow) === null
+        && km_app_map_republish_expiry(KM_APP_MAP_EVENT_SLUG, $pastMeta, 'こわれた値', $republishNow) === null);
+    check_bool('添付された元のファイルを残す', str_contains($publishLib, "const KM_APP_MAP_EVENT_SOURCE_FILE = 'app-map-kosen-event.source.json';")
+        && str_contains($publishLib, '@file_put_contents($sourcePath, $raw, LOCK_EX)'));
+    check_bool('配り直しは前回の設定(チェックサム・折り込み・元の名前)', str_contains($publishLib, "\$withChecksum = (\$meta['checksum'] ?? true) !== false;")
+        && str_contains($publishLib, "(\$meta['foldWebEvents'] ?? false) === true,")
+        && str_contains($publishLib, "(string) (\$meta['sourceName'] ?? '')"));
+    check_bool('元のファイルが無ければ添付を求める', str_contains($publishLib, '前に添付した地図が残っていません。'));
+    check_bool('配り直しは CSRF の照合の後・配信先を確かめる', str_contains($publishPage, "} elseif (\$action === 'republish') {")
+        && strpos($publishPage, "\$action === 'republish'") > strpos($publishPage, 'km_csrf_verify()')
+        && str_contains($publishPage, '$published = km_app_map_republish(km_db(), $config, $knownSlug);'));
+    check_bool('ボタンは押す前に確かめる', str_contains($publishPage, 'data-km-confirm="page.mapPublish.confirmRepublish"')
+        && str_contains($publishPage, '<input type="hidden" name="do_publish" value="republish">'));
+    check_bool('押せないときは理由を出す', str_contains($publishPage, "\$planReason = '有効期限が過ぎているため"));
+    foreach (['ja', 'en'] as $lang) {
+        $dictionary = (string) file_get_contents(__DIR__ . '/../admin/assets/i18n/' . $lang . '.js');
+        $republishKeys = ['republishButton', 'republishSource', 'republishFold', 'republishHint', 'confirmRepublish'];
+        check_bool("i18n: mapPublish.republish ($lang)", array_filter(
+            $republishKeys,
+            static fn (string $key): bool => !str_contains($dictionary, '"page.mapPublish.' . $key . '"')
+        ) === []);
+    }
     km_check_heading('app-map: 配信に焼くのは「次に効く会期」(続き)');
     check_bool('無ければ一番早い会期だけ', str_contains($eventsLib, "static fn (array \$row): bool => (string) (\$row['startsAt'] ?? '') === \$startsAt"));
     // イベントの不調で配信そのものを止めない(表がまだ無いときも地図は配れる)
