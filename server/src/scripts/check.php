@@ -1652,6 +1652,8 @@ function km_check_app_map_web_events(): void
         km_app_map_poster_names([['nameOverrides' => (object) []]], $numberedMap, ['22' => ["Let's play Densan!"]])[0]['nameOverrides']->{'u-22'});
 
     check('通行止めの地点', [$uuidB], $event['closedNodeUuids']);
+    // 2026-11-02: 理由もアプリへ(地点の詳細に Website と同じ「立入禁止 + 理由」を出す)
+    check('通行止めの理由', '工事中', $event['closureReasons']->{$uuidB} ?? null);
     // 両方向が畳まれ、階をまたぐものと知らない地点は落ちて、残るのは1本
     check('通行止めの線は1本', 1, count($event['closedLineKeys']));
     $endpoints = [$uuidA, $uuidB];
@@ -9630,12 +9632,19 @@ function km_check_layout(): void
     $nodeExtrasApi = (string) file_get_contents(__DIR__ . '/../api/node-extras.php');
     $nodeExtrasLib = (string) file_get_contents(__DIR__ . '/../lib/node-extras.php');
     $appScheduleApi = (string) file_get_contents(__DIR__ . '/../api/app-schedule.php');
-    check_bool('アプリ: 部屋の詳細に一般の予定と屋台(教員室・研究室は出さない)', str_contains($nodeExtrasApi, "'schedule' => \$schedule, 'stalls' => \$stalls]")
+    check_bool('アプリ: 部屋の詳細に一般の予定と屋台(教員室・研究室は出さない)', str_contains($nodeExtrasApi, "'schedule' => \$schedule, 'stalls' => \$stalls,")
         && str_contains($nodeExtrasLib, 'km_event_schedule_public($pdo, $projectNodes, [], false, [$node[\'id\'] => true])')
         && substr_count($nodeExtrasLib, "if (\$node === null || km_map_node_is_restricted(\$node)) {") >= 3);
     check_bool('アプリ: 予定の口はアクセスコード(本文)・一般の行だけ・場所はアプリの uuid・教員室と研究室は場所に入れない', str_contains($appScheduleApi, "km_learning_code_allowed(\$pdo, (string) (\$input['code'] ?? ''))")
         && str_contains($appScheduleApi, "require_method('POST');") && str_contains($appScheduleApi, 'km_event_schedule_public($pdo, $projectNodes, [], false, $places)')
         && str_contains($appScheduleApi, "if (!km_map_node_is_restricted(\$node) && (string) (\$row['uuid'] ?? '') !== '') {"));
+    // 2026-11-02(利用者「アプリ側を Website に揃えて」): ♡ は Website と同じポスターごと・地点の URL も返す
+    check_bool('アプリ: ♡ はポスターごと(この地点に出しているポスターだけ・Website と同じ表と回数の絞り)',
+        str_contains($nodeExtrasApi, 'if (!in_array($posterId, $posterIds, true)) {')
+        && str_contains($nodeExtrasApi, "km_poster_like_set(\$pdo, \$posterId, \$posterVoter, km_poster_like_source(\$pdo), (bool) \$posterLike['like'])")
+        && str_contains($nodeExtrasApi, "'posterLikes' => \$posterLikes, 'link' => \$link,"));
+    check_bool('アプリ: ♡ を押すには端末の印が要る', str_contains($nodeExtrasApi, "|| !is_bool(\$posterLike['like'] ?? null) || \$device === '')) {"));
+    check_bool('アプリ: 地点の URL は http/https だけ(km_node_links_for_map)', str_contains($nodeExtrasApi, "km_node_links_for_map(\$pdo)[\$node['id']] ?? null"));
 
     km_check_heading('脆弱性のメール: PHP・composer・npm・Ubuntu の USN(2026-10-30、振り返りのフェーズ 6 の 2。lib/security-audit.php)');
     require_once __DIR__ . '/../lib/security-audit.php';

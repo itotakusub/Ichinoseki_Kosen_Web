@@ -7,8 +7,12 @@ declare(strict_types=1);
  *
  *   POST {"code":"…","node":"<地点の uuid>","device":"<32 桁の 16 進>"}               写真といいねの数を読む
  *   POST {"code":"…","node":"…","device":"…","like":true|false}                      いいねを付ける・外す(そのあとの数を返す)
- *   → {"success":true,"posters":[…],"likes":{"count":N,"liked":bool},"likeable":bool,"schedule":[…],"stalls":[…]}
+ *   POST {"code":"…","node":"…","device":"…","posterLike":{"poster":<番号>,"like":true|false}} ポスターの ♡ を付ける・外す
+ *   → {"success":true,"posters":[…],"likes":{"count":N,"liked":bool},"likeable":bool,"schedule":[…],"stalls":[…],
+ *      "posterLikes":[{"id":…,"count":N,"liked":bool}],"link":{"url":"…","label":"…"}|null}
  *   schedule・stalls は 2026-10-30(振り返りのフェーズ 5)。この地点の一般の予定と、屋台のメニュー・混み具合
+ *   posterLikes・link は 2026-11-02(利用者「アプリ側を Website に揃えて」)。♡ は Website と同じポスターごと
+ *   (lib/poster-likes.php。地点のいいねは古い版のアプリのために残す)、link は地点の URL(Website の「くわしく見る ↗」)
  *
  * - **地図のアクセスコードが要る**(地図を持つ人だけ。照合は学習データと同じ km_learning_code_allowed)。コードは URL に載せない
  * - 端末の印は鍵つきの印にしてだけ持つ。IP は持たない(回数を絞る印だけ)
@@ -20,6 +24,7 @@ require_once __DIR__ . '/../api_bootstrap.php';
 require_once __DIR__ . '/../lib/db.php';
 require_once __DIR__ . '/../lib/learning-data.php';
 require_once __DIR__ . '/../lib/node-extras.php';
+require_once __DIR__ . '/../lib/poster-likes.php';
 
 require_method('POST');
 
@@ -39,6 +44,11 @@ if ($like !== null && !is_bool($like)) {
 }
 if ($like !== null && $device === '') {
     respond(['success' => false, 'message' => '端末の印が必要です。'], 400);
+}
+$posterLike = $input['posterLike'] ?? null;
+if ($posterLike !== null && (!is_array($posterLike) || !is_int($posterLike['poster'] ?? null) || (int) $posterLike['poster'] <= 0
+    || !is_bool($posterLike['like'] ?? null) || $device === '')) {
+    respond(['success' => false, 'message' => 'posterLike の形が違います。'], 400);
 }
 
 try {
@@ -73,9 +83,29 @@ try {
     $likes = $restricted ? ['count' => 0, 'liked' => false] : km_node_like_state($pdo, $nodeUuid, $voter);
     $schedule = km_node_extras_schedule($pdo, $node);
     $stalls = km_node_extras_stalls($pdo, $node);
+
+    // ポスターの ♡。押せるのは**この地点に出しているポスターだけ**(api/poster-like.php の「いま掲示しているものだけ」と同じ考え)
+    $posterIds = array_map(static fn (array $poster): int => (int) $poster['id'], $posters);
+    $posterVoter = $device !== '' ? km_poster_like_voter($pdo, $device) : null;
+    if ($posterLike !== null && $posterVoter !== null) {
+        $posterId = (int) $posterLike['poster'];
+        if (!in_array($posterId, $posterIds, true)) {
+            respond(['success' => false, 'message' => 'このポスターは今は掲示していません。'], 404);
+        }
+        km_poster_likes_ensure_table($pdo);
+        if (km_poster_like_set($pdo, $posterId, $posterVoter, km_poster_like_source($pdo), (bool) $posterLike['like']) === 'limited') {
+            respond(['success' => false, 'message' => '♡ が多すぎます。しばらく待ってからやり直してください。'], 429);
+        }
+    }
+    $posterLikes = km_poster_like_state($pdo, array_slice($posterIds, 0, KM_POSTER_LIKE_QUERY_MAX), $posterVoter);
+    // 地点の URL(Website の詳細の「くわしく見る ↗」。km_node_links_for_map は http/https だけを返す)
+    $link = $node !== null ? (km_node_links_for_map($pdo)[$node['id']] ?? null) : null;
 } catch (Throwable $exception) {
     error_log('api/node-extras.php failed: ' . $exception->getMessage());
     respond(['success' => false, 'message' => '読めませんでした。'], 500);
 }
 
-respond(['success' => true, 'posters' => $posters, 'likes' => $likes, 'likeable' => $likeable, 'schedule' => $schedule, 'stalls' => $stalls]);
+respond([
+    'success' => true, 'posters' => $posters, 'likes' => $likes, 'likeable' => $likeable, 'schedule' => $schedule, 'stalls' => $stalls,
+    'posterLikes' => $posterLikes, 'link' => $link,
+]);

@@ -914,13 +914,18 @@ function km_app_map_events_from_web(array $overlay, stdClass $map, ?string $star
 
     // --- 通行止め(ノード) ---
     $closedNodeUuids = [];
-    foreach (array_keys($overlay['closedNodes'] ?? []) as $shortId) {
+    // 理由(2026-11-02。アプリの地点の詳細にも Website と同じ「立入禁止 + 理由」を出す。理由の無いものは入れない)
+    $closureReasons = [];
+    foreach (($overlay['closedNodes'] ?? []) as $shortId => $reason) {
         $found = $byShortId[(string) $shortId] ?? null;
         if ($found === null) {
             $skipped['unknownNode']++;
             continue;
         }
         $closedNodeUuids[$found['uuid']] = true;
+        if (is_string($reason) && trim($reason) !== '') {
+            $closureReasons[$found['uuid']] = trim($reason);
+        }
     }
 
     /*
@@ -1059,6 +1064,7 @@ function km_app_map_events_from_web(array $overlay, stdClass $map, ?string $star
         'endAtMillis' => $endAtMillis,
         'closedLineKeys' => array_keys($closedLineKeys),
         'closedNodeUuids' => array_keys($closedNodeUuids),
+        'closureReasons' => (object) $closureReasons,
         // Website 側に「階ごとの立入禁止」が無い。線とノードで表す
         'closedFloors' => [],
         'places' => $places,
