@@ -5085,6 +5085,9 @@ function km_check_hardening(): void
     $deploy = $file('scripts/deploy-to-host.ps1');
     check_bool('配備物に compose.local.yaml と host-local.sh がある', str_contains($deploy, "'./compose.local.yaml'") && str_contains($deploy, "'./scripts/host-local.sh'"));
     check_bool('配備は相手の .env の KM_ENV を見て、本番に KM_ENV=local があれば止まる', str_contains($deploy, '本番のホスト($HostName)の .env が KM_ENV=local になっています'));
+    // 本番の Old/ は root の持ち物で kmops は書けない(2026-11-03、配備が Permission denied で止まった)
+    check_bool('外したファイルの退避先は置き場の直下の retired/(ホストの Old/ に書かない)', str_contains($deploy, 'mkdir -p "retired/$(dirname "$p")"')
+        && !str_contains($deploy, 'mkdir -p "Old/'));
 
     /*
      * ## 機密なしのコピー(2026-10-05)
