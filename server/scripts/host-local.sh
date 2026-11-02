@@ -10,9 +10,9 @@
 #                  (Android のビルドが localhost や IP を受け付けないため)
 #   --admin-domain 管理画面を別オリジンにするときの名前(省略可)
 #   --ip           この検証機の LAN の IPv4(省略すると hostname -I の先頭)
-#   --lan          管理系ポート(8281・3002・8025)に入れる範囲(省略すると --ip の /24)
+#   --lan          管理系ポート(8025)に入れる範囲(省略すると --ip の /24)
 #   --fresh-secrets  **機密なしのコピー**を立てるとき(2026-10-05)。本番の env.txt を持ち込まず、
-#                  空の秘密(MariaDB・Postgres・Soketi)を乱数で埋め、DB と利用者の名前も既定で埋める。
+#                  空の秘密(MariaDB・Postgres)を乱数で埋め、DB と利用者の名前も既定で埋める。
 #                  **値が入っているキーには触らない**(何度流しても同じ秘密のまま)。
 #                  KM_API_RESOURCE は https://<--domain>/api(空の Logto に、この名前で API リソースを作る)。
 #                  Logto のアプリの ID と秘密・webhook の署名鍵は、Console で作ってから書く(docs/13)
@@ -241,9 +241,6 @@ fresh_secrets() {
   fill_if_empty POSTGRES_USER logto name
   fill_if_empty POSTGRES_DB logto name
   fill_if_empty POSTGRES_PASSWORD "$(random_secret)" secret
-  fill_if_empty SOKETI_APP_ID kosenmap name
-  fill_if_empty SOKETI_APP_KEY "$(random_secret)" secret
-  fill_if_empty SOKETI_APP_SECRET "$(random_secret)" secret
   # 空の Logto には、この名前で API リソースを作る(本番の名前は使わない)
   fill_if_empty KM_API_RESOURCE "https://$DOMAIN/api" name
   # compose が既定なしで読むキー。空の行を置いて「設定されていない」の警告を止める(値は Console で作ってから書く)
@@ -359,7 +356,7 @@ do_init() {
   # Android と Windows に入れやすい名前の写し(中身は同じ PEM)
   install -m 644 "$CERTS/rootCA.pem" "$CERTS/kosenmap-local-ca.crt"
 
-  # MariaDB: web も phpMyAdmin もホスト名 mariadb で繋いで検証する(Old/vps-bootstrap.sh と同じ SAN)
+  # MariaDB: web はホスト名 mariadb で繋いで検証する(Old/vps-bootstrap.sh と同じ SAN)
   if needs_new "$CERTS/mariadb-server.pem" "DNS:localhost,DNS:mariadb,IP Address:127.0.0.1"; then
     issue_server mariadb-server mariadb "DNS:mariadb,DNS:localhost,IP:127.0.0.1"
     # mariadb の公式イメージは uid 999(mysql)で動く。**読めないと起動に失敗する**
@@ -455,7 +452,7 @@ DNS:$ADMIN"
   2. CA を入れる: certs/kosenmap-local-ca.crt を PC(信頼されたルート証明機関)と Android(CA 証明書)へ
   3. 控えから戻す(初回だけ)→ Logto の戻り先: docker compose exec -T -u www-data web php scripts/logto-domain.php --from=<控えの本番の名前> --to=$DOMAIN --apply
      (2026-09-17 の移行より前の控えは ito8795.com、後は $PROD_DOMAIN)
-  4. ./scripts/host-setup.sh --fix → docker compose build web soketi → docker compose up -d
+  4. ./scripts/host-setup.sh --fix → docker compose build web → docker compose up -d
   5. ./scripts/host-local.sh status
 EOF
 }

@@ -3,7 +3,8 @@
 declare(strict_types=1);
 
 /**
- * 管理系ポート(8281 phpMyAdmin / 3002 Logto 管理 / 8025 Mailpit)の入場判定。
+ * 管理系ポート(8025 Mailpit)の入場判定。
+ * (8281 phpMyAdmin と 3002 Logto Console は 2026-11-02 に nginx から外した。Console は SSH のトンネルで開く)
  *
  * nginx の `auth_request` がリクエストごとにここを呼ぶ。**返すのは status だけ**で、
  * 本文は返さない(auth_request は本文を捨てる)。
@@ -132,7 +133,7 @@ try {
 
     /*
      * **書き込みの scope も要る**(2026-09-14、診断 server-authz#2)。
-     * この先は phpMyAdmin・Logto Console・Mailpit —— どれも DB や利用者を直接書き換えられる。
+     * この先(いまは Mailpit。以前は phpMyAdmin・Logto Console も)は、届いたメールや DB・利用者に直接触れる。
      * 管理画面の POST と同じ KM_ADMIN_WRITE_SCOPE を求める(bootstrap.php の説明)。
      */
     if (!in_array(KM_ADMIN_SCOPE, $scopes, true) || !in_array(KM_ADMIN_WRITE_SCOPE, $scopes, true)) {
@@ -146,9 +147,9 @@ try {
     /*
      * **停止されたアカウントを通さない。**
      *
-     * ここは 8281 / 3002 / 8025(phpMyAdmin・Logto Console・Mailpit)の入口。
+     * ここは管理系ポート(いまは 8025 の Mailpit)の入口。
      * 管理画面(guard.php)だけ塞いでも、こちらが開いていれば
-     * **停止された人が DB を直接触れてしまう。**
+     * **停止された人が裏口から触れてしまう。**
      *
      * 例外は下の catch が拾い、判定できないものは通さない。
      */

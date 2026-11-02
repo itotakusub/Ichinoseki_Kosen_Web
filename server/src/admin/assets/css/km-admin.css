@@ -38,12 +38,6 @@
   );
 }
 
-/* チャットの発言ログ。高さを固定して中でスクロールさせる */
-.km-chat-log {
-  height: 320px;
-  overflow-y: auto;
-}
-
 /* プロフィール画像は正方形へ切り出す(縦横比を保ったまま) */
 .km-avatar-img { object-fit: cover; }
 
@@ -67,7 +61,7 @@
 
 /* 配信の削除で「配信 ID を打つ」入力欄。CSP で style 属性が使えないので class にする。 */
 .km-w-12rem { width: 12rem; }
-/* ダッシュボードの「次フェーズの作業」の進み具合(2026-10-05) */
+/* 幅 8rem の入力欄など */
 .km-w-8rem { width: 8rem; }
 
 /*
@@ -117,7 +111,7 @@
 .km-floor-preview-empty { display: block; padding: 2rem 0.5rem; text-align: center; color: var(--bs-secondary-color); background: var(--bs-tertiary-bg); border-radius: 0.5rem; }
 .km-w-24rem { max-width: 24rem; }
 
-/* テーブル管理の外部接続(admin/tables.php。2026-10-21)。作った直後の使い方の例 */
+/* コマンドの例(設定の Logto Console の開き方など。以前はテーブル管理の外部接続の例に使っていた) */
 .km-api-example { white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; background: var(--bs-tertiary-bg); padding: 0.5rem 0.75rem; border-radius: 0.375rem; }
 
 /* 案内チャットの質問と答えの一覧(admin/guide-chat.php。2026-10-25) */
@@ -126,3 +120,92 @@
 .km-guide-log-cards { min-width: 10rem; }
 .km-guide-log-rate { min-width: 8rem; }
 .km-guide-log-confirm { width: 9rem; }
+
+/*
+ * タスクマネージャー(admin/taskmgr.php。2026-11-02、Windows のタスクマネージャーの形)。
+ * 左に縦のタブ、右に中身。狭い画面(lg 未満)ではタブを上に横並びにする。
+ * 項目の色は --km-tm-color で持ち、グラフ(素の SVG)は親のクラスから色を受け取る(style 属性は使えない)。
+ */
+.km-tm { display: grid; grid-template-columns: 13rem minmax(0, 1fr); min-height: 34rem; overflow: hidden; }
+.km-tm-rail { display: flex; flex-direction: column; justify-content: space-between; gap: 1rem; padding: 0.75rem 0.5rem; background: var(--bs-tertiary-bg); border-right: 1px solid var(--bs-border-color); }
+.km-tm-tabs { display: flex; flex-direction: column; gap: 0.15rem; }
+.km-tm-tab { position: relative; display: flex; align-items: center; gap: 0.75rem; width: 100%; padding: 0.55rem 0.75rem; border: 0; border-radius: 0.375rem; background: transparent; color: var(--bs-body-color); font-size: 0.9rem; text-align: left; }
+.km-tm-tab .bi { font-size: 1.1rem; }
+.km-tm-tab:hover { background: var(--bs-secondary-bg); }
+.km-tm-tab:focus-visible { outline: 2px solid var(--bs-primary); outline-offset: -2px; }
+.km-tm-tab.active { background: var(--bs-body-bg); font-weight: 600; }
+.km-tm-tab.active::before { content: ""; position: absolute; left: 0; top: 25%; bottom: 25%; width: 3px; border-radius: 3px; background: var(--bs-primary); }
+.km-tm-rail-foot { padding: 0 0.5rem; }
+.km-tm-body { min-width: 0; padding: 0.75rem 1.25rem 1.25rem; }
+.km-tm-bar { display: flex; justify-content: flex-end; min-height: 1.5rem; margin-bottom: 0.5rem; }
+.km-tm-status { font-size: 0.8125rem; color: var(--bs-secondary-color); }
+.km-tm-hint { font-size: 0.8125rem; color: var(--bs-secondary-color); }
+.km-tm-subtitle { font-size: 1rem; font-weight: 600; margin-bottom: 0.5rem; }
+@media (max-width: 991.98px) {
+  .km-tm { grid-template-columns: minmax(0, 1fr); min-height: 0; }
+  .km-tm-rail { gap: 0.5rem; padding: 0.5rem; border-right: 0; border-bottom: 1px solid var(--bs-border-color); }
+  .km-tm-tabs { flex-direction: row; overflow-x: auto; }
+  .km-tm-tab { width: auto; white-space: nowrap; padding: 0.45rem 0.65rem; }
+  .km-tm-tab.active::before { left: 25%; right: 25%; top: auto; bottom: 0; width: auto; height: 3px; }
+  .km-tm-rail-foot { display: flex; align-items: center; gap: 0.5rem; white-space: nowrap; }
+  .km-tm-rail-foot .form-label { margin-bottom: 0; }
+  .km-tm-body { padding: 0.75rem; }
+}
+
+/* 項目の色(CPU 青・メモリ紫・スワップ 橙・ディスク 緑・ネットワーク 桃) */
+.km-tm-c-cpu { --km-tm-color: #1f7fd1; }
+.km-tm-c-mem { --km-tm-color: #9a3fc8; }
+.km-tm-c-swap { --km-tm-color: #c57a00; }
+.km-tm-c-disk { --km-tm-color: #3d9a1e; }
+.km-tm-c-net { --km-tm-color: #d0478a; }
+
+/* パフォーマンス: 左に項目(小さなグラフ + 1 行)、右に大きなグラフと数値 */
+.km-tm-perf { display: grid; grid-template-columns: 15rem minmax(0, 1fr); gap: 1.25rem; }
+.km-tm-metrics { display: flex; flex-direction: column; gap: 0.25rem; }
+.km-tm-metric { display: flex; align-items: center; gap: 0.75rem; width: 100%; padding: 0.5rem; border: 1px solid transparent; border-radius: 0.375rem; background: transparent; color: var(--bs-body-color); text-align: left; }
+.km-tm-metric[hidden] { display: none; }
+.km-tm-metric:hover { background: var(--bs-tertiary-bg); }
+.km-tm-metric.active { background: var(--bs-tertiary-bg); border-color: var(--bs-border-color); }
+.km-tm-metric:focus-visible { outline: 2px solid var(--bs-primary); outline-offset: -2px; }
+.km-tm-mini { flex: 0 0 4.5rem; width: 4.5rem; height: 2.5rem; border: 1px solid var(--km-tm-color); background: var(--bs-body-bg); }
+.km-tm-metric-text { display: flex; flex-direction: column; min-width: 0; }
+.km-tm-metric-name { font-weight: 600; }
+.km-tm-metric-line { font-size: 0.8125rem; color: var(--bs-secondary-color); overflow-wrap: anywhere; }
+.km-tm-main { min-width: 0; }
+.km-tm-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.5rem; }
+.km-tm-name { font-size: 1.6rem; font-weight: 600; margin: 0; }
+.km-tm-model { font-size: 0.9rem; color: var(--bs-secondary-color); overflow-wrap: anywhere; }
+.km-tm-axis { display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--bs-secondary-color); }
+.km-tm-graph { display: block; width: 100%; height: 16rem; border: 1px solid var(--km-tm-color); background: var(--bs-body-bg); }
+.km-tm-gridline { stroke: var(--km-tm-color); stroke-opacity: 0.15; stroke-width: 1; }
+.km-tm-area { fill: var(--km-tm-color); fill-opacity: 0.15; stroke: none; }
+.km-tm-line { fill: none; stroke: var(--km-tm-color); stroke-width: 1.5; stroke-linejoin: round; }
+.km-tm-line-dashed { stroke-dasharray: 4 3; }
+.km-tm-stats { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 1rem 2rem; margin-top: 1rem; }
+.km-tm-big { display: flex; flex-wrap: wrap; gap: 0.75rem 2rem; align-content: flex-start; }
+.km-tm-big-label { font-size: 0.8125rem; color: var(--bs-secondary-color); }
+.km-tm-big-value { font-size: 1.35rem; font-weight: 500; font-variant-numeric: tabular-nums; }
+.km-tm-kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.25rem 1rem; margin: 0; font-size: 0.875rem; }
+.km-tm-kv dt { font-weight: 400; color: var(--bs-secondary-color); }
+.km-tm-kv dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+@media (max-width: 767.98px) {
+  .km-tm-perf { grid-template-columns: minmax(0, 1fr); }
+  .km-tm-metrics { flex-direction: row; overflow-x: auto; }
+  .km-tm-metric { width: auto; flex: 0 0 auto; }
+  .km-tm-graph { height: 11rem; }
+  .km-tm-stats { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* プロセス・コンテナの表。見出しを押して並べ替え、値の大きさでセルを色付けする(Windows と同じ) */
+.km-tm-table { font-variant-numeric: tabular-nums; }
+.km-tm-table thead th { vertical-align: bottom; white-space: nowrap; }
+/* 狭い画面でも 1 行に収め、表の中で横に流す(.table-responsive) */
+.km-tm-table td { white-space: nowrap; }
+.km-tm-sort { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0; border: 0; background: transparent; color: inherit; font-weight: inherit; }
+.km-tm-sort:focus-visible { outline: 2px solid var(--bs-primary); outline-offset: 2px; }
+.km-tm-sort-icon { font-size: 0.7rem; }
+.km-tm-colsum { display: block; font-size: 1.05rem; font-weight: 500; }
+.table > :not(caption) > * > .km-tm-heat-1 { --bs-table-bg-state: rgba(255, 196, 0, 0.12); }
+.table > :not(caption) > * > .km-tm-heat-2 { --bs-table-bg-state: rgba(255, 180, 0, 0.24); }
+.table > :not(caption) > * > .km-tm-heat-3 { --bs-table-bg-state: rgba(255, 150, 0, 0.36); }
+.table > :not(caption) > * > .km-tm-heat-4 { --bs-table-bg-state: rgba(255, 110, 0, 0.48); }

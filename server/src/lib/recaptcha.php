@@ -5,7 +5,7 @@ declare(strict_types=1);
 /**
  * reCAPTCHA v2(「私はロボットではありません」)の検証。公開の問い合わせフォームで使う。
  *
- * **このプロジェクトで唯一の、意図的な外部 CDN 依存。** AdminLTE も Leaflet も pusher-js も
+ * **このプロジェクトで唯一の、意図的な外部 CDN 依存。** AdminLTE も Leaflet も
  * 手元へ落として配置しているが、reCAPTCHA のスクリプトは google.com から読むしかなく、
  * 自前でホストできない。承知の上で入れている。
  *

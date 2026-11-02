@@ -131,7 +131,7 @@ $KM_PAGE = [
     'h1Key' => 'page.tableData.h1',
     'h1' => 'テーブルデータ',
     'crumbs' => [
-        ['key' => 'side.database', 'text' => 'データベース'],
+        ['key' => 'side.groupOps', 'text' => '運用'],
         ['key' => 'page.tables.h1', 'text' => 'テーブル管理'],
         ['key' => 'page.tableData.h1', 'text' => 'テーブルデータ'],
     ],

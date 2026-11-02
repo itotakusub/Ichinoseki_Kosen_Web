@@ -603,8 +603,8 @@ function km_check_app_map(): string
     check('件数: 通行止めは地点と線の合計', 3, $filledStatus['closureCount']);
     check('件数: 出さない地点', 1, $filledStatus['hiddenCount']);
     check('件数: 無い UUID のときも 0 で揃える', 0, $missing['nameCount']);
-    // 臨時の名前が 0 件なら、管理画面「ダウンロード」で配信し直しを促す
-    check_bool('臨時の名前 0 件を知らせる', str_contains((string) file_get_contents(__DIR__ . '/../admin/downloads.php'), 'page.downloads.mapReleaseEventEmpty'));
+    // 臨時の名前が 0 件なら、管理画面で配信し直しを促す(2026-11-02 から「地図の配信」の画面。_inc/partials/map-releases.php)
+    check_bool('臨時の名前 0 件を知らせる', str_contains((string) file_get_contents(__DIR__ . '/../admin/_inc/partials/map-releases.php'), 'page.downloads.mapReleaseEventEmpty'));
     foreach (['ja', 'en'] as $lang) {
         $i18n = (string) file_get_contents(__DIR__ . '/../admin/assets/i18n/' . $lang . '.js');
         foreach (['mapReleaseEventEmpty', 'mapReleaseEventNames', 'mapReleaseEventPlaces', 'mapReleaseEventClosures', 'mapReleaseEventHidden'] as $key) {
@@ -1640,8 +1640,20 @@ function km_check_app_map_web_events(): void
     check_bool('配信の 2 か所(Website の地図・イベント用の地図)で入れる',
         substr_count($posterPublishLib, "km_app_map_poster_names(\$events['events'], \$map, km_app_map_poster_titles(\$pdo))") === 2);
     check_bool('ポスターを出さない設定なら入れない', str_contains($posterPublishLib, 'if (!km_poster_mode_shows(km_poster_mode($pdo), true)) {'));
+    // 添付したイベント用の地図に番号が無いとき、Website の表から足してから見出しを入れる(添付の番号が先)
+    check_bool('イベント用の地図: 番号の無い地点に表の番号を足してから見出し',
+        strpos($posterPublishLib, 'km_map_projects_apply($map, array_diff_key(km_map_node_projects_all($pdo), km_map_projects_from_app($map)));')
+            < strpos($posterPublishLib, "km_app_map_poster_names(\$events['events'], \$map, km_app_map_poster_titles(\$pdo));\n        km_app_map_replace_events"));
+    $numberedMap = json_decode('{"nodes":[{"uuid":"u-22","floor":"1"},{"uuid":"u-own","floor":"1","projectNumbers":["9"]}]}');
+    km_map_projects_apply($numberedMap, array_diff_key(['u-22' => ['22'], 'u-own' => ['99']], km_map_projects_from_app($numberedMap)));
+    check('番号の無い地点に表の番号', ['22'], $numberedMap->nodes[0]->projectNumbers);
+    check('添付に番号があればそちらのまま', ['9'], $numberedMap->nodes[1]->projectNumbers);
+    check('足した番号でポスターの見出しが入る', "Let's play Densan!",
+        km_app_map_poster_names([['nameOverrides' => (object) []]], $numberedMap, ['22' => ["Let's play Densan!"]])[0]['nameOverrides']->{'u-22'});
 
     check('通行止めの地点', [$uuidB], $event['closedNodeUuids']);
+    // 2026-11-02: 理由もアプリへ(地点の詳細に Website と同じ「立入禁止 + 理由」を出す)
+    check('通行止めの理由', '工事中', $event['closureReasons']->{$uuidB} ?? null);
     // 両方向が畳まれ、階をまたぐものと知らない地点は落ちて、残るのは1本
     check('通行止めの線は1本', 1, count($event['closedLineKeys']));
     $endpoints = [$uuidA, $uuidB];
@@ -1705,14 +1717,83 @@ function km_check_app_map_web_events(): void
     check_bool('終わっていないイベントを取る', str_contains($eventsLib, 'WHERE is_enabled = 1 AND (ends_at IS NULL OR ends_at > NOW())')
         && str_contains($eventsLib, '(starts_at IS NULL OR starts_at <= NOW()) AS isActive'));
     // **会期をまたいで混ぜない。** 工事(長期)と高専祭(翌週)を 1 つに畳むと、通行止めが今日から効く
-    check_bool('いま有効なものがあればそれだけ', str_contains($eventsLib, "return ['overlay' => km_map_event_overlay_build(\$pdo, \$active), 'startsAt' => null];"));
+    check_bool('いま有効なものがあればそれだけ', str_contains($eventsLib, "return ['overlay' => km_map_event_overlay_build(\$pdo, \$active), 'startsAt' => null, 'endsAt' => km_map_event_window_ends_at(\$active)];"));
+    check_bool('これからの会期も終わりを返す', str_contains($eventsLib, "'startsAt' => \$startsAt, 'endsAt' => km_map_event_window_ends_at(\$window)];"));
+
+    /*
+     * 配信の期限を会期の終わりに合わせる(2026-11-02、利用者「会期が終了してもマップが残り続けるのはなんで」)。
+     * 期限は前回の値を引き継いでいたので、会期より長く端末に残った
+     */
+    km_check_heading('app-map: 配信の期限は会期の終わりに合わせる(2026-11-02)');
+    require_once __DIR__ . '/../lib/map-events.php';
+    check_bool('会期の終わりは一番遅い終わり', km_map_event_window_ends_at([
+        ['endsAt' => '2026-11-02 21:00:00'], ['endsAt' => '2026-11-03 09:00:00'], ['endsAt' => '2026-11-01 12:00:00'],
+    ]) === '2026-11-03 09:00:00');
+    check_bool('終わりの無いイベントがあれば決まらない', km_map_event_window_ends_at([
+        ['endsAt' => '2026-11-02 21:00:00'], ['endsAt' => null],
+    ]) === null);
+    check_bool('イベントが無ければ決まらない', km_map_event_window_ends_at([]) === null);
+    check_bool('不調のときも終わりは空', str_contains($eventsLib, "return ['overlay' => km_map_event_overlay_empty(), 'startsAt' => null, 'endsAt' => null];"));
+    check_bool('イベント用の正本の初期値は会期の終わり', str_contains($publishPage, 'if ($slug === $eventSlug && $eventEndInput !== null) {')
+        && str_contains($publishPage, "\$activeEventsEndsAt = \$publishWindow['endsAt'];"));
+    check_bool('会期より後の期限は知らせる(入力中と配信後)', str_contains($publishPage, 'data-km-event-end=')
+        && str_contains($publishPage, "input.value.slice(0, 16) > input.dataset.kmEventEnd")
+        && str_contains($publishPage, '$publishedExpires->format(\'Y-m-d\TH:i\') > $eventEndInput'));
+    check_bool('警告は出すが配信は止めない', str_contains($publishPage, 'foreach ($warnings as $warning)')
+        && !str_contains($publishPage, '$errors[] = \'有効期限(\''));
+    foreach (['ja', 'en'] as $lang) {
+        $dictionary = (string) file_get_contents(__DIR__ . '/../admin/assets/i18n/' . $lang . '.js');
+        check_bool("i18n: mapPublish.expiresAfterEvent ($lang)", str_contains($dictionary, 'page.mapPublish.expiresAfterEvent')
+            && str_contains($dictionary, 'page.mapPublish.expiresEventEnd"')
+            && str_contains($dictionary, 'page.mapPublish.expiresEventEndHint'));
+    }
+
+    /*
+     * 最新の内容で配り直す(2026-11-02、利用者「アプリのマップ配信の版も簡単に更新できるように」)。
+     * ファイルも期限も選ばず、前回の設定のまま版を上げる。アプリは開いている間 15 分ごとに確かめる(MapAutoCheck.kt)
+     */
+    km_check_heading('app-map: 最新の内容で配り直す(2026-11-02)');
+    require_once __DIR__ . '/../lib/app-map-publish.php';
+    $publishLib = (string) file_get_contents(__DIR__ . '/../lib/app-map-publish.php');
+    $republishNow = new DateTimeImmutable('2026-11-02T12:00:00+09:00');
+    $futureMeta = ['expiresAt' => '2026-12-01T00:00:00+09:00'];
+    $pastMeta = ['expiresAt' => '2026-11-01T00:00:00+09:00'];
+    check_bool('イベント用は会期の終わり', km_app_map_republish_expiry(KM_APP_MAP_EVENT_SLUG, $futureMeta, '2026-11-03 18:00:00', $republishNow)
+        === (new DateTimeImmutable('2026-11-03 18:00:00'))->format(DateTimeInterface::ATOM));
+    check_bool('会期が過ぎていれば、いまの期限を引き継ぐ', km_app_map_republish_expiry(KM_APP_MAP_EVENT_SLUG, $futureMeta, '2026-11-01 18:00:00', $republishNow)
+        === '2026-12-01T00:00:00+09:00');
+    check_bool('Website の正本は会期で切らない', km_app_map_republish_expiry(KM_APP_MAP_MAIN_SLUG, $futureMeta, '2026-11-03 18:00:00', $republishNow)
+        === '2026-12-01T00:00:00+09:00');
+    check_bool('期限が過ぎていれば推測で埋めない', km_app_map_republish_expiry(KM_APP_MAP_MAIN_SLUG, $pastMeta, null, $republishNow) === null
+        && km_app_map_republish_expiry(KM_APP_MAP_EVENT_SLUG, $pastMeta, 'こわれた値', $republishNow) === null);
+    check_bool('添付された元のファイルを残す', str_contains($publishLib, "const KM_APP_MAP_EVENT_SOURCE_FILE = 'app-map-kosen-event.source.json';")
+        && str_contains($publishLib, '@file_put_contents($sourcePath, $raw, LOCK_EX)'));
+    check_bool('配り直しは前回の設定(チェックサム・折り込み・元の名前)', str_contains($publishLib, "\$withChecksum = (\$meta['checksum'] ?? true) !== false;")
+        && str_contains($publishLib, "(\$meta['foldWebEvents'] ?? false) === true,")
+        && str_contains($publishLib, "(string) (\$meta['sourceName'] ?? '')"));
+    check_bool('元のファイルが無ければ添付を求める', str_contains($publishLib, '前に添付した地図が残っていません。'));
+    check_bool('配り直しは CSRF の照合の後・配信先を確かめる', str_contains($publishPage, "} elseif (\$action === 'republish') {")
+        && strpos($publishPage, "\$action === 'republish'") > strpos($publishPage, 'km_csrf_verify()')
+        && str_contains($publishPage, '$published = km_app_map_republish(km_db(), $config, $knownSlug);'));
+    check_bool('ボタンは押す前に確かめる', str_contains($publishPage, 'data-km-confirm="page.mapPublish.confirmRepublish"')
+        && str_contains($publishPage, '<input type="hidden" name="do_publish" value="republish">'));
+    check_bool('押せないときは理由を出す', str_contains($publishPage, "\$planReason = '有効期限が過ぎているため"));
+    foreach (['ja', 'en'] as $lang) {
+        $dictionary = (string) file_get_contents(__DIR__ . '/../admin/assets/i18n/' . $lang . '.js');
+        $republishKeys = ['republishButton', 'republishSource', 'republishFold', 'republishHint', 'confirmRepublish'];
+        check_bool("i18n: mapPublish.republish ($lang)", array_filter(
+            $republishKeys,
+            static fn (string $key): bool => !str_contains($dictionary, '"page.mapPublish.' . $key . '"')
+        ) === []);
+    }
+    km_check_heading('app-map: 配信に焼くのは「次に効く会期」(続き)');
     check_bool('無ければ一番早い会期だけ', str_contains($eventsLib, "static fn (array \$row): bool => (string) (\$row['startsAt'] ?? '') === \$startsAt"));
     // イベントの不調で配信そのものを止めない(表がまだ無いときも地図は配れる)
     check_bool('不調なら「イベント無し」に倒す', str_contains($eventsLib, "error_log('km_map_event_overlay_for_app failed (publishing without events): '"));
-    // 配信し直し忘れに気づける場所(管理画面「ダウンロード」)
-    $downloadsPage = (string) file_get_contents(__DIR__ . '/../admin/downloads.php');
+    // 配信し直し忘れに気づける場所(2026-11-02 から管理画面「地図の配信」。カードは _inc/partials/map-releases.php)
+    $downloadsPage = (string) file_get_contents(__DIR__ . '/../admin/_inc/partials/map-releases.php');
     check_bool('配信に載っていなければ管理画面で知らせる', str_contains($downloadsPage, 'page.downloads.mapReleaseEventStale')
-        && str_contains($downloadsPage, '$mapEventWindow'));
+        && str_contains($downloadsPage, '$mapEventWindow') && str_contains((string) file_get_contents(__DIR__ . '/../admin/map-publish.php'), '$mapEventWindow = ['));
     foreach (['ja', 'en'] as $lang) {
         check_bool(
             "i18n: mapReleaseEventStale ($lang)",
@@ -2023,7 +2104,7 @@ function km_check_guide_chat(): void
         && strpos($guideAdmin, 'km_csrf_verify()') < strpos($guideAdmin, 'km_setting_set($pdo, KM_GUIDE_ENABLED_SETTING')
         && str_contains($guideAdmin, "\$known = array_column(km_test_accounts_all(\$pdo), 'sub');")
         && str_contains($guideAdmin, "km_admin_log_record('content', 'guide.settings',")
-        && str_contains((string) file_get_contents(__DIR__ . '/../admin/_inc/partials/sidebar.php'), 'href="./guide-chat.php"'));
+        && str_contains((string) file_get_contents(__DIR__ . '/../admin/_inc/partials/sidebar.php'), "'./guide-chat.php'"));
     check_bool('既定は OFF(管理画面で ON にして人を選んでから)', str_contains($lib, "'enabled' => km_setting_get(\$pdo, KM_GUIDE_ENABLED_SETTING, '0') === '1',"));
     // 2026-10-25: 質問と答えを残す・評価・時間の枠・チャットを開いたまま・「AI は間違えることがあります」
     check_bool('口: 評価は質問より前に受ける(回数に数えない)・答えたら残す・質問の種類は画面へ返さない', strpos($api, "if (array_key_exists('rate', \$input)) {") < strpos($api, '$question = ')
@@ -2790,7 +2871,7 @@ function km_check_review_0925(): void
     check_bool('外したことを記録する(語そのものは書かない)', str_contains($page, "km_admin_log_record('content', 'ranking.query_hidden', (string) \$year);"));
     require_once $src . '/lib/admin-log.php';
     check_bool('記録の文言がある', isset(KM_ADMIN_LOG_ACTION_LABELS['ranking.query_hidden']));
-    check_bool('メニューから開ける', str_contains($read('admin/_inc/partials/sidebar.php'), 'href="./ranking.php"'));
+    check_bool('メニューから開ける', str_contains($read('admin/_inc/partials/sidebar.php'), "'./ranking.php'"));
     check_bool('語は画面でエスケープする', str_contains($page, "<?= km_e(\$row['query']) ?>"));
 
     km_check_heading('review-1005 W-45: 公開するのは管理者が選んだ語だけ(月ごとの写し)');
@@ -3358,7 +3439,7 @@ function km_check_guest_links(): void
     foreach (['guest.link_create', 'guest.link_revoke', 'guest.account_create', 'guest.account_reenter', 'guest.account_revoke', 'guest.account_names_allow', 'guest.account_names_deny'] as $action) {
         check_bool('記録の文言: ' . $action, isset(KM_ADMIN_LOG_ACTION_LABELS[$action]));
     }
-    check_bool('メニューから開ける', str_contains($read('admin/_inc/partials/sidebar.php'), 'href="./guest-links.php"'));
+    check_bool('メニューから開ける', str_contains($read('admin/_inc/partials/sidebar.php'), "'./guest-links.php'"));
     check_bool('期限の切れたリンクは 30 日で消す', str_contains($code($read('lib/privacy-retention.php')), 'DELETE FROM km_map_guest_links WHERE expires_at < DATE_SUB(NOW(), INTERVAL ? DAY)'));
     check_bool('退会したら発行者を外す', str_contains($code($read('lib/account-delete.php')), 'UPDATE km_map_guest_links SET created_by = NULL WHERE created_by = ?'));
     km_check_heading('guest-links: 仮アカウント(MariaDB)');
@@ -4099,7 +4180,8 @@ function km_check_update_notice(): void
         str_contains($baseBody, "いま使っているもの:\n        sha256:c")
             && str_contains($baseBody, "新しく出たもの:\n        sha256:d")
     );
-    check_bool('ビルド元は Dockerfile の digest を書き換えると書く', str_contains($baseBody, 'Dockerfile(docker/php・docker/soketi)の digest'));
+    // soketi は 2026-11-02 に外した。ビルドするのは web だけ
+    check_bool('ビルド元は Dockerfile の digest を書き換えると書く', str_contains($baseBody, 'Dockerfile(docker/php)の digest') && !str_contains($baseBody, 'soketi'));
     check_bool('件数を先に書く', str_contains($baseBody, '更新が 1 件あります。'));
 }
 
@@ -4257,7 +4339,8 @@ function km_check_security_review(): void
     $csp = $code($read('lib/csp.php'));
     check_bool('reCAPTCHA はパスまで絞る', str_contains($csp, "'https://www.google.com/recaptcha/'") && !str_contains($csp, "'https://www.google.com';"));
     check_bool('gstatic もパスまで絞る', !str_contains($csp, "'https://www.gstatic.com';"));
-    check_bool('チャットの埋め込みは HEX で逃がす', substr_count($read('admin/chat.php'), 'JSON_HEX_TAG') >= 2);
+    // 管理画面のチャットは 2026-11-02 に Soketi ごと外した。戻っていないことを見る
+    check_bool('チャットの画面と API は無い(Soketi ごと外した)', !is_file($src . '/admin/chat.php') && glob($src . '/admin/api/chat-*.php') === []);
     check_bool('見取り図は sandbox の CSP で配る', str_contains($code($read('api/floor-image.php')), 'sandbox'));
     // style 属性は CSP の style-src に弾かれて効かない。自前の画面と JS に置かない
     $styled = [];
@@ -4309,7 +4392,8 @@ NEEDLE;
     check_bool('210m は APK の差し替えだけ', substr_count($nginx, 'client_max_body_size 210m;') === 1 && preg_match('#location = /admin/downloads\.php \{\s*client_max_body_size 210m;#', $nginx) === 1);
     check_bool('vendor を塞ぐ', str_contains($nginx, 'location ~ ^/(lib|config|scripts|uploads|cache|vendor)/'));
     check_bool('ランキングへの記録を絞る', str_contains($nginx, 'zone=km_app:10m') && str_contains($nginx, 'limit_req zone=km_app '));
-    check('枠の制限は 8281 と 8025 の2つ(3001 は Logto が自分で送る)', 2, substr_count($nginx, "frame-ancestors 'self'\" always"));
+    // 8281(phpMyAdmin)は 2026-11-02 に外した。残る管理系の口は 8025 だけ
+    check('枠の制限は 8025 の1つ(auth は Logto が自分で送る)', 1, substr_count($nginx, "frame-ancestors 'self'\" always"));
     check_bool('KM_CSP_REPORT_ONLY を web へ渡す', str_contains((string) file_get_contents($repoRoot . '/compose.yaml'), 'KM_CSP_REPORT_ONLY: ${KM_CSP_REPORT_ONLY:-}'));
     // **2回に分けて外す。** 1本の正規表現で s を付けると、`#.*$` が改行をまたいでファイルの終わりまで食う
     $restoreCode = (string) preg_replace(
@@ -4388,13 +4472,15 @@ function km_check_hardening(): void
     } else {
         $gateLocation = (string) @file_get_contents($hideRepoRoot . '/nginx/km/gate-location.conf');
         $nginxTemplate = (string) @file_get_contents($hideRepoRoot . '/nginx/default.conf.template');
-        check_bool('管理ポートは許可していない送信元に 403 を見せず接続を切る', str_contains($gateLocation, "location @km_hide {\n    return 444;") && substr_count($nginxTemplate, 'error_page 403 = @km_hide;') === 3);
+        // 8281 と 3002 は 2026-11-02 に外したので、残るのは 8025 の 1 つ
+        check_bool('管理ポートは許可していない送信元に 403 を見せず接続を切る', str_contains($gateLocation, "location @km_hide {\n    return 444;") && substr_count($nginxTemplate, 'error_page 403 = @km_hide;') === 1);
     }
     check('書き込みの scope は admin:users:write', 'admin:users:write', (static function () use ($read): ?string {
         return preg_match("/const KM_ADMIN_WRITE_SCOPE = '([^']+)'/", $read('admin/_inc/bootstrap.php'), $m) === 1 ? $m[1] : null;
     })());
     $guard = $code($read('admin/_inc/guard.php'));
-    check_bool('guard は状態を変える要求に write を求める(server-authz 2)', str_contains($guard, 'KM_ADMIN_WRITE_SCOPE') && str_contains($guard, "!defined('KM_ADMIN_POST_WITHOUT_WRITE')"));
+    // 2026-11-02 から例外は無い(唯一の例外だった Soketi の購読の認可を外した)
+    check_bool('guard は状態を変える要求に write を求める・例外の口は無い(server-authz 2)', str_contains($guard, 'KM_ADMIN_WRITE_SCOPE') && !str_contains($guard, 'KM_ADMIN_POST_WITHOUT_WRITE'));
     check_bool('gate は read と write の両方を求める', str_contains($code($read('admin/api/gate.php')), '!in_array(KM_ADMIN_SCOPE, $scopes, true) || !in_array(KM_ADMIN_WRITE_SCOPE, $scopes, true)'));
     // 例外を増やすと、read だけのロールで書ける口が黙って増える
     $exempt = [];
@@ -4403,7 +4489,7 @@ function km_check_hardening(): void
             $exempt[] = basename($apiFile);
         }
     }
-    check('write を求めない POST は chat-auth.php だけ', ['chat-auth.php'], $exempt);
+    check('write を求めない POST は無い', [], $exempt);
     /*
      * 管理画面の CSP は script-src 'self' 'nonce-…' だけ。**インラインの on…= と nonce 無しの <script> は
      * 黙って動かない**(map-publish.php の確認ダイアログが本番でそうなっていた)。
@@ -4428,7 +4514,7 @@ function km_check_hardening(): void
         }
     }
     check('インラインの on…= と nonce 無しの <script> が無い', [], $inline);
-    check_bool('<script> の中の json_encode は HEX で逃がす(server-injection 1)', str_contains($read('admin/_inc/partials/head.php'), 'JSON_HEX_TAG') && str_contains($read('admin/monitor.php'), 'JSON_HEX_TAG'));
+    check_bool('<script> の中の json_encode は HEX で逃がす(server-injection 1)', str_contains($read('admin/_inc/partials/head.php'), 'JSON_HEX_TAG'));
     // Leaflet のツールチップは HTML として描く。ノード名を素で渡すと注入になる(server-injection 0)
     check_bool('地図のツールチップに名前を素で渡さない', preg_match('/bindTooltip\((?:node|poi)\.name\b/', $read('Main/app.js')) === 0);
     check_bool('セッションは発行した ID しか受け付けない(critic 3)', str_contains($code($read('lib/session.php')), "ini_set('session.use_strict_mode', '1')"));
@@ -4600,9 +4686,8 @@ function km_check_hardening(): void
         'APP_URL' => 'APP_URL: ${APP_URL:-https://${KM_DOMAIN}}',
         // 2026-10-19 から 443 番の auth.<ドメイン>(.env の KM_AUTH_DOMAIN で名前を変えられる。:3001 は外した)
         'LOGTO_ENDPOINT' => 'LOGTO_ENDPOINT: ${LOGTO_ENDPOINT:-https://${KM_AUTH_DOMAIN:-auth.${KM_DOMAIN}}}',
-        // Console と phpMyAdmin は管理用のホスト名(無ければ KM_DOMAIN)。ゲートの Cookie がホスト名ごとのため(2026-09-15)
-        'LOGTO_ADMIN_ENDPOINT' => 'ADMIN_ENDPOINT: ${LOGTO_ADMIN_ENDPOINT:-https://${KM_ADMIN_DOMAIN:-${KM_DOMAIN}}:3002}',
-        'PMA_ABSOLUTE_URI' => 'PMA_ABSOLUTE_URI: ${PMA_ABSOLUTE_URI:-https://${KM_ADMIN_DOMAIN:-${KM_DOMAIN}}:8281/}',
+        // Console は 2026-11-02 から SSH のトンネルで開く(ホストの 127.0.0.1:3002)。phpMyAdmin は同じ日に外した
+        'LOGTO_ADMIN_ENDPOINT' => 'ADMIN_ENDPOINT: ${LOGTO_ADMIN_ENDPOINT:-http://localhost:3002}',
         'MAIL_HOST' => 'MAIL_HOST: ${MAIL_HOST:-mailserver}',
         'MAIL_PORT' => 'MAIL_PORT: ${MAIL_PORT:-587}',
         'MAIL_FROM' => 'MAIL_FROM: ${MAIL_FROM:-noreply@${KM_DOMAIN}}',
@@ -4720,34 +4805,30 @@ function km_check_hardening(): void
     check_bool('mailserver には no-new-privileges を付けない', !str_contains($vpsServices['mailserver'] ?? '', 'no-new-privileges'));
     check_bool('MariaDB は LOAD DATA LOCAL を受け付けない', str_contains($baseServices['mariadb'] ?? '', '--local-infile=0'));
     check_bool('MariaDB にグローバルの max_statement_time を掛けない(mysqldump が止まる)', !str_contains($baseServices['mariadb'] ?? '', 'max_statement_time'));
-    check_bool('Soketi はクライアントイベントを受けない', str_contains($baseServices['soketi'] ?? '', 'SOKETI_DEFAULT_APP_ENABLE_CLIENT_MESSAGES: "false"') && str_contains($baseServices['soketi'] ?? '', 'SOKETI_DEFAULT_APP_MAX_CONNS:'));
-    check_bool('Soketi は root で動かない', preg_match('/^USER node$/m', $file('docker/soketi/Dockerfile')) === 1);
+    /*
+     * Soketi・phpMyAdmin は 2026-11-02 に外した(利用者の指示。脆弱性の知らせ 15 件がすべて Soketi の部品で、
+     * 使っていたのはチャット(本番 0 件)と監視の即時表示だけ。phpMyAdmin は DB に外から触れる入口だった)
+     */
+    check_bool('compose に soketi・phpmyadmin が無い(本番の上書きにも)', !isset($baseServices['soketi']) && !isset($baseServices['phpmyadmin'])
+        && !isset($vpsServices['soketi']) && !isset($vpsServices['phpmyadmin']) && !str_contains($baseWeb, 'SOKETI_'));
+    check_bool('phpMyAdmin の設定(KM_PMA_*・PMA_ABSOLUTE_URI)が compose と .env.example に残っていない', !str_contains($yamlCode($base) . $vpsCode . $file('.env.example'), 'KM_PMA_')
+        && !str_contains($yamlCode($base) . $vpsCode . $file('.env.example'), 'PMA_ABSOLUTE_URI'));
+    check_bool('docker/soketi・docker/phpmyadmin が無い(Old/ へ退避)', !is_dir(dirname($src) . '/docker/soketi') && !is_dir(dirname($src) . '/docker/phpmyadmin'));
     // 本番の送信は mailserver。無認証の画面を持つ Mailpit を起動しない(server-ops 11)
     check_bool('VPS: Mailpit は profile の内側', str_contains($vpsServices['mailpit'] ?? '', 'profiles: ["mailpit"]'));
     $vpsProxy = $vpsServices['reverse-proxy'] ?? '';
     check_bool('VPS: nginx は Mailpit を待たない', str_contains($vpsProxy, 'depends_on: !override') && !str_contains($vpsProxy, 'mailpit:'));
-    // [::] で待つと docker-proxy が送信元を 172.x に化けさせ、allow-admin.conf を素通りする(server-ops 2)
-    $adminPorts = [];
-    // 8025(Mailpit)は 2026-09-18 に本番から外した。残る 2 つだけを見る
-    foreach (['8281', '3002'] as $port) {
-        if (!str_contains($vpsProxy, "\"0.0.0.0:{$port}:{$port}\"")) {
-            $adminPorts[] = $port;
-        }
-    }
-    check('VPS: 管理系ポートは 0.0.0.0 だけで待つ', [], $adminPorts);
-    check_bool('phpMyAdmin は root を既定で断る(server-ops 12)', str_contains($file('docker/phpmyadmin/config.user.inc.php'), "KM_PMA_ALLOW_ROOT") && str_contains($file('docker/phpmyadmin/config.user.inc.php'), "'AllowNoPassword'] = false"));
-    // 環境保管領域(2026-10-19)。パスワードがあるときだけ有効。無いまま controluser を書くと空のパスワードで繋ぎに行く
-    $pmaConfig = $file('docker/phpmyadmin/config.user.inc.php');
-    check_bool('phpMyAdmin の環境保管領域は KM_PMA_CONTROLPASS があるときだけ・表は 19 個', str_contains($pmaConfig, "if (\$kmPmaControlPass !== '' && isset(\$cfg['Servers'])")
-        && str_contains($pmaConfig, "['pmadb'] = 'phpmyadmin';") && substr_count($pmaConfig, "=> 'pma__") === 19);
-    // 2026-10-19: 「機能」の画面でログイン Cookie の有効期間が空の文字列で保存され、ログイン後の全画面が TypeError になった
-    check_bool('phpMyAdmin のログインの有効期間は利用者ごとの設定で変えさせない(UserprefsDisallow)', str_contains($pmaConfig, '$cfg[\'UserprefsDisallow\'] = [\'LoginCookieValidity\'];'));
-    check_bool('compose は制御用のパスワードを .env から渡すだけ(既定は空)', str_contains($file('compose.yaml'), 'KM_PMA_CONTROLPASS: ${KM_PMA_CONTROLPASS:-}')
-        && preg_match('/^KM_PMA_CONTROLPASS=$/m', $file('.env.example')) === 1);
-    $pmaCell = $file('docs/05-containers.ipynb');
-    check_bool('制御用の利用者は phpmyadmin.* だけ・TLS 必須・パスワードは引数に載せない(docs/05 §1-2)', str_contains($pmaCell, 'IDENTIFIED BY \'$PASS\' REQUIRE SSL;')
-        && str_contains($pmaCell, "GRANT SELECT, INSERT, UPDATE, DELETE ON phpmyadmin.* TO 'pma'@'%';") && !str_contains($pmaCell, 'mariadb -uroot -p')
-        && !str_contains($pmaCell, 'echo "$PASS"'));
+    /*
+     * 外に開くのは 80・443 だけ(2026-11-02)。8281(phpMyAdmin)と 3002(Logto Console)を閉じた。
+     * Console は logto がホストの 127.0.0.1:3002 にだけ出し、SSH のトンネルで開く
+     * ([::] や 0.0.0.0 で待つと外から届く。127.0.0.1 ならホストの中からだけ)
+     */
+    preg_match('/^    ports: !override\n((?:      - .*\n)+)/m', $vpsProxy, $vpsPortsMatch);
+    check('VPS: nginx が publish するのは 80 と 443 だけ', "      - \"80:80\"\n      - \"443:443\"\n", $vpsPortsMatch[1] ?? null);
+    check_bool('Logto Console(3002)はホストの 127.0.0.1 だけに出す', preg_match('/^    ports:\n      - "127\.0\.0\.1:3002:3002"$/m', $baseServices['logto'] ?? '') === 1
+        && !preg_match('/"(0\.0\.0\.0:)?(3002|8281):(3002|8281)"/', $yamlCode($base) . $vpsCode));
+    check_bool('Console の開き方(SSH のトンネル)は設定の画面にある', str_contains($file('src/admin/settings.php'), 'km_site_logto_console_tunnel()')
+        && str_contains($file('src/lib/site.php'), "'ssh -i ~/.ssh/km_ops -L 3002:127.0.0.1:3002 kmops@' . km_site_host()"));
 
     km_check_heading('hardening B・C: nginx(同時接続・待ち時間・転送ヘッダー)');
     $nginx = (string) preg_replace('/^\s*#.*$/m', '', $file('nginx/default.conf.template'));
@@ -4772,7 +4853,7 @@ function km_check_hardening(): void
     // 公式イメージの nginx.conf が http に 65 を書いており、並べると "is duplicate" で起動しない
     check_bool('keepalive_timeout を http に書かない', !str_contains($httpPart, 'keepalive_timeout'));
     $connLimits = [];
-    foreach (['443 ssl' => 100, '8281 ssl' => 50, '3002 ssl' => 50, '8025 ssl' => 50] as $listen => $limit) {
+    foreach (['443 ssl' => 100, '8025 ssl' => 50] as $listen => $limit) {
         if (!str_contains($server($listen), "limit_conn km_conn {$limit};")) {
             $connLimits[] = $listen;
         }
@@ -4795,9 +4876,9 @@ function km_check_hardening(): void
     check('443 の最初の正規表現は `.php/` の 404', '\.php/', $firstRegex[1] ?? null);
     check_bool('include 専用の 404 は `\.php(/|$)`', str_contains($https, 'logto-client)\.php(/|$) {'));
     check_bool('proxy-web.conf に proxy_read_timeout を書かない(location で重複すると起動しない)', !str_contains((string) preg_replace('/^\s*#.*$/m', '', $file('nginx/km/proxy-web.conf')), 'proxy_read_timeout'));
-    // 2 つ目は Soketi の WebSocket(/ws/app/。2026-10-19 に 6001 番から移した。1 本を長く張る)
-    check('443 で 300s を許すのは downloads.php と /ws/app/ だけ', 2, substr_count($https, 'proxy_read_timeout 300s;'));
-    check_bool('未認証で重い口を km_api で絞る(メソッドを問わない)', str_contains($https, 'location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update|positioning-params|learning|poster-image|poster-event|table|node-extras|display-defaults|user-map-data|map-events|poster-like|stall|stalls|app-schedule)|logto_me)\.php$ {') && str_contains($https, 'limit_req zone=km_api burst=120 nodelay;'));
+    // 2 つ目だった Soketi の WebSocket(/ws/app/)は 2026-11-02 に外した
+    check('443 で 300s を許すのは downloads.php だけ', 1, substr_count($https, 'proxy_read_timeout 300s;'));
+    check_bool('未認証で重い口を km_api で絞る(メソッドを問わない)', str_contains($https, 'location ~ ^/(api/(app-stats|app-avatar|floor-image|download|map-data|route-weights|map-calibration|app-update|positioning-params|learning|poster-image|poster-event|node-extras|display-defaults|user-map-data|map-events|poster-like|stall|stalls|app-schedule)|logto_me)\.php$ {') && str_contains($https, 'limit_req zone=km_api burst=120 nodelay;'));
     check_bool('アプリの地図は km_appmap で絞る', preg_match('#location = /api/app-map\.php \{\s*limit_req zone=km_appmap burst=30 nodelay;#', $https) === 1);
     check_bool('callback.php は認可コードをログに残さない', preg_match('#location = /callback\.php \{\s*access_log [^;]+ km_no_query;#', $https) === 1);
     /*
@@ -4818,7 +4899,9 @@ function km_check_hardening(): void
     }
     check('set_time_limit を延ばした画面は nginx の待ちもそれより長い', [], $shortProxy);
     // 利用者が付けた X-Forwarded-For を足すと、Logto 側で IP を偽れる(server-ops 7)。HSTS は nginx の1本だけ
-    foreach (['auth' => $authChunk, '3002' => $server('3002 ssl')] as $port => $logtoServer) {
+    // 3002(Console)の server は 2026-11-02 に外した。残るのはサインインの入口だけ
+    check_bool('nginx は 8281・3002 で待ち受けない', !preg_match('/listen (\[::\]:)?(8281|3002) /', $nginx));
+    foreach (['auth' => $authChunk] as $port => $logtoServer) {
         check_bool("{$port}: X-Forwarded-For は送信元だけ", str_contains($logtoServer, 'proxy_set_header X-Forwarded-For $remote_addr;') && !str_contains($logtoServer, '$proxy_add_x_forwarded_for'));
         check_bool("{$port}: Logto の HSTS を隠す", str_contains($logtoServer, 'proxy_hide_header Strict-Transport-Security;'));
     }
@@ -4849,7 +4932,8 @@ function km_check_hardening(): void
             $staticUpstreams[] = $upstreamMatch[1];
         }
     }
-    check_bool('upstream が 5 つある(web・phpmyadmin・logto 2 つ・soketi)', count($upstreamMatches) === 5);
+    // phpmyadmin・logto_console・soketi は 2026-11-02 に外した
+    check('upstream は web と logto_core の 2 つ', ['km_web', 'km_logto_core'], array_column($upstreamMatches, 1));
     check('upstream はどれも zone と resolve を持つ', [], $staticUpstreams);
     check_bool('resolver(Docker の内蔵 DNS)は http に 1 本', str_contains($httpPart, 'resolver 127.0.0.11 valid=10s ipv6=off;') && substr_count($nginx, 'resolver ') === 1);
 
@@ -4868,8 +4952,8 @@ function km_check_hardening(): void
     };
     $expectedNetworks = [
         'postgres' => ['authdb'], 'logto' => ['edge', 'authdb', 'mail'], 'mariadb' => ['appdb'],
-        'phpmyadmin' => ['edge', 'appdb'], 'web' => ['edge', 'appdb', 'mail', 'monitor'], 'reverse-proxy' => ['edge'],
-        'soketi' => ['edge'], 'mailpit' => ['edge', 'mail'],
+        'web' => ['edge', 'appdb', 'mail', 'monitor'], 'reverse-proxy' => ['edge'],
+        'mailpit' => ['edge', 'mail'],
         // タスクマネージャー(2026-10-05)。Glances は monitor(internal)だけ。web だけが読みに来る
         'glances' => ['monitor'],
     ];
@@ -4888,15 +4972,15 @@ function km_check_hardening(): void
     $notReadOnly = [];
     $notCapDropped = [];
     foreach ($baseServices + array_intersect_key($vpsServices, ['certbot' => true, 'mailserver' => true]) as $serviceName => $block) {
-        // phpmyadmin と mailserver は起動スクリプトがイメージの中に設定を書き出すので付けない(compose の注記)
-        if (!in_array($serviceName, ['phpmyadmin', 'mailserver'], true) && preg_match('/^    read_only: true$/m', $block) !== 1) {
+        // mailserver は起動スクリプトがイメージの中に設定を書き出すので付けない(compose の注記)
+        if ($serviceName !== 'mailserver' && preg_match('/^    read_only: true$/m', $block) !== 1) {
             $notReadOnly[] = $serviceName;
         }
         if (preg_match('/^    cap_drop:\n      - ALL$/m', $block) !== 1) {
             $notCapDropped[] = $serviceName;
         }
     }
-    check('read_only(phpmyadmin と mailserver 以外)', [], $notReadOnly);
+    check('read_only(mailserver 以外)', [], $notReadOnly);
     check('cap_drop: ALL(全サービス)', [], $notCapDropped);
     $floatingImages = [];
     foreach ([$composeBaseCode, $composeVpsCode] as $composeCode) {
@@ -4907,7 +4991,7 @@ function km_check_hardening(): void
             }
         }
     }
-    foreach (['docker/php/Dockerfile', 'docker/soketi/Dockerfile'] as $dockerfile) {
+    foreach (['docker/php/Dockerfile'] as $dockerfile) {
         preg_match_all('/^(?:FROM\s+(\S+)|COPY\s+--from=(\S+))/m', $yamlCode($file($dockerfile)), $fromMatches, PREG_SET_ORDER);
         foreach ($fromMatches as $fromMatch) {
             $image = ($fromMatch[1] ?? '') !== '' ? $fromMatch[1] : ($fromMatch[2] ?? '');
@@ -4920,7 +5004,7 @@ function km_check_hardening(): void
     check('イメージとビルド元はすべて digest で固定', [], $floatingImages);
     // タグも残す: check-updates.sh が Logto の版番号と、固定した digest より新しい修正版を読むため
     $untaggedPins = [];
-    foreach (['postgres', 'logto', 'mariadb', 'phpmyadmin'] as $serviceName) {
+    foreach (['postgres', 'logto', 'mariadb'] as $serviceName) {
         if (preg_match('/^    image: [^\s@]+:[^\s@\/]+@sha256:[0-9a-f]{64}$/m', $baseServices[$serviceName] ?? '') !== 1) {
             $untaggedPins[] = $serviceName;
         }
@@ -4948,9 +5032,6 @@ function km_check_hardening(): void
         check_bool("{$composeName}: src を書ける形で渡していない", preg_match('#^      - \./src:/var/www/html$#m', $webBlock) !== 1);
     }
     check_bool('host-setup.sh が PHP の書く設定 2 つを空で作れる(無いと Docker がディレクトリを作る)', str_contains($file('scripts/host-setup.sh'), 'for name in map-access app-map; do'));
-    $soketiDockerfile = $file('docker/soketi/Dockerfile');
-    check_bool('Soketi は Node 24 の土台にフォークの /app を載せる(§7 の 4)', preg_match('/^FROM node:24-trixie-slim@sha256:[0-9a-f]{64}$/m', $soketiDockerfile) === 1 && str_contains($soketiDockerfile, 'COPY --from=fork /app /app'));
-    check_bool('Soketi の pm2 の置き場は /tmp(read_only の下で起動するため)', str_contains($soketiDockerfile, 'ENV PM2_HOME=/tmp/.pm2'));
     check_bool('allow-admin.conf は Docker の網(172.16.0.0/12)を許さない(§7 の 8)', preg_match('#^\s*allow 172\.16\.0\.0/12;#m', $file('nginx/km/allow-admin.conf')) !== 1);
     check_bool('Logto は LOGTO_DB_USER があればそれで繋ぐ(§7 の 3)', str_contains($baseServices['logto'] ?? '', 'DB_URL: postgres://${LOGTO_DB_USER:-${POSTGRES_USER}}:${LOGTO_DB_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/${POSTGRES_DB}'));
     $roleSql = $file('scripts/logto-db-role.sql');
@@ -4966,7 +5047,7 @@ function km_check_hardening(): void
     check_bool('ゲートは開始前でも同じ Cookie 名を見る', str_contains($sessionLib, 'isset($_COOKIE[KM_SESSION_NAME])'));
     check_bool('nginx: 管理用のホストでは管理画面に要るパスだけ返す', str_contains($nginx, 'map "$km_host_role:$uri" $km_leave_admin_host') && str_contains($https, 'if ($km_leave_admin_host)') && str_contains($https, 'if ($km_leave_public_host)'));
     check_bool('nginx: 別オリジンかどうかは KM_ADMIN_URL と KM_APP_URL を比べて決める', str_contains($nginx, 'map "${KM_ADMIN_URL}" $km_admin_split {'));
-    check_bool('nginx: 6001 の Origin は管理画面の URL', preg_match('/map \$http_origin \$km_ws_origin_denied \{\s*""\s+0;\s*"\$\{KM_ADMIN_URL\}"\s+0;\s*default\s+1;/', $nginx) === 1);
+    check_bool('nginx: WebSocket の Origin の見張り(Soketi 用)は 2026-11-02 に外した', !str_contains($nginx, 'km_ws_origin_denied') && !str_contains($nginx, 'km_soketi'));
     check_bool('ゲートのログイン先は管理画面の URL', str_contains($file('nginx/km/gate-location.conf'), 'return 302 $km_admin_url/admin/login.php;'));
     check_bool('compose: 既定は公開側と同じ(別オリジンにしない)', str_contains($baseServices['reverse-proxy'] ?? '', 'KM_ADMIN_URL: ${KM_ADMIN_URL:-${KM_APP_URL:-https://192.168.3.29:9443}}') && str_contains($baseWeb, 'ADMIN_URL: ${ADMIN_URL:-${APP_URL:-https://192.168.3.29:9443}}'));
     check_bool('VPS: 管理用の URL は KM_ADMIN_DOMAIN から導く(無ければ KM_DOMAIN)', str_contains($vpsProxy, 'KM_ADMIN_URL: ${KM_ADMIN_URL:-https://${KM_ADMIN_DOMAIN:-${KM_DOMAIN}}}') && str_contains($vpsWeb, 'ADMIN_URL: ${ADMIN_URL:-https://${KM_ADMIN_DOMAIN:-${KM_DOMAIN}}}'));
@@ -5035,12 +5116,15 @@ function km_check_hardening(): void
     $noticeJs = $file('src/admin/assets/js/km-notice.js');
     check_bool('お知らせを閉じる: 情報のお知らせだけ・ブラウザに覚える', str_contains($adminScripts, "./assets/js/km-notice.js") && str_contains($noticeJs, ".alert.alert-info.d-flex.align-items-start") && str_contains($noticeJs, "'kmadmin-dismissed'") && !str_contains($noticeJs, 'fetch('));
     $dashboard = $file('src/admin/index.php');
-    check_bool('次フェーズの作業はかんばんの表から出す(決め打ちを残さない)', str_contains($dashboard, 'km_tasks_all(km_db())') && !str_contains($dashboard, 'page.index.next1'));
-    // サービス監視の「今後の拡張」もタスクの分類から出す(2026-10-06)
-    $monitorPage = $file('src/admin/monitor.php');
+    /*
+     * 「次フェーズの作業」は 2026-11-02 にダッシュボードから外した(タスクはプロジェクト状況・かんばんにある)。
+     * 代わりにアプリへ配っている地図の期限を出す。サービス監視はタスクマネージャーのサービスのタブへ移した
+     */
+    check_bool('ダッシュボードはタスクを出さず、アプリへ配っている地図の状態を出す', !str_contains($dashboard, 'km_tasks_all(') && !str_contains($dashboard, 'page.index.next1')
+        && str_contains($dashboard, 'km_app_map_release_status(') && str_contains($dashboard, 'page.index.mapTitle'));
     $tasksLib = $file('src/lib/tasks.php');
-    check_bool('サービス監視の「今後の拡張」はタスクの分類 monitor から出す(決め打ちを残さない)', str_contains($monitorPage, "km_tasks_by_topic(km_db(), 'monitor')")
-        && !str_contains($monitorPage, 'page.monitor.plan1') && !str_contains($file('src/admin/assets/i18n/ja.js'), '"page.monitor.plan1"'));
+    check_bool('サービス監視(monitor.php)はタスクマネージャーのサービスのタブへ転送するだけ', str_contains($file('src/admin/monitor.php'), "header('Location: ./taskmgr.php?tab=services', true, 301);")
+        && !str_contains($file('src/admin/monitor.php'), 'km_tasks_by_topic') && !str_contains($file('src/admin/assets/i18n/ja.js'), '"page.monitor.'));
     check_bool('分類は決めた値だけ(作る・直すの両方で確かめる)', substr_count($tasksLib, 'km_tasks_validate_topic($topic);') === 2
         && str_contains($tasksLib, "if (!array_key_exists(\$topic, KM_TASK_TOPICS))"));
     check_bool('分類の列は古い表にも足し、3 行は列を足したときだけ入れる(消したら戻さない)', str_contains($tasksLib, "ADD COLUMN IF NOT EXISTS topic VARCHAR(32) NOT NULL DEFAULT ''")
@@ -5060,7 +5144,9 @@ function km_check_hardening(): void
     check_bool('共有リンク: ファイルを消したらリンクも止める', str_contains($file('src/admin/file-manager.php'), 'km_file_share_revoke_for_file($pdo, $id);'));
     $charts = $file('src/admin/charts.php');
     check_bool('チャート: 棒の上の数字の余白を取る(いちばん高い棒の数字が切れない)', str_contains($charts, '$chartTop = 20;') && str_contains($charts, '$y = $chartTop + $chartHeight - $barHeight;'));
-    check_bool('チャート: ランキングの語(隠した語は除く)とよく行く場所', str_contains($charts, 'km_map_ranking_hidden_queries') && str_contains($charts, 'km_map_ranking_places'));
+    // 調べられた語は ranking.php と同じ数だったので、2026-11-02 にリンクにした(よく行く場所は ranking.php に無いので残す)
+    check_bool('チャート: よく行く場所は出す・調べられた語はランキングの語へのリンク(同じ数を 2 か所に出さない)', str_contains($charts, 'km_map_ranking_places')
+        && !str_contains($charts, 'km_map_ranking_queries') && str_contains($charts, 'href="./ranking.php"'));
     $guestLib = $file('src/lib/map-guest.php');
     foreach (['km_map_guest_create', 'km_map_guest_revoke', 'km_map_guest_create_account', 'km_map_guest_revoke_account', 'km_map_guest_set_names'] as $writer) {
         $body = (string) strstr((string) strstr($guestLib, "function {$writer}("), "\n}\n", true);
@@ -5116,6 +5202,116 @@ function km_check_hardening(): void
         && str_contains($file('src/admin/taskmgr.php'), 'for ($s = 1; $s <= 10; $s++)')
         && str_contains($taskmgrJs, 'window.setTimeout(() => tick(mine), seconds * 1000)')
         && !str_contains($taskmgrJs, 'setInterval('));
+    /*
+     * Windows のタスクマネージャーの形(2026-11-02、利用者の指示)。左の縦のタブ 5 つ(?tab= で開ける)。
+     * サービスはサービス監視(monitor.php)を移したもの。確かめはこのタブを開いている間だけ回す
+     */
+    $taskmgrPage = $file('src/admin/taskmgr.php');
+    preg_match_all("/^    \['([a-z]+)', 'bi-[a-z0-9-]+', 'page\.taskmgr\.tab[A-Za-z]+', '[^']+'\],$/m", $taskmgrPage, $tmTabs);
+    check('タスクマネージャーのタブはプロセス・パフォーマンス・コンテナ・サービス・詳細', ['processes', 'performance', 'containers', 'services', 'details'], $tmTabs[1]);
+    check_bool('?tab= は決まった名前だけ受ける(ほかはプロセス)', str_contains($taskmgrPage, "in_array(\$_GET['tab'], \$tabIds, true) ? \$_GET['tab'] : 'processes'"));
+    check_bool('サービスのタブは services.js の表(data-km-services="table")・確かめはタブを開いている間だけ', str_contains($taskmgrPage, '<tbody data-km-services="table"></tbody>')
+        && str_contains($taskmgrJs, "services.startAuto(SERVICES_INTERVAL_MS);") && str_contains($taskmgrJs, 'services.stopAuto();'));
+    check_bool('グラフは素の SVG・色はクラス(style 属性を書かない)', !preg_match('/\sstyle=/', $taskmgrPage) && !str_contains($taskmgrJs, '.style.')
+        && str_contains($file('src/admin/assets/css/km-admin.css'), '.km-tm-c-cpu { --km-tm-color:'));
+    check_bool('Glances の network・fs は切ったまま(コンテナの中からはホストの値にならない。通信とディスクの容量は host-stats.sh)', str_contains($glancesBlock, 'network,fs')
+        && !str_contains($taskmgrData, "'network'") && !str_contains($taskmgrData, "'fs'"));
+    $tmI18nMissing = [];
+    preg_match_all("/tr\('(page\.taskmgr\.[A-Za-z.]+)'/", $taskmgrJs, $tmKeys);
+    preg_match_all('/data-i18n="(page\.taskmgr\.[A-Za-z.]+)"/', $taskmgrPage, $tmPageKeys);
+    foreach (array_unique(array_merge($tmKeys[1], $tmPageKeys[1], ['page.taskmgr.st.R', 'page.taskmgr.st.Z'])) as $tmKey) {
+        foreach (['ja', 'en'] as $tmLang) {
+            if (!str_contains($file("src/admin/assets/i18n/{$tmLang}.js"), '"' . $tmKey . '"')) {
+                $tmI18nMissing[] = "{$tmLang}: {$tmKey}";
+            }
+        }
+    }
+    check('タスクマネージャーの文言は日英の辞書の両方にある', [], $tmI18nMissing);
+
+    /*
+     * 配備のあとに「ページを更新してください」と出す(2026-11-02、利用者の指示)。
+     * 印は src の相対パス・大きさ・更新時刻から(lib/release.php)。中身が同じなら同じ印、1 つ変われば変わる
+     */
+    km_check_heading('release: 配備のあとの更新の帯');
+    require_once $src . '/lib/release.php';
+    $relRoot = sys_get_temp_dir() . '/km-release-check-' . bin2hex(random_bytes(4));
+    @mkdir($relRoot . '/Main', 0777, true);
+    @mkdir($relRoot . '/uploads', 0777, true);
+    @mkdir($relRoot . '/admin/vendor', 0777, true);
+    file_put_contents($relRoot . '/index.php', '<?php echo 1;');
+    file_put_contents($relRoot . '/Main/app.js', 'a();');
+    touch($relRoot . '/index.php', 1790000000);
+    touch($relRoot . '/Main/app.js', 1790000000);
+    $relFirst = km_release_compute($relRoot);
+    $relAgain = km_release_compute($relRoot);
+    file_put_contents($relRoot . '/uploads/photo.php', 'x');
+    file_put_contents($relRoot . '/admin/vendor/lib.js', 'x');
+    file_put_contents($relRoot . '/notes.txt', 'x');
+    $relIgnored = km_release_compute($relRoot);
+    file_put_contents($relRoot . '/Main/app.js', 'b();');
+    touch($relRoot . '/Main/app.js', 1790000000);
+    $relSameSize = km_release_compute($relRoot);
+    touch($relRoot . '/Main/app.js', 1790000100);
+    $relChanged = km_release_compute($relRoot);
+    check_bool('同じ中身なら同じ印(12 文字)・書き込み先と vendor と .php/.js/.css/.html 以外は数えない', preg_match('/^[0-9a-f]{12}$/', $relFirst) === 1
+        && $relFirst === $relAgain && $relFirst === $relIgnored);
+    check_bool('1 つ変われば印が変わる(配備は tar なので更新時刻が変わる)', $relSameSize === $relFirst && $relChanged !== $relFirst);
+    @mkdir($relRoot . '/empty');
+    file_put_contents($relRoot . '/empty/readme.txt', 'x');
+    check('数えるファイルが無ければ空(帯を出さない)', ['', ''], [km_release_compute($relRoot . '/empty'), km_release_compute($relRoot . '/missing')]);
+    foreach ([$relRoot . '/empty/readme.txt', $relRoot . '/uploads/photo.php', $relRoot . '/admin/vendor/lib.js', $relRoot . '/notes.txt', $relRoot . '/index.php', $relRoot . '/Main/app.js'] as $relFile) {
+        @unlink($relFile);
+    }
+    foreach ([$relRoot . '/empty', $relRoot . '/admin/vendor', $relRoot . '/admin', $relRoot . '/uploads', $relRoot . '/Main', $relRoot] as $relDir) {
+        @rmdir($relDir);
+    }
+    $releaseApi = $file('src/api/release.php');
+    check_bool('印の口は GET だけ・印だけ返す・セッションを使わない', str_contains($releaseApi, "require_method('GET');") && str_contains($releaseApi, "respond(['success' => true, 'release' => km_release_id()]);")
+        && !str_contains($releaseApi, 'session'));
+    $releaseMissing = [];
+    foreach (['src/admin/_inc/partials/head.php', 'src/index.php', 'src/account.php', 'src/faq.php', 'src/contact.php', 'src/notice.php', 'src/qr.php', 'src/guest.php', 'src/posters.php', 'src/share.php'] as $releasePage) {
+        $releaseCode = $file($releasePage);
+        if (!str_contains($releaseCode, '<?= km_release_tags() ?>') || strpos($releaseCode, '<?= km_release_tags() ?>') > strpos($releaseCode, '</head>')) {
+            $releaseMissing[] = $releasePage;
+        }
+    }
+    check('印と見張りは管理画面の全ページ(head.php)と公開ページの <head> にある', [], $releaseMissing);
+    $releaseJs = $file('src/Main/release-watch.js');
+    check_bool('見張り: 自分では読み込み直さない(押されたときだけ)・入力中なら添える・あとでの印は覚える・聞くのは 5 分ごと',
+        substr_count($releaseJs, 'window.location.reload()') === 1 && str_contains($releaseJs, "reload.addEventListener('click', function () { window.location.reload(); });")
+        && str_contains($releaseJs, 'TEXT.dirty') && str_contains($releaseJs, 'rememberDismissed(release);') && str_contains($releaseJs, 'const CHECK_MS = 5 * 60 * 1000;')
+        && str_contains($releaseJs, "fetch('/api/release.php'") && !str_contains($releaseJs, 'innerHTML') && !str_contains($releaseJs, "setAttribute('style'"));
+    check_bool('管理用のホストでも /api/release.php と /Main/ を返す($km_leave_admin_host)', str_contains($nginx, 'api/(map-data|floor-image|download|release)\.php$') && str_contains($nginx, '"~^admin:/(admin/|Main/|'));
+
+    /*
+     * 無理に置かれた項目を的確な場所へ(2026-11-02、利用者の指示)。先にあり、元に無いこと
+     * (元に残すと、どちらで直したのか分からなくなる)
+     */
+    km_check_heading('admin: 項目の置き場所(2026-11-02)');
+    $moves = [
+        'チュートリアルの終わりの知らせ: ポスター → お知らせとチュートリアル' => ['src/admin/notices.php', 'src/admin/posters.php', "\$formAction === 'tutorial_end'"],
+        '地点の URL: ポスター → 地点の読み・別名・URL' => ['src/admin/search-aliases.php', 'src/admin/posters.php', "\$formAction === 'link_save'"],
+        '部屋のいいね: ポスター → チャート' => ['src/admin/charts.php', 'src/admin/posters.php', "=== 'likes_reset'"],
+        '教職員氏名の登録状況: チャート → 教職員の地点' => ['src/admin/staff-nodes.php', 'src/admin/charts.php', 'data-km-donut='],
+        'アプリへ配信中の地図(停止・再開・削除): ダウンロード → 地図の配信' => ['src/admin/map-publish.php', 'src/admin/downloads.php', "isset(\$_POST['map_action'])"],
+        'イベント中の記録: テスト用アカウント → イベントモード' => ['src/admin/map-events.php', 'src/admin/test-mode.php', 'KM_EVENT_COLLECT_SETTING'],
+        '管理アプリのイベントの取り込み: イベントモード → アプリの地図を取り込む' => ['src/admin/map-sync.php', 'src/admin/map-events.php', 'event-import.php'],
+    ];
+    $misplaced = [];
+    foreach ($moves as $moveLabel => [$movedTo, $movedFrom, $needle]) {
+        if (!str_contains($file($movedTo), $needle) || ($movedFrom === 'src/admin/map-events.php' ? str_contains($file($movedFrom), "'import_upload'") : str_contains($file($movedFrom), $needle))) {
+            $misplaced[] = $moveLabel;
+        }
+    }
+    check('移した項目は先にあり、元に無い', [], $misplaced);
+    check_bool('移した先のページ名(お知らせとチュートリアル・地点の読み・別名・URL)', str_contains($file('src/admin/assets/i18n/ja.js'), '"page.notices.h1": "お知らせとチュートリアル"')
+        && str_contains($file('src/admin/assets/i18n/ja.js'), '"page.searchAliases.h1": "地点の読み・別名・URL"'));
+    check_bool('配信中の地図のカードは部品にして地図の配信の画面が読む(停止・再開・削除はそこへ戻る)', str_contains($file('src/admin/map-publish.php'), "require __DIR__ . '/_inc/partials/map-releases.php';")
+        && str_contains($file('src/admin/map-publish.php'), "header('Location: ./map-publish.php?mapdeleted=1#map-releases', true, 302);")
+        && !str_contains($file('src/admin/map-publish.php'), '「配布ファイル」の画面から'));
+    check_bool('イベントの取り込みは CSRF を通ったときだけ受ける(読み込む側が印を立てる)', str_contains($file('src/admin/_inc/event-import.php'), "(\$kmEventImportVerified ?? false) === true")
+        && str_contains($file('src/admin/map-sync.php'), "\$kmEventImportVerified = true;") && strpos($file('src/admin/map-sync.php'), '!km_csrf_verify()') < strpos($file('src/admin/map-sync.php'), "\$kmEventImportVerified = true;"));
+
     $hostUpdates = $file('scripts/host-updates-setup.sh');
     check_bool('cron(版 7 以降)に host-stats(1 分)と host-resource-alert(5 分)がある', preg_match('/^CRON_VERSION=([7-9]|[1-9][0-9])$/m', $hostUpdates) === 1
         && str_contains($hostUpdates, '* * * * *    root  $STATS_SCRIPT --path $PATH_ROOT')
@@ -5451,9 +5647,35 @@ function km_check_hardening(): void
     check_bool('受け箱: 版の表示は versionName の頭・無ければ 1000000 を引く', km_apk_inbox_label(1000005, '5 (261009.1048)') === '5' && km_apk_inbox_label(1000012, null) === '12');
     $inboxLib = $file('src/lib/apk-inbox.php');
     $inboxPage = $file('src/admin/apk-inbox.php');
-    check_bool('受け箱: 開いただけでは公開しない(公開・取り消し・戻すは CSRF つきの POST だけ)', str_contains($inboxPage, "if (!km_csrf_verify()) {")
-        && strpos($inboxPage, 'km_apk_inbox_publish(') > strpos($inboxPage, "=== 'POST'") && substr_count($inboxPage, 'km_csrf_field()') === 3
+    check_bool('受け箱: 開いただけでは公開しない(公開・取り消し・戻す・自動の切り替えは CSRF つきの POST だけ)', str_contains($inboxPage, "if (!km_csrf_verify()) {")
+        && strpos($inboxPage, 'km_apk_inbox_publish(') > strpos($inboxPage, "=== 'POST'") && substr_count($inboxPage, 'km_csrf_field()') === 4
+        && strpos($inboxPage, 'km_apk_inbox_set_auto_publish(') > strpos($inboxPage, "if (!km_csrf_verify()) {")
         && str_contains($inboxPage, "require __DIR__ . '/_inc/guard.php';"));
+
+    /*
+     * 自動で公開する(2026-11-02、利用者「版の更新が面倒くさいので、簡単にしてください」)。
+     * 検めにすべて通った届けだけ・公開はもう一度検めてから・失敗したら待ちのまま残してメールに理由。既定は「する」で、画面で切れる
+     */
+    check_bool('受け箱(自動): 検めに通った届け(waiting)だけを、届いたその場で公開する',
+        str_contains($inboxLib, "if (\$status === 'waiting' && km_apk_inbox_auto_publish_enabled(\$pdo)) {")
+        && strpos($inboxLib, 'km_apk_inbox_publish($pdo, $id, KM_APK_INBOX_AUTO_BY);') > strpos($inboxLib, "\$status = \$ok ? 'waiting' : 'rejected';")
+        && strpos($inboxLib, 'km_apk_inbox_publish($pdo, $id, KM_APK_INBOX_AUTO_BY);') < strpos($inboxLib, 'km_apk_inbox_notify($id, $token, $status, $label, $files, $problems, $autoError);'));
+    check_bool('受け箱(自動): 失敗したら待ちのまま(published にしない)・理由を記録', str_contains($inboxLib, "            km_apk_inbox_publish(\$pdo, \$id, KM_APK_INBOX_AUTO_BY);\n            \$status = 'published';")
+        && str_contains($inboxLib, '$autoError = $exception->getMessage();'));
+    check_bool('受け箱(自動): 既定は「する」・\'0\' のときだけしない', str_contains($inboxLib, "km_setting_get(\$pdo, KM_APK_INBOX_AUTO_PUBLISH_SETTING, '1') !== '0'"));
+    $mailPublished = km_apk_inbox_mail_text(12, 'https://admin.example/admin/apk-inbox.php?t=x', 'published', '45', ['一般用: 版番号 1000045'], null);
+    check_bool('受け箱(自動)のメール: 「公開しました」・押す操作は要らない・戻す URL', str_contains($mailPublished['subject'], '公開しました(版 45)')
+        && str_contains($mailPublished['body'], '前の版に戻す') && str_contains($mailPublished['body'], 'https://admin.example/admin/apk-inbox.php?t=x')
+        && !str_contains($mailPublished['body'], '「公開する」を押して'));
+    $mailFailed = km_apk_inbox_mail_text(13, 'L', 'waiting', '46', [], '署名の鍵が今の配布物と違います');
+    check_bool('受け箱(自動)のメール: 自動の公開に失敗したら理由と「公開する」の案内', str_contains($mailFailed['subject'], '届きました(版 46)')
+        && str_contains($mailFailed['body'], '自動で公開しようとしましたが、できませんでした: 署名の鍵が今の配布物と違います')
+        && str_contains($mailFailed['body'], '「公開する」を押してください'));
+    $mailWaiting = km_apk_inbox_mail_text(14, 'L', 'waiting', '47', [], null);
+    check_bool('受け箱のメール: 自動でないときは今までどおり(失敗の文は無い)', !str_contains($mailWaiting['body'], '自動で公開しよう')
+        && str_contains(km_apk_inbox_mail_text(15, 'L', 'rejected', '48', ['  ✕ 署名'], null)['subject'], '公開できません(版 48)'));
+    check_bool('受け箱(自動): 画面で切り替えられ・自動で公開したときの決めた人', str_contains($inboxPage, 'name="enabled" value="<?= $autoPublish ? \'0\' : \'1\' ?>"')
+        && KM_APK_INBOX_AUTO_BY === '自動公開' && str_contains($file('src/scripts/apk-inbox.php'), "'published' => '検めに通ったので自動で公開しました(メールを送りました)'"));
     check_bool('受け箱: 公開の前にもう一度検め、片方が失敗したらもう片方も戻す', strpos($inboxLib, '$recheck = km_apk_inbox_inspect(') < strpos($inboxLib, 'km_dist_store_file(')
         && str_contains($inboxLib, "\$prev === null ? km_dist_delete(\$pdo, \$slug) : km_dist_restore(\$pdo, \$slug, \$prev, \$by);"));
     check_bool('受け箱: URL の印は DB に SHA-256 だけ・nginx はこのページのクエリをログに残さない', str_contains($inboxLib, "hash('sha256', \$token)")
@@ -5498,7 +5720,7 @@ function km_check_hardening(): void
      *   - Logto: auth.<ドメイン> の 443 番(nginx の auth の server)。.env の KM_AUTH_DOMAIN で切り替える(無ければ :3001)
      *   - Soketi: 管理画面の 443 番の /ws/app/ → Soketi の /app/
      */
-    km_check_heading('443 番へ寄せる: サインイン(auth.<ドメイン>)と通知(/ws/app/)');
+    km_check_heading('443 番へ寄せる: サインイン(auth.<ドメイン>)。通知(/ws/app/)は 2026-11-02 に外した');
     $vps = $file('compose.vps.yaml');
     $switch = '${LOGTO_ENDPOINT:-https://${KM_AUTH_DOMAIN:-auth.${KM_DOMAIN}}}';
     check_bool('web の LOGTO_ENDPOINT と logto の ENDPOINT は同じ導き方(発行元 iss が食い違わない)',
@@ -5517,28 +5739,15 @@ function km_check_hardening(): void
     if (preg_match('/^server \{\n    listen 443 ssl;.*?\n\}\n/ms', $file('nginx/default.conf.template'), $mainMatch) === 1) {
         $mainHttps = $mainMatch[0];
     }
-    $wsLocation = '';
-    if (preg_match('/location \^~ \/ws\/app\/ \{.*?\n    \}\n/s', $mainHttps, $wsMatch) === 1) {
-        $wsLocation = $wsMatch[0];
-    }
-    check_bool('/ws/app/: 管理画面の Origin だけ・公開側のホストでは 404・Soketi の /app/ へ', $wsLocation !== ''
-        && str_contains($wsLocation, "if (\$km_ws_origin_denied) {\n            return 403;")
-        && str_contains($wsLocation, "if (\$km_host_role = public) {\n            return 404;")
-        && str_contains($wsLocation, 'proxy_pass http://km_soketi/app/;') && str_contains($wsLocation, 'proxy_set_header Upgrade $http_upgrade;'));
-    check_bool('/ws/ のほか(配信の HTTP API /apps/ など)は外に出さない', preg_match('#location \^~ /ws/ \{\s*return 404;#', $mainHttps) === 1);
-    check_bool('管理用のホストでは /ws/app/ を返す($km_leave_admin_host)', str_contains($file('nginx/default.conf.template'), '|vendor-web/|ws/app/|'));
+    // Soketi の /ws/app/ は 2026-11-02 に外した(利用者の指示)。/ws/ は全部 404 のまま
+    check_bool('/ws/ は全部 404(/ws/app/ と Soketi への転送は無い)', preg_match('#location \^~ /ws/ \{\s*return 404;#', $mainHttps) === 1
+        && !str_contains($mainHttps, 'location ^~ /ws/app/') && !preg_match('/upstream km_soketi|http:\/\/km_soketi/', $file('nginx/default.conf.template')));
+    check_bool('管理用のホストでも /ws/app/ を通さない($km_leave_admin_host)', !str_contains($file('nginx/default.conf.template'), 'ws/app/|'));
     $siteLib = $file('src/lib/site.php');
     check_bool('PHP の Logto の入口は LOGTO_ENDPOINT が正本(km_site_url の logto-core)', str_contains($siteLib, "if (\$service === 'logto-core') {\n        return km_site_logto_endpoint() . \$path;")
         && str_contains($siteLib, "\$endpoint = trim((string) getenv('LOGTO_ENDPOINT'));"));
-    $wsPages = [];
-    foreach (['src/admin/chat.php', 'src/admin/monitor.php'] as $page) {
-        $code = $file($page);
-        if (str_contains($code, 'wsPort: 6001') || !str_contains($code, 'wsPath: <?= json_encode(km_site_ws_path()') || !str_contains($code, 'wssPort: <?= (int) km_site_ws_port() ?>')) {
-            $wsPages[] = $page;
-        }
-    }
-    check('チャットと死活監視は管理画面の 443 番の /ws で張る', [], $wsPages);
-    check_bool('CSP の connect-src は WebSocket の宛先を km_site_ws_origin から', str_contains($file('src/lib/csp.php'), '$connect[] = km_site_ws_origin();'));
+    check_bool('チャットと Soketi の口(admin/chat.php・lib/soketi.php・lib/chat.php)が無い', !is_file($src . '/admin/chat.php') && !is_file($src . '/lib/soketi.php') && !is_file($src . '/lib/chat.php'));
+    check_bool('CSP の connect-src に WebSocket の宛先を足さない', !str_contains($file('src/lib/csp.php'), 'km_site_ws_origin') && !function_exists('km_site_ws_origin'));
     $savedEndpoint = getenv('LOGTO_ENDPOINT');
     putenv('LOGTO_ENDPOINT=https://auth.example.jp/');
     $authEndpoint = km_site_logto_endpoint();
@@ -5622,7 +5831,7 @@ function km_check_hardening(): void
     // 2026-10-23 から、アプリから取り込んだイベントも Website で直せる(利用者の指示)。直した時刻を残し、取り込み直す前に知らせる
     check_bool('イベントを直す 5 つの操作すべてで、Website で直した時刻を残す・取り込み直すと消える', substr_count($file('src/admin/api/map-edit.php'), 'km_map_event_touch_web_edit($pdo, $eventId);') === 5
         && in_array('km_map_event_web_edits', KM_MAP_EVENT_CHILD_TABLES, true)
-        && str_contains($file('src/admin/map-events.php'), "if (\$existing !== null && (\$existing['webEditedAt'] ?? null) !== null) {"));
+        && str_contains($file('src/admin/_inc/partials/event-import.php'), "if (\$existing !== null && (\$existing['webEditedAt'] ?? null) !== null) {"));
     check_bool('Website の地図編集で「表示しない」を切り替えられる・記録に文言', str_contains($file('src/admin/api/map-edit.php'), "case 'event.hidden.toggle': {")
         && str_contains($file('src/admin/assets/js/map-editor.js'), "action: 'event.hidden.toggle'") && isset(KM_ADMIN_LOG_ACTION_LABELS['map.event_hidden']));
     require_once __DIR__ . '/../lib/app-map-convert.php';
@@ -6335,7 +6544,8 @@ function km_check_backup_notice(): void
             }
         }
     }
-    check_bool('build: のサービスを compose から見つけられる', count(array_unique($buildServices[1])) >= 2);
+    // Soketi を外して(2026-11-02)build: は web だけになった
+    check('build: のサービスを compose から見つけられる', ['web'], array_values(array_unique($buildServices[1])));
     check(
         'build: のサービスは全部ビルド元を見張る',
         [],
@@ -8098,7 +8308,7 @@ function km_check_layout(): void
         && str_contains($appJsForPosters, 'href="${escapeHtml(poster.linkUrl)}" target="_blank" rel="noopener noreferrer"')
         && str_contains($appJsForPosters, "if (node.linkUrl && /^https?:\\/\\//i.test(node.linkUrl)) {"));
     check_bool('監査ログ: ポスターと地点の URL の操作に文言がある', isset(KM_ADMIN_LOG_ACTION_LABELS['poster.mode'], KM_ADMIN_LOG_ACTION_LABELS['poster.create'], KM_ADMIN_LOG_ACTION_LABELS['poster.update'], KM_ADMIN_LOG_ACTION_LABELS['poster.delete'], KM_ADMIN_LOG_ACTION_LABELS['map.node_link']));
-    check_bool('管理画面: サイドバーから開ける', str_contains((string) file_get_contents(__DIR__ . '/../admin/_inc/partials/sidebar.php'), '<a href="./posters.php" class="<?= $link(\'posters\') ?>">'));
+    check_bool('管理画面: サイドバーから開ける', str_contains((string) file_get_contents(__DIR__ . '/../admin/_inc/partials/sidebar.php'), "['posters', './posters.php'"));
 
     km_check_heading('node-extras: アプリの部屋の写真(ポスター)といいね(2026-10-22)');
     require_once __DIR__ . '/../lib/node-extras.php';
@@ -8166,7 +8376,8 @@ function km_check_layout(): void
     $privacyForLikes = (string) json_encode(km_legal_privacy(), JSON_UNESCAPED_UNICODE);
     check_bool('利用規約・プライバシーポリシー: いいね(誰が付けたかは記録しない・外すと消える)を書いた', str_contains((string) json_encode(km_legal_terms(), JSON_UNESCAPED_UNICODE), 'いいねは誰が付けたかを記録せず、数だけを表示します')
         && str_contains($privacyForLikes, 'アプリの「いいね」(場所・端末ごとの印・送り元の印・日時') && str_contains($privacyForLikes, 'もう一度押して外した時点で削除されます'));
-    check_bool('管理画面: ポスターの画面で地点ごとのいいねを見て 0 に戻せる・記録に文言', str_contains((string) file_get_contents(__DIR__ . '/../admin/posters.php'), "if (\$formAction === 'likes_reset') {")
+    // 2026-11-02 にポスターの画面からチャートへ移した
+    check_bool('管理画面: チャートの画面で地点ごとのいいねを見て 0 に戻せる・記録に文言', str_contains((string) file_get_contents(__DIR__ . '/../admin/charts.php'), "} elseif ((string) (\$_POST['form_action'] ?? '') === 'likes_reset') {")
         && isset(KM_ADMIN_LOG_ACTION_LABELS['node.likes_reset']));
 
     /*
@@ -8196,7 +8407,7 @@ function km_check_layout(): void
     check_bool('管理画面: バックアップを見る・落とす・消す・控えを戻す(消す・戻すは書き込みの権限と CSRF)', str_contains($backupsPage, "require __DIR__ . '/_inc/guard.php';")
         && str_contains($backupsPage, "if (\$formAction === 'map_delete') {") && str_contains($backupsPage, "if (\$formAction === 'learning_restore') {")
         && str_contains($backupsPage, '!km_csrf_verify()') && substr_count($backupsPage, '<?php if ($KM_ADMIN_CAN_WRITE): ?>') === 2
-        && str_contains((string) file_get_contents(__DIR__ . '/../admin/_inc/partials/sidebar.php'), '<a href="./backups.php" class="<?= $link(\'backups\') ?>">'));
+        && str_contains((string) file_get_contents(__DIR__ . '/../admin/_inc/partials/sidebar.php'), "['backups', './backups.php'"));
     check_bool('監査ログ: 落とす・戻すに文言', isset(KM_ADMIN_LOG_ACTION_LABELS['map.backup_download'], KM_ADMIN_LOG_ACTION_LABELS['learning.backup_download'], KM_ADMIN_LOG_ACTION_LABELS['learning.backup_restore']));
 
     km_check_heading('map-node-stairs: 階段の上り口・下り口の向き(2026-10-22)');
@@ -8432,10 +8643,11 @@ function km_check_layout(): void
             km_map_event_import_projects_of_map(json_decode('{"events":[]}')), km_map_event_import_projects_of(json_decode('[]')), km_map_event_import_projects_of(null)]);
     check('取り込み: 番号の見せ物(地点の数・Website に無い地点・番号の数・いまの数)', ['nodes' => 3, 'unknown' => 1, 'numbers' => 3, 'current' => 0],
         km_map_event_import_projects_summary($importProjects, ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' => [], 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' => []], []));
-    $mapEventsAdmin = (string) file_get_contents(__DIR__ . '/../admin/map-events.php');
+    // 取り込みは 2026-11-02 にイベントモードから「アプリの地図を取り込む」(map-sync.php)へ移した
+    $mapEventsAdmin = (string) file_get_contents(__DIR__ . '/../admin/_inc/event-import.php') . (string) file_get_contents(__DIR__ . '/../admin/_inc/partials/event-import.php');
     check_bool('取り込みの画面: 企画の番号も入れ替える(既定で印)・一時地点の数と分けて出す', str_contains($mapEventsAdmin, "if (\$pending['projects'] !== null && (\$_POST['import_projects'] ?? '') === '1') {")
         && str_contains($mapEventsAdmin, 'name="import_projects" value="1" id="km-import-projects" checked')
-        && str_contains($mapEventsAdmin, '一時地点 <?= $event[\'poiCount\'] ?>')
+        && str_contains((string) file_get_contents(__DIR__ . '/../admin/map-events.php'), '一時地点 <?= $event[\'poiCount\'] ?>')
         && str_contains((string) file_get_contents(__DIR__ . '/../lib/map-event-import.php'), "'projects' => km_map_event_import_projects_of_map(\$map)]"));
     check('一時地点の名前が番号なら企画の番号(名前全体のときだけ)', ['21', 'A-3', null, null, null],
         [km_map_project_number_from_name(' 21 '), km_map_project_number_from_name('a-3'), km_map_project_number_from_name('受付'), km_map_project_number_from_name('21 たこ焼き'), km_map_project_number_from_name('')]);
@@ -8574,7 +8786,7 @@ function km_check_layout(): void
     $qrAdmin = (string) file_get_contents(__DIR__ . '/../admin/qr-links.php');
     check_bool('管理画面: guard の内側・CSRF を見てから書く・記録に残す・左の一覧にある', str_contains($qrAdmin, "require __DIR__ . '/_inc/guard.php';")
         && strpos($qrAdmin, 'km_csrf_verify()') < strpos($qrAdmin, 'km_qr_link_save(') && str_contains($qrAdmin, "'qr_link.create'")
-        && str_contains((string) file_get_contents(__DIR__ . '/../admin/_inc/partials/sidebar.php'), 'href="./qr-links.php"'));
+        && str_contains((string) file_get_contents(__DIR__ . '/../admin/_inc/partials/sidebar.php'), "'./qr-links.php'"));
 
     km_check_heading('お知らせ: 管理画面で書く・最初の画面と詳しいページ・プレビュー(2026-10-24)');
     require_once __DIR__ . '/../lib/notices.php';
@@ -8632,7 +8844,7 @@ function km_check_layout(): void
     check_bool('管理画面: guard の内側・CSRF を見てから書く・プレビューは保存しない(公開ページと同じ組み立て)・記録に残す・左の一覧にある', str_contains($noticeAdmin, "require __DIR__ . '/_inc/guard.php';")
         && strpos($noticeAdmin, 'km_csrf_verify()') < strpos($noticeAdmin, 'km_notice_save(') && str_contains($noticeAdmin, "if (\$formAction === 'preview') {")
         && str_contains($noticeAdmin, '<?= km_notice_detail_html($preview) ?>') && str_contains($noticeAdmin, "'notice.create'")
-        && str_contains((string) file_get_contents(__DIR__ . '/../admin/_inc/partials/sidebar.php'), 'href="./notices.php"'));
+        && str_contains((string) file_get_contents(__DIR__ . '/../admin/_inc/partials/sidebar.php'), "'./notices.php'"));
     /*
      * ======== 地図の 6 つの直し(2026-10-24、利用者の指示) ========
      *   1. 共有から開いたときは、チュートリアル・前回の経路を出さない(広告は出す)
@@ -8928,46 +9140,12 @@ function km_check_layout(): void
         && str_contains($importPage, 'min="<?= KM_POSTER_IMPORT_MIN ?>"') && str_contains($importPage, "assets/js/poster-import.js"));
     check_bool('利用規約: 広告は収益化していない', str_contains($termsText, '広告は収益化していません。'));
 
-    km_check_heading('table-api: テーブル管理の外部接続(2026-10-21)');
-    require_once __DIR__ . '/../lib/table-api.php';
-    $apiUser = 'kmx_' . str_repeat('a', 16);
-    $apiPass = str_repeat('b', 48);
-    check('ユーザー名とキー: Basic(PHP が分けたもの)', [$apiUser, $apiPass], km_table_api_credentials(['PHP_AUTH_USER' => $apiUser, 'PHP_AUTH_PW' => $apiPass]));
-    check('ユーザー名とキー: Authorization の Basic・Bearer <ID>:<キー>', [[$apiUser, $apiPass], [$apiUser, $apiPass]], [
-        km_table_api_credentials(['HTTP_AUTHORIZATION' => 'Basic ' . base64_encode($apiUser . ':' . $apiPass)]),
-        km_table_api_credentials(['HTTP_AUTHORIZATION' => 'Bearer ' . $apiUser . ':' . $apiPass]),
-    ]);
-    check('ユーザー名とキー: 形の違うもの・無いものは断る(クエリでは受けない)', [null, null, null, null], [
-        km_table_api_credentials([]),
-        km_table_api_credentials(['PHP_AUTH_USER' => 'root', 'PHP_AUTH_PW' => $apiPass]),
-        km_table_api_credentials(['PHP_AUTH_USER' => $apiUser, 'PHP_AUTH_PW' => 'short']),
-        km_table_api_credentials(['HTTP_AUTHORIZATION' => 'Bearer ' . $apiUser, 'QUERY_STRING' => 'key=' . $apiPass]),
-    ]);
-    $apiValuesError = static function (mixed $input): string {
-        try {
-            km_table_api_values($input);
-            return '';
-        } catch (InvalidArgumentException $exception) {
-            return 'x';
-        }
-    };
-    check('書き込む値: {列: 値} だけ(id・入れ子・配列の形・変な列名は断る)', ['x', 'x', 'x', 'x', 'x', ''], [
-        $apiValuesError([]), $apiValuesError(['a', 'b']), $apiValuesError(['id' => 1]), $apiValuesError(['name' => ['x']]),
-        $apiValuesError(['na`me' => 'x']), $apiValuesError(['name' => 'x']),
-    ]);
-    check('書き込む値: null は空(→ NULL)・真偽は 1/0・数は文字に', ['a' => '', 'b' => '1', 'c' => '0', 'd' => '3.5'], km_table_api_values(['a' => null, 'b' => true, 'c' => false, 'd' => 3.5]));
-    $apiLib = (string) file_get_contents(__DIR__ . '/../lib/table-api.php');
-    $apiEndpointCode = (string) file_get_contents(__DIR__ . '/../api/table.php');
-    check_bool('キーは SHA-256 だけを置く・ユーザー名とキーはこちらで作る(乱数)', str_contains($apiLib, "hash('sha256', \$secret)") && str_contains($apiLib, "\$keyId = 'kmx_' . bin2hex(random_bytes(8));")
-        && str_contains($apiLib, '$secret = bin2hex(random_bytes(24));') && !preg_match('/CREATE TABLE IF NOT EXISTS km_table_api_keys \([^;]*\bsecret\s+VARCHAR/s', $apiLib));
-    check_bool('最小限の権限: 1 つの表だけ・kmt_ だけ・既定は読む + 足す・取り消し/表の削除で止まる', KM_TABLE_API_DEFAULT_PERMISSIONS === ['can_read', 'can_insert']
-        && str_contains($apiLib, 'WHERE key_id = ? AND revoked_at IS NULL') && str_contains($apiLib, '!km_table_is_managed_name($table) || !km_table_exists($pdo, $table) || km_table_is_deleted($pdo, $table)')
-        && str_contains($apiEndpointCode, "if (!is_string(\$tableParam) || (\$tableParam !== '' && \$tableParam !== \$connection['table'])) {"));
-    check_bool('口: 操作ごとに権限を見てから触る・Cookie を使わない・書き込みは記録に残す', strpos($apiEndpointCode, 'if (!$connection[$need]) {') < strpos($apiEndpointCode, 'km_table_rows(')
-        && !str_contains($apiEndpointCode, 'km_session_start') && substr_count($apiEndpointCode, "km_admin_log_record('table', 'table.api_write'") === 3
-        && isset(KM_ADMIN_LOG_ACTION_LABELS['table.api_create'], KM_ADMIN_LOG_ACTION_LABELS['table.api_revoke'], KM_ADMIN_LOG_ACTION_LABELS['table.api_write']));
-    check_bool('管理画面: キーは作った直後の 1 回だけ出す', str_contains((string) file_get_contents(__DIR__ . '/../admin/tables.php'), "unset(\$_SESSION['km_table_api_new']);"));
-
+    km_check_heading('table-api: テーブル管理の外部接続は外した(2026-11-02)');
+    $tablesPage = (string) file_get_contents(__DIR__ . '/../admin/tables.php');
+    check_bool('外部接続の口(api/table.php・lib/table-api.php)が無い', !is_file(__DIR__ . '/../api/table.php') && !is_file(__DIR__ . '/../lib/table-api.php'));
+    check_bool('テーブル管理の画面にキーを作る・取り消す口が無い', !str_contains($tablesPage, 'table-api.php') && !str_contains($tablesPage, 'api_create')
+        && !str_contains($tablesPage, 'api_revoke') && !str_contains($tablesPage, 'km_table_api_new'));
+    check_bool('記録の文言にも外部接続が無い', !isset(KM_ADMIN_LOG_ACTION_LABELS['table.api_create']) && !isset(KM_ADMIN_LOG_ACTION_LABELS['table.api_write']));
     km_check_heading('map-floors: 階と平面図の差し替え・追加・削除・zip(2026-10-21)');
     require_once __DIR__ . '/../lib/map-floors.php';
     require_once __DIR__ . '/../lib/zip-read.php';
@@ -9590,12 +9768,19 @@ function km_check_layout(): void
     $nodeExtrasApi = (string) file_get_contents(__DIR__ . '/../api/node-extras.php');
     $nodeExtrasLib = (string) file_get_contents(__DIR__ . '/../lib/node-extras.php');
     $appScheduleApi = (string) file_get_contents(__DIR__ . '/../api/app-schedule.php');
-    check_bool('アプリ: 部屋の詳細に一般の予定と屋台(教員室・研究室は出さない)', str_contains($nodeExtrasApi, "'schedule' => \$schedule, 'stalls' => \$stalls]")
+    check_bool('アプリ: 部屋の詳細に一般の予定と屋台(教員室・研究室は出さない)', str_contains($nodeExtrasApi, "'schedule' => \$schedule, 'stalls' => \$stalls,")
         && str_contains($nodeExtrasLib, 'km_event_schedule_public($pdo, $projectNodes, [], false, [$node[\'id\'] => true])')
         && substr_count($nodeExtrasLib, "if (\$node === null || km_map_node_is_restricted(\$node)) {") >= 3);
     check_bool('アプリ: 予定の口はアクセスコード(本文)・一般の行だけ・場所はアプリの uuid・教員室と研究室は場所に入れない', str_contains($appScheduleApi, "km_learning_code_allowed(\$pdo, (string) (\$input['code'] ?? ''))")
         && str_contains($appScheduleApi, "require_method('POST');") && str_contains($appScheduleApi, 'km_event_schedule_public($pdo, $projectNodes, [], false, $places)')
         && str_contains($appScheduleApi, "if (!km_map_node_is_restricted(\$node) && (string) (\$row['uuid'] ?? '') !== '') {"));
+    // 2026-11-02(利用者「アプリ側を Website に揃えて」): ♡ は Website と同じポスターごと・地点の URL も返す
+    check_bool('アプリ: ♡ はポスターごと(この地点に出しているポスターだけ・Website と同じ表と回数の絞り)',
+        str_contains($nodeExtrasApi, 'if (!in_array($posterId, $posterIds, true)) {')
+        && str_contains($nodeExtrasApi, "km_poster_like_set(\$pdo, \$posterId, \$posterVoter, km_poster_like_source(\$pdo), (bool) \$posterLike['like'])")
+        && str_contains($nodeExtrasApi, "'posterLikes' => \$posterLikes, 'link' => \$link,"));
+    check_bool('アプリ: ♡ を押すには端末の印が要る', str_contains($nodeExtrasApi, "|| !is_bool(\$posterLike['like'] ?? null) || \$device === '')) {"));
+    check_bool('アプリ: 地点の URL は http/https だけ(km_node_links_for_map)', str_contains($nodeExtrasApi, "km_node_links_for_map(\$pdo)[\$node['id']] ?? null"));
 
     km_check_heading('脆弱性のメール: PHP・composer・npm・Ubuntu の USN(2026-10-30、振り返りのフェーズ 6 の 2。lib/security-audit.php)');
     require_once __DIR__ . '/../lib/security-audit.php';
@@ -9638,14 +9823,14 @@ function km_check_layout(): void
     check('メール: 脆弱性は件名の一番前・種類として受ける', ['[KosenMap] 脆弱性が出ました。対処してください (1件) ほか 1件', 1],
         [km_update_notice_subject([['name' => 'PHP 8.4.15', 'current' => '8.4.14', 'available' => '8.4.15', 'kind' => 'vuln'], ['name' => 'logto', 'current' => '1', 'available' => '2', 'kind' => 'release']]),
             count(km_update_notice_parse('{"items":[{"name":"Ubuntu USN-1","kind":"vuln"}]}')['items'])]);
-    check_bool('メール: 当て方(PHP・composer・Soketi・Ubuntu とカーネルの再起動)を書く', str_contains(km_update_notice_body([['name' => 'x', 'current' => '', 'available' => '', 'kind' => 'vuln']], 'h'), 'カーネル(linux-…)は再起動するまで効かない'));
+    check_bool('メール: 当て方(PHP・composer・Ubuntu とカーネルの再起動)を書く', str_contains(km_update_notice_body([['name' => 'x', 'current' => '', 'available' => '', 'kind' => 'vuln']], 'h'), 'カーネル(linux-…)は再起動するまで効かない'));
     $updatesForVulns = (string) @file_get_contents(dirname(__DIR__, 2) . '/scripts/check-updates.sh');
     if ($updatesForVulns === '') {
         check_skip('check-updates.sh の脆弱性の欄', '配備先には scripts/ が無い');
     } else {
-        check_bool('check-updates.sh: 4 つを見る・新しい勧告は必ず送る・送れてから覚えて二度と送らない・パイプで while を回さない',
+        check_bool('check-updates.sh: 3 つを見る(Soketi の npm は 2026-11-02 に外した)・新しい勧告は必ず送る・送れてから覚えて二度と送らない・パイプで while を回さない',
             str_contains($updatesForVulns, 'scripts/security-audit.php php') && str_contains($updatesForVulns, 'scripts/security-audit.php composer')
-            && str_contains($updatesForVulns, 'scripts/security-audit.php npm') && str_contains($updatesForVulns, 'scripts/security-audit.php usn "$_release"')
+            && !str_contains($updatesForVulns, 'scripts/security-audit.php npm') && str_contains($updatesForVulns, 'scripts/security-audit.php usn "$_release"')
             && str_contains($updatesForVulns, "  if [ -n \"\$NEW_VULN_KEYS\" ]; then\n    return 0")
             && strpos($updatesForVulns, '>> "$VULN_SEEN_FILE"') > strpos($updatesForVulns, 'php scripts/notify-update.php; then')
             && str_contains($updatesForVulns, 'done < "$VULN_TMP"'));

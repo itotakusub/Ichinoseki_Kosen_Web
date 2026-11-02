@@ -136,15 +136,14 @@ if (!in_array(KM_ADMIN_SCOPE, $grantedScopes, true)) {
  *
  * 各ページの POST に1つずつ書くと、足し忘れたページだけ素通しになる。
  * 全ページが通るここで、GET / HEAD 以外をまとめて見る。
- * 状態を変えない POST(Soketi の購読の認可)だけ、ページ側が
- * KM_ADMIN_POST_WITHOUT_WRITE を定義して外す。
+ * **例外は無い**(2026-11-02)。以前は状態を変えない POST(Soketi の購読の認可)だけ、ページ側が
+ * KM_ADMIN_POST_WITHOUT_WRITE を定義して外せたが、Soketi ごと外したので口も閉じた。
  */
 $KM_ADMIN_CAN_WRITE = in_array(KM_ADMIN_WRITE_SCOPE, $grantedScopes, true);
 $kmRequestMethod = strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET'));
 if (
     !$KM_ADMIN_CAN_WRITE
     && !in_array($kmRequestMethod, ['GET', 'HEAD'], true)
-    && !defined('KM_ADMIN_POST_WITHOUT_WRITE')
 ) {
     km_admin_log_record('auth', 'admin.write_denied', basename((string) ($_SERVER['SCRIPT_NAME'] ?? '')));
     km_admin_forbid_write();

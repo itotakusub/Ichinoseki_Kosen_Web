@@ -16,7 +16,6 @@ $KM_PAGE = [
     'h1Key' => 'page.profile.h1',
     'h1' => 'プロフィール',
     'crumbs' => [
-        ['key' => 'side.extra', 'text' => 'その他ページ'],
         ['key' => 'page.profile.h1', 'text' => 'プロフィール'],
     ],
 ];

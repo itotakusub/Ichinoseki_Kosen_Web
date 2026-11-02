@@ -104,7 +104,7 @@ $KM_PAGE = [
     'h1Key' => 'page.mapSettings.h1',
     'h1' => '地図データ公開設定',
     'crumbs' => [
-        ['key' => 'side.database', 'text' => 'データベース'],
+        ['key' => 'side.groupMap', 'text' => '地図'],
         ['key' => 'page.mapSettings.h1', 'text' => '地図データ公開設定'],
     ],
 ];

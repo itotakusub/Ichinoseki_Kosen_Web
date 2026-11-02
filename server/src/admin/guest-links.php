@@ -27,7 +27,7 @@ $KM_PAGE = [
     'h1Key' => 'page.guestLinks.h1',
     'h1' => 'お試しの閲覧リンク',
     'crumbs' => [
-        ['key' => 'side.content', 'text' => 'コンテンツ'],
+        ['key' => 'side.groupPublic', 'text' => '公開ページ'],
         ['key' => 'page.guestLinks.h1', 'text' => 'お試しの閲覧リンク'],
     ],
 ];

@@ -5,21 +5,22 @@ declare(strict_types=1);
 define('KM_ADMIN', true);
 require __DIR__ . '/_inc/guard.php';
 require_once dirname(__DIR__) . '/lib/db.php';
-require_once dirname(__DIR__) . '/lib/table-manage.php';
 require_once dirname(__DIR__) . '/lib/admin-log.php';
 require_once dirname(__DIR__) . '/lib/logto-management.php';
-require_once dirname(__DIR__) . '/lib/tasks.php';
+require_once dirname(__DIR__) . '/lib/staff-org.php';
+require_once dirname(__DIR__) . '/lib/app-map.php';
 
 /*
  * タイルの数値。取得できないものは「—」のままにして画面自体は必ず出す
  * (admin/map-settings.php の $dbError と同じ扱い)。
  * 監視対象サービス数は services.js が data-km-services-count へ書き込むのでここでは扱わない。
  */
-$tableCount = null;
+// 「テーブル数」のタイルは 2026-11-02 に「教職員の申請(未処理)」へ替えた(運用で見て手が動く数にする)
+$staffWaiting = null;
 $eventCount = null;
 try {
     $pdo = km_db();
-    $tableCount = count(km_table_list($pdo));
+    $staffWaiting = km_staff_requests_pending_count($pdo);
     $eventCount = km_admin_log_count_since($pdo, 1);
 } catch (Throwable $exception) {
     error_log('admin/index.php tiles failed: ' . $exception->getMessage());
@@ -34,26 +35,20 @@ try {
 }
 
 /*
- * 「次フェーズの作業」は、かんばん・プロジェクト状況と同じ表(km_tasks)から出す(2026-10-05、利用者の指示)。
- * 以前は 4 行の決め打ちで、ボードで進めても変わらなかった。
- * 並びは「進行中 → 要判断 → 未着手」、同じ状態の中はボードの並び(sort_order)。完了は出さない。
+ * アプリへ配っている地図の期限(2026-11-02)。以前ここにあった「次フェーズの作業」(km_tasks)は
+ * プロジェクト状況・かんばんと同じものだったので外し、会期の前に見落とすと困る「配信の期限」を出す。
+ * 期限が切れると来場者アプリは地図を消す(lib/app-map.php の km_app_map_release_status の注記)。
  */
-$nextTasks = null;
-$taskStatusLabel = ['progress' => '進行中', 'decision' => '要判断', 'todo' => '未着手'];
-$taskStatusBadge = ['progress' => 'text-bg-info', 'decision' => 'text-bg-warning', 'todo' => 'text-bg-secondary'];
+$mapReleases = null;
 try {
-    $rank = ['progress' => 0, 'decision' => 1, 'todo' => 2];
-    $open = array_values(array_filter(
-        km_tasks_all(km_db()),
-        static fn (array $task): bool => isset($rank[$task['status']])
-    ));
-    usort($open, static fn (array $a, array $b): int =>
-        [$rank[$a['status']], (int) $a['sortOrder'], (int) $a['id']] <=> [$rank[$b['status']], (int) $b['sortOrder'], (int) $b['id']]);
-    $nextTasks = array_slice($open, 0, 5);
+    $mapConfig = km_app_map_config();
+    $mapReleases = km_app_map_release_status($mapConfig);
+    foreach ($mapReleases as $i => $row) {
+        $mapReleases[$i]['paused'] = km_app_map_is_paused((array) ($mapConfig['maps'][$row['slug']] ?? []));
+    }
 } catch (Throwable $exception) {
-    error_log('admin/index.php next tasks failed: ' . $exception->getMessage());
+    error_log('admin/index.php map releases failed: ' . $exception->getMessage());
 }
-
 $KM_PAGE = [
     'nav' => 'index',
     'titleKey' => 'page.index.title',
@@ -100,7 +95,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
                   </div>
                   <i class="bi bi-hdd-network small-box-icon" aria-hidden="true"></i>
                   <a
-                    href="./monitor.php"
+                    href="./taskmgr.php?tab=services"
                     class="small-box-footer link-light link-underline-opacity-0 link-underline-opacity-50-hover"
                   >
                     <span data-i18n="common.details">詳細</span>
@@ -135,12 +130,12 @@ require __DIR__ . '/_inc/partials/page-header.php';
                 <!--begin::Small Box Widget 3-->
                 <div class="small-box text-bg-warning">
                   <div class="inner">
-                    <h3><?= $tableCount === null ? '&mdash;' : (int) $tableCount ?></h3>
-                    <p data-i18n="page.index.tileTables">テーブル数</p>
+                    <h3><?= $staffWaiting === null ? '&mdash;' : (int) $staffWaiting ?></h3>
+                    <p data-i18n="page.index.tileStaff">教職員の申請(未処理)</p>
                   </div>
-                  <i class="bi bi-table small-box-icon" aria-hidden="true"></i>
+                  <i class="bi bi-person-badge small-box-icon" aria-hidden="true"></i>
                   <a
-                    href="./tables.php"
+                    href="./staff-requests.php"
                     class="small-box-footer link-light link-underline-opacity-0 link-underline-opacity-50-hover"
                   >
                     <span data-i18n="common.details">詳細</span>
@@ -211,36 +206,41 @@ require __DIR__ . '/_inc/partials/page-header.php';
                 <!--begin::Card-->
                 <div class="card">
                   <div class="card-header d-flex align-items-center">
-                    <h3 class="card-title" data-i18n="page.index.nextTitle">次フェーズの作業</h3>
+                    <h3 class="card-title" data-i18n="page.index.mapTitle">アプリへ配っている地図</h3>
                     <div class="ms-auto">
-                      <a href="./kanban.php" class="btn btn-sm btn-outline-secondary" data-i18n="page.index.nextKanban">かんばん</a>
-                      <a href="./projects.php" class="btn btn-sm btn-outline-secondary" data-i18n="page.index.nextProjects">プロジェクト状況</a>
+                      <a href="./map-publish.php" class="btn btn-sm btn-outline-secondary" data-i18n="side.mapPublish">地図の配信</a>
                     </div>
                   </div>
                   <!-- /.card-header -->
                   <div class="card-body p-0">
-                    <?php if ($nextTasks === null): ?>
-                      <p class="text-body-secondary m-3" data-i18n="page.index.nextError">作業の一覧を読み込めませんでした。</p>
-                    <?php elseif ($nextTasks === []): ?>
-                      <p class="text-body-secondary m-3" data-i18n="page.index.nextEmpty">残っている作業はありません。</p>
+                    <?php if ($mapReleases === null): ?>
+                      <p class="text-body-secondary m-3" data-i18n="page.index.mapError">配信の設定を読み込めませんでした。</p>
+                    <?php elseif ($mapReleases === []): ?>
+                      <p class="text-body-secondary m-3" data-i18n="page.index.mapEmpty">いま配っている地図はありません。</p>
                     <?php else: ?>
                     <ul class="list-group list-group-flush">
-                      <?php foreach ($nextTasks as $i => $task): ?>
-                      <li class="list-group-item d-flex align-items-center gap-2">
-                        <i class="bi bi-<?= (int) $i + 1 ?>-circle-fill text-primary" aria-hidden="true"></i>
-                        <span class="flex-grow-1"><?= km_e((string) $task['title']) ?></span>
-                        <span class="badge <?= km_e($taskStatusBadge[$task['status']]) ?>"
-                          data-i18n="page.projects.status.<?= km_e((string) $task['status']) ?>"
-                          ><?= km_e($taskStatusLabel[$task['status']]) ?></span>
-                        <div class="progress km-progress-sm km-w-8rem flex-shrink-0" role="progressbar" aria-valuenow="<?= (int) $task['progress'] ?>" aria-valuemin="0" aria-valuemax="100">
-                          <div class="progress-bar" data-km-progress="<?= (int) $task['progress'] ?>"></div>
-                        </div>
+                      <?php foreach ($mapReleases as $row): ?>
+                      <li class="list-group-item d-flex align-items-center gap-2 flex-wrap">
+                        <code><?= km_e($row['slug']) ?></code>
+                        <span class="text-body-secondary fs-7">版 <?= (int) $row['revision'] ?></span>
+                        <span class="flex-grow-1"></span>
+                        <?php if ($row['paused']): ?>
+                          <span class="badge text-bg-secondary" data-i18n="page.index.mapPaused">停止中</span>
+                        <?php elseif ($row['unknown']): ?>
+                          <span class="badge text-bg-danger" data-i18n="page.index.mapUnknown">期限が読めません</span>
+                        <?php elseif ($row['expired']): ?>
+                          <span class="badge text-bg-danger" data-i18n="page.index.mapExpired">期限切れ</span>
+                        <?php else: ?>
+                          <span class="badge <?= $row['warn'] ? 'text-bg-warning' : 'text-bg-success' ?>">
+                            <?= km_e(substr((string) $row['expiresAt'], 0, 16)) ?>
+                            (<span data-i18n="page.index.mapLeft">あと</span> <?= (int) $row['daysLeft'] ?> <span data-i18n="page.index.mapDays">日</span>)
+                          </span>
+                        <?php endif; ?>
                       </li>
                       <?php endforeach; ?>
                     </ul>
                     <?php endif; ?>
-                  </div>
-                  <!-- /.card-body -->
+                  </div>                  <!-- /.card-body -->
                 </div>
                 <!--end::Card-->
               </div>
@@ -250,10 +250,5 @@ require __DIR__ . '/_inc/partials/page-header.php';
           <!--end::Container-->
         </div>
         <!--end::App Content-->
-        <?php // 進み具合の幅は動く値なので data 属性で渡し、ここで style へ入れる(CSP で style 属性が使えない。projects.php と同じ) ?>
-        <script<?= km_csp_nonce_attr() ?>>
-          document.querySelectorAll('[data-km-progress]').forEach((bar) => {
-            bar.style.width = bar.dataset.kmProgress + '%';
-          });
-        </script>
+
 <?php require __DIR__ . '/_inc/partials/footer.php'; ?>

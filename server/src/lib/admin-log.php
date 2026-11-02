@@ -5,7 +5,7 @@ declare(strict_types=1);
 /**
  * 管理操作の監査ログ。admin/timeline.php が表示し、admin/index.php が件数を出す。
  *
- * lib/chat.php / lib/map-rate-limit.php と同じ「初回アクセス時に CREATE TABLE IF NOT
+ * lib/map-rate-limit.php と同じ「初回アクセス時に CREATE TABLE IF NOT
  * EXISTS」パターン。DB ユーザー Main の現権限(SELECT/INSERT/UPDATE/CREATE/DELETE)だけで
  * 完結し、権限の追加付与は要らない。
  *
@@ -62,7 +62,7 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     'logout' => 'がログアウトしました',
     'admin.denied' => 'が管理画面を開こうとしましたが、管理の権限がありませんでした',
     'admin.write_denied' => 'の変更は、書き込みの権限が無いため断られました',
-    'gate.denied' => 'が phpMyAdmin などの管理用ポートへ入ろうとしましたが、権限がありませんでした',
+    'gate.denied' => 'が管理用ポート(Mailpit など)へ入ろうとしましたが、権限がありませんでした',
     'account.suspended_blocked' => 'は停止されたアカウントのため、入れませんでした',
     // 実行者は居ない(Logto からの呼び出し)。残る IP は送ってきた相手のもの
     'webhook.signature_failed' => 'が送った Logto の webhook は、署名を確かめられず受け付けませんでした',
@@ -164,6 +164,7 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     'apk.publish' => 'が受け箱のアプリを公開しました',
     'apk.cancel' => 'が受け箱のアプリを取り消しました',
     'apk.rollback' => 'がアプリを前の版に戻しました',
+    'apk.auto_publish' => 'がアプリの自動公開を切り替えました',
     'profile.avatar_update' => 'がプロフィール画像を変更しました',
     'profile.avatar_clear' => 'がプロフィール画像を既定に戻しました',
     // **新しいパスワードそのものは記録しない。** 変えたという事実だけ残す
@@ -233,7 +234,7 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     'test.settings' => 'がテスト用の表示(アンケート・操作方法)を変更しました',
     'test.events_csv' => 'がテスト用アカウントの記録を書き出しました',
     'test.events_delete' => 'がテスト用アカウントの記録を消しました',
-    // ポスター・広告と地点の URL(2026-10-21、admin/posters.php)
+    // ポスター・広告と地点の URL(2026-10-21、admin/posters.php。2026-11-02 から地点の URL は search-aliases.php・終わりの知らせは notices.php・部屋のいいねは charts.php)
     'poster.mode' => 'がポスターの出し方を変更しました',
     'poster.create' => 'がポスターを足しました',
     'poster.update' => 'がポスターを変更しました',
@@ -241,10 +242,7 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     'poster.import' => 'がポスターをまとめて取り込みました',
     'node.likes_reset' => 'が部屋のいいねを 0 に戻しました',
     'poster.likes_reset' => 'がポスターの ♡ を 0 に戻しました',
-    // テーブル管理の外部接続(2026-10-21、lib/table-api.php)。書き込みは外のプログラムからで、実行者は無く IP だけ残る
-    'table.api_create' => 'がテーブルの外部接続を作りました',
-    'table.api_revoke' => 'がテーブルの外部接続を取り消しました',
-    'table.api_write' => 'の外部接続がテーブルの行を書き換えました',
+    // テーブル管理の外部接続(table.api_*)は 2026-11-02 に口ごと外した(本番のキーは 0 件だった)
     'poster.tutorial_end' => 'がチュートリアルの終わりの知らせを変更しました',
     'map.node_link' => 'が地点の URL を変更しました',
     // 階と平面図(2026-10-21、admin/map-floors.php)

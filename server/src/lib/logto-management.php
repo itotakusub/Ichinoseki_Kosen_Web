@@ -13,7 +13,7 @@ declare(strict_types=1);
  * 資格情報は lib/db.php と同じ「環境変数 → config/logto-m2m.local.php → 既定値」の二段構え。
  * フェーズ4で compose の環境変数が効かない事例があったため、ファイル側の逃げ道を必ず残す。
  *
- * appSecret は**サーバー側でしか読まない**(lib/soketi.php の SOKETI_APP_SECRET と同じ原則)。
+ * appSecret は**サーバー側でしか読まない**(鍵はブラウザに出さない、の原則)。
  * 画面や JS へ渡すことは一切しない。
  */
 

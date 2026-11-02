@@ -22,7 +22,7 @@ $KM_PAGE = [
     'h1Key' => 'page.arCaptures.h1',
     'h1' => 'AR の撮影',
     'crumbs' => [
-        ['key' => 'side.content', 'text' => 'コンテンツ'],
+        ['key' => 'side.groupRecords', 'text' => '記録と分析'],
         ['key' => 'page.arCaptures.h1', 'text' => 'AR の撮影'],
     ],
 ];

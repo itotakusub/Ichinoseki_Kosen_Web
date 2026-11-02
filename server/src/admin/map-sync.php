@@ -29,6 +29,10 @@ require_once dirname(__DIR__) . '/lib/admin-log.php';
  * ## 適用の前に必ず数を見せる
  *
  * 何件増えて何件置き換わり、消すと**どの氏名が失われる**のかを出してから押させる。
+ *
+ * ## 管理アプリのイベントもここから(2026-11-02)
+ *
+ * 以前はイベントモードの画面にあった。管理アプリから入れる口を 1 つにまとめた(_inc/event-import.php)。
  */
 
 $slug = 'kosen-main';
@@ -51,6 +55,9 @@ try {
 if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && !km_csrf_verify()) {
     // 副作用を起こす前に弾く
     $errors[] = 'セッションの有効期限が切れています。ページを再読み込みしてからやり直してください。';
+} elseif (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && str_starts_with((string) ($_POST['form_action'] ?? ''), 'import_')) {
+    // 管理アプリのイベント(下の _inc/event-import.php が受ける)
+    $kmEventImportVerified = true;
 } elseif (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
     $action = (string) ($_POST['do_sync'] ?? '');
 
@@ -148,6 +155,10 @@ if (isset($_GET['uploaded'])) {
     $notice = 'アプリの地図を取り込みました。';
 }
 
+// 管理アプリのイベントの取り込み(2026-11-02 にイベントモードの画面から移した)。POST は CSRF を通ったときだけ受ける
+$kmEventImportVerified ??= false;
+require __DIR__ . '/_inc/event-import.php';
+
 $KM_PAGE = [
     'nav' => 'mapSync',
     'titleKey' => 'page.mapSync.title',
@@ -155,7 +166,7 @@ $KM_PAGE = [
     'h1Key' => 'page.mapSync.h1',
     'h1' => 'アプリの地図を取り込む',
     'crumbs' => [
-        ['key' => 'side.database', 'text' => 'データベース'],
+        ['key' => 'side.groupApp', 'text' => 'アプリ'],
         ['key' => 'page.mapSync.h1', 'text' => 'アプリの地図を取り込む'],
     ],
 ];
@@ -405,6 +416,9 @@ require __DIR__ . '/_inc/partials/page-header.php';
                 </button>
               </form>
             <?php endif; ?>
+
+            <?php // 管理アプリのイベント(2026-11-02 にイベントモードの画面から移した) ?>
+            <?php require __DIR__ . '/_inc/partials/event-import.php'; ?>
           </div>
           <!--end::Container-->
         </div>

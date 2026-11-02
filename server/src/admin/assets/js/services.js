@@ -4,9 +4,10 @@
  * エンドポイントはここ 1 箇所にまとめてある。実疎通を実装するフェーズでは
  * この配列に status を書き戻すだけで画面が追随する。
  *
- * 注意: ブラウザから 8281 / 3001 / 3002 / 6001 を直接 fetch すると、
- * 自己署名証明書と CORS で必ず失敗する。実際の死活監視は 9443 の PHP 側に
- * プロキシ用エンドポイントを立てて、サーバー間通信で行うこと。
+ * 注意: ブラウザから各サービスを直接 fetch すると、自己署名証明書と CORS で必ず失敗する。
+ * 実際の死活監視は PHP 側(api/health-check.php)がサーバー間通信で行う。
+ *
+ * 2026-11-02: phpMyAdmin と Soketi を外し、サービス監視の画面はタスクマネージャーの「サービス」へまとめた。
  */
 (() => {
   'use strict';
@@ -44,6 +45,7 @@
       url: urlOf('web-http', `http://${HOST}:8080`),
       icon: 'bi-globe',
       accent: 'text-bg-primary',
+      containers: ['km-nginx-proxy'],
       openable: true,
       status: 'unknown',
     },
@@ -55,17 +57,7 @@
       url: urlOf('web-https', `https://${HOST}:9443`),
       icon: 'bi-shield-lock-fill',
       accent: 'text-bg-success',
-      openable: true,
-      status: 'unknown',
-    },
-    {
-      id: 'phpmyadmin',
-      port: portOf('phpmyadmin', 8281),
-      nameKey: 'svc.phpmyadmin.name',
-      roleKey: 'svc.phpmyadmin.role',
-      url: urlOf('phpmyadmin', `https://${HOST}:8281`),
-      icon: 'bi-database-gear',
-      accent: 'text-bg-info',
+      containers: ['km-nginx-proxy'],
       openable: true,
       status: 'unknown',
     },
@@ -77,6 +69,7 @@
       url: urlOf('logto-core', `https://${HOST}:3001`),
       icon: 'bi-key-fill',
       accent: 'text-bg-warning',
+      containers: ['km-logto'],
       openable: true,
       status: 'unknown',
     },
@@ -85,21 +78,11 @@
       port: portOf('logto-admin', 3002),
       nameKey: 'svc.logtoAdmin.name',
       roleKey: 'svc.logtoAdmin.role',
-      url: urlOf('logto-admin', `https://${HOST}:3002`),
+      // Console は SSH のトンネルを張ってから http://localhost:3002 で開く(2026-11-02。設定の画面に開き方)
+      url: urlOf('logto-admin', 'http://localhost:3002'),
       icon: 'bi-sliders',
       accent: 'text-bg-warning',
-      openable: true,
-      status: 'unknown',
-    },
-    {
-      id: 'soketi',
-      port: portOf('soketi', 6001),
-      nameKey: 'svc.soketi.name',
-      roleKey: 'svc.soketi.role',
-      url: urlOf('soketi', `https://${HOST}:6001`),
-      icon: 'bi-broadcast',
-      accent: 'text-bg-danger',
-      // WebSocket の入口(2026-10-19 から管理画面の 443 番の /ws/)。ブラウザで開く画面は無い
+      containers: ['km-logto'],
       openable: false,
       status: 'unknown',
     },
@@ -118,6 +101,8 @@
       url: urlOf('mailpit', null),
       icon: 'bi-envelope-at',
       accent: 'text-bg-primary',
+      // 本番は mailserver、ローカルは Mailpit(居る方を出す)
+      containers: ['km-mailserver', 'km-mailpit'],
       openable: Boolean(urlOf('mailpit', null)),
       status: 'unknown',
     },
@@ -129,6 +114,7 @@
       url: `${HOST}:${portOf('mariadb', 3306)}`,
       icon: 'bi-database-fill',
       accent: 'text-bg-secondary',
+      containers: ['km-mariadb'],
       // TCP 直接続なのでブラウザからは開けない
       openable: false,
       status: 'unknown',
@@ -175,43 +161,42 @@
     </div>
   `;
 
-  // 監視ページ用: card で接続先と操作ボタンまで出す
-  const detailedCard = (service) => {
-    const openButton = service.openable
-      ? `<a href="${escapeHtml(service.url)}" class="btn btn-outline-primary btn-sm"
-             target="_blank" rel="noopener noreferrer">
-           <i class="bi bi-box-arrow-up-right me-1" aria-hidden="true"></i>${escapeHtml(t('svc.open'))}
-         </a>`
-      : `<span class="text-body-secondary fs-7">
-           <i class="bi bi-plug me-1" aria-hidden="true"></i>${escapeHtml(t('svc.directConnect'))}
-         </span>`;
-
-    return `
-      <div class="col-12 col-md-6 col-xl-4">
-        <div class="card mb-3 h-100">
-          <div class="card-header d-flex align-items-center">
-            <span class="info-box-icon km-svc-icon ${service.accent} shadow-sm me-2">
-              <i class="bi ${service.icon}"></i>
-            </span>
-            <h3 class="card-title mb-0">${escapeHtml(t(service.nameKey))}</h3>
-            <div class="card-tools ms-auto">${statusBadge(service.status)}</div>
-          </div>
-          <div class="card-body">
-            <dl class="row mb-0 fs-7">
-              <dt class="col-4 text-body-secondary">${escapeHtml(t('svc.role'))}</dt>
-              <dd class="col-8 mb-2">${escapeHtml(t(service.roleKey))}</dd>
-              <dt class="col-4 text-body-secondary">${escapeHtml(t('svc.port'))}</dt>
-              <dd class="col-8 mb-2">${service.port}</dd>
-              <dt class="col-4 text-body-secondary">${escapeHtml(t('svc.endpoint'))}</dt>
-              <dd class="col-8 mb-0"><code class="text-break">${escapeHtml(service.url)}</code></dd>
-            </dl>
-          </div>
-          <div class="card-footer">${openButton}</div>
-        </div>
-      </div>
-    `;
+  /*
+   * コンテナの様子(タスクマネージャーが host-stats.sh の集計から渡す。名前 → 「メモリ」などの短い文)。
+   * null の間はまだ集計を読んでいない(名前だけ出す)。集計に名前が無ければ「見当たらない」。
+   */
+  let containerInfo = null;
+  const containerCell = (service) => {
+    const names = service.containers ?? [];
+    if (names.length === 0) {
+      return '<td class="text-body-secondary">—</td>';
+    }
+    if (containerInfo === null) {
+      return `<td class="fs-7"><code>${escapeHtml(names[0])}</code></td>`;
+    }
+    const found = names.find((name) => Object.hasOwn(containerInfo, name));
+    if (!found) {
+      return `<td class="fs-7"><span class="badge text-bg-warning me-1">${escapeHtml(t('svc.containerMissing'))}</span><code>${escapeHtml(names[0])}</code></td>`;
+    }
+    return `<td class="fs-7"><code>${escapeHtml(found)}</code> <span class="text-body-secondary">${escapeHtml(containerInfo[found])}</span></td>`;
   };
 
+  // タスクマネージャーの「サービス」用: 1 サービス 1 行(2026-11-02。以前のサービス監視のカードを置き換えた)
+  const tableRow = (service) => {
+    const open = service.openable
+      ? `<a href="${escapeHtml(service.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(service.url)}</a>`
+      : `<code class="text-break">${escapeHtml(service.url ?? '')}</code>`;
+    return `
+      <tr>
+        <td><i class="bi ${service.icon} me-2" aria-hidden="true"></i>${escapeHtml(t(service.nameKey))}</td>
+        <td>${statusBadge(service.status)}</td>
+        <td class="text-end font-monospace">${service.port}</td>
+        <td>${escapeHtml(t(service.roleKey))}</td>
+        <td class="fs-7">${open}</td>
+        ${containerCell(service)}
+      </tr>
+    `;
+  };
   /*
    * 設定ページ用: 接続先の一覧表(ポートと役割だけ)。
    *
@@ -232,8 +217,8 @@
     document.querySelectorAll('[data-km-services="compact"]').forEach((container) => {
       container.innerHTML = SERVICES.map((service) => compactCard(service)).join('');
     });
-    document.querySelectorAll('[data-km-services="detailed"]').forEach((container) => {
-      container.innerHTML = SERVICES.map((service) => detailedCard(service)).join('');
+    document.querySelectorAll('[data-km-services="table"]').forEach((tbody) => {
+      tbody.innerHTML = SERVICES.map((service) => tableRow(service)).join('');
     });
     document.querySelectorAll('[data-km-endpoints]').forEach((tbody) => {
       tbody.innerHTML = SERVICES.map((service) => endpointRow(service)).join('');
@@ -291,29 +276,12 @@
     return Math.round(grown * (0.8 + Math.random() * 0.4));
   };
 
-  /**
+  /*
    * ./api/health-check.php を叩いて SERVICES[].status を書き戻す。
-   * 9443 の PHP がサーバー間で各ポートへ TCP 接続を試すだけなので、ブラウザの
+   * PHP がサーバー間で各ポートへ TCP 接続を試すだけなので、ブラウザの
    * 自己署名証明書・CORS の制約を受けない(services.js 冒頭のコメント参照)。
    * 連打防止のため、実行中の呼び出しは無視する。
-   */
-  /**
-   * 死活確認の結果を取り込んで描き直す。
-   *
-   * 自分で叩いた結果(refresh)と、他の人が叩いた結果を Soketi 経由で受け取った場合
-   * (monitor.php が呼ぶ)の両方でここを通す。取り込み方を1箇所にしておく。
-   */
-  const applyStatuses = (data) => {
-    SERVICES.forEach((service) => {
-      const status = data?.[service.id];
-      service.status = status === 'up' || status === 'down' ? status : 'unknown';
-    });
-    lastCheckedAt = data?.checkedAt ? new Date(data.checkedAt) : new Date();
-    render();
-    document.dispatchEvent(new CustomEvent(EVENT_REFRESHED, { detail: { at: lastCheckedAt } }));
-  };
-
-  /** 成功したら true。実行中で飛ばしたときは null(失敗の回数には数えない)。 */
+   */  /** 成功したら true。実行中で飛ばしたときは null(失敗の回数には数えない)。 */
   const refresh = async () => {
     if (refreshing) {
       return null;
@@ -353,7 +321,7 @@
   /*
    * ---- 自動確認 ----
    *
-   * 呼ぶ側(monitor.php)が setInterval で refresh() を回すと、失敗が続いても
+   * 呼ぶ側(taskmgr.js)が setInterval で refresh() を回すと、失敗が続いても
    * 同じ間隔で叩き続ける。ここで持つ:
    *   - **前回が終わってから**次を予約する(setTimeout の数珠つなぎ。重ならない)
    *   - 失敗が続くと nextDelay() で間隔を延ばす
@@ -420,11 +388,14 @@
     all: SERVICES,
     render,
     refresh,
-    // 自動確認(失敗時は間隔を延ばす・非表示の間は止める・重ならない)。monitor.php から使う
+    /** コンテナの様子を渡して表を描き直す(名前 → 短い文。null で「まだ読んでいない」に戻す) */
+    setContainers(info) {
+      containerInfo = info && typeof info === 'object' ? info : null;
+      render();
+    },
+    // 自動確認(失敗時は間隔を延ばす・非表示の間は止める・重ならない)。タスクマネージャーの「サービス」から使う
     startAuto,
     stopAuto,
-    // 他の人が調べた結果を Soketi 経由で受け取ったときに使う(monitor.php)
-    applyStatuses,
     event: EVENT_REFRESHED,
     get lastCheckedAt() {
       return lastCheckedAt;

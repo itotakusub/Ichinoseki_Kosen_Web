@@ -155,4 +155,4 @@ git -C $RepoDir gc -q --prune=now 2>&1 | Out-Null
 
 Write-Host ''
 Write-Host "送りました: $Remote(版 $versionName)" -ForegroundColor Green
-Write-Host '5 分以内に本番ホストが取りに行き、届いたらメールが来ます。メールの URL を開いて「公開する」を押してください。'
+Write-Host '5 分以内に本番ホストが取りに行き、検めに通れば自動で公開してメールで知らせます(2026-11-02 から。受け箱の画面で「自動で公開しない」にしていれば、メールの URL から「公開する」を押してください)。'

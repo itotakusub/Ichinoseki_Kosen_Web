@@ -82,6 +82,66 @@ if ($postTooLarge) {
     $errors[] = 'ファイルが大きすぎます(上限 ' . (KM_APP_MAP_EVENT_MAX_BYTES / 1024 / 1024) . 'MB)。';
 } elseif (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && !km_csrf_verify()) {
     $errors[] = 'セッションの有効期限が切れています。ページを再読み込みしてからやり直してください。';
+} elseif (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && isset($_POST['map_action'])) {
+    /*
+     * 配信の停止 / 再開 / 削除(2026-11-02 に downloads.php から移した。カードは _inc/partials/map-releases.php)。
+     *
+     * **DB は使わない。** 設定ファイルと地図の実体だけで完結するので、
+     * DB が落ちていても止められる —— 止めたいのは大抵、何かがおかしいとき。
+     */
+    $mapAction = (string) $_POST['map_action'];
+    $mapSlug = (string) ($_POST['map_slug'] ?? '');
+
+    try {
+        $config = km_app_map_config();
+
+        if ($mapAction === 'pause' || $mapAction === 'resume') {
+            $paused = $mapAction === 'pause';
+            km_app_map_write_config(km_app_map_set_paused($config, $mapSlug, $paused));
+            km_admin_log_record('content', $paused ? 'map.pause' : 'map.resume', $mapSlug);
+            header('Location: ./map-publish.php?' . ($paused ? 'paused' : 'resumed') . '=1#map-releases', true, 302);
+            exit;
+        }
+
+        if ($mapAction === 'delete') {
+            /*
+             * **取り返しがつかないので、配信 ID を打たせる。**
+             * チェックボックスだと、押し慣れた場所を反射で押して消える。
+             * 打つ手間があると、少なくとも「どれを消すのか」は読むことになる。
+             */
+            if (trim((string) ($_POST['confirm_slug'] ?? '')) !== $mapSlug) {
+                $errors[] = '確認のため、配信 ID をそのまま入力してください。';
+            } else {
+                $removed = km_app_map_remove($config, $mapSlug);
+                // **設定を先に書く。** ファイルを先に消すと、書き込みに失敗したとき
+                // 「設定は残っているのに実体が無い」状態になる
+                km_app_map_write_config($removed['config']);
+
+                $deletedFile = false;
+                if ($removed['fileName'] !== null) {
+                    $path = km_app_map_storage_path($config, $removed['fileName']);
+                    if ($path !== null) {
+                        $deletedFile = @unlink($path);
+                    }
+                }
+                km_admin_log_record(
+                    'content',
+                    'map.delete',
+                    $mapSlug . ' コード=' . $removed['removedCodes'] . ' 実体=' . ($deletedFile ? '削除' : '無し')
+                );
+                header('Location: ./map-publish.php?mapdeleted=1#map-releases', true, 302);
+                exit;
+            }
+        }
+    } catch (Throwable $exception) {
+        error_log('map-publish.php map ' . $mapAction . ' failed: ' . $exception->getMessage());
+        /*
+         * **理由をそのまま出す。**「失敗しました」だけでは打つ手が分からない。
+         * ただし出すのは利用者向けに書いた文だけ(KmUserError と入力の検証)。
+         * 書き込みの失敗は lib/app-map.php が打つ手を KmUserError で添える(2026-09-14)。
+         */
+        $errors[] = km_admin_error_message($exception, '配信の設定を変えられませんでした。');
+    }
 } elseif (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
     // 地図の組み立てと書き出しは時間がかかる。PHP の既定(30 秒)で途中終了させない
     @set_time_limit(120);
@@ -159,6 +219,29 @@ if ($postTooLarge) {
                 $notice = "イベント用の正本: 版 {$published['revision']} を配信しました。";
             } catch (Throwable $exception) {
                 $errors[] = km_admin_error_message($exception, '配信できませんでした。');
+            }
+        }
+    } elseif ($action === 'republish') {
+        // 最新の内容で配り直す(2026-11-02)。入力なし。前回の設定のまま版を上げる(km_app_map_republish)
+        if ($knownSlug === null) {
+            $errors[] = '配信先を選び直してください。';
+        } else {
+            try {
+                $published = km_app_map_republish(km_db(), $config, $knownSlug);
+                $publishedSlug = $knownSlug;
+                $config = $published['config'];
+                km_admin_log_record(
+                    'content',
+                    'map.publish',
+                    $knownSlug . " / 配り直し / 版{$published['revision']} / 地点{$published['nodes']} / 経路{$published['lines']}"
+                    . ' / イベント' . $published['events'] . ' / 期限' . $published['expiresAt']
+                );
+                $notice = ($knownSlug === $eventSlug ? 'イベント用の正本' : 'Website の正本')
+                    . ": 最新の内容で版 {$published['revision']} を配り直しました(期限 "
+                    . (new DateTimeImmutable($published['expiresAt']))->format('Y-m-d H:i')
+                    . ')。アプリは開いている間 15 分以内に受け取ります。';
+            } catch (Throwable $exception) {
+                $errors[] = km_admin_error_message($exception, '配り直せませんでした。');
             }
         }
     } elseif ($action === 'add_code') {
@@ -249,10 +332,12 @@ $orphans = km_app_map_orphan_codes($config);
  */
 $activeEvents = [];
 $activeEventsStartsAt = null;
+$activeEventsEndsAt = null;
 try {
     require_once dirname(__DIR__) . '/lib/map-events.php';
     $publishWindow = km_map_event_overlay_for_app(km_db());
     $activeEventsStartsAt = $publishWindow['startsAt'];
+    $activeEventsEndsAt = $publishWindow['endsAt'];
     foreach ($publishWindow['overlay']['events'] as $event) {
         $activeEvents[] = (string) $event['name'];
     }
@@ -261,13 +346,91 @@ try {
     error_log('map-publish.php events failed: ' . $exception->getMessage());
 }
 
-/** 期限の初期値。**いまの期限を引き継ぐ**(毎回打ち直させない)。 */
-$expiresDefault = static function (array $config, string $slug): string {
+/**
+ * 会期の終わり(入力欄と同じ形 Y-m-d\TH:i)。**イベント用の正本の期限はこれに合わせる**(2026-11-02、
+ * 利用者「会期が終了してもマップが残り続けるのはなんで」—— 期限は前回の値を引き継いでいたので、会期より長く残った)。
+ * Website の正本はふだんの地図なので、会期では切らない
+ */
+$eventEndInput = null;
+if (is_string($activeEventsEndsAt) && $activeEventsEndsAt !== '') {
+    try {
+        $eventEndInput = (new DateTimeImmutable($activeEventsEndsAt))->format('Y-m-d\TH:i');
+    } catch (Throwable $exception) {
+        $eventEndInput = null;
+    }
+}
+
+/*
+ * 配信した期限が会期の終わりより後なら、**配信は止めずに**知らせる(会期のあとも見せたいときがある)。
+ * 比べるのは分まで(入力欄が分までなので、同じ時刻を選んだのに警告が出ないように)
+ */
+$warnings = [];
+if ($publishedSlug === $eventSlug && $eventEndInput !== null) {
+    $publishedExpires = km_app_map_parse_iso((string) ($config['maps'][$eventSlug]['expiresAt'] ?? ''));
+    if ($publishedExpires !== null && $publishedExpires->format('Y-m-d\TH:i') > $eventEndInput) {
+        $warnings[] = '有効期限(' . $publishedExpires->format('Y-m-d H:i') . ')が会期の終わり(' . str_replace('T', ' ', $eventEndInput)
+            . ')より後です。会期が終わっても、期限まで端末に地図が残ります。';
+    }
+}
+
+/** 期限の初期値。イベント用の正本は会期の終わり、ほかは**いまの期限を引き継ぐ**(毎回打ち直させない)。 */
+$expiresDefault = static function (array $config, string $slug) use ($eventSlug, $eventEndInput): string {
+    if ($slug === $eventSlug && $eventEndInput !== null) {
+        return $eventEndInput;
+    }
     $current = $config['maps'][$slug]['expiresAt'] ?? null;
     $parsed = is_string($current) ? km_app_map_parse_iso($current) : null;
 
     return ($parsed ?? new DateTimeImmutable('+30 days'))->format('Y-m-d\TH:i');
 };
+
+/*
+ * 配信中の地図の期限。
+ *
+ * **切れたことが、これまでどこにも出ていなかった。** 2026-08-27 に失効したのに
+ * 気づかれず、記録文書にだけ残り続けた。期限を短く保つのは正しい(会期が終わった
+ * 地図を配り続けない)ので、**切れる前に気づける場所**をここに置く。
+ *
+ * 設定ファイルを読むだけなので DB は要らない。失敗しても画面は出す。
+ */
+$mapReleases = [];
+try {
+    $mapReleases = km_app_map_release_report(km_app_map_config());
+} catch (Throwable $exception) {
+    error_log('map-publish.php map release status failed: ' . $exception->getMessage());
+}
+
+/*
+ * Website に「次に効く会期」があるか(2026-10-24、利用者の指摘「一般向けアプリでイベントが丸ごと効いていない」)。
+ *
+ * **配信は焼き付けた写し**で、一般向けアプリは配信に載っているイベントしか効かせない(管理ビルドは自分で選べる)。
+ * イベントを作ったあとに配信し直すのを忘れると、当日アプリには何も出ない —— それが画面のどこにも出ていなかった。
+ * 載っていなければ下で「配信し直してください」と出す。DB が無くても画面は出す
+ */
+$mapEventWindow = null;
+try {
+    require_once __DIR__ . '/../lib/map-events.php';
+    $window = km_map_event_overlay_for_app(km_db());
+    $windowEvents = $window['overlay']['events'] ?? [];
+    if ($windowEvents !== []) {
+        $mapEventWindow = [
+            'names' => implode(' / ', array_filter(array_map(
+                static fn (array $row): string => trim((string) ($row['name'] ?? '')),
+                $windowEvents
+            ))),
+            'startsAt' => $window['startsAt'],
+        ];
+    }
+} catch (Throwable $exception) {
+    error_log('map-publish.php website event window failed: ' . $exception->getMessage());
+}
+
+// 停止・再開・削除のあと(上の map_action から戻ってきたとき)
+foreach (['paused' => '配信を停止しました。', 'resumed' => '配信を再開しました。', 'mapdeleted' => '配信を削除しました。'] as $param => $text) {
+    if ($notice === null && isset($_GET[$param])) {
+        $notice = $text;
+    }
+}
 
 $KM_PAGE = [
     'nav' => 'mapPublish',
@@ -276,7 +439,7 @@ $KM_PAGE = [
     'h1Key' => 'page.mapPublish.h1',
     'h1' => 'アプリへ地図を配信する',
     'crumbs' => [
-        ['key' => 'side.database', 'text' => 'データベース'],
+        ['key' => 'side.groupApp', 'text' => 'アプリ'],
         ['key' => 'page.mapPublish.h1', 'text' => 'アプリへ地図を配信する'],
     ],
 ];
@@ -286,10 +449,36 @@ require __DIR__ . '/_inc/partials/header.php';
 require __DIR__ . '/_inc/partials/sidebar.php';
 require __DIR__ . '/_inc/partials/page-header.php';
 
-/** 配信の状態(版・期限・停止・コード数)。 */
-$renderCurrent = static function (string $slug) use ($config, $report): void {
+/*
+ * 「最新の内容で配り直す」で使う期限と、押せるかどうか(2026-11-02。km_app_map_republish と同じ決め方)。
+ * 押せないときは理由を出す(下の「配信する」へ回ってもらう)
+ */
+$republishPlan = [];
+foreach (KM_APP_MAP_SLUGS as $planSlug) {
+    $planMeta = $config['maps'][$planSlug] ?? null;
+    if (!is_array($planMeta)) {
+        continue;
+    }
+    $planExpires = km_app_map_republish_expiry($planSlug, $planMeta, $activeEventsEndsAt);
+    $planReason = null;
+    if ($planExpires === null) {
+        $planReason = '有効期限が過ぎているため、配り直せません。下の「配信する」で期限を選んでください。';
+    } elseif ($planSlug === $eventSlug && km_app_map_storage_path($config, KM_APP_MAP_EVENT_SOURCE_FILE) === null) {
+        $planReason = '前に添付した地図が残っていません(この機能より前の配信です)。一度だけ下から添付して配信すると、次から配り直せます。';
+    }
+    $republishPlan[$planSlug] = [
+        'expires' => $planExpires !== null ? (new DateTimeImmutable($planExpires))->format('Y-m-d H:i') : null,
+        'reason' => $planReason,
+        'next' => km_app_map_next_revision($config, $planSlug),
+        'fold' => ($planMeta['foldWebEvents'] ?? false) === true,
+    ];
+}
+
+/** 配信の状態(版・期限・停止・コード数)と「最新の内容で配り直す」。 */
+$renderCurrent = static function (string $slug) use ($config, $report, $republishPlan, $eventSlug): void {
     $current = $report[$slug] ?? null;
     $meta = $config['maps'][$slug] ?? [];
+    $plan = $republishPlan[$slug] ?? null;
     ?>
     <div class="card mb-4">
       <div class="card-header">
@@ -322,9 +511,46 @@ $renderCurrent = static function (string $slug) use ($config, $report): void {
           <?php if (($current['file']['error'] ?? null) !== null): ?>
             <div class="alert alert-danger mt-3 mb-0 fs-7"><?= km_e((string) $current['file']['error']) ?></div>
           <?php endif; ?>
+          <?php if ($plan !== null): ?>
+            <?php
+            /*
+             * **ふだんはこれだけ押せばよい**(2026-11-02)。前回と同じ設定で、いまの Website の内容
+             * (イベント・ポスターの見出し・読み・英語の名前)を作り直して版を上げる。ファイルも期限も選ばない
+             */
+            ?>
+            <hr>
+            <?php if ($plan['reason'] === null): ?>
+              <form method="post"
+                    data-km-confirm="page.mapPublish.confirmRepublish"
+                    data-km-confirm-fallback="最新の内容で作り直して、版を上げて配ります。端末は次の確認で置き換わります。よろしいですか?">
+                <?= km_csrf_field() ?>
+                <input type="hidden" name="do_publish" value="republish">
+                <input type="hidden" name="slug" value="<?= km_e($slug) ?>">
+                <button type="submit" class="btn btn-success">
+                  <i class="bi bi-arrow-repeat me-1" aria-hidden="true"></i>
+                  <span data-i18n="page.mapPublish.republishButton">最新の内容で配り直す</span>
+                  (<span data-i18n="page.mapPublish.revision">版</span> <?= (int) $plan['next'] ?>)
+                </button>
+              </form>
+              <div class="form-text">
+                <span data-i18n="page.mapPublish.expiresAt">有効期限</span>: <?= km_e((string) $plan['expires']) ?>
+                <?php if ($slug === $eventSlug): ?>
+                  ・<span data-i18n="page.mapPublish.republishSource">前に添付した地図</span>
+                  <?php if ($plan['fold']): ?>
+                    <span data-i18n="page.mapPublish.republishFold">+ Website のイベントを折り込み直す</span>
+                  <?php endif; ?>
+                <?php endif; ?>
+              </div>
+              <div class="form-text" data-i18n="page.mapPublish.republishHint">
+                前回と同じ設定で、いまの Website の内容から作り直して配ります。アプリは開いている間 15 分ごとに版を確かめ、自動で入れ替えます。
+              </div>
+            <?php else: ?>
+              <div class="form-text text-warning-emphasis"><?= km_e($plan['reason']) ?></div>
+            <?php endif; ?>
+          <?php endif; ?>
         <?php endif; ?>
         <p class="form-text mb-0 mt-3" data-i18n="page.mapPublish.pauseElsewhere">
-          停止と削除は「配布ファイル」の画面から行えます。
+          停止と削除は、このページの下の「アプリへ配信中の地図」で行えます。
         </p>
       </div>
     </div>
@@ -332,17 +558,28 @@ $renderCurrent = static function (string $slug) use ($config, $report): void {
 };
 
 /** 期限とチェックサムの入力。2つの区画で同じ形。 */
-$renderExpiryAndChecksum = static function (string $slug) use ($config, $expiresDefault): void {
+$renderExpiryAndChecksum = static function (string $slug) use ($config, $expiresDefault, $eventSlug, $eventEndInput): void {
+    $watchEnd = $slug === $eventSlug && $eventEndInput !== null;
     ?>
     <div class="mb-3">
       <label class="form-label" for="expires_at_<?= km_e($slug) ?>"
              data-i18n="page.mapPublish.expiresLabel">有効期限</label>
       <input class="form-control" type="datetime-local" id="expires_at_<?= km_e($slug) ?>" name="expires_at"
-             value="<?= km_e($expiresDefault($config, $slug)) ?>" required>
+             value="<?= km_e($expiresDefault($config, $slug)) ?>" required
+             <?php if ($watchEnd): ?>data-km-event-end="<?= km_e($eventEndInput) ?>"<?php endif; ?>>
       <div class="form-text" data-i18n="page.mapPublish.expiresHint">
-        期限を過ぎると、来場者の端末は地図を自分で消します。
-        会期の終わりより少し後にしてください。
+        期限を過ぎると、来場者の端末は地図を自分で消します(開いたままの端末も、その時刻に消します)。
       </div>
+      <?php if ($watchEnd): ?>
+        <div class="form-text">
+          <span data-i18n="page.mapPublish.expiresEventEnd">会期の終わり</span>: <?= km_e(str_replace('T', ' ', $eventEndInput)) ?>
+          <span data-i18n="page.mapPublish.expiresEventEndHint">(初期値はこの時刻です)</span>
+        </div>
+        <div class="form-text text-warning-emphasis d-none km-expiry-warning" role="alert"
+             data-i18n="page.mapPublish.expiresAfterEvent">
+          会期の終わりより後です。会期が終わっても、期限まで端末に地図が残ります。
+        </div>
+      <?php endif; ?>
     </div>
     <div class="form-check mb-3">
       <input class="form-check-input" type="checkbox" value="1" id="checksum_<?= km_e($slug) ?>" name="checksum" checked>
@@ -457,11 +694,14 @@ $renderCodes = static function (string $slug) use ($codesBySlug, $newCode, $newC
             <?php if ($notice !== null): ?>
               <div class="alert alert-success" role="alert"><?= km_e($notice) ?></div>
             <?php endif; ?>
+            <?php foreach ($warnings as $warning): ?>
+              <div class="alert alert-warning" role="alert"><?= km_e($warning) ?></div>
+            <?php endforeach; ?>
             <?php foreach ($errors as $error): ?>
               <div class="alert alert-danger" role="alert"><?= km_e($error) ?></div>
             <?php endforeach; ?>
 
-            <div class="card mb-4">
+            <div class="card mb-4" id="republish-top">
               <div class="card-body">
                 <p class="mb-0" data-i18n="page.mapPublish.lead">
                   アプリへ配る地図は2つあります。「Website の正本」はこの Website の地図から作り、
@@ -771,10 +1011,10 @@ $renderCodes = static function (string $slug) use ($codesBySlug, $newCode, $newC
                         <?php // 既定はオフ。添付する地図のイベントは、多くはアプリで作ってある ?>
                         <input class="form-check-input" type="checkbox" value="1" id="fold_web_events" name="fold_web_events">
                         <label class="form-check-label" for="fold_web_events"
-                               data-i18n="page.mapPublish.eventFold">Website のイベント(通行止め)も折り込む</label>
+                               data-i18n="page.mapPublish.eventFold">Website のイベント(通行止め・臨時の名前・ポスターの見出し)も折り込む</label>
                         <div class="form-text" data-i18n="page.mapPublish.eventFoldHint">
                           オフのときは、ファイルに入っているイベントをそのまま配ります。
-                          オンにすると「イベント」画面の内容で置き換えます。
+                          オンにすると「イベント」画面の内容で置き換え、企画の番号の地点にはポスターの見出しを名前として入れます(Website の地図と同じ名前)。
                         </div>
                       </div>
 
@@ -791,6 +1031,9 @@ $renderCodes = static function (string $slug) use ($codesBySlug, $newCode, $newC
             </div>
             <?php $renderCodes($eventSlug); ?>
             <!--end::EventRelease-->
+
+            <?php // 期限・中身・停止・再開・削除(2026-11-02 に downloads.php から移した) ?>
+            <?php require __DIR__ . '/_inc/partials/map-releases.php'; ?>
           </div>
           <!--end::Container-->
         </div>
@@ -811,6 +1054,17 @@ $renderCodes = static function (string $slug) use ($codesBySlug, $newCode, $newC
                   event.preventDefault();
                 }
               });
+            });
+
+            // 期限が会期の終わりより後なら知らせる(止めはしない)。値はどちらも Y-m-dTH:i なので文字列で比べられる
+            document.querySelectorAll('input[data-km-event-end]').forEach((input) => {
+              const warning = input.parentElement && input.parentElement.querySelector('.km-expiry-warning');
+              if (!warning) { return; }
+              const update = () => {
+                warning.classList.toggle('d-none', !(input.value && input.value.slice(0, 16) > input.dataset.kmEventEnd));
+              };
+              input.addEventListener('input', update);
+              update();
             });
 
             // 伏せたアクセスコードを、押したときだけ出す(コードそのものは翻訳しないので textContent でよい)

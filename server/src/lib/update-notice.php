@@ -37,11 +37,11 @@ const KM_UPDATE_NOTICE_MAX_ITEMS = 20;
  *               **気づかないうちに上がりうる**という警告
  * - `series`  … 系列のタグ(`17-alpine` / `11.4` / `5.2.3-apache`)の中身が入れ替わった。
  *               **修正版が出た**という知らせ。当てるかどうかを決める
- * - `base`    … 自前でビルドするもの(web / soketi)の**ビルド元**が入れ替わった。
+ * - `base`    … 自前でビルドするもの(web。soketi は 2026-11-02 に外した)の**ビルド元**が入れ替わった。
  *               pull では変わらないので、ビルドし直すまで当たらない
  *
  * - `vuln`    … 脆弱性の勧告(2026-10-30、振り返りのフェーズ 6 の 2。lib/security-audit.php)。PHP の版・composer・
- *               Soketi の npm・ホストの Ubuntu(USN)。**件名の一番前に出す**(「脆弱性が出ました。対処してください」)
+ *               ホストの Ubuntu(USN)。Soketi の npm は 2026-11-02 に Soketi ごと外した。**件名の一番前に出す**(「脆弱性が出ました。対処してください」)
  *
  * **混ぜない。** 打つ手が違う。
  *
@@ -214,18 +214,17 @@ function km_update_notice_body(
         $step++;
     }
     if (in_array('base', $kinds, true)) {
-        $lines[] = $step . '. ビルド元は Dockerfile(docker/php・docker/soketi)の digest を書き換えて配備する';
+        $lines[] = $step . '. ビルド元は Dockerfile(docker/php)の digest を書き換えて配備する';
         $lines[] = '       (上の「新しく出たもの」。pull だけでは当たりません)';
         $step++;
         $lines[] = $step . '. ホストでビルドし直して入れ替える';
-        $lines[] = '       docker compose build --pull web soketi && docker compose up -d';
+        $lines[] = '       docker compose build --pull web && docker compose up -d';
         $step++;
     }
     if (in_array('vuln', $kinds, true)) {
         $lines[] = $step . '. 脆弱性は、名前の頭で当て方が変わる';
         $lines[] = '       PHP の版 … docker/php/Dockerfile の php:8.4-apache の digest を書き換えて build し直す(公式の像が出るまで待つことがある)';
         $lines[] = '       composer の部品 … 手元の src で composer update <部品> を流し、check.php を通してから配備する';
-        $lines[] = '       Soketi の部品 … フォーク(aloware/soketi)の新しい像を待ち、docker/soketi/Dockerfile の digest を書き換える';
         $lines[] = '       Ubuntu(USN) … unattended-upgrades が当てる。急ぐなら sudo apt-get update && sudo apt-get upgrade。';
         $lines[] = '                      カーネル(linux-…)は再起動するまで効かない。外から突ける穴なら、直るまで止めることも考える';
         $step++;

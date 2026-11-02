@@ -26,7 +26,7 @@ $KM_PAGE = [
     'h1Key' => 'page.mapHereQr.h1',
     'h1' => '現在地の QR',
     'crumbs' => [
-        ['key' => 'side.database', 'text' => 'データベース'],
+        ['key' => 'side.groupMap', 'text' => '地図'],
         ['key' => 'page.mapHereQr.h1', 'text' => '現在地の QR'],
     ],
 ];

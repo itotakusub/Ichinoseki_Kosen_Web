@@ -76,7 +76,7 @@ $KM_PAGE = [
     'h1Key' => 'page.mapEditor.h1',
     'h1' => '地図編集',
     'crumbs' => [
-        ['key' => 'side.database', 'text' => 'データベース'],
+        ['key' => 'side.groupMap', 'text' => '地図'],
         ['key' => 'page.mapEditor.h1', 'text' => '地図編集'],
     ],
 ];

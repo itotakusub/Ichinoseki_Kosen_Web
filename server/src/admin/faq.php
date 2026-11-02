@@ -26,7 +26,7 @@ $KM_PAGE = [
     'h1Key' => 'page.faq.h1',
     'h1' => 'FAQ',
     'crumbs' => [
-        ['key' => 'side.content', 'text' => 'コンテンツ'],
+        ['key' => 'side.groupPublic', 'text' => '公開ページ'],
         ['key' => 'page.faq.h1', 'text' => 'FAQ'],
     ],
 ];

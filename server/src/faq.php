@@ -15,6 +15,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/lib/db.php';
 require_once __DIR__ . '/lib/faq.php';
 require_once __DIR__ . '/lib/assets.php';
+require_once __DIR__ . '/lib/release.php';   // km_release_tags(): 配備のあとに更新を促す(2026-11-02)
 require_once __DIR__ . '/lib/csp.php';
 
 // 出力より前に送る。公開ページは AdminLTE も外部サービスも使わないので一番狭い方針でよい
@@ -96,6 +97,8 @@ function km_faq_e(?string $value): string
             padding: 3rem 1rem;
         }
     </style>
+    <?php // 配備のあとに「ページを更新してください」と出す(2026-11-02。lib/release.php・Main/release-watch.js) ?>
+    <?= km_release_tags() ?>
 </head>
 
 <body>

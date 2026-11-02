@@ -26,6 +26,7 @@ require_once __DIR__ . '/lib/mailer.php';
 require_once __DIR__ . '/lib/recaptcha.php';
 require_once __DIR__ . '/lib/admin-log.php';
 require_once __DIR__ . '/lib/assets.php';
+require_once __DIR__ . '/lib/release.php';   // km_release_tags(): 配備のあとに更新を促す(2026-11-02)
 require_once __DIR__ . '/lib/csp.php';
 require_once __DIR__ . '/lib/user-error.php';
 
@@ -193,6 +194,8 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         .c-alert.info { background: #f1f5f9; color: #334155; border: 1px solid #e2e8f0; }
         .g-recaptcha { margin-bottom: 1.1rem; }
     </style>
+    <?php // 配備のあとに「ページを更新してください」と出す(2026-11-02。lib/release.php・Main/release-watch.js) ?>
+    <?= km_release_tags() ?>
 </head>
 
 <body>

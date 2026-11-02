@@ -464,7 +464,8 @@ function km_map_event_overlay_build(PDO $pdo, array $events): array
  * **会期をまたいで混ぜない。** 工事(長期)の最中に高専祭(翌週)が来るとき、
  * 2 つを 1 つに畳むと高専祭の通行止めが今日から効いてしまう。選ぶのはどちらか一方の会期。
  *
- * @return array{overlay:array, startsAt:?string} startsAt は「まだ始まっていない会期」のときだけ入る
+ * @return array{overlay:array, startsAt:?string, endsAt:?string} startsAt は「まだ始まっていない会期」のときだけ入る。
+ *         endsAt はその会期の終わり(配信の期限の初期値。[km_map_event_window_ends_at])
  */
 function km_map_event_overlay_for_app(PDO $pdo): array
 {
@@ -476,7 +477,7 @@ function km_map_event_overlay_for_app(PDO $pdo): array
         return km_map_event_overlay_for_app_build($pdo);
     } catch (Throwable $exception) {
         error_log('km_map_event_overlay_for_app failed (publishing without events): ' . $exception->getMessage());
-        return ['overlay' => km_map_event_overlay_empty(), 'startsAt' => null];
+        return ['overlay' => km_map_event_overlay_empty(), 'startsAt' => null, 'endsAt' => null];
     }
 }
 
@@ -506,7 +507,7 @@ function km_map_event_overlay_for_app_build(PDO $pdo): array
 
     $active = array_values(array_filter($rows, static fn (array $row): bool => $row['isActive']));
     if ($active !== []) {
-        return ['overlay' => km_map_event_overlay_build($pdo, $active), 'startsAt' => null];
+        return ['overlay' => km_map_event_overlay_build($pdo, $active), 'startsAt' => null, 'endsAt' => km_map_event_window_ends_at($active)];
     }
 
     // これから始まるものだけ。一番早い会期を選ぶ(同じ時刻に始まるものは一緒に重ねる)
@@ -521,14 +522,38 @@ function km_map_event_overlay_for_app_build(PDO $pdo): array
         }
     }
     if ($startsAt === null) {
-        return ['overlay' => km_map_event_overlay_empty(), 'startsAt' => null];
+        return ['overlay' => km_map_event_overlay_empty(), 'startsAt' => null, 'endsAt' => null];
     }
     $window = array_values(array_filter(
         $rows,
         static fn (array $row): bool => (string) ($row['startsAt'] ?? '') === $startsAt
     ));
 
-    return ['overlay' => km_map_event_overlay_build($pdo, $window), 'startsAt' => $startsAt];
+    return ['overlay' => km_map_event_overlay_build($pdo, $window), 'startsAt' => $startsAt, 'endsAt' => km_map_event_window_ends_at($window)];
+}
+
+/**
+ * 会期の終わり(重ねるイベントのうち一番遅い ends_at)。**純粋関数**
+ *
+ * 配信の期限はこれに合わせる(2026-11-02、利用者「会期が終了してもマップが残り続けるのはなんで」——
+ * 期限は配信のたびに手で入れ、前回の値を引き継いでいたので、会期より長く残った)。
+ * 終わりの無いイベント(手で止めるまで)が 1 つでもあれば、会期の終わりは決まらないので null
+ *
+ * @param list<array<string, mixed>> $rows
+ */
+function km_map_event_window_ends_at(array $rows): ?string
+{
+    $endsAt = null;
+    foreach ($rows as $row) {
+        $value = (string) ($row['endsAt'] ?? '');
+        if ($value === '') {
+            return null;
+        }
+        if ($endsAt === null || $value > $endsAt) {
+            $endsAt = $value;
+        }
+    }
+    return $endsAt;
 }
 
 /**

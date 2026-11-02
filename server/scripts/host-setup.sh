@@ -512,7 +512,7 @@ else
     note '  SSH 越しに入るときは **-D(SOCKS)** を使うこと:'
     note '    ssh -D 1080 <利用者>@<ホスト>'
     note '    → ブラウザの SOCKS5 プロキシを localhost:1080 に(DNS もプロキシ側で引く)'
-    note '    → そのまま https://<ホスト>:8281 / :3002 を開く'
+    note '    → そのまま https://<ホスト>:8025 を開く(Logto Console は -L 3002:127.0.0.1:3002 → http://localhost:3002。2026-11-02)'
     #
     # **-L(ポート転送)では通れない。** 宛先が localhost になり、
     # ito4.jp の Cookie が送られないので Logto のゲートで必ず弾かれる

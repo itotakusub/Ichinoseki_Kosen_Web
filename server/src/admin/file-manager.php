@@ -16,7 +16,7 @@ $KM_PAGE = [
     'h1Key' => 'page.fileManager.h1',
     'h1' => 'ファイル管理',
     'crumbs' => [
-        ['key' => 'side.extra', 'text' => 'その他ページ'],
+        ['key' => 'side.groupTeam', 'text' => 'チーム'],
         ['key' => 'page.fileManager.h1', 'text' => 'ファイル管理'],
     ],
 ];

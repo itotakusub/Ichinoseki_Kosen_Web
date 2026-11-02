@@ -9,7 +9,9 @@ declare(strict_types=1);
  *
  *   php      … 動いている PHP と、php.net の同じ系列(8.4 など)の最新。最新が上で、セキュリティの直しを含む版なら知らせる
  *   composer … `composer audit --locked`(composer.lock の部品。勧告は Packagist と GitHub のセキュリティ勧告)
- *   npm      … Soketi の /app の `npm audit`(勧告は GitHub のセキュリティ勧告)。重さが moderate 以上だけ
+ *   npm      … Soketi の /app の `npm audit`(勧告は GitHub のセキュリティ勧告)。重さが moderate 以上だけ。
+ *              **2026-11-02 に Soketi ごと外したので、check-updates.sh はもう呼ばない。** npm の部品を持つコンテナを
+ *              足したときのために、読み方(km_security_npm_items)と検査は残す
  *   usn      … Ubuntu のセキュリティのお知らせ(USN)のうち、**ホストに入っている部品**に当たるもの。
  *              2026-10-30 の CVE-2026-98432(カーネルの TCP の穴)で、コンテナの外も見る要があると分かった。
  *              直したカーネルが出たときに USN が出るので、「直した版が出た」の知らせにもなる

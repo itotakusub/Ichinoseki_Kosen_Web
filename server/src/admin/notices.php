@@ -7,6 +7,8 @@ require __DIR__ . '/_inc/guard.php';
 require_once dirname(__DIR__) . '/lib/db.php';
 require_once dirname(__DIR__) . '/lib/notices.php';
 require_once dirname(__DIR__) . '/lib/map-switches.php';
+// チュートリアルの終わりの知らせ(km_tutorial_end_*)。2026-11-02 にポスターの画面から移した
+require_once dirname(__DIR__) . '/lib/posters.php';
 require_once dirname(__DIR__) . '/lib/admin-log.php';
 
 /**
@@ -17,23 +19,27 @@ require_once dirname(__DIR__) . '/lib/admin-log.php';
  * - 「最初の画面に出す」を付けたものは、公開の地図の「はじめに」の先頭に短い文を出す(出す最後の日まで)。
  *   読んだ人には出し直さない(閲覧者の手元に覚える。Main/welcome.js)
  * - 「プレビュー」は保存せずに、最初の画面のお知らせと、くわしいページを**公開ページと同じ組み立て**(km_notice_detail_html)で下に出す
+ *
+ * **チュートリアルもここ**(2026-11-02、利用者の指示「無理やり配置した項目を的確な場所へ」)。チュートリアルを出すかどうかの
+ * スイッチと、終わりの知らせ(以前はポスターの画面にあった)を 1 つのカードにまとめた。ページの名前は「お知らせとチュートリアル」。
  */
 
 $KM_PAGE = [
     'nav' => 'notices',
     'titleKey' => 'page.notices.title',
-    'title' => 'お知らせ | KosenMap 管理',
+    'title' => 'お知らせとチュートリアル | KosenMap 管理',
     'h1Key' => 'page.notices.h1',
-    'h1' => 'お知らせ',
+    'h1' => 'お知らせとチュートリアル',
     'crumbs' => [
-        ['key' => 'side.content', 'text' => 'コンテンツ'],
-        ['key' => 'page.notices.h1', 'text' => 'お知らせ'],
+        ['key' => 'side.groupEvent', 'text' => '会期'],
+        ['key' => 'page.notices.h1', 'text' => 'お知らせとチュートリアル'],
     ],
 ];
 
 $errors = [];
 $dbError = null;
 $switches = ['tutorial' => true, 'notices' => true];
+$tutorialEnd = ['text' => KM_TUTORIAL_END_TEXT_DEFAULT, 'ownSurveyUrl' => '', 'surveyUrl' => '', 'phoneQr' => true];
 $rows = [];
 $editing = null;
 $form = null;
@@ -62,6 +68,17 @@ try {
             km_admin_log_record('content', 'map.switches', 'チュートリアル ' . ($tutorialOn ? 'ON' : 'OFF') . '・お知らせ ' . ($noticesOn ? 'ON' : 'OFF'));
             header('Location: ./notices.php?saved=switches#map-switches', true, 303);
             exit;
+        }
+        // チュートリアルの終わりの知らせ(2026-10-21。2026-11-02 にポスターの画面から移した。記録の名前は前のまま)
+        if ($formAction === 'tutorial_end') {
+            try {
+                km_tutorial_end_save($pdo, (string) ($_POST['end_text'] ?? ''), (string) ($_POST['end_survey_url'] ?? ''), isset($_POST['end_phone_qr']));
+                km_admin_log_record('settings', 'poster.tutorial_end');
+                header('Location: ./notices.php?saved=tutorial_end#map-switches', true, 303);
+                exit;
+            } catch (InvalidArgumentException $exception) {
+                $errors[] = $exception->getMessage();
+            }
         }
         if ($formAction === 'delete' && $targetId !== null) {
             $title = km_notice_delete($pdo, $targetId);
@@ -113,6 +130,7 @@ try {
         $editing = km_notice_find($pdo, $editId);
     }
     $switches = km_map_switches($pdo);
+    $tutorialEnd = km_tutorial_end_config($pdo);
 } catch (Throwable $exception) {
     error_log('admin/notices.php: ' . $exception->getMessage());
     $dbError = km_admin_error_message($exception, '詳しくはサーバーのログを照合してください。');
@@ -123,6 +141,7 @@ $notice = [
     'updated' => 'お知らせを保存しました。',
     'deleted' => 'お知らせを消しました。',
     'switches' => '地図を開いたときに出すものを保存しました。',
+    'tutorial_end' => 'チュートリアルの終わりの知らせを保存しました。',
 ][(string) ($_GET['saved'] ?? '')] ?? null;
 
 // フォームの中身: 打ち直し・プレビュー > 編集中の行 > 新しく書く(日付は今日・最初の画面に出す)
@@ -226,6 +245,42 @@ require __DIR__ . '/_inc/partials/page-header.php';
                       <div class="form-text">
                         チュートリアルを止めると、広告はチュートリアルの終わりではなく、「はじめに」を閉じたときに出します。
                         お知らせを止めても、ここで書いたお知らせは消えません。
+                      </div>
+                    </div>
+                    <div class="card-footer text-end">
+                      <button type="submit" class="btn btn-primary btn-sm">保存</button>
+                    </div>
+                  </form>
+                  <?php
+                  /*
+                   * チュートリアルの終わりの知らせ(2026-10-21。2026-11-02 にポスターの画面から移した)。
+                   * 上のスイッチと同じカードに置く(チュートリアルのことは、ここだけ見ればわかるように)
+                   */
+                  ?>
+                  <form method="post" action="./notices.php" class="border-top" id="tutorial-end">
+                    <?= km_csrf_field() ?>
+                    <input type="hidden" name="form_action" value="tutorial_end">
+                    <div class="card-body">
+                      <h4 class="fs-6 fw-semibold">チュートリアルの終わりの知らせ</h4>
+                      <p class="fs-7 text-body-secondary">
+                        チュートリアルが終わったとき(最後まで進んだ・スキップした)に出します。広告を出したときは、広告を閉じたあとに出ます。
+                        見出しは「🎉 チュートリアルが終わりました」で固定です。<strong>ポスターの出し方(3 段階)とは関係なく出ます。</strong>
+                      </p>
+                      <div class="mb-3">
+                        <label class="form-label" for="km-end-text">本文</label>
+                        <textarea class="form-control" id="km-end-text" name="end_text" rows="2" maxlength="<?= KM_TUTORIAL_END_TEXT_MAX ?>"><?= km_e($tutorialEnd['text']) ?></textarea>
+                      </div>
+                      <div class="mb-3">
+                        <label class="form-label" for="km-end-survey">アンケートの URL(https)</label>
+                        <input class="form-control" type="url" id="km-end-survey" name="end_survey_url" maxlength="255" placeholder="https://forms.gle/…" value="<?= km_e($tutorialEnd['ownSurveyUrl']) ?>">
+                        <div class="form-text">
+                          「このページのアンケートを募集中です。こちら」と QR を出します。空なら <a href="./test-mode.php">テスト用アカウント</a>の画面で決めたアンケートの URL を使います
+                          <?php if ($tutorialEnd['ownSurveyUrl'] === '' && $tutorialEnd['surveyUrl'] !== ''): ?>(いまは <code><?= km_e($tutorialEnd['surveyUrl']) ?></code>)<?php elseif ($tutorialEnd['surveyUrl'] === ''): ?>(いまはどちらも空なので、アンケートの行は出しません)<?php endif; ?>。
+                        </div>
+                      </div>
+                      <div class="form-check mb-0">
+                        <input class="form-check-input" type="checkbox" id="km-end-phone" name="end_phone_qr" value="1" <?= $tutorialEnd['phoneQr'] ? 'checked' : '' ?>>
+                        <label class="form-check-label" for="km-end-phone">「スマホでもマップを見ることができます」と、地図の QR(<?= km_e(km_site_url(null, '/')) ?>)を出す</label>
                       </div>
                     </div>
                     <div class="card-footer text-end">

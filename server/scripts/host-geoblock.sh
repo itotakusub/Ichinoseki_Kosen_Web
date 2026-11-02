@@ -12,7 +12,7 @@
 #
 # カーネルの nftables に**専用の表 `inet km_geoblock`** を 1 つ作り、国別の IP の範囲を集合(interval set)に載せて
 # **prerouting(priority -150)で落とす**。Docker の宛先の書き換え(nat、priority -100)より前なので、
-# ホストの SSH にも、Docker が publish したポート(80・443・8281・3002。3001・6001 は 2026-10-19 に閉じた)にも効く。
+# ホストの SSH にも、Docker が publish したポート(80・443。3001・6001 は 2026-10-19、8281・3002 は 2026-11-02 に閉じた)にも効く。
 # 処理はカーネルの中で、集合は木の検索なので CPU はほぼ使わない。メモリは国の数しだいで数 MB。
 #
 # ## 設定(ホストにだけ置く。リポジトリには置かない)
@@ -24,7 +24,7 @@
 #   DENY_INVERT=yes                  拒否の一覧を反転する: **DENY_COUNTRIES に書いた国だけを通し、ほかの国は全部拒否**
 #                                    (2026-10-08、利用者の指示)。既定は no。yes / 1 / true / on で反転
 #   ADMIN_COUNTRIES=jp               管理用のポートに入れる国。空なら絞らない
-#   ADMIN_PORTS=8281 3002            管理用のポート(phpMyAdmin・Logto の Console)
+#   ADMIN_PORTS=                     管理用のポート。**既定は空**(2026-11-02 に 8281 の phpMyAdmin を外し、3002 の Console は 127.0.0.1 だけにした)
 #   EXEMPT_PORTS=22                  **どの国からでも通すポート(既定 22 = SSH)。締め出されないために残すこと**
 #
 # LAN・ループバック・Docker の内側(10/8・172.16/12・192.168/16・100.64/10・127/8・fc00::/7・fe80::/10)は常に通す。
@@ -82,7 +82,7 @@ V6_URL="https://www.ipdeny.com/ipv6/ipaddresses/aggregated/%s-aggregated.zone"
 DENY_COUNTRIES=""
 DENY_INVERT=""
 ADMIN_COUNTRIES=""
-ADMIN_PORTS="8281 3002"
+ADMIN_PORTS=""
 EXEMPT_PORTS="22"
 HAVE_CONF=0
 if [ -f "$CONF" ]; then

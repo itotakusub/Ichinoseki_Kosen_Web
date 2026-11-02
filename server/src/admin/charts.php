@@ -5,6 +5,8 @@ declare(strict_types=1);
 define('KM_ADMIN', true);
 require __DIR__ . '/_inc/guard.php';
 require_once dirname(__DIR__) . '/lib/db.php';
+require_once dirname(__DIR__) . '/lib/admin-log.php';
+require_once dirname(__DIR__) . '/lib/node-extras.php';
 
 $KM_PAGE = [
     'nav' => 'charts',
@@ -13,7 +15,7 @@ $KM_PAGE = [
     'h1Key' => 'page.charts.h1',
     'h1' => 'チャート',
     'crumbs' => [
-        ['key' => 'side.content', 'text' => 'コンテンツ'],
+        ['key' => 'side.groupRecords', 'text' => '記録と分析'],
         ['key' => 'page.charts.h1', 'text' => 'チャート'],
     ],
 ];
@@ -22,6 +24,11 @@ $KM_PAGE = [
  * 外部チャートライブラリは使わず、素の SVG / CSS で描く方針は据え置き。
  * 数値だけをサンプルから実データに差し替える。
  *
+ * **2026-11-02 の並べ直し**(利用者の指示「無理やり配置した項目を的確な場所へ」):
+ * - 部屋のいいね(Android アプリ)をポスターの画面から移した(数を見る場所はここ)
+ * - 教職員氏名の登録状況は教職員の地点(staff-nodes.php)へ移した
+ * - 今年よく検索された語はランキングの語(ranking.php)と同じものだったので、そこへのリンクにした
+ *
  * 月の区切りは必ず SQL 側(DATE_FORMAT)で出す。フェーズ13で DB と PHP のタイムゾーンを
  * Asia/Tokyo に揃えたので今はどちらで丸めても同じになるが、**値が住んでいる場所で区切る**
  * 方が設定の食い違いに強い。以前は DB が UTC・PHP が Asia/Tokyo で、PHP 側で丸めると
@@ -29,14 +36,29 @@ $KM_PAGE = [
  */
 $months = [];
 $values = [];
-$occupantWith = 0;
-$occupantWithout = 0;
 $dbError = null;
-$rankingQueries = [];
 $rankingPlaces = [];
+$likeTotals = [];
+$errors = [];
 
 try {
     $pdo = km_db();
+
+    // 部屋のいいねを 0 に戻す(2026-10-22。lib/node-extras.php。2026-11-02 にポスターの画面から移した)
+    if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
+        if (!km_csrf_verify()) {
+            $errors[] = 'セッションの有効期限が切れています。ページを再読み込みしてからやり直してください。';
+        } elseif ((string) ($_POST['form_action'] ?? '') === 'likes_reset') {
+            $likeNode = (string) ($_POST['node_uuid'] ?? '');
+            if (km_node_uuid_valid($likeNode)) {
+                km_node_likes_ensure_table($pdo);
+                $removed = km_node_likes_reset($pdo, $likeNode);
+                km_admin_log_record('content', 'node.likes_reset', $likeNode . '(' . $removed . ' 件)');
+            }
+            header('Location: ./charts.php?saved=likes_reset#node-likes', true, 303);
+            exit;
+        }
+    }
 
     // 直近6か月ぶんの枠を先に作る(データが無い月も 0 として並べたいので)
     for ($i = 5; $i >= 0; $i--) {
@@ -59,24 +81,11 @@ try {
     }
 
     /*
-     * ランキングの語とよく行く場所(2026-10-05、利用者の指示)。今年の上位 10 件。
-     * 隠した語(km_map_ranking_hidden_queries)は出さない。表がまだ無ければ空のまま(ランキングを一度も使っていない)。
+     * よく行く場所(2026-10-05、利用者の指示)。今年の上位 10 件。表がまだ無ければ空のまま(ランキングを一度も使っていない)。
+     * 調べられた語は ranking.php(公開を選ぶ画面に同じ数がある)。2026-11-02 にここの写しをやめた
      */
     $year = (int) date('Y');
     try {
-        $stmt = $pdo->prepare(
-            'SELECT q.normalized_query AS label, SUM(q.searches) AS c
-               FROM km_map_ranking_queries q
-               LEFT JOIN km_map_ranking_hidden_queries h
-                 ON h.normalized_query = q.normalized_query AND h.year = q.year
-              WHERE q.year = ? AND h.normalized_query IS NULL
-              GROUP BY q.normalized_query
-              ORDER BY c DESC, label
-              LIMIT 10'
-        );
-        $stmt->execute([$year]);
-        $rankingQueries = $stmt->fetchAll();
-
         $stmt = $pdo->prepare(
             'SELECT COALESCE(NULLIF(n.title, \'\'), NULLIF(n.name, \'\'), p.node_uuid) AS label, SUM(p.visits) AS c
                FROM km_map_ranking_places p
@@ -92,10 +101,8 @@ try {
         error_log('charts.php ranking skipped: ' . $exception->getMessage());
     }
 
-    // ドーナツは map-settings.php が既に使っている2つの COUNT をそのまま流用する
-    $totalNodes = (int) $pdo->query('SELECT COUNT(*) FROM km_map_nodes')->fetchColumn();
-    $occupantWith = (int) $pdo->query('SELECT COUNT(*) FROM km_map_nodes WHERE occupant_name IS NOT NULL')->fetchColumn();
-    $occupantWithout = max(0, $totalNodes - $occupantWith);
+    km_node_likes_ensure_table($pdo);
+    $likeTotals = km_node_likes_totals($pdo);
 } catch (Throwable $exception) {
     error_log('charts.php failed: ' . $exception->getMessage());
     $dbError = $exception->getMessage();
@@ -108,9 +115,7 @@ $values = array_values($values);
 // 全部 0 でも高さ計算で 0 除算しないように(元のサンプル実装と同じ配慮)
 $max = ($values !== [] ? max($values) : 0) ?: 1;
 
-$occupantTotal = $occupantWith + $occupantWithout;
-$occupantWithPercent = $occupantTotal > 0 ? round($occupantWith / $occupantTotal * 100, 1) : 0.0;
-$occupantWithoutPercent = $occupantTotal > 0 ? round(100 - $occupantWithPercent, 1) : 0.0;
+$notice = ['likes_reset' => 'いいねを 0 に戻しました。'][(string) ($_GET['saved'] ?? '')] ?? null;
 
 $barWidth = 44;
 $gap = 24;
@@ -138,6 +143,12 @@ require __DIR__ . '/_inc/partials/page-header.php';
               </div>
             </div>
 
+            <?php if ($notice !== null): ?>
+              <div class="alert alert-success" role="alert"><?= km_e($notice) ?></div>
+            <?php endif; ?>
+            <?php foreach ($errors as $error): ?>
+              <div class="alert alert-danger" role="alert"><?= km_e($error) ?></div>
+            <?php endforeach; ?>
             <?php if ($dbError !== null): ?>
               <div class="alert alert-warning" role="alert" data-i18n="page.charts.dbError">
                 データベースに接続できないため、グラフを表示できません。
@@ -200,49 +211,47 @@ require __DIR__ . '/_inc/partials/page-header.php';
               </div>
 
               <div class="col-12 col-xl-5">
-                <!--begin::Card-->
-                <div class="card mb-4">
-                  <div class="card-header">
-                    <h3 class="card-title" data-i18n="page.charts.donutTitle">教職員氏名の登録状況</h3>
-                  </div>
-                  <!-- /.card-header -->
-                  <div class="card-body d-flex align-items-center gap-4 flex-wrap">
-                    <?php if ($occupantTotal === 0): ?>
-                      <p class="text-body-secondary fs-7 mb-0" data-i18n="page.charts.donutEmpty">
-                        地図データがまだ登録されていません。
-                      </p>
+                <?php
+                /*
+                 * 部屋のいいね(2026-10-22。Android アプリの部屋の詳細。lib/node-extras.php)。
+                 * 2026-11-02 にポスターの画面から移した(数を見る場所はチャート)
+                 */
+                ?>
+                <div class="card mb-4" id="node-likes">
+                  <div class="card-header"><h3 class="card-title">部屋のいいね(<?= count($likeTotals) ?> 地点)</h3></div>
+                  <div class="card-body">
+                    <p class="fs-7 text-body-secondary">
+                      Android アプリの部屋の詳細で付けられる「いいね」の数です。<strong>だれが付けたかは持っていません</strong>
+                      (端末ごとの印を鍵つきの印にしてだけ持ち、1 端末 1 地点 1 つ。同じ送り元から 1 時間に <?= KM_NODE_LIKE_SOURCE_LIMIT ?> まで)。
+                      部屋の詳細には、<a href="./posters.php">ポスター・広告</a>で地点に置いたポスターが写真として出ます。
+                    </p>
+                    <?php if ($likeTotals === []): ?>
+                      <p class="text-body-secondary fs-7 mb-0">まだありません。</p>
                     <?php else: ?>
-                      <?php
-                        /*
-                         * 割合だけが動くので、値は data 属性で渡し、CSS 変数として
-                         * 下のスクリプトが設定する(style="…" は CSP で使えない)。
-                         * 見た目の定義は assets/css/km-admin.css の .km-donut。
-                         */
-                      ?>
-                      <div
-                        class="km-donut"
-                        data-km-donut="<?= (int) round($occupantWithPercent) ?>"
-                        role="img"
-                        aria-label="教職員氏名の登録状況"
-                        data-i18n-attr="aria-label:page.charts.donutTitle"
-                      ></div>
-                      <ul class="list-unstyled mb-0 fs-7">
-                        <li class="mb-2">
-                          <span class="badge text-bg-danger">&nbsp;</span>
-                          <span data-i18n="page.charts.donutWith">氏名あり</span>
-                          <strong><?= $occupantWith ?> (<?= $occupantWithPercent ?>%)</strong>
-                        </li>
-                        <li>
-                          <span class="badge text-bg-primary">&nbsp;</span>
-                          <span data-i18n="page.charts.donutWithout">氏名なし</span>
-                          <strong><?= $occupantWithout ?> (<?= $occupantWithoutPercent ?>%)</strong>
-                        </li>
-                      </ul>
+                      <div class="table-responsive">
+                        <table class="table table-sm align-middle mb-0">
+                          <thead><tr><th scope="col">地点</th><th scope="col" class="text-end">いいね</th><th scope="col"></th></tr></thead>
+                          <tbody>
+                            <?php foreach ($likeTotals as $likeRow): ?>
+                              <tr>
+                                <td><?= km_e($likeRow['name'] !== '' ? $likeRow['name'] : $likeRow['uuid'] . '(地図に無い)') ?></td>
+                                <td class="text-end"><?= (int) $likeRow['count'] ?></td>
+                                <td class="text-end">
+                                  <form method="post" class="m-0" data-km-confirm="この地点のいいねを 0 に戻します。よろしいですか?">
+                                    <?= km_csrf_field() ?>
+                                    <input type="hidden" name="form_action" value="likes_reset">
+                                    <input type="hidden" name="node_uuid" value="<?= km_e($likeRow['uuid']) ?>">
+                                    <button type="submit" class="btn btn-sm btn-outline-danger">0 に戻す</button>
+                                  </form>
+                                </td>
+                              </tr>
+                            <?php endforeach; ?>
+                          </tbody>
+                        </table>
+                      </div>
                     <?php endif; ?>
                   </div>
-                  <!-- /.card-body -->
                 </div>
-                <!--end::Card-->
               </div>
             </div>
             <!--end::Row-->
@@ -289,7 +298,15 @@ require __DIR__ . '/_inc/partials/page-header.php';
             ?>
             <!--begin::Row(ランキング)-->
             <div class="row">
-              <?php $rankingCard('page.charts.rankingQueriesTitle', '今年よく検索された語', 'page.charts.rankingEmpty', $rankingQueries); ?>
+              <div class="col-12 col-xl-6">
+                <div class="card mb-4">
+                  <div class="card-header"><h3 class="card-title" data-i18n="page.charts.rankingQueriesTitle">今年よく検索された語</h3></div>
+                  <div class="card-body">
+                    <p class="fs-7 text-body-secondary mb-2">数と、公開する語を選ぶ画面は「ランキングの語」にあります(同じ数を 2 か所に出さない)。</p>
+                    <a href="./ranking.php" class="btn btn-sm btn-outline-primary"><i class="bi bi-trophy me-1" aria-hidden="true"></i><span data-i18n="side.ranking">ランキングの語</span></a>
+                  </div>
+                </div>
+              </div>
               <?php $rankingCard('page.charts.rankingPlacesTitle', '今年よく行かれた場所', 'page.charts.rankingEmpty', $rankingPlaces); ?>
             </div>
             <!--end::Row(ランキング)-->
@@ -300,9 +317,6 @@ require __DIR__ . '/_inc/partials/page-header.php';
 
         <?php // 値の反映は JS 経由。要素の style を JS から触るのは CSP の対象外 ?>
         <script<?= km_csp_nonce_attr() ?>>
-          document.querySelectorAll('[data-km-donut]').forEach((el) => {
-            el.style.setProperty('--km-donut', el.dataset.kmDonut + '%');
-          });
           document.querySelectorAll('[data-km-progress]').forEach((bar) => {
             bar.style.width = bar.dataset.kmProgress + '%';
           });

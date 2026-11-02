@@ -13,8 +13,8 @@ declare(strict_types=1);
  * 例: `APP_URL=https://kosenmap.example.jp` / `APP_URL=https://192.168.3.29:9443`
  *
  * **ここが返すのは「ブラウザから見た URL」だけ。** コンテナ間の通信先
- * (`mariadb` / `mailpit` / `soketi` などのサービス名)は別物で、ドメインを変えても
- * 変わらない。混ぜないこと — lib/soketi.php が内部ホストを使い続けているのはそのため。
+ * (`mariadb` / `mailpit` などのサービス名)は別物で、ドメインを変えても
+ * 変わらない。混ぜないこと。
  */
 
 /** 既定値。env が無い環境(コンテナ外での CLI 実行など)でも壊れないように。 */
@@ -22,17 +22,16 @@ const KM_SITE_DEFAULT_URL = 'https://192.168.3.29:9443';
 
 /**
  * サービスごとのポート。**画面の表示と死活監視で同じ表を使う**ため、ここに置く。
- * logto-core(3001)と soketi(6001)はコンテナの中の番号で、外には出していない(2026-10-19 から 443 番の auth.<ドメイン> と /ws/app/。
- * ブラウザから見た番号は km_site_port が返す)。
+ * logto-core(3001)はコンテナの中の番号で、外には出していない(2026-10-19 から 443 番の auth.<ドメイン>。
+ * ブラウザから見た番号は km_site_port が返す)。logto-admin(3002)はホストの 127.0.0.1 だけ(2026-11-02。SSH のトンネルで開く)。
+ * phpmyadmin(8281)と soketi(6001)は 2026-11-02 に外した。
  * 変えるときは compose.yaml の ports と nginx の listen も揃えること。
  */
 const KM_SITE_PORTS = [
     'web-http' => 8080,
     'web-https' => 9443,
-    'phpmyadmin' => 8281,
     'logto-core' => 3001,
     'logto-admin' => 3002,
-    'soketi' => 6001,
     'mailpit' => 8025,
     'mariadb' => 3306,
 ];
@@ -67,9 +66,25 @@ function km_site_parts(): array
  *
  * ゲート(nginx の auth_request → admin/api/gate.php)が見るのは**セッション Cookie**で、
  * Cookie はホスト名ごとに分かれる(`__Host-` は Domain を持てない)。管理画面が admin.example.jp なら、
- * phpMyAdmin・Logto Console・Mailpit も admin.example.jp:ポート で開かないとゲートで必ず弾かれる。
+ * Mailpit も admin.example.jp:ポート で開かないとゲートで必ず弾かれる。
+ * (phpMyAdmin と Logto Console は 2026-11-02 に nginx から外した。Console は KM_SITE_LOGTO_CONSOLE_URL)
  */
-const KM_SITE_ADMIN_SERVICES = ['phpmyadmin', 'logto-admin', 'mailpit'];
+const KM_SITE_ADMIN_SERVICES = ['mailpit'];
+
+/**
+ * **Logto Console の開き方**(2026-11-02、利用者の指示「Logto も SSH から」)。
+ *
+ * Console はインターネットに出さず、ホストの 127.0.0.1:3002 にだけ出す(compose.yaml の logto)。
+ * 手元で `ssh -i ~/.ssh/km_ops -L 3002:127.0.0.1:3002 kmops@<ホスト>` を張ってから、この URL を開く。
+ * Logto の ADMIN_ENDPOINT も同じ値(Console の戻り先は Logto がそこから作る)。
+ */
+const KM_SITE_LOGTO_CONSOLE_URL = 'http://localhost:3002';
+
+/** Console へトンネルを張るコマンド(画面に出す)。鍵と利用者は運用の決まり(docs/05-containers)に合わせる */
+function km_site_logto_console_tunnel(): string
+{
+    return 'ssh -i ~/.ssh/km_ops -L 3002:127.0.0.1:3002 kmops@' . km_site_host();
+}
 
 /**
  * 管理画面の URL の部品。正本は環境変数 `ADMIN_URL`。**無ければ APP_URL と同じ**(= 別オリジンにしない)。
@@ -175,8 +190,7 @@ function km_site_origin(): string
 /**
  * 付随サービスの URL を組む。
  *
- * `km_site_url('phpmyadmin')` → `https://192.168.3.29:8281`
- * `km_site_url('logto-admin', '/console/users/xxx')` → `…:3002/console/users/xxx`
+ * `km_site_url('logto-admin', '/console/users/xxx')` → `http://localhost:3002/console/users/xxx`(SSH のトンネルで開く)
  * `km_site_url(null, '/faq.php')` → 本体の URL + パス
  *
  * **標準ポート(443/80)ならポート番号を付けない。** ドメイン運用に移ったとき
@@ -190,6 +204,10 @@ function km_site_url(?string $service = null, string $path = ''): string
     // Logto の入口は LOGTO_ENDPOINT が正本(2026-10-19。auth.<ドメイン> の 443 番に寄せた。km_site_logto_endpoint の注記)
     if ($service === 'logto-core') {
         return km_site_logto_endpoint() . $path;
+    }
+    // Console は SSH のトンネルの先(2026-11-02。KM_SITE_LOGTO_CONSOLE_URL の注記)
+    if ($service === 'logto-admin') {
+        return KM_SITE_LOGTO_CONSOLE_URL . $path;
     }
 
     $parts = km_site_parts();
@@ -240,14 +258,11 @@ function km_site_port(string $service): ?int
         // 本体が既定ポートなら平文も既定ポート、そうでなければ LAN 構成の 8080
         return $parts['port'] === null ? 80 : KM_SITE_PORTS['web-http'];
     }
-    // Logto と Soketi はブラウザから見た入口の番号(2026-10-19 に 443 番へ寄せた。km_site_logto_endpoint の注記)
+    // Logto はブラウザから見た入口の番号(2026-10-19 に 443 番へ寄せた。km_site_logto_endpoint の注記)
     if ($service === 'logto-core') {
         $port = parse_url(km_site_logto_endpoint(), PHP_URL_PORT);
 
         return is_int($port) ? $port : null;
-    }
-    if ($service === 'soketi') {
-        return km_site_ws_port();
     }
 
     return KM_SITE_PORTS[$service] ?? null;
@@ -274,39 +289,6 @@ function km_site_logto_endpoint(): string
     $parts = km_site_parts();
 
     return $parts['scheme'] . '://auth.' . $parts['host'];
-}
-
-/**
- * Soketi へブラウザから張る WebSocket の接続先。
- *
- * **管理画面と同じオリジンの 443 番の /ws/ を通す**(2026-10-19)。以前は `<ドメイン>:6001` に直に張っていたが、
- * 学校の回線は 443 番以外を通さないので、学内からはチャットと死活監視がいつも「未接続」だった。
- * nginx は 443 の server の `location ^~ /ws/app/` で Soketi の /app/ へ渡す(Origin は管理画面だけ)。
- * pusher-js は wsHost:wssPort + wsPath + /app/<key> へ張る。
- */
-function km_site_ws_host(): string
-{
-    return km_site_admin_parts()['host'];
-}
-
-function km_site_ws_port(): int
-{
-    return km_site_admin_parts()['port'] ?? (km_site_admin_parts()['scheme'] === 'https' ? 443 : 80);
-}
-
-function km_site_ws_path(): string
-{
-    return '/ws';
-}
-
-/** CSP の connect-src に書く WebSocket の宛先(既定ポートなら番号を付けない)。 */
-function km_site_ws_origin(): string
-{
-    $port = km_site_ws_port();
-    $scheme = km_site_admin_parts()['scheme'] === 'https' ? 'wss' : 'ws';
-    $omit = ($scheme === 'wss' && $port === 443) || ($scheme === 'ws' && $port === 80);
-
-    return $scheme . '://' . km_site_ws_host() . ($omit ? '' : ':' . $port);
 }
 
 /** 「host:port」の表示用。接続先を人に見せるところで使う。 */
@@ -349,10 +331,6 @@ function km_site_service_map(): array
          */
         $noUrl = $service === 'mariadb' || ($service === 'mailpit' && !km_site_is_local());
         $url = $noUrl ? null : km_site_url($service);
-        // Soketi は管理画面の 443 番の /ws/ の奥(km_site_ws_host の注記)。開く画面は無いので、表示用に入口だけ見せる
-        if ($service === 'soketi') {
-            $url = km_site_admin_origin() . km_site_ws_path() . '/';
-        }
         $map[$service] = [
             'url' => $url,
             'port' => $port,

@@ -13,7 +13,7 @@ declare(strict_types=1);
  * 送るようになったら、MAIL_HOST / MAIL_PORT を実サービスへ向け、必要なら認証と TLS を
  * 足すだけで済むよう、接続情報はすべて環境変数から読む(コードに決め打ちしない)。
  *
- * lib/soketi.php と同じ「第三者サービスのクライアントを1関数に集約する」形。
+ * 「第三者サービスのクライアントを1関数に集約する」形(lib/logto-management.php と同じ)。
  */
 
 require_once __DIR__ . '/../vendor/autoload.php';

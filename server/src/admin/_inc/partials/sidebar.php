@@ -9,63 +9,98 @@ if (!defined('KM_ADMIN')) {
 $nav = $KM_PAGE['nav'] ?? '';
 
 /*
- * チャットの未読件数。km_chat_unread_badge() は1リクエスト内で1回しか数えず、
- * DB が落ちていれば null を返す(そのときはバッジを出さない = 画面は壊れない)。
+ * アプリの受け箱で公開を待っている届けの数(2026-10-09。lib/apk-inbox.php)。DB が落ちていれば出さない。
+ * **行き先は変えない**(2026-11-02)。以前は待ちがあると「ダウンロード」のリンク先が受け箱に変わり、
+ * 開くたびに行き先が違った。数はバッジで知らせ、受け箱へはダウンロードの画面とヘッダーの通知から行く。
  */
-require_once dirname(__DIR__, 3) . '/lib/chat.php';
-$chatUnread = km_chat_unread_badge((string) ($KM_USER['sub'] ?? ''));
+$apkWaiting = (static function (): int {
+    try {
+        require_once dirname(__DIR__, 3) . '/lib/apk-inbox.php';
+        return km_apk_inbox_waiting_count(km_db());
+    } catch (Throwable $exception) {
+        return 0;
+    }
+})();
 
-// どの親メニューを開くか。フェーズ1では組み立てスクリプトでページごとに
-// active / menu-open を書き込んでいたが、ここで一元化した。
-$openMenus = [
-    'tables' => 'database',
-    'mapSettings' => 'database',
-    'mapSync' => 'database',
-    'mapPublish' => 'database',
-    'mapEditor' => 'database',
-    'mapEvents' => 'database',
-    'posters' => 'database',
-    'backups' => 'database',
-    'schedule' => 'database',
-    'mapFloors' => 'database',
-    'mapAreas' => 'database',
-    'mapHereQr' => 'database',
-    'searchAliases' => 'database',
-    'stalls' => 'database',
-    'login' => 'auth',
-    'projects' => 'content',
-    'timeline' => 'content',
-    'charts' => 'content',
-    'mailbox' => 'content',
-    // ランキングの「調べられた語」を外す(2026-09-25、診断 W-45)
-    'ranking' => 'content',
-    // AR 実測の記録と画像(2026-10-06、lib/ar-capture.php)
-    'arCaptures' => 'content',
-    // お試しの閲覧リンク(2026-09-30、lib/map-guest.php)
-    'guestLinks' => 'content',
-    'profile' => 'extra',
-    // FAQ は見本ページではなく、編集して公開する実コンテンツになった(フェーズ14)
-    'faq' => 'content',
-    // QR のリンク集(2026-10-24、lib/qr-links.php)
-    'qrLinks' => 'content',
-    // お知らせ(2026-10-24、lib/notices.php)
-    'notices' => 'content',
-    // 案内チャット(2026-10-24、lib/guide-chat.php。企画書の LLM の案内)
-    'guideChat' => 'content',
-    // 規約とポリシーへ足す章。本文はコードのまま(admin/legal.php の説明を参照)
-    'legal' => 'content',
-    'calendar' => 'extra',
-    'kanban' => 'extra',
-    'chat' => 'extra',
-    'filemanager' => 'extra',
+/*
+ * **サイドバーは目的ごとの組で並べる**(2026-11-02、利用者の指示「無理やり配置した項目を分かりやすく」)。
+ *
+ * 以前は「データベース」の下に地図・イベント・屋台・バックアップなど 13 項目が入り、
+ * 「コンテンツ」に集計やアクセス制御が混ざり、「設定」が「連携サービス(Logto)」の見出しの下にあった。
+ * 組は「何をしに来たか」で分ける。ページの URL と各ページの nav の名前は変えていない(ブックマークが生きる)。
+ *
+ * 1 項目 = [nav の名前, 行き先, アイコン, i18n の鍵, 日本語の既定]。組は開閉でき、いまのページの組だけ開いておく。
+ * チャット・サービス監視・phpMyAdmin・Logto Console へのリンクは 2026-11-02 に外した
+ * (チャットと Soketi は撤去、監視はタスクマネージャーへ、Console は SSH のトンネルで開く。設定の画面に開き方がある)。
+ */
+$groups = [
+    'map' => ['bi-map', 'side.groupMap', '地図', [
+        ['mapEditor', './map-editor.php', 'bi-pin-map', 'side.mapEditor', '地図編集'],
+        ['mapFloors', './map-floors.php', 'bi-layers', 'side.mapFloors', '階と平面図'],
+        ['mapAreas', './map-areas.php', 'bi-palette', 'side.mapAreas', '地図の色分け'],
+        ['searchAliases', './search-aliases.php', 'bi-alphabet', 'side.searchAliases', '地点の読み・別名・URL'],
+        ['mapHereQr', './map-here-qr.php', 'bi-qr-code', 'side.mapHereQr', '現在地の QR'],
+        ['mapSettings', './map-settings.php', 'bi-shield-lock', 'side.mapSettings', '地図の公開設定'],
+    ]],
+    'event' => ['bi-calendar-event', 'side.groupEvent', '会期', [
+        ['mapEvents', './map-events.php', 'bi-cone-striped', 'side.mapEvents', 'イベントモード'],
+        ['schedule', './schedule.php', 'bi-calendar-event', 'side.schedule', 'スケジュール'],
+        ['stalls', './stalls.php', 'bi-shop', 'side.stalls', '屋台'],
+        ['posters', './posters.php', 'bi-image', 'side.posters', 'ポスター・広告'],
+        ['notices', './notices.php', 'bi-megaphone', 'side.notices', 'お知らせとチュートリアル'],
+        ['guideChat', './guide-chat.php', 'bi-chat-dots', 'side.guideChat', '案内チャット(AI)'],
+    ]],
+    'app' => ['bi-phone', 'side.groupApp', 'アプリ', [
+        ['mapPublish', './map-publish.php', 'bi-broadcast', 'side.mapPublish', '地図の配信'],
+        ['mapSync', './map-sync.php', 'bi-arrow-repeat', 'side.mapSync', 'アプリの地図を取り込む'],
+        ['downloads', './downloads.php', 'bi-download', 'side.downloads', 'アプリの配布'],
+    ]],
+    'public' => ['bi-globe', 'side.groupPublic', '公開ページ', [
+        ['guestLinks', './guest-links.php', 'bi-link-45deg', 'side.guestLinks', 'お試しの閲覧リンク'],
+        ['testMode', './test-mode.php', 'bi-clipboard2-data', 'side.testMode', 'テスト用アカウント'],
+        ['qrLinks', './qr-links.php', 'bi-qr-code-scan', 'side.qrLinks', 'QR のリンク集'],
+        ['faq', './faq.php', 'bi-question-circle', 'side.faq', 'FAQ'],
+        ['legal', './legal.php', 'bi-file-earmark-text', 'side.legal', '規約とポリシー'],
+    ]],
+    'people' => ['bi-people-fill', 'side.groupPeople', '人', [
+        ['users', './users.php', 'bi-people', 'side.users', 'ユーザー管理'],
+        ['staffRequests', './staff-requests.php', 'bi-person-badge', 'side.staffRequests', '教職員の申請'],
+        ['staffNodes', './staff-nodes.php', 'bi-geo-alt', 'side.staffNodes', '教職員の地点'],
+        ['mailbox', './mailbox.php', 'bi-envelope-fill', 'side.mailbox', '受信箱'],
+    ]],
+    'records' => ['bi-bar-chart-fill', 'side.groupRecords', '記録と分析', [
+        ['visitors', './visitors.php', 'bi-globe2', 'side.visitors', '訪問者'],
+        ['charts', './charts.php', 'bi-bar-chart', 'side.charts', 'チャート'],
+        ['ranking', './ranking.php', 'bi-trophy', 'side.ranking', 'ランキングの語'],
+        ['arCaptures', './ar-captures.php', 'bi-camera', 'side.arCaptures', 'AR の撮影'],
+        ['timeline', './timeline.php', 'bi-clock-history', 'side.timeline', 'タイムライン'],
+    ]],
+    'ops' => ['bi-gear-wide-connected', 'side.groupOps', '運用', [
+        ['taskmgr', './taskmgr.php', 'bi-cpu', 'side.taskmgr', 'タスクマネージャー'],
+        ['backups', './backups.php', 'bi-archive', 'side.backups', 'バックアップ'],
+        ['tables', './tables.php', 'bi-table', 'side.tables', 'テーブル管理'],
+        ['settings', './settings.php', 'bi-gear-fill', 'side.settings', '設定'],
+    ]],
+    'team' => ['bi-kanban', 'side.groupTeam', 'チーム', [
+        ['projects', './projects.php', 'bi-list-check', 'side.projects', 'プロジェクト状況'],
+        ['kanban', './kanban.php', 'bi-kanban-fill', 'side.kanban', 'かんばん'],
+        ['calendar', './calendar.php', 'bi-calendar3', 'side.calendar', 'カレンダー'],
+        ['filemanager', './file-manager.php', 'bi-folder-fill', 'side.fileManager', 'ファイル管理'],
+    ]],
 ];
-$openMenu = $openMenus[$nav] ?? '';
+
+/** いまのページが入っている組(開いておく)。プロフィールはヘッダーの名前のメニューから開くので、どの組にも無い */
+$openGroup = '';
+foreach ($groups as $groupId => $group) {
+    foreach ($group[3] as $item) {
+        if ($item[0] === $nav) {
+            $openGroup = $groupId;
+        }
+    }
+}
 
 /** サイドバーの子項目に付けるクラス */
 $link = static fn(string $id): string => 'nav-link' . ($nav === $id ? ' active' : '');
-/** 親項目(展開する側)に付けるクラス */
-$parentItem = static fn(string $id): string => 'nav-item' . ($openMenu === $id ? ' menu-open' : '');
-$parentLink = static fn(string $id): string => 'nav-link' . ($openMenu === $id ? ' active' : '');
 ?>
       <!--begin::Sidebar-->
       <aside class="app-sidebar bg-body-secondary shadow" data-bs-theme="dark">
@@ -102,385 +137,38 @@ $parentLink = static fn(string $id): string => 'nav-link' . ($openMenu === $id ?
               data-accordion="false"
               id="navigation"
             >
-              <li class="nav-header" data-i18n="side.headerMain">メイン</li>
               <li class="nav-item">
                 <a href="./index.php" class="<?= $link('index') ?>">
                   <i class="nav-icon bi bi-speedometer2"></i>
                   <p data-i18n="side.dashboard">ダッシュボード</p>
                 </a>
               </li>
-              <li class="nav-item">
-                <a href="./users.php" class="<?= $link('users') ?>">
-                  <i class="nav-icon bi bi-people-fill"></i>
-                  <p data-i18n="side.users">ユーザー管理</p>
-                </a>
-              </li>
-              <?php // 展示の PC 用のテスト用アカウントと、集めた記録(2026-10-15、lib/test-mode.php) ?>
-              <li class="nav-item">
-                <a href="./test-mode.php" class="<?= $link('testMode') ?>">
-                  <i class="nav-icon bi bi-clipboard2-data"></i>
-                  <p data-i18n="side.testMode">テスト用アカウント</p>
-                </a>
-              </li>
-              <?php // 教職員の権限の申請(docs/15。2026-09-18)。承認すると教職員氏名と閲覧不可の地点が見えるようになる ?>
-              <li class="nav-item">
-                <a href="./staff-requests.php" class="<?= $link('staffRequests') ?>">
-                  <i class="nav-icon bi bi-person-badge"></i>
-                  <p data-i18n="side.staffRequests">教職員の申請</p>
-                </a>
-              </li>
-              <?php // 教職員の地点(docs/15 段 G)。割り当てと、教職員が送った変更の確認 ?>
-              <li class="nav-item">
-                <a href="./staff-nodes.php" class="<?= $link('staffNodes') ?>">
-                  <i class="nav-icon bi bi-geo-alt"></i>
-                  <p data-i18n="side.staffNodes">教職員の地点</p>
-                </a>
-              </li>
-              <li class="<?= $parentItem('database') ?>">
-                <a href="#" class="<?= $parentLink('database') ?>">
-                  <i class="nav-icon bi bi-database-fill"></i>
-                  <p data-i18n="side.database">
-                    データベース
-                    <i class="nav-arrow bi bi-chevron-right"></i>
-                  </p>
-                </a>
-                <ul class="nav nav-treeview">
-                  <li class="nav-item">
-                    <a href="./tables.php" class="<?= $link('tables') ?>">
-                      <i class="nav-icon bi bi-table"></i>
-                      <p data-i18n="side.tables">テーブル管理</p>
-                    </a>
-                  </li>
-                  <li class="nav-item">
-                    <a href="./map-sync.php" class="<?= $link('mapSync') ?>">
-                      <i class="nav-icon bi bi-arrow-repeat"></i>
-                      <p data-i18n="side.mapSync">アプリの地図を取り込む</p>
-                    </a>
-                  </li>
-                  <li class="nav-item">
-                    <a href="./map-publish.php" class="<?= $link('mapPublish') ?>">
-                      <i class="nav-icon bi bi-broadcast"></i>
-                      <p data-i18n="side.mapPublish">アプリへ地図を配信する</p>
-                    </a>
-                  </li>
-                  <li class="nav-item">
-                    <a href="./map-editor.php" class="<?= $link('mapEditor') ?>">
-                      <i class="nav-icon bi bi-pin-map"></i>
-                      <p data-i18n="side.mapEditor">地図編集</p>
-                    </a>
-                  </li>
-                  <li class="nav-item">
-                    <a href="./map-events.php" class="<?= $link('mapEvents') ?>">
-                      <i class="nav-icon bi bi-cone-striped"></i>
-                      <p data-i18n="side.mapEvents">イベントモード</p>
-                    </a>
-                  </li>
-                  <?php // 階と平面図(画像の差し替え・階の追加と削除。2026-10-21、lib/map-floors.php) ?>
-                  <li class="nav-item">
-                    <a href="./map-floors.php" class="<?= $link('mapFloors') ?>">
-                      <i class="nav-icon bi bi-layers"></i>
-                      <p data-i18n="side.mapFloors">階と平面図</p>
-                    </a>
-                  </li>
-                  <?php // 場所ごとの色分け(2026-10-30、lib/area-paint.php。床を塗った画像を作って公開の地図に出す) ?>
-                  <li class="nav-item">
-                    <a href="./map-areas.php" class="<?= $link('mapAreas') ?>">
-                      <i class="nav-icon bi bi-palette"></i>
-                      <p data-i18n="side.mapAreas">地図の色分け</p>
-                    </a>
-                  </li>
-                  <?php // 校内に貼る現在地の QR(2026-10-30。/?here=<地点>。読むとそこを今いる場所にした地図が開く) ?>
-                  <li class="nav-item">
-                    <a href="./map-here-qr.php" class="<?= $link('mapHereQr') ?>">
-                      <i class="nav-icon bi bi-qr-code"></i>
-                      <p data-i18n="side.mapHereQr">現在地の QR</p>
-                    </a>
-                  </li>
-                  <?php // 屋台(2026-10-30。lib/stalls.php。屋台ごとの鍵とメニュー・混み具合) ?>
-                  <li class="nav-item">
-                    <a href="./stalls.php" class="<?= $link('stalls') ?>">
-                      <i class="nav-icon bi bi-shop"></i>
-                      <p data-i18n="side.stalls">屋台</p>
-                    </a>
-                  </li>
-                  <?php // 読み・別名(2026-10-30。lib/search-aliases.php。検索・案内チャット・アプリの検索に入る) ?>
-                  <li class="nav-item">
-                    <a href="./search-aliases.php" class="<?= $link('searchAliases') ?>">
-                      <i class="nav-icon bi bi-alphabet"></i>
-                      <p data-i18n="side.searchAliases">読み・別名</p>
-                    </a>
-                  </li>
-                  <?php // ポスター・広告と地点の URL(2026-10-21、lib/posters.php) ?>
-                  <li class="nav-item">
-                    <a href="./posters.php" class="<?= $link('posters') ?>">
-                      <i class="nav-icon bi bi-image"></i>
-                      <p data-i18n="side.posters">ポスター・広告</p>
-                    </a>
-                  </li>
-                  <?php // 企画のスケジュール(2026-10-23、lib/event-schedule.php) ?>
-                  <li class="nav-item">
-                    <a href="./schedule.php" class="<?= $link('schedule') ?>">
-                      <i class="nav-icon bi bi-calendar-event"></i>
-                      <p data-i18n="side.schedule">スケジュール</p>
-                    </a>
-                  </li>
-                  <?php // 地図のバックアップと Wi-Fi 学習の控え(2026-10-23、lib/map-backup.php・lib/learning-backup.php) ?>
-                  <li class="nav-item">
-                    <a href="./backups.php" class="<?= $link('backups') ?>">
-                      <i class="nav-icon bi bi-archive"></i>
-                      <p data-i18n="side.backups">バックアップ</p>
-                    </a>
-                  </li>
-                  <li class="nav-item">
-                    <a href="./map-settings.php" class="<?= $link('mapSettings') ?>">
-                      <i class="nav-icon bi bi-shield-lock"></i>
-                      <p data-i18n="side.mapSettings">地図データ公開設定</p>
-                    </a>
-                  </li>
-                  <li class="nav-item">
-                    <a
-                      href="<?= km_e(km_site_url('phpmyadmin', '/')) ?>"
-                      class="nav-link"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      <i class="nav-icon bi bi-box-arrow-up-right"></i>
-                      <p data-i18n="side.phpmyadmin">phpMyAdmin</p>
-                    </a>
-                  </li>
-                </ul>
-              </li>
-              <li class="nav-item">
-                <a href="./monitor.php" class="<?= $link('monitor') ?>">
-                  <i class="nav-icon bi bi-activity"></i>
-                  <p data-i18n="side.monitor">サービス監視</p>
-                </a>
-              </li>
-              <?php // タスクマネージャー(2026-10-05)。nginx で IP を絞ってあるので、許可していない場所からは開けない ?>
-              <li class="nav-item">
-                <a href="./taskmgr.php" class="<?= $link('taskmgr') ?>">
-                  <i class="nav-icon bi bi-cpu"></i>
-                  <p data-i18n="side.taskmgr">タスクマネージャー</p>
-                </a>
-              </li>
-              <?php // 訪問者と大まかな位置(2026-10-06)。位置はこのページを開いたブラウザが引く ?>
-              <li class="nav-item">
-                <a href="./visitors.php" class="<?= $link('visitors') ?>">
-                  <i class="nav-icon bi bi-globe2"></i>
-                  <p data-i18n="side.visitors">訪問者</p>
-                </a>
-              </li>
-
-              <li class="nav-header" data-i18n="side.headerContent">コンテンツ</li>
-              <li class="<?= $parentItem('content') ?>">
-                <a href="#" class="<?= $parentLink('content') ?>">
-                  <i class="nav-icon bi bi-grid-3x3-gap-fill"></i>
-                  <p data-i18n="side.content">
-                    コンテンツ
-                    <i class="nav-arrow bi bi-chevron-right"></i>
-                  </p>
-                </a>
-                <ul class="nav nav-treeview">
-                  <li class="nav-item">
-                    <a href="./projects.php" class="<?= $link('projects') ?>">
-                      <i class="nav-icon bi bi-kanban"></i>
-                      <p data-i18n="side.projects">プロジェクト状況</p>
-                    </a>
-                  </li>
-                  <li class="nav-item">
-                    <a href="./timeline.php" class="<?= $link('timeline') ?>">
-                      <i class="nav-icon bi bi-clock-history"></i>
-                      <p data-i18n="side.timeline">タイムライン</p>
-                    </a>
-                  </li>
-                  <li class="nav-item">
-                    <a href="./charts.php" class="<?= $link('charts') ?>">
-                      <i class="nav-icon bi bi-bar-chart-fill"></i>
-                      <p data-i18n="side.charts">チャート</p>
-                    </a>
-                  </li>
-                  <li class="nav-item">
-                    <a href="./mailbox.php" class="<?= $link('mailbox') ?>">
-                      <i class="nav-icon bi bi-envelope-fill"></i>
-                      <p data-i18n="side.mailbox">受信箱</p>
-                    </a>
-                  </li>
-                  <li class="nav-item">
-                    <a href="./ranking.php" class="<?= $link('ranking') ?>">
-                      <i class="nav-icon bi bi-trophy"></i>
-                      <p data-i18n="side.ranking">ランキングの語</p>
-                    </a>
-                  </li>
-                  <li class="nav-item">
-                    <a href="./ar-captures.php" class="<?= $link('arCaptures') ?>">
-                      <i class="nav-icon bi bi-camera"></i>
-                      <p data-i18n="side.arCaptures">AR の撮影</p>
-                    </a>
-                  </li>
-                  <li class="nav-item">
-                    <a href="./guest-links.php" class="<?= $link('guestLinks') ?>">
-                      <i class="nav-icon bi bi-link-45deg"></i>
-                      <p data-i18n="side.guestLinks">お試しの閲覧リンク</p>
-                    </a>
-                  </li>
-                  <?php // 問い合わせフォームは公開ページ(/contact.php)へ一本化した(フェーズ17)。
-                        // 受信箱はここに残る ?>
-                  <li class="nav-item">
-                    <a href="./faq.php" class="<?= $link('faq') ?>">
-                      <i class="nav-icon bi bi-question-circle"></i>
-                      <p data-i18n="side.faq">FAQ</p>
-                    </a>
-                  </li>
-                  <?php // お知らせ(2026-10-24。地図の最初の画面と /notice.php) ?>
-                  <li class="nav-item">
-                    <a href="./notices.php" class="<?= $link('notices') ?>">
-                      <i class="nav-icon bi bi-megaphone"></i>
-                      <p data-i18n="side.notices">お知らせ</p>
-                    </a>
-                  </li>
-                  <?php // 案内チャット(2026-10-24。LLM の模擬店・経路の案内。テスト用アカウント 1 つだけに出す) ?>
-                  <li class="nav-item">
-                    <a href="./guide-chat.php" class="<?= $link('guideChat') ?>">
-                      <i class="nav-icon bi bi-chat-dots"></i>
-                      <p data-i18n="side.guideChat">案内チャット</p>
-                    </a>
-                  </li>
-                  <?php // QR のリンク集(2026-10-24。公開ページ /qr.php に並べるリンク) ?>
-                  <li class="nav-item">
-                    <a href="./qr-links.php" class="<?= $link('qrLinks') ?>">
-                      <i class="nav-icon bi bi-qr-code"></i>
-                      <p data-i18n="side.qrLinks">QR のリンク集</p>
-                    </a>
-                  </li>
-                  <li class="nav-item">
-                    <a href="./legal.php" class="<?= $link('legal') ?>">
-                      <i class="nav-icon bi bi-file-earmark-text"></i>
-                      <p data-i18n="side.legal">規約とポリシー</p>
-                    </a>
-                  </li>
-                </ul>
-              </li>
-              <?php
-              // アプリの受け箱で公開を待っている届けの数(2026-10-09。lib/apk-inbox.php)。DB が落ちていれば出さない
-              $apkWaiting = (static function (): int {
-                  try {
-                      require_once dirname(__DIR__, 3) . '/lib/apk-inbox.php';
-                      return km_apk_inbox_waiting_count(km_db());
-                  } catch (Throwable $exception) {
-                      return 0;
-                  }
-              })();
-              ?>
-              <li class="nav-item">
-                <a href="<?= $apkWaiting > 0 ? './apk-inbox.php' : './downloads.php' ?>" class="<?= $link('downloads') ?>">
-                  <i class="nav-icon bi bi-download"></i>
-                  <p>
-                    <span data-i18n="side.downloads">ダウンロード</span>
-                    <?php if ($apkWaiting > 0): ?>
-                      <span class="nav-badge badge text-bg-warning me-3" title="公開を待っているアプリ"><?= (int) $apkWaiting ?></span>
-                    <?php endif; ?>
-                  </p>
-                </a>
-              </li>
-              <li class="<?= $parentItem('extra') ?>">
-                <a href="#" class="<?= $parentLink('extra') ?>">
-                  <i class="nav-icon bi bi-collection-fill"></i>
-                  <p data-i18n="side.extra">
-                    その他ページ
-                    <i class="nav-arrow bi bi-chevron-right"></i>
-                  </p>
-                </a>
-                <ul class="nav nav-treeview">
-                  <li class="nav-item">
-                    <a href="./profile.php" class="<?= $link('profile') ?>">
-                      <i class="nav-icon bi bi-person-circle"></i>
-                      <p data-i18n="side.profile">プロフィール</p>
-                    </a>
-                  </li>
-                  <li class="nav-item">
-                    <a href="./calendar.php" class="<?= $link('calendar') ?>">
-                      <i class="nav-icon bi bi-calendar3"></i>
-                      <p data-i18n="side.calendar">カレンダー</p>
-                    </a>
-                  </li>
-                  <li class="nav-item">
-                    <a href="./kanban.php" class="<?= $link('kanban') ?>">
-                      <i class="nav-icon bi bi-kanban-fill"></i>
-                      <p data-i18n="side.kanban">かんばん</p>
-                    </a>
-                  </li>
-                  <li class="nav-item">
-                    <a href="./chat.php" class="<?= $link('chat') ?>">
-                      <i class="nav-icon bi bi-chat-dots-fill"></i>
-                      <p data-i18n="side.chat">
-                        チャット
-                        <?php // チャット画面を開いている間は JS がこの数字を直接書き替える ?>
-                        <span
-                          class="nav-badge badge text-bg-danger me-3<?= ($chatUnread ?? 0) > 0 ? '' : ' d-none' ?>"
-                          data-km-chat-unread
-                        ><?= (int) ($chatUnread ?? 0) ?></span>
-                      </p>
-                    </a>
-                  </li>
-                  <li class="nav-item">
-                    <a href="./file-manager.php" class="<?= $link('filemanager') ?>">
-                      <i class="nav-icon bi bi-folder-fill"></i>
-                      <p data-i18n="side.fileManager">ファイル管理</p>
-                    </a>
-                  </li>
-                  <?php
-                  /*
-                   * ここにあった「請求書(見本)」「サービス比較」「メンテナンス中」は
-                   * 1.0.5 で消した。**3枚とも DB に繋がっていない AdminLTE のデモ**で、
-                   * 実機能と並んでいると管理者が取り違える(「請求書?」と聞かれた)。
-                   *
-                   * 原本は `admin/vendor/adminlte/` に在るので、組み込み方の参照が
-                   * 要るときはそちらを見る。
-                   */
-                  ?>
-                </ul>
-              </li>
-
-              <li class="nav-header" data-i18n="side.headerAuth">連携サービス</li>
-              <li class="<?= $parentItem('auth') ?>">
-                <a href="#" class="<?= $parentLink('auth') ?>">
-                  <i class="nav-icon bi bi-shield-lock-fill"></i>
-                  <p data-i18n="side.auth">
-                    認証 (Logto)
-                    <i class="nav-arrow bi bi-chevron-right"></i>
-                  </p>
-                </a>
-                <ul class="nav nav-treeview">
-                  <li class="nav-item">
-                    <a
-                      href="<?= km_e(km_site_url('logto-admin', '/')) ?>"
-                      class="nav-link"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      <i class="nav-icon bi bi-box-arrow-up-right"></i>
-                      <p data-i18n="side.logtoAdmin">管理コンソール</p>
-                    </a>
-                  </li>
-                  <li class="nav-item">
-                    <a
-                      href="<?= km_e(km_site_url('logto-core', '/')) ?>"
-                      class="nav-link"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      <i class="nav-icon bi bi-box-arrow-up-right"></i>
-                      <p data-i18n="side.logtoCore">認証エンドポイント</p>
-                    </a>
-                  </li>
-                </ul>
-              </li>
-              <li class="nav-item">
-                <a href="./settings.php" class="<?= $link('settings') ?>">
-                  <i class="nav-icon bi bi-gear-fill"></i>
-                  <p data-i18n="side.settings">設定</p>
-                </a>
-              </li>
+              <?php foreach ($groups as $groupId => [$groupIcon, $groupKey, $groupLabel, $items]): ?>
+                <li class="nav-item<?= $openGroup === $groupId ? ' menu-open' : '' ?>">
+                  <a href="#" class="nav-link<?= $openGroup === $groupId ? ' active' : '' ?>">
+                    <i class="nav-icon bi <?= km_e($groupIcon) ?>"></i>
+                    <p>
+                      <span data-i18n="<?= km_e($groupKey) ?>"><?= km_e($groupLabel) ?></span>
+                      <i class="nav-arrow bi bi-chevron-right"></i>
+                    </p>
+                  </a>
+                  <ul class="nav nav-treeview">
+                    <?php foreach ($items as [$id, $href, $icon, $key, $label]): ?>
+                      <li class="nav-item">
+                        <a href="<?= km_e($href) ?>" class="<?= $link($id) ?>">
+                          <i class="nav-icon bi <?= km_e($icon) ?>"></i>
+                          <p>
+                            <span data-i18n="<?= km_e($key) ?>"><?= km_e($label) ?></span>
+                            <?php if ($id === 'downloads' && $apkWaiting > 0): ?>
+                              <span class="nav-badge badge text-bg-warning me-3" title="公開を待っているアプリ"><?= (int) $apkWaiting ?></span>
+                            <?php endif; ?>
+                          </p>
+                        </a>
+                      </li>
+                    <?php endforeach; ?>
+                  </ul>
+                </li>
+              <?php endforeach; ?>
             </ul>
             <!--end::Sidebar Menu-->
           </nav>

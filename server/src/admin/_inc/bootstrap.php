@@ -62,7 +62,7 @@ define('KM_ADMIN_RESOURCE', rtrim((string) (getenv('LOGTO_API_RESOURCE') ?: km_s
 const KM_ADMIN_SCOPE = 'admin:users:read';
 
 /**
- * **状態を変える操作**(管理画面の POST と、phpMyAdmin などへのゲート)に要る scope。
+ * **状態を変える操作**(管理画面の POST と、Mailpit などの管理系ポートへのゲート)に要る scope。
  *
  * 以前は KM_ADMIN_SCOPE(read)1つで、テーブル削除も地図の配信も DB の直接操作も
  * できていた(診断 server-authz#2)。いまの kosenmap-admin は4スコープを全部持つので
