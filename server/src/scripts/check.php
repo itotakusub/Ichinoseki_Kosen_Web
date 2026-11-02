@@ -1715,7 +1715,37 @@ function km_check_app_map_web_events(): void
     check_bool('終わっていないイベントを取る', str_contains($eventsLib, 'WHERE is_enabled = 1 AND (ends_at IS NULL OR ends_at > NOW())')
         && str_contains($eventsLib, '(starts_at IS NULL OR starts_at <= NOW()) AS isActive'));
     // **会期をまたいで混ぜない。** 工事(長期)と高専祭(翌週)を 1 つに畳むと、通行止めが今日から効く
-    check_bool('いま有効なものがあればそれだけ', str_contains($eventsLib, "return ['overlay' => km_map_event_overlay_build(\$pdo, \$active), 'startsAt' => null];"));
+    check_bool('いま有効なものがあればそれだけ', str_contains($eventsLib, "return ['overlay' => km_map_event_overlay_build(\$pdo, \$active), 'startsAt' => null, 'endsAt' => km_map_event_window_ends_at(\$active)];"));
+    check_bool('これからの会期も終わりを返す', str_contains($eventsLib, "'startsAt' => \$startsAt, 'endsAt' => km_map_event_window_ends_at(\$window)];"));
+
+    /*
+     * 配信の期限を会期の終わりに合わせる(2026-11-02、利用者「会期が終了してもマップが残り続けるのはなんで」)。
+     * 期限は前回の値を引き継いでいたので、会期より長く端末に残った
+     */
+    km_check_heading('app-map: 配信の期限は会期の終わりに合わせる(2026-11-02)');
+    require_once __DIR__ . '/../lib/map-events.php';
+    check_bool('会期の終わりは一番遅い終わり', km_map_event_window_ends_at([
+        ['endsAt' => '2026-11-02 21:00:00'], ['endsAt' => '2026-11-03 09:00:00'], ['endsAt' => '2026-11-01 12:00:00'],
+    ]) === '2026-11-03 09:00:00');
+    check_bool('終わりの無いイベントがあれば決まらない', km_map_event_window_ends_at([
+        ['endsAt' => '2026-11-02 21:00:00'], ['endsAt' => null],
+    ]) === null);
+    check_bool('イベントが無ければ決まらない', km_map_event_window_ends_at([]) === null);
+    check_bool('不調のときも終わりは空', str_contains($eventsLib, "return ['overlay' => km_map_event_overlay_empty(), 'startsAt' => null, 'endsAt' => null];"));
+    check_bool('イベント用の正本の初期値は会期の終わり', str_contains($publishPage, 'if ($slug === $eventSlug && $eventEndInput !== null) {')
+        && str_contains($publishPage, "\$activeEventsEndsAt = \$publishWindow['endsAt'];"));
+    check_bool('会期より後の期限は知らせる(入力中と配信後)', str_contains($publishPage, 'data-km-event-end=')
+        && str_contains($publishPage, "input.value.slice(0, 16) > input.dataset.kmEventEnd")
+        && str_contains($publishPage, '$publishedExpires->format(\'Y-m-d\TH:i\') > $eventEndInput'));
+    check_bool('警告は出すが配信は止めない', str_contains($publishPage, 'foreach ($warnings as $warning)')
+        && !str_contains($publishPage, '$errors[] = \'有効期限(\''));
+    foreach (['ja', 'en'] as $lang) {
+        $dictionary = (string) file_get_contents(__DIR__ . '/../admin/assets/i18n/' . $lang . '.js');
+        check_bool("i18n: mapPublish.expiresAfterEvent ($lang)", str_contains($dictionary, 'page.mapPublish.expiresAfterEvent')
+            && str_contains($dictionary, 'page.mapPublish.expiresEventEnd"')
+            && str_contains($dictionary, 'page.mapPublish.expiresEventEndHint'));
+    }
+    km_check_heading('app-map: 配信に焼くのは「次に効く会期」(続き)');
     check_bool('無ければ一番早い会期だけ', str_contains($eventsLib, "static fn (array \$row): bool => (string) (\$row['startsAt'] ?? '') === \$startsAt"));
     // イベントの不調で配信そのものを止めない(表がまだ無いときも地図は配れる)
     check_bool('不調なら「イベント無し」に倒す', str_contains($eventsLib, "error_log('km_map_event_overlay_for_app failed (publishing without events): '"));

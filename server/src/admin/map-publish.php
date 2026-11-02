@@ -249,10 +249,12 @@ $orphans = km_app_map_orphan_codes($config);
  */
 $activeEvents = [];
 $activeEventsStartsAt = null;
+$activeEventsEndsAt = null;
 try {
     require_once dirname(__DIR__) . '/lib/map-events.php';
     $publishWindow = km_map_event_overlay_for_app(km_db());
     $activeEventsStartsAt = $publishWindow['startsAt'];
+    $activeEventsEndsAt = $publishWindow['endsAt'];
     foreach ($publishWindow['overlay']['events'] as $event) {
         $activeEvents[] = (string) $event['name'];
     }
@@ -261,8 +263,38 @@ try {
     error_log('map-publish.php events failed: ' . $exception->getMessage());
 }
 
-/** 期限の初期値。**いまの期限を引き継ぐ**(毎回打ち直させない)。 */
-$expiresDefault = static function (array $config, string $slug): string {
+/**
+ * 会期の終わり(入力欄と同じ形 Y-m-d\TH:i)。**イベント用の正本の期限はこれに合わせる**(2026-11-02、
+ * 利用者「会期が終了してもマップが残り続けるのはなんで」—— 期限は前回の値を引き継いでいたので、会期より長く残った)。
+ * Website の正本はふだんの地図なので、会期では切らない
+ */
+$eventEndInput = null;
+if (is_string($activeEventsEndsAt) && $activeEventsEndsAt !== '') {
+    try {
+        $eventEndInput = (new DateTimeImmutable($activeEventsEndsAt))->format('Y-m-d\TH:i');
+    } catch (Throwable $exception) {
+        $eventEndInput = null;
+    }
+}
+
+/*
+ * 配信した期限が会期の終わりより後なら、**配信は止めずに**知らせる(会期のあとも見せたいときがある)。
+ * 比べるのは分まで(入力欄が分までなので、同じ時刻を選んだのに警告が出ないように)
+ */
+$warnings = [];
+if ($publishedSlug === $eventSlug && $eventEndInput !== null) {
+    $publishedExpires = km_app_map_parse_iso((string) ($config['maps'][$eventSlug]['expiresAt'] ?? ''));
+    if ($publishedExpires !== null && $publishedExpires->format('Y-m-d\TH:i') > $eventEndInput) {
+        $warnings[] = '有効期限(' . $publishedExpires->format('Y-m-d H:i') . ')が会期の終わり(' . str_replace('T', ' ', $eventEndInput)
+            . ')より後です。会期が終わっても、期限まで端末に地図が残ります。';
+    }
+}
+
+/** 期限の初期値。イベント用の正本は会期の終わり、ほかは**いまの期限を引き継ぐ**(毎回打ち直させない)。 */
+$expiresDefault = static function (array $config, string $slug) use ($eventSlug, $eventEndInput): string {
+    if ($slug === $eventSlug && $eventEndInput !== null) {
+        return $eventEndInput;
+    }
     $current = $config['maps'][$slug]['expiresAt'] ?? null;
     $parsed = is_string($current) ? km_app_map_parse_iso($current) : null;
 
@@ -332,17 +364,28 @@ $renderCurrent = static function (string $slug) use ($config, $report): void {
 };
 
 /** 期限とチェックサムの入力。2つの区画で同じ形。 */
-$renderExpiryAndChecksum = static function (string $slug) use ($config, $expiresDefault): void {
+$renderExpiryAndChecksum = static function (string $slug) use ($config, $expiresDefault, $eventSlug, $eventEndInput): void {
+    $watchEnd = $slug === $eventSlug && $eventEndInput !== null;
     ?>
     <div class="mb-3">
       <label class="form-label" for="expires_at_<?= km_e($slug) ?>"
              data-i18n="page.mapPublish.expiresLabel">有効期限</label>
       <input class="form-control" type="datetime-local" id="expires_at_<?= km_e($slug) ?>" name="expires_at"
-             value="<?= km_e($expiresDefault($config, $slug)) ?>" required>
+             value="<?= km_e($expiresDefault($config, $slug)) ?>" required
+             <?php if ($watchEnd): ?>data-km-event-end="<?= km_e($eventEndInput) ?>"<?php endif; ?>>
       <div class="form-text" data-i18n="page.mapPublish.expiresHint">
-        期限を過ぎると、来場者の端末は地図を自分で消します。
-        会期の終わりより少し後にしてください。
+        期限を過ぎると、来場者の端末は地図を自分で消します(開いたままの端末も、その時刻に消します)。
       </div>
+      <?php if ($watchEnd): ?>
+        <div class="form-text">
+          <span data-i18n="page.mapPublish.expiresEventEnd">会期の終わり</span>: <?= km_e(str_replace('T', ' ', $eventEndInput)) ?>
+          <span data-i18n="page.mapPublish.expiresEventEndHint">(初期値はこの時刻です)</span>
+        </div>
+        <div class="form-text text-warning-emphasis d-none km-expiry-warning" role="alert"
+             data-i18n="page.mapPublish.expiresAfterEvent">
+          会期の終わりより後です。会期が終わっても、期限まで端末に地図が残ります。
+        </div>
+      <?php endif; ?>
     </div>
     <div class="form-check mb-3">
       <input class="form-check-input" type="checkbox" value="1" id="checksum_<?= km_e($slug) ?>" name="checksum" checked>
@@ -457,6 +500,9 @@ $renderCodes = static function (string $slug) use ($codesBySlug, $newCode, $newC
             <?php if ($notice !== null): ?>
               <div class="alert alert-success" role="alert"><?= km_e($notice) ?></div>
             <?php endif; ?>
+            <?php foreach ($warnings as $warning): ?>
+              <div class="alert alert-warning" role="alert"><?= km_e($warning) ?></div>
+            <?php endforeach; ?>
             <?php foreach ($errors as $error): ?>
               <div class="alert alert-danger" role="alert"><?= km_e($error) ?></div>
             <?php endforeach; ?>
@@ -811,6 +857,17 @@ $renderCodes = static function (string $slug) use ($codesBySlug, $newCode, $newC
                   event.preventDefault();
                 }
               });
+            });
+
+            // 期限が会期の終わりより後なら知らせる(止めはしない)。値はどちらも Y-m-dTH:i なので文字列で比べられる
+            document.querySelectorAll('input[data-km-event-end]').forEach((input) => {
+              const warning = input.parentElement && input.parentElement.querySelector('.km-expiry-warning');
+              if (!warning) { return; }
+              const update = () => {
+                warning.classList.toggle('d-none', !(input.value && input.value.slice(0, 16) > input.dataset.kmEventEnd));
+              };
+              input.addEventListener('input', update);
+              update();
             });
 
             // 伏せたアクセスコードを、押したときだけ出す(コードそのものは翻訳しないので textContent でよい)
