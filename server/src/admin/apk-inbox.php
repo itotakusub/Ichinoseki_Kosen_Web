@@ -42,6 +42,13 @@ try {
         $action = (string) ($_POST['action'] ?? '');
         if (!km_csrf_verify()) {
             $errors[] = 'セッションの有効期限が切れています。ページを再読み込みしてからやり直してください。';
+        } elseif ($action === 'auto_publish') {
+            // 自動で公開するかの切り替え(2026-11-02)。届けには触らない
+            $enabled = ($_POST['enabled'] ?? '') === '1';
+            km_apk_inbox_set_auto_publish($pdo, $enabled);
+            km_admin_log_record('content', 'apk.auto_publish', $enabled ? 'on' : 'off');
+            header('Location: ./apk-inbox.php?done=' . ($enabled ? 'auto_on' : 'auto_off'), true, 302);
+            exit;
         } else {
             try {
                 if ($action === 'publish') {
@@ -82,7 +89,14 @@ try {
 }
 
 $done = (string) ($_GET['done'] ?? '');
-$notice = ['publish' => '公開しました。アプリの自動更新が次に確かめたときから届きます。', 'cancel' => '取り消しました(受け箱から消しました)。', 'rollback' => '前の版に戻しました。'][$done] ?? null;
+$notice = [
+    'publish' => '公開しました。アプリの自動更新が次に確かめたときから届きます。',
+    'cancel' => '取り消しました(受け箱から消しました)。',
+    'rollback' => '前の版に戻しました。',
+    'auto_on' => '検めに通った届けを、届いたときに自動で公開します。',
+    'auto_off' => '自動で公開しません。届いたらメールの URL から「公開する」を押してください。',
+][$done] ?? null;
+$autoPublish = $pdo !== null && km_apk_inbox_auto_publish_enabled($pdo);
 
 $statusLabel = static fn (string $s): array => [
     'waiting' => ['公開を待っています', 'text-bg-warning'],
@@ -113,9 +127,35 @@ require __DIR__ . '/_inc/partials/page-header.php';
               <i class="bi bi-info-circle-fill me-2 mt-1" aria-hidden="true"></i>
               <div>
                 PC が GitHub の非公開リポジトリに置いた APK を、サーバーが 5 分ごとに取りに行き、ここへ入れます(サーバーに外から APK を受け取る口はありません)。
-                <strong>開いただけでは公開しません。</strong>版・署名の検めを見て「公開する」を押してください。覚えのない届けは「取り消す」。
+                <?php if ($autoPublish): ?>
+                  <strong>検め(署名が今と同じ鍵・版が上がる・パッケージ名)にすべて通った届けは、届いたときに自動で公開します。</strong>
+                  問題のある版は、公開から <?= (int) KM_APK_INBOX_KEEP_DAYS ?> 日まで「前の版に戻す」で戻せます。
+                <?php else: ?>
+                  <strong>開いただけでは公開しません。</strong>版・署名の検めを見て「公開する」を押してください。覚えのない届けは「取り消す」。
+                <?php endif; ?>
               </div>
             </div>
+
+            <?php if ($pdo !== null): ?>
+              <?php // 自動で公開するかの切り替え(2026-11-02、利用者「版の更新が面倒くさいので、簡単に」) ?>
+              <form method="post" class="card mb-4">
+                <div class="card-body d-flex flex-wrap align-items-center gap-2">
+                  <?= km_csrf_field() ?>
+                  <input type="hidden" name="action" value="auto_publish" />
+                  <span>
+                    自動で公開:
+                    <?php if ($autoPublish): ?>
+                      <span class="badge text-bg-success">する</span>
+                    <?php else: ?>
+                      <span class="badge text-bg-secondary">しない(押して公開)</span>
+                    <?php endif; ?>
+                  </span>
+                  <button type="submit" name="enabled" value="<?= $autoPublish ? '0' : '1' ?>" class="btn btn-sm btn-outline-secondary ms-auto">
+                    <?= $autoPublish ? '自動で公開しない(押して公開する)' : '自動で公開する' ?>
+                  </button>
+                </div>
+              </form>
+            <?php endif; ?>
 
             <?php if ($selected !== null): ?>
               <?php [$label, $badge] = $statusLabel((string) $selected['status']); ?>

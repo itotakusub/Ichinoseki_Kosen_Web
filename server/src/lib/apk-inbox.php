@@ -25,9 +25,17 @@ declare(strict_types=1);
  *
  * 落ちたら「公開できない届け」として記録し、理由をメールに書く(届いたことは知らせる)。
  * **URL を開いただけでは公開しない**(Gmail などがリンクを先に読みに行くので。利用者の決定)。
+ *
+ * ## 自動で公開する(2026-11-02、利用者「版の更新が面倒くさいので、簡単にしてください」)
+ *
+ * 検めに**すべて通った**届けは、届いたその場で公開する(押しに行かなくてよい)。メールは「公開しました」になり、
+ * 同じ URL から 7 日間は「前の版に戻す」を押せる。検めは押したときと同じ(署名が今の配布物と同じ鍵・版が上がる・パッケージ名)ので、
+ * GitHub の鍵が漏れても、別の鍵で作った APK は公開されない。管理画面の受け箱で「自動で公開しない」に戻せる(設定 apk_inbox_auto_publish)。
+ * 自動の公開に失敗したら、今までどおり「公開を待っています」で残し、理由をメールに書く。
  */
 
 require_once __DIR__ . '/db.php';
+require_once __DIR__ . '/settings.php';
 require_once __DIR__ . '/distributables.php';
 require_once __DIR__ . '/apk-version.php';
 require_once __DIR__ . '/uploads.php';
@@ -41,6 +49,21 @@ const KM_APK_INBOX_PACKAGES = [
 const KM_APK_INBOX_KEEP_DAYS = 7;
 /** latest.json の上限 */
 const KM_APK_INBOX_MANIFEST_MAX_BYTES = 64 * 1024;
+/** 自動で公開するか('1' / '0'。無ければ '1') */
+const KM_APK_INBOX_AUTO_PUBLISH_SETTING = 'apk_inbox_auto_publish';
+/** 自動で公開したときの「決めた人」 */
+const KM_APK_INBOX_AUTO_BY = '自動公開';
+
+/** 検めに通った届けを自動で公開するか。**既定は する**(2026-11-02) */
+function km_apk_inbox_auto_publish_enabled(PDO $pdo): bool
+{
+    return km_setting_get($pdo, KM_APK_INBOX_AUTO_PUBLISH_SETTING, '1') !== '0';
+}
+
+function km_apk_inbox_set_auto_publish(PDO $pdo, bool $enabled): void
+{
+    km_setting_set($pdo, KM_APK_INBOX_AUTO_PUBLISH_SETTING, $enabled ? '1' : '0');
+}
 
 function km_apk_inbox_ensure_table(PDO $pdo): void
 {
@@ -241,12 +264,59 @@ function km_apk_inbox_stage(PDO $pdo, string $dir): array
         json_encode($problems, JSON_UNESCAPED_UNICODE),
     ]);
     $id = (int) $pdo->lastInsertId();
-    km_apk_inbox_notify($id, $token, $status, $label, $files, $problems);
+
+    // 検めに通ったら、その場で公開する(2026-11-02。公開はもう一度検めてから。失敗したら待ちのまま残す)
+    $autoError = null;
+    if ($status === 'waiting' && km_apk_inbox_auto_publish_enabled($pdo)) {
+        try {
+            km_apk_inbox_publish($pdo, $id, KM_APK_INBOX_AUTO_BY);
+            $status = 'published';
+        } catch (Throwable $exception) {
+            $autoError = $exception->getMessage();
+            error_log('km_apk_inbox_stage auto publish failed: ' . $autoError);
+        }
+    }
+    km_apk_inbox_notify($id, $token, $status, $label, $files, $problems, $autoError);
     return ['id' => $id, 'status' => $status, 'created' => true, 'problems' => array_merge($problems, $fileProblems)];
 }
 
+/**
+ * 管理者へのメールの件名と本文。**純粋関数**(check.php)。
+ *
+ * @param 'published'|'waiting'|'rejected' $status published は自動で公開したとき
+ * @param list<string> $lines 枠ごとの検めの行
+ * @return array{subject:string, body:string}
+ */
+function km_apk_inbox_mail_text(int $id, string $link, string $status, ?string $label, array $lines, ?string $autoError = null): array
+{
+    $version = '版 ' . ($label ?? '?');
+    $detail = implode("\n", $lines);
+    if ($status === 'published') {
+        return [
+            'subject' => '[KosenMap] 新しいアプリを公開しました(' . $version . ')',
+            'body' => "GitHub の受け箱に届いたアプリが検めにすべて通ったので、自動で公開しました(#{$id})。\n\n{$detail}\n\n"
+                . "アプリは次に版を確かめたときに知らせます(押す操作は要りません)。\n"
+                . '覚えのない版・問題のある版なら、' . KM_APK_INBOX_KEEP_DAYS . " 日以内に次を開いて「前の版に戻す」を押してください(管理画面のサインインが要ります):\n{$link}\n",
+        ];
+    }
+    if ($status === 'waiting') {
+        $reason = $autoError !== null ? "自動で公開しようとしましたが、できませんでした: {$autoError}\n\n" : '';
+        return [
+            'subject' => '[KosenMap] 新しいアプリが届きました(' . $version . ')',
+            'body' => "GitHub の受け箱に新しいアプリが届きました(#{$id})。\n\n{$detail}\n\n{$reason}"
+                . "公開するには、次を開いて「公開する」を押してください(管理画面のサインインが要ります。開いただけでは公開しません):\n{$link}\n\n"
+                . '公開しないときは同じ画面で「取り消す」。' . KM_APK_INBOX_KEEP_DAYS . " 日たつと受け箱から消えます。\n"
+                . "覚えのない届けなら、公開せずに取り消してください。\n",
+        ];
+    }
+    return [
+        'subject' => '[KosenMap] 届いたアプリを公開できません(' . $version . ')',
+        'body' => "GitHub の受け箱にアプリが届きましたが、検めに通らなかったので公開できません(#{$id})。\n\n{$detail}\n\n詳しくは:\n{$link}\n",
+    ];
+}
+
 /** 管理者へメール。**送れなくても届けは残す**(管理画面「ダウンロード」に出る)。 */
-function km_apk_inbox_notify(int $id, string $token, string $status, ?string $label, array $files, array $problems): void
+function km_apk_inbox_notify(int $id, string $token, string $status, ?string $label, array $files, array $problems, ?string $autoError = null): void
 {
     try {
         require_once __DIR__ . '/mailer.php';
@@ -265,18 +335,9 @@ function km_apk_inbox_notify(int $id, string $token, string $status, ?string $la
         foreach ($problems as $p) {
             $lines[] = '✕ ' . $p;
         }
-        if ($status === 'waiting') {
-            $subject = '[KosenMap] 新しいアプリが届きました(版 ' . ($label ?? '?') . ')';
-            $body = "GitHub の受け箱に新しいアプリが届きました(#{$id})。\n\n" . implode("\n", $lines) . "\n\n"
-                . "公開するには、次を開いて「公開する」を押してください(管理画面のサインインが要ります。開いただけでは公開しません):\n{$link}\n\n"
-                . '公開しないときは同じ画面で「取り消す」。' . KM_APK_INBOX_KEEP_DAYS . " 日たつと受け箱から消えます。\n"
-                . "覚えのない届けなら、公開せずに取り消してください。\n";
-        } else {
-            $subject = '[KosenMap] 届いたアプリを公開できません(版 ' . ($label ?? '?') . ')';
-            $body = "GitHub の受け箱にアプリが届きましたが、検めに通らなかったので公開できません(#{$id})。\n\n" . implode("\n", $lines) . "\n\n"
-                . "詳しくは:\n{$link}\n";
-        }
-        km_mail_send(km_mail_admin_to(), $subject, $body, $status !== 'waiting');
+        $mail = km_apk_inbox_mail_text($id, $link, $status, $label, $lines, $autoError);
+        // 公開できない届け・自動の公開に失敗した届けは目立たせる(第 4 引数)
+        km_mail_send(km_mail_admin_to(), $mail['subject'], $mail['body'], $status === 'rejected' || $autoError !== null);
     } catch (Throwable $exception) {
         error_log('km_apk_inbox_notify failed: ' . $exception->getMessage());
     }

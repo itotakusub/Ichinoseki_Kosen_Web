@@ -164,6 +164,7 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     'apk.publish' => 'が受け箱のアプリを公開しました',
     'apk.cancel' => 'が受け箱のアプリを取り消しました',
     'apk.rollback' => 'がアプリを前の版に戻しました',
+    'apk.auto_publish' => 'がアプリの自動公開を切り替えました',
     'profile.avatar_update' => 'がプロフィール画像を変更しました',
     'profile.avatar_clear' => 'がプロフィール画像を既定に戻しました',
     // **新しいパスワードそのものは記録しない。** 変えたという事実だけ残す

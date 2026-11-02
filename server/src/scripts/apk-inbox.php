@@ -10,6 +10,7 @@ declare(strict_types=1);
  * 呼ぶのは scripts/host-apk-inbox.sh(本番ホストの root の cron)。フォルダには latest.json と APK 2 つがある
  * (ホストの run/apk-inbox/ を、web には読み取り専用で渡してある)。
  * 検めて、通れば受け箱(uploads/apk-inbox/)へ写し、管理者へメールする。同じ届けを 2 度入れても 1 回にしかならない。
+ * 2026-11-02 から、検めに通った届けはその場で自動で公開する(管理画面で切れる。lib/apk-inbox.php)。
  *
  * 終わりのコード: 0 = 入れた(または前に入れた)・1 = 失敗(ホストの記録とメールに残る)。
  * 検めに落ちた届けも 0(「公開できない届け」として記録し、理由はメールで知らせる)。
@@ -49,7 +50,11 @@ try {
     printf(
         "届け #%d: %s%s\n",
         $result['id'],
-        $result['created'] ? ['waiting' => '公開を待っています(メールを送りました)', 'rejected' => '検めに通りませんでした(メールで知らせました)'][$result['status']] ?? $result['status'] : '前に入れた届けです(何もしません)',
+        $result['created'] ? [
+            'published' => '検めに通ったので自動で公開しました(メールを送りました)',
+            'waiting' => '公開を待っています(メールを送りました)',
+            'rejected' => '検めに通りませんでした(メールで知らせました)',
+        ][$result['status']] ?? $result['status'] : '前に入れた届けです(何もしません)',
         $result['problems'] !== [] ? ' —— ' . implode(' / ', $result['problems']) : ''
     );
     exit(0);

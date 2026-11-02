@@ -5493,9 +5493,35 @@ function km_check_hardening(): void
     check_bool('受け箱: 版の表示は versionName の頭・無ければ 1000000 を引く', km_apk_inbox_label(1000005, '5 (261009.1048)') === '5' && km_apk_inbox_label(1000012, null) === '12');
     $inboxLib = $file('src/lib/apk-inbox.php');
     $inboxPage = $file('src/admin/apk-inbox.php');
-    check_bool('受け箱: 開いただけでは公開しない(公開・取り消し・戻すは CSRF つきの POST だけ)', str_contains($inboxPage, "if (!km_csrf_verify()) {")
-        && strpos($inboxPage, 'km_apk_inbox_publish(') > strpos($inboxPage, "=== 'POST'") && substr_count($inboxPage, 'km_csrf_field()') === 3
+    check_bool('受け箱: 開いただけでは公開しない(公開・取り消し・戻す・自動の切り替えは CSRF つきの POST だけ)', str_contains($inboxPage, "if (!km_csrf_verify()) {")
+        && strpos($inboxPage, 'km_apk_inbox_publish(') > strpos($inboxPage, "=== 'POST'") && substr_count($inboxPage, 'km_csrf_field()') === 4
+        && strpos($inboxPage, 'km_apk_inbox_set_auto_publish(') > strpos($inboxPage, "if (!km_csrf_verify()) {")
         && str_contains($inboxPage, "require __DIR__ . '/_inc/guard.php';"));
+
+    /*
+     * 自動で公開する(2026-11-02、利用者「版の更新が面倒くさいので、簡単にしてください」)。
+     * 検めにすべて通った届けだけ・公開はもう一度検めてから・失敗したら待ちのまま残してメールに理由。既定は「する」で、画面で切れる
+     */
+    check_bool('受け箱(自動): 検めに通った届け(waiting)だけを、届いたその場で公開する',
+        str_contains($inboxLib, "if (\$status === 'waiting' && km_apk_inbox_auto_publish_enabled(\$pdo)) {")
+        && strpos($inboxLib, 'km_apk_inbox_publish($pdo, $id, KM_APK_INBOX_AUTO_BY);') > strpos($inboxLib, "\$status = \$ok ? 'waiting' : 'rejected';")
+        && strpos($inboxLib, 'km_apk_inbox_publish($pdo, $id, KM_APK_INBOX_AUTO_BY);') < strpos($inboxLib, 'km_apk_inbox_notify($id, $token, $status, $label, $files, $problems, $autoError);'));
+    check_bool('受け箱(自動): 失敗したら待ちのまま(published にしない)・理由を記録', str_contains($inboxLib, "            km_apk_inbox_publish(\$pdo, \$id, KM_APK_INBOX_AUTO_BY);\n            \$status = 'published';")
+        && str_contains($inboxLib, '$autoError = $exception->getMessage();'));
+    check_bool('受け箱(自動): 既定は「する」・\'0\' のときだけしない', str_contains($inboxLib, "km_setting_get(\$pdo, KM_APK_INBOX_AUTO_PUBLISH_SETTING, '1') !== '0'"));
+    $mailPublished = km_apk_inbox_mail_text(12, 'https://admin.example/admin/apk-inbox.php?t=x', 'published', '45', ['一般用: 版番号 1000045'], null);
+    check_bool('受け箱(自動)のメール: 「公開しました」・押す操作は要らない・戻す URL', str_contains($mailPublished['subject'], '公開しました(版 45)')
+        && str_contains($mailPublished['body'], '前の版に戻す') && str_contains($mailPublished['body'], 'https://admin.example/admin/apk-inbox.php?t=x')
+        && !str_contains($mailPublished['body'], '「公開する」を押して'));
+    $mailFailed = km_apk_inbox_mail_text(13, 'L', 'waiting', '46', [], '署名の鍵が今の配布物と違います');
+    check_bool('受け箱(自動)のメール: 自動の公開に失敗したら理由と「公開する」の案内', str_contains($mailFailed['subject'], '届きました(版 46)')
+        && str_contains($mailFailed['body'], '自動で公開しようとしましたが、できませんでした: 署名の鍵が今の配布物と違います')
+        && str_contains($mailFailed['body'], '「公開する」を押してください'));
+    $mailWaiting = km_apk_inbox_mail_text(14, 'L', 'waiting', '47', [], null);
+    check_bool('受け箱のメール: 自動でないときは今までどおり(失敗の文は無い)', !str_contains($mailWaiting['body'], '自動で公開しよう')
+        && str_contains(km_apk_inbox_mail_text(15, 'L', 'rejected', '48', ['  ✕ 署名'], null)['subject'], '公開できません(版 48)'));
+    check_bool('受け箱(自動): 画面で切り替えられ・自動で公開したときの決めた人', str_contains($inboxPage, 'name="enabled" value="<?= $autoPublish ? \'0\' : \'1\' ?>"')
+        && KM_APK_INBOX_AUTO_BY === '自動公開' && str_contains($file('src/scripts/apk-inbox.php'), "'published' => '検めに通ったので自動で公開しました(メールを送りました)'"));
     check_bool('受け箱: 公開の前にもう一度検め、片方が失敗したらもう片方も戻す', strpos($inboxLib, '$recheck = km_apk_inbox_inspect(') < strpos($inboxLib, 'km_dist_store_file(')
         && str_contains($inboxLib, "\$prev === null ? km_dist_delete(\$pdo, \$slug) : km_dist_restore(\$pdo, \$slug, \$prev, \$by);"));
     check_bool('受け箱: URL の印は DB に SHA-256 だけ・nginx はこのページのクエリをログに残さない', str_contains($inboxLib, "hash('sha256', \$token)")
