@@ -151,6 +151,26 @@
   .km-tm-rail-foot .form-label { margin-bottom: 0; }
   .km-tm-body { padding: 0.75rem; }
 }
+/*
+ * 縦は画面の残りを使う(2026-11-03、利用者「縦幅が小さいのがもったいない」。lg 以上だけ)。
+ * AdminLTE の .app-main は縦の flex なので、そこから .km-tm まで flex で伸ばし、
+ * パフォーマンスのグラフとプロセスの表(.km-tm-fill)が残りを受け取る。
+ * .km-tm-fill は contain: size で中身の行数に押し広げられないようにし、入る行数は taskmgr.js が数える
+ * (入らない行は hidden。低い窓では 15 行を出して枠の中でスクロール)。34rem は下限のまま。
+ */
+@media (min-width: 992px) {
+  .app-main > .app-content:has(> #km-taskmgr) { display: flex; flex-direction: column; flex: 1 0 auto; }
+  #km-taskmgr { display: flex; flex-direction: column; flex: 1 0 auto; }
+  /* 下の .km-tm-graph などより後で効かせるため、#km-taskmgr を前に付ける */
+  #km-taskmgr > .km-tm { flex: 1 0 auto; }
+  #km-taskmgr .km-tm-body { display: flex; flex-direction: column; }
+  #km-taskmgr .km-tm-panel:not([hidden]) { display: flex; flex-direction: column; flex: 1 1 auto; }
+  #km-taskmgr .km-tm-fill { flex: 1 1 0; min-height: 12rem; contain: size; overflow: auto; }
+  #km-taskmgr .km-tm-fill thead th { position: sticky; top: 0; z-index: 1; background: var(--bs-body-bg); }
+  #km-taskmgr .km-tm-perf { flex: 1 1 auto; }
+  #km-taskmgr .km-tm-main { display: flex; flex-direction: column; }
+  #km-taskmgr .km-tm-graph { flex: 1 1 16rem; height: auto; min-height: 16rem; }
+}
 
 /* 項目の色(CPU 青・メモリ紫・スワップ 橙・ディスク 緑・ネットワーク 桃) */
 .km-tm-c-cpu { --km-tm-color: #1f7fd1; }

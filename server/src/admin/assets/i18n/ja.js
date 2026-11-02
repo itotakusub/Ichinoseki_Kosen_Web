@@ -1007,7 +1007,7 @@ globalThis.KM_I18N.ja = {
   "page.taskmgr.colLimit": "上限",
   "page.taskmgr.colUrl": "開き方",
   "page.taskmgr.colContainer": "コンテナ",
-  "page.taskmgr.processHint": "ホストの CPU の上位 15 件(Glances)。見出しを押すと並べ替えます。",
+  "page.taskmgr.processHint": "ホストの CPU の上位(Glances。画面の高さに入るだけ、最大 40 件)。見出しを押すと並べ替えます。",
   "page.taskmgr.containersHint": "1 分ごとの集計(host-stats.sh)。CPU は前の集計との差から出します(開いてから 2 回目の集計で出ます)。",
   "page.taskmgr.servicesHint": "サーバーから各サービスの口へ繋いで確かめます(このタブを開いている間、30 秒ごと)。",
   "page.taskmgr.checkNow": "今すぐ確かめる",

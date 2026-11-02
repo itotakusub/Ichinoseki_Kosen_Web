@@ -1006,7 +1006,7 @@ globalThis.KM_I18N.en = {
   "page.taskmgr.colLimit": "Limit",
   "page.taskmgr.colUrl": "How to open",
   "page.taskmgr.colContainer": "Container",
-  "page.taskmgr.processHint": "Top 15 processes on the host by CPU (Glances). Click a heading to sort.",
+  "page.taskmgr.processHint": "Top processes on the host by CPU (Glances; as many as fit on screen, up to 40). Click a heading to sort.",
   "page.taskmgr.containersHint": "Collected every minute (host-stats.sh). CPU is the difference from the previous collection, so it appears from the second one after opening.",
   "page.taskmgr.servicesHint": "The server connects to each service port to check it (every 30 seconds while this tab is open).",
   "page.taskmgr.checkNow": "Check now",

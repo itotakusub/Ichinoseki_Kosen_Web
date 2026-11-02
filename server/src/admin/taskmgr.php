@@ -112,8 +112,9 @@ require __DIR__ . '/_inc/partials/page-header.php';
 
                 <!--begin::プロセス-->
                 <section class="km-tm-panel" id="km-tm-panel-processes" role="tabpanel" aria-labelledby="km-tm-tab-processes" data-km-tm-panel="processes"<?= $tab === 'processes' ? '' : ' hidden' ?>>
-                  <p class="km-tm-hint" data-i18n="page.taskmgr.processHint">ホストの CPU の上位 15 件(Glances)。見出しを押すと並べ替えます。</p>
-                  <div class="table-responsive">
+                  <p class="km-tm-hint" data-i18n="page.taskmgr.processHint">ホストの CPU の上位(Glances。画面の高さに入るだけ、最大 40 件)。見出しを押すと並べ替えます。</p>
+                  <?php // km-tm-fill: 広い画面では残りの高さを埋め、入る行数を taskmgr.js が数える ?>
+                  <div class="table-responsive km-tm-fill">
                     <table class="table table-sm table-hover align-middle mb-0 km-tm-table">
                       <thead>
                         <tr>

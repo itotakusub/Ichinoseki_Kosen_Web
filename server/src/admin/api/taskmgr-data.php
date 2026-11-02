@@ -22,8 +22,9 @@ require dirname(__DIR__) . '/_inc/guard.php';
 
 const KM_TASKMGR_GLANCES = 'http://glances:61208/api/4/';
 const KM_TASKMGR_GLANCES_PLUGINS = [
-    'quicklook', 'cpu', 'percpu', 'load', 'mem', 'memswap', 'processcount', 'uptime', 'system', 'diskio', 'processlist/top/15',
+    'quicklook', 'cpu', 'percpu', 'load', 'mem', 'memswap', 'processcount', 'uptime', 'system', 'diskio', 'processlist/top/40',
 ];
+// プロセスは 40 件まで取り、画面の高さに入るだけ出す(2026-11-03。本番で 24KB・数 ms。15 件は 9KB)
 const KM_TASKMGR_HOSTSTATS = '/var/www/hoststats/stats.json';
 const KM_TASKMGR_MAX_BYTES = 512 * 1024;
 

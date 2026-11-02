@@ -5217,6 +5217,15 @@ function km_check_hardening(): void
         && str_contains($taskmgrJs, "services.startAuto(SERVICES_INTERVAL_MS);") && str_contains($taskmgrJs, 'services.stopAuto();'));
     check_bool('グラフは素の SVG・色はクラス(style 属性を書かない)', !preg_match('/\sstyle=/', $taskmgrPage) && !str_contains($taskmgrJs, '.style.')
         && str_contains($file('src/admin/assets/css/km-admin.css'), '.km-tm-c-cpu { --km-tm-color:'));
+    // 縦は画面の残りを使う(2026-11-03、利用者「縦幅が小さいのがもったいない」)
+    $kmAdminCss = $file('src/admin/assets/css/km-admin.css');
+    check_bool('広い画面では画面の残りまで伸ばす(app-content から flex。グラフとプロセスの表が残りを受け取る)', str_contains($kmAdminCss, '.app-main > .app-content:has(> #km-taskmgr) { display: flex; flex-direction: column; flex: 1 0 auto; }')
+        && str_contains($kmAdminCss, '#km-taskmgr .km-tm-graph { flex: 1 1 16rem; height: auto; min-height: 16rem; }')
+        && str_contains($kmAdminCss, '#km-taskmgr .km-tm-fill { flex: 1 1 0; min-height: 12rem; contain: size; overflow: auto; }')
+        && str_contains($taskmgrPage, '<div class="table-responsive km-tm-fill">'));
+    check_bool('プロセスは 40 件まで取り、入る行数だけ出す(狭い画面と低い窓は 15 行)', str_contains($taskmgrData, "'processlist/top/40'")
+        && str_contains($taskmgrJs, 'const PROCESS_MIN_ROWS = 15;') && str_contains($taskmgrJs, 'rows.forEach((row, i) => { row.hidden = i >= fits; });')
+        && str_contains($taskmgrJs, 'new ResizeObserver(() => fitProcesses()).observe(processWrap);'));
     check_bool('Glances の network・fs は切ったまま(コンテナの中からはホストの値にならない。通信とディスクの容量は host-stats.sh)', str_contains($glancesBlock, 'network,fs')
         && !str_contains($taskmgrData, "'network'") && !str_contains($taskmgrData, "'fs'"));
     $tmI18nMissing = [];
