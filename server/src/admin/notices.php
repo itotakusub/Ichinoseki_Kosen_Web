@@ -222,7 +222,8 @@ require __DIR__ . '/_inc/partials/page-header.php';
                 <?php
                 /*
                  * 地図を開いたときに出すもの(2026-10-24、利用者の指示「チュートリアル・お知らせを機能ごと ON/OFF」。lib/map-switches.php)。
-                 * 外すと、チュートリアル(初回の操作案内)・お知らせ(「はじめに」の先頭・一覧のページ)をどちらも出さない。
+                 * 外すと、チュートリアル(初回の操作案内)・お知らせ(「はじめに」の先頭・引き出しのボタン)を地図に出さない。
+                 * お知らせの公開ページ(/notice.php)はスイッチに関係なく、「公開する」を付けたものを出す(2026-11-03)。
                  * お知らせを外しても、ここで書いたものは残る(付け直せばそのまま出る)
                  */
                 ?>
@@ -240,11 +241,11 @@ require __DIR__ . '/_inc/partials/page-header.php';
                       </div>
                       <div class="form-check form-switch mb-2">
                         <input class="form-check-input" type="checkbox" role="switch" id="switch-notices" name="notices_enabled" value="1"<?= $switches['notices'] ? ' checked' : '' ?>>
-                        <label class="form-check-label" for="switch-notices">お知らせ(「はじめに」の先頭と、お知らせの一覧のページ)</label>
+                        <label class="form-check-label" for="switch-notices">お知らせ(「はじめに」の先頭と、引き出しの「お知らせ」のボタン)</label>
                       </div>
                       <div class="form-text">
                         チュートリアルを止めると、広告はチュートリアルの終わりではなく、「はじめに」を閉じたときに出します。
-                        お知らせを止めても、ここで書いたお知らせは消えません。
+                        お知らせを止めても、ここで書いたお知らせは消えません。公開ページ(お知らせの一覧とくわしいページ)には、止めていても「公開する」を付けたものが出ます。
                       </div>
                     </div>
                     <div class="card-footer text-end">

@@ -9041,8 +9041,9 @@ function km_check_layout(): void
     check_bool('お知らせ OFF: 最初の画面に出さない・一覧へのボタンを出さない', str_contains($shareIndex, "if (\$kmSwitches['notices']) {")
         && preg_match("/<\?php if \(\\\$kmSwitches\['notices'\]\): \?>\s*<a href=\"\/notice\.php\" class=\"secondary-btn\">お知らせ<\/a>/", $shareIndex) === 1);
     $switchNoticePage = (string) file_get_contents(__DIR__ . '/../notice.php');
-    check_bool('お知らせ OFF: 公開ページは 404(書いたものは消さない)', str_contains($switchNoticePage, "\$noticesOff = !km_map_switches(\$pdo)['notices'];")
-        && preg_match('/if \(\$noticesOff\) \{\s*http_response_code\(404\);/', $switchNoticePage) === 1);
+    // 2026-11-03: 公開ページはスイッチを見ない(OFF でも「公開する」のものは読める。利用者の指摘「公開中にも関わらず何も表示されない」)
+    check_bool('お知らせ OFF でも公開ページは「公開する」のものを出す(スイッチを見ない)', str_contains($switchNoticePage, '$all = km_notices_public($pdo, km_notice_today());')
+        && !str_contains($switchNoticePage, 'km_map_switches') && !str_contains($switchNoticePage, 'noticesOff'));
     $switchAdmin = (string) file_get_contents(__DIR__ . '/../admin/notices.php');
     check_bool('管理画面「お知らせ」で切り替える(CSRF のあと・記録に残す)', str_contains($switchAdmin, "if (\$formAction === 'switches') {")
         && strpos($switchAdmin, 'km_csrf_verify()') < strpos($switchAdmin, 'km_map_switches_save(')
