@@ -745,6 +745,14 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
     - **11-03 10:26 に配備済み(利用者)。** 読むだけで確かめた: 本番のファイルは手元と同じ・`event-setup.php` はサインインへ 302・`_inc` と `/uploads/poster-archives/` は 404・
       コンテナの中で check.php event-setup 41 件が通過・`km_poster_archives` はまだ無い(片付けを押すまで作らない)・uploads は www-data で書ける。
       ポスター 59 件はすべて止まっている(11-02 22:13 に出し方を「表示しない」にしたときから。今回の一括は使われていない)
+  - **Console のトンネルは km の鍵の SOCKS で・phpMyAdmin を戻した(11-03、利用者の指示)**: 11-02 に書いた `ssh -i km_ops -L 3002:…` は**通らなかった** ——
+    kmops の鍵には全部 `no-port-forwarding`(降格のときの host-ops-user.sh)が付いていて、`-L` も `-D` も待ち受けは開くが先で「administratively prohibited」。
+    **km の鍵(km_vps)で `ssh -N -D 127.0.0.1:10800 km@ito4.jp`** を張り、`--proxy-server=socks5://127.0.0.1:10800 --proxy-bypass-list="<-loopback>"` と専用のプロフィールの Chrome で開く
+    (curl で `localhost:3002` → 302 `/console` を確かめた)。デスクトップの `トンネル開通SSH.cmd` がトンネル → Chrome → Chrome を閉じたらトンネルを切る、までを行う。
+    設定の画面・site.php・docs/05・docs/11・compose と nginx の注記を直した。
+    - **phpMyAdmin は 127.0.0.1:8281 だけで戻した**(compose.yaml の phpmyadmin。nginx は通さない・網は appdb と edge・root と空パスワードは禁止のまま)。
+      `pma` 利用者・`phpmyadmin` の DB・`.env` の `KM_PMA_*`・ボリューム `test_phpmyadmin_sessions` は残っていたのでそのまま使う(docs/05 の「名残を消す」セルは外した)。
+      配備の退避の一覧から `docker/phpmyadmin` を外した。compose は本番の `.env` で `config -q` を通した(一時フォルダ)。**配備は `-Action up` が要る**
   - **上のバーの文字が狭い幅で縦に折れていた(11-03)**: 項目は折らない(`white-space: nowrap`)。「マップへ」は sm 未満、ダッシュボード・タスクマネージャーは xl 未満でアイコンだけにし、
     名前は aria-label と title に残す(言語の切り替えにも追随)。写しで 375・800・1024・1280 幅とも 1 行・はみ出しなしを測った。配備待ち
   - **配備のあと**: host-setup で check-updates.sh と host-geoblock.sh を配り直す。phpMyAdmin の名残(`pma` 利用者・`phpmyadmin` の DB・ボリューム `test_phpmyadmin_sessions`)を消すかは利用者の判断(docs/05 §1-2 のセル)

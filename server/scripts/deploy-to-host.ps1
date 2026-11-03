@@ -824,8 +824,9 @@ Write-Host '      展開しました'
   retired/ は置き場の直下(kmops の持ち物)に作る。書けなければ最初の 1 つで止め、理由を出す。
 #>
 $retiredPaths = @(
-    # 2026-11-02: Soketi・チャット・サービス監視・外部接続 API・phpMyAdmin を外した(docs/status.md)
-    'docker/soketi', 'docker/phpmyadmin',
+    # 2026-11-02: Soketi・チャット・サービス監視・外部接続 API を外した(docs/status.md)。
+    # phpMyAdmin(docker/phpmyadmin)は 11-03 にトンネルの先だけで戻したので、ここには書かない(書くと配るたびに退避される)
+    'docker/soketi',
     'src/lib/soketi.php', 'src/lib/chat.php', 'src/lib/table-api.php', 'src/api/table.php',
     'src/admin/chat.php',
     'src/admin/api/chat-auth.php', 'src/admin/api/chat-send.php', 'src/admin/api/chat-read.php', 'src/admin/api/chat-history.php',

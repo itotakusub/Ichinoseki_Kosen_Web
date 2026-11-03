@@ -30,7 +30,7 @@ services:
   # それまでどのサービスにも上限が無く、1 つの暴走(PHP のメモリ・Soketi の接続・fork の連鎖)が
   # **ホスト全体(RAM 2GB)を道連れにできた。** 本番の使用量(2026-09-14 の実測)の 2〜4 倍を目安に置く:
   #   logto 254M → 512m / mariadb 133M → 512m / postgres 45M → 256m / web 58M → 384m /
-  #   nginx 10M → 128m / mailpit 23M → 128m(soketi と phpmyadmin は 2026-11-02 に外した)
+  #   nginx 10M → 128m / phpmyadmin 51M → 256m / mailpit 23M → 128m(soketi は 2026-11-02 に外した。phpmyadmin は 11-03 にトンネルの先だけで戻した)
   #   (mailserver 192m と certbot 128m は compose.vps.yaml)
   # 合計は RAM を超えるが、これは「全員が同時に上限まで使う」ことを想定した枠ではなく、
   # **1 つが暴れたときに他を巻き込まない**ための天井。
@@ -172,9 +172,9 @@ services:
       ENDPOINT: ${LOGTO_ENDPOINT:-https://${KM_AUTH_DOMAIN:-auth.${KM_DOMAIN:-192.168.3.29}}}
       # **Console は SSH のトンネルからだけ開く**(2026-11-02、利用者の指示)。それまでは nginx の 3002 番を
       # インターネットへ出していた(送信元の制限と管理画面のサインインの 2 枚つき)。
-      # いまはホストの 127.0.0.1:3002 にだけ出し(下の ports:)、手元で
-      #   ssh -i ~/.ssh/km_ops -L 3002:127.0.0.1:3002 kmops@<ホスト>
-      # を張って http://localhost:3002 を開く。Console の戻り先は Logto が ADMIN_ENDPOINT から作るので DB は触らない
+      # いまはホストの 127.0.0.1:3002 にだけ出し(下の ports:)、手元で km の鍵の SOCKS のトンネル
+      #   ssh -i ~/.ssh/km_vps -N -D 127.0.0.1:10800 km@<ホスト>
+      # を張り、そのトンネルを通す Chrome で http://localhost:3002 を開く(kmops の鍵は転送が禁止。docs/05-containers の §5)。Console の戻り先は Logto が ADMIN_ENDPOINT から作るので DB は触らない
       ADMIN_ENDPOINT: ${LOGTO_ADMIN_ENDPOINT:-http://localhost:3002}
       TRUST_PROXY_HEADER: "1"
     # **ホストの外からは届かない。** 127.0.0.1 に限って出すので、SSH で入れる人だけが使える
@@ -270,10 +270,84 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
-    # **web だけが届く網**(phpMyAdmin は 2026-11-02 に外した)。 利用者の Host を `172.30.2.%` に絞る前提(docs/12 の §2)
+    # **web と phpmyadmin だけが届く網**(phpMyAdmin は 11-02 に外し、11-03 にトンネルの先だけで戻した)。利用者の Host を `172.30.2.%` に絞る前提(docs/12 の §2)
     networks:
       - appdb
 
+  # **phpMyAdmin は SSH のトンネルの先だけで開く**(2026-11-03、利用者の指示で戻した)。
+  # 11-02 に外した(DB に外から触れる入口を 0 にする)が、外に出さなければ使ってよい、という決め直し。
+  # 以前は nginx の 8281 番でインターネットに出していた(送信元の制限と管理画面のサインインの 2 枚つき)。
+  # いまは **ホストの 127.0.0.1:8281 にだけ出す**(下の ports:)。nginx は通さない。
+  # 開き方は Console と同じ SOCKS のトンネル(km の鍵で `ssh -N -D`)→ その Chrome で http://localhost:8281
+  # (docs/05-containers の §5-2。デスクトップの「トンネル開通SSH.cmd」がこれを行う)
+  phpmyadmin:
+    # 2026-09-15 に動いていた中身(タグを残す理由は postgres と同じ)
+    image: phpmyadmin:5.2.3-apache@sha256:fb0cb638f7d1c2529407921d86679b2b2faf5bb8542314821e9f16e7e3d2954f
+    container_name: km-phpmyadmin
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    pids_limit: 200
+    # スワップ: mem_limit の 2 倍まで(スワップに逃がしてよい)。OOM の順: 500(人が使うときだけ要る。真っ先に止めてよい)。2026-10-05
+    memswap_limit: 512m
+    oom_score_adj: 500
+    logging: *km-logging
+    # **read_only にしない。** イメージの起動スクリプトが /etc/phpmyadmin/config.secret.inc.php(Cookie の暗号鍵)と
+    # /usr/local/etc/php/conf.d/phpmyadmin-misc.ini(UPLOAD_LIMIT)を**毎回その場で書く**。
+    # tmpfs で覆うと、同じ場所にあるイメージの設定(config.inc.php・拡張の ini)まで消える。
+    # 代わりに特権を落とす: Apache が 80 番で待ち(NET_BIND_SERVICE)、www-data へ下り(SETUID・SETGID)、
+    # 子に合図を送り(KILL)、セッションの置き場の持ち主を揃える(CHOWN・FOWNER・DAC_OVERRIDE)
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - KILL
+      - NET_BIND_SERVICE
+      - SETGID
+      - SETUID
+    environment:
+      # 画面に出る日時とログを日本時間にそろえる
+      TZ: Asia/Tokyo
+      # root でのログインを一時的に許すときだけ .env に 1(docker/phpmyadmin/config.user.inc.php)。
+      # **普段は空 = 禁止。** 2026-09-14 まではイメージの既定で root も空パスワードも通っていた(server-ops 12)
+      KM_PMA_ALLOW_ROOT: ${KM_PMA_ALLOW_ROOT:-}
+      # 環境保管領域の制御用の利用者(2026-10-19)。**パスワードがあるときだけ有効**(docker/phpmyadmin/config.user.inc.php)。
+      # 作り方は docs/05-containers の §1-2(パスワードはホストで作って .env に書く。画面にもリポジトリにも出さない)
+      KM_PMA_CONTROLUSER: ${KM_PMA_CONTROLUSER:-pma}
+      KM_PMA_CONTROLPASS: ${KM_PMA_CONTROLPASS:-}
+      PMA_HOST: mariadb
+      PMA_PORT: "3306"
+      PMA_SSL: "1"
+      PMA_SSL_VERIFY: "1"
+      PMA_SSL_CA: /certs/rootCA.pem
+      # トンネルの先で開く URL(2026-11-03 から。以前は https://<管理用のホスト名>:8281/)
+      PMA_ABSOLUTE_URI: ${PMA_ABSOLUTE_URI:-http://localhost:8281/}
+      UPLOAD_LIMIT: 128M
+      HIDE_PHP_VERSION: "true"
+    volumes:
+      - ./certs/rootCA.pem:/certs/rootCA.pem:ro
+      - phpmyadmin_sessions:/sessions
+      # root と空パスワードのログインを断ち、ログインの寿命を 30 分にする(2026-09-14)
+      - ./docker/phpmyadmin/config.user.inc.php:/etc/phpmyadmin/config.user.inc.php:ro
+    # **ホストの外からは届かない。** 127.0.0.1 に限って出すので、SSH で入れる人だけが使える(logto の 3002 と同じ)
+    ports:
+      - "127.0.0.1:8281:80"
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1/"]
+      start_period: 30s
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    # appdb … MariaDB へ(利用者の Host は 172.30.2.%)/ edge … ホストへ publish するため(appdb は internal で publish できない)
+    networks:
+      - edge
+      - appdb
   web:
     build:
       context: .
@@ -766,7 +840,9 @@ volumes:
     name: test_postgres_data
   mariadb_data:
     name: test_mariadb_data
-  # test_phpmyadmin_sessions は 2026-11-02 に phpMyAdmin と一緒に外した(実体は残る。消すなら docker volume rm)
+  # phpMyAdmin のログインのセッション。11-02 に外したときも実体は残していたので、それをそのまま使う(2026-11-03)
+  phpmyadmin_sessions:
+    name: test_phpmyadmin_sessions
   # Web の PHP のセッション(2026-10-29)。新しく作るもの(test_ の実体は無い)。消してもログインし直すだけ
   web_sessions:
     name: km_web_sessions

@@ -4808,14 +4808,19 @@ function km_check_hardening(): void
     check_bool('MariaDB は LOAD DATA LOCAL を受け付けない', str_contains($baseServices['mariadb'] ?? '', '--local-infile=0'));
     check_bool('MariaDB にグローバルの max_statement_time を掛けない(mysqldump が止まる)', !str_contains($baseServices['mariadb'] ?? '', 'max_statement_time'));
     /*
-     * Soketi・phpMyAdmin は 2026-11-02 に外した(利用者の指示。脆弱性の知らせ 15 件がすべて Soketi の部品で、
-     * 使っていたのはチャット(本番 0 件)と監視の即時表示だけ。phpMyAdmin は DB に外から触れる入口だった)
+     * Soketi は 2026-11-02 に外した(利用者の指示。脆弱性の知らせ 15 件がすべて Soketi の部品で、
+     * 使っていたのはチャット(本番 0 件)と監視の即時表示だけ)。
+     * phpMyAdmin も同じ日に外したが、11-03 に**ホストの 127.0.0.1:8281 だけで**戻した(利用者の指示。SSH のトンネルの先で開く)
      */
-    check_bool('compose に soketi・phpmyadmin が無い(本番の上書きにも)', !isset($baseServices['soketi']) && !isset($baseServices['phpmyadmin'])
-        && !isset($vpsServices['soketi']) && !isset($vpsServices['phpmyadmin']) && !str_contains($baseWeb, 'SOKETI_'));
-    check_bool('phpMyAdmin の設定(KM_PMA_*・PMA_ABSOLUTE_URI)が compose と .env.example に残っていない', !str_contains($yamlCode($base) . $vpsCode . $file('.env.example'), 'KM_PMA_')
-        && !str_contains($yamlCode($base) . $vpsCode . $file('.env.example'), 'PMA_ABSOLUTE_URI'));
-    check_bool('docker/soketi・docker/phpmyadmin が無い(Old/ へ退避)', !is_dir(dirname($src) . '/docker/soketi') && !is_dir(dirname($src) . '/docker/phpmyadmin'));
+    check_bool('compose に soketi が無い(本番の上書きにも)', !isset($baseServices['soketi']) && !isset($vpsServices['soketi']) && !str_contains($baseWeb, 'SOKETI_'));
+    $pmaBlock = $baseServices['phpmyadmin'] ?? '';
+    check_bool('phpMyAdmin はホストの 127.0.0.1:8281 だけに出す(nginx は通さない・DB の網に居る)', preg_match('/^    ports:\n      - "127\.0\.0\.1:8281:80"\n    [a-z]/m', $pmaBlock) === 1
+        && str_contains($pmaBlock, 'PMA_ABSOLUTE_URI: ${PMA_ABSOLUTE_URI:-http://localhost:8281/}') && str_contains($pmaBlock, "      - appdb\n")
+        && !isset($vpsServices['phpmyadmin']) && !str_contains($file('nginx/default.conf.template'), 'server phpmyadmin'));
+    check_bool('phpMyAdmin の root・空パスワードを断つ設定を読ませる', str_contains($pmaBlock, './docker/phpmyadmin/config.user.inc.php:/etc/phpmyadmin/config.user.inc.php:ro')
+        && str_contains($file('docker/phpmyadmin/config.user.inc.php'), "['AllowNoPassword'] = false;") && str_contains($pmaBlock, 'KM_PMA_ALLOW_ROOT: ${KM_PMA_ALLOW_ROOT:-}'));
+    check_bool('docker/soketi は無い(Old/ へ退避)・docker/phpmyadmin は配備で退避しない', !is_dir(dirname($src) . '/docker/soketi')
+        && !str_contains($file('scripts/deploy-to-host.ps1'), "'docker/phpmyadmin'"));
     // 本番の送信は mailserver。無認証の画面を持つ Mailpit を起動しない(server-ops 11)
     check_bool('VPS: Mailpit は profile の内側', str_contains($vpsServices['mailpit'] ?? '', 'profiles: ["mailpit"]'));
     $vpsProxy = $vpsServices['reverse-proxy'] ?? '';
@@ -4829,8 +4834,11 @@ function km_check_hardening(): void
     check('VPS: nginx が publish するのは 80 と 443 だけ', "      - \"80:80\"\n      - \"443:443\"\n", $vpsPortsMatch[1] ?? null);
     check_bool('Logto Console(3002)はホストの 127.0.0.1 だけに出す', preg_match('/^    ports:\n      - "127\.0\.0\.1:3002:3002"$/m', $baseServices['logto'] ?? '') === 1
         && !preg_match('/"(0\.0\.0\.0:)?(3002|8281):(3002|8281)"/', $yamlCode($base) . $vpsCode));
-    check_bool('Console の開き方(SSH のトンネル)は設定の画面にある', str_contains($file('src/admin/settings.php'), 'km_site_logto_console_tunnel()')
-        && str_contains($file('src/lib/site.php'), "'ssh -i ~/.ssh/km_ops -L 3002:127.0.0.1:3002 kmops@' . km_site_host()"));
+    // kmops の鍵は転送が禁止(no-port-forwarding)なので、km の鍵の SOCKS(-D)で張る(2026-11-03、利用者の指摘)
+    check_bool('Console と phpMyAdmin の開き方(km の SOCKS のトンネルと、それを通す Chrome)は設定の画面にある', str_contains($file('src/admin/settings.php'), 'km_site_logto_console_tunnel()')
+        && str_contains($file('src/admin/settings.php'), 'km_site_tunnel_chrome()') && str_contains($file('src/admin/settings.php'), 'KM_SITE_PHPMYADMIN_URL')
+        && str_contains($file('src/lib/site.php'), "'ssh -i ~/.ssh/km_vps -N -D 127.0.0.1:' . KM_SITE_TUNNEL_SOCKS_PORT . ' km@' . km_site_host()")
+        && str_contains($file('src/lib/site.php'), '--proxy-bypass-list="<-loopback>"') && !str_contains($file('src/lib/site.php'), 'km_ops -L'));
 
     km_check_heading('hardening B・C: nginx(同時接続・待ち時間・転送ヘッダー)');
     $nginx = (string) preg_replace('/^\s*#.*$/m', '', $file('nginx/default.conf.template'));
@@ -4974,15 +4982,15 @@ function km_check_hardening(): void
     $notReadOnly = [];
     $notCapDropped = [];
     foreach ($baseServices + array_intersect_key($vpsServices, ['certbot' => true, 'mailserver' => true]) as $serviceName => $block) {
-        // mailserver は起動スクリプトがイメージの中に設定を書き出すので付けない(compose の注記)
-        if ($serviceName !== 'mailserver' && preg_match('/^    read_only: true$/m', $block) !== 1) {
+        // mailserver と phpmyadmin は起動スクリプトがイメージの中に設定を書き出すので付けない(compose の注記。phpmyadmin は 11-03 に戻した)
+        if (!in_array($serviceName, ['mailserver', 'phpmyadmin'], true) && preg_match('/^    read_only: true$/m', $block) !== 1) {
             $notReadOnly[] = $serviceName;
         }
         if (preg_match('/^    cap_drop:\n      - ALL$/m', $block) !== 1) {
             $notCapDropped[] = $serviceName;
         }
     }
-    check('read_only(mailserver 以外)', [], $notReadOnly);
+    check('read_only(mailserver・phpmyadmin 以外)', [], $notReadOnly);
     check('cap_drop: ALL(全サービス)', [], $notCapDropped);
     $floatingImages = [];
     foreach ([$composeBaseCode, $composeVpsCode] as $composeCode) {

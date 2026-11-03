@@ -74,7 +74,7 @@ upstream km_logto_core {
     zone km_up_logto_core 64k;
     server logto:3001 resolve;
 }
-# km_phpmyadmin・km_logto_console・km_soketi は 2026-11-02 に外した(phpMyAdmin と Soketi は撤去。
+# km_phpmyadmin・km_logto_console・km_soketi は 2026-11-02 に外した(phpMyAdmin は 11-03 に 127.0.0.1:8281 だけで戻した(nginx は通さない)。Soketi は撤去。
 # Logto Console は nginx を通さず、logto の 127.0.0.1:3002 を SSH のトンネルで開く。compose.yaml の logto)
 
 # ---------------------------------------------------------------------------
