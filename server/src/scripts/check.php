@@ -97,6 +97,8 @@ const KM_CHECK_PURE = [
     'layout',
     'route',
     'qr',
+    // イベントのセットアップ・ポスターの一括と会期後の片付け(2026-11-03)
+    'event-setup',
 ];
 
 /** 名前を明示したときだけ走る検査。置かれている設定を読む。 */
@@ -8418,7 +8420,9 @@ function km_check_layout(): void
     $backupsPage = (string) file_get_contents(__DIR__ . '/../admin/backups.php');
     check_bool('管理画面: バックアップを見る・落とす・消す・控えを戻す(消す・戻すは書き込みの権限と CSRF)', str_contains($backupsPage, "require __DIR__ . '/_inc/guard.php';")
         && str_contains($backupsPage, "if (\$formAction === 'map_delete') {") && str_contains($backupsPage, "if (\$formAction === 'learning_restore') {")
-        && str_contains($backupsPage, '!km_csrf_verify()') && substr_count($backupsPage, '<?php if ($KM_ADMIN_CAN_WRITE): ?>') === 2
+        // 囲みは 3 つ: 地図の控えを消す・学習の控えを戻す・ポスターの控えを消す(2026-11-03)
+        && str_contains($backupsPage, "if (\$formAction === 'poster_archive_delete') {")
+        && str_contains($backupsPage, '!km_csrf_verify()') && substr_count($backupsPage, '<?php if ($KM_ADMIN_CAN_WRITE): ?>') === 3
         && str_contains((string) file_get_contents(__DIR__ . '/../admin/_inc/partials/sidebar.php'), "['backups', './backups.php'"));
     check_bool('監査ログ: 落とす・戻すに文言', isset(KM_ADMIN_LOG_ACTION_LABELS['map.backup_download'], KM_ADMIN_LOG_ACTION_LABELS['learning.backup_download'], KM_ADMIN_LOG_ACTION_LABELS['learning.backup_restore']));
 
@@ -10490,6 +10494,173 @@ function km_check_recaptcha(): int
  * 型・誤り訂正・マスクを網羅した突き合わせは `check-qr-port.ps1` の側。
  * こちらは配備のたびに走る側なので、**壊れたことに気づくための1点**を持つ。
  */
+/**
+ * イベントのセットアップ(admin/event-setup.php)・ポスターの一括の出す/止める・会期後の片付け(2026-11-03、利用者の指示)。
+ * DB は使わない。手順の印・一括の受け方は純粋関数を、控えの zip は作業用の場所で実際に書いて読み戻す。
+ */
+function km_check_event_setup(): void
+{
+    // _inc の部品は KM_ADMIN が無いと 404 で止まる(直に開かせない)。検査の中だけで立てる
+    if (!defined('KM_ADMIN')) {
+        define('KM_ADMIN', true);
+    }
+    require_once __DIR__ . '/../lib/posters.php';
+    require_once __DIR__ . '/../lib/poster-archive.php';
+    require_once __DIR__ . '/../lib/zip-read.php';
+    require_once __DIR__ . '/../lib/admin-log.php';
+    require_once __DIR__ . '/../admin/_inc/event-setup-status.php';
+    $read = static fn (string $path): string => (string) file_get_contents(__DIR__ . '/../' . $path);
+
+    km_check_heading('event-setup: ポスターの一括(全て出す・全て止める・✓を出す・✓を止める)');
+    check('一括は 4 つ', ['show_all', 'hide_all', 'show_checked', 'hide_checked'], array_keys(KM_POSTER_BULK_ACTIONS));
+    check('✓は正の整数だけ・重なりは 1 つに', [3, 5, 7], km_poster_bulk_ids(['3', '5', 'x', '-1', '0', '5', 7, '7.5', ['9']]));
+    check('✓が配列でなければ無し', [], km_poster_bulk_ids('3'));
+    check('全て出すは✓を見ない(全部)', ['ids' => null, 'enabled' => true, 'label' => '全て出す'], km_poster_bulk_plan('show_all', ['1']));
+    check('✓を止めるは✓の番号だけ(付けた順)', ['ids' => [4, 2], 'enabled' => false, 'label' => '✓を付けたものを止める'], km_poster_bulk_plan('hide_checked', ['4', '2', '4']));
+    $refused = static function (string $bulk, mixed $ids): string {
+        try {
+            km_poster_bulk_plan($bulk, $ids);
+        } catch (InvalidArgumentException $exception) {
+            return $exception->getMessage();
+        }
+
+        return '(断らなかった)';
+    };
+    check('✓が 0 件で✓の操作は断る(何も変えない)', 'ポスターに✓を付けてから押してください。', $refused('show_checked', []));
+    check_bool('知らない操作は断る', $refused('delete_all', ['1']) !== '(断らなかった)');
+    $postersPage = $read('admin/posters.php');
+    $bulkPartial = $read('admin/_inc/partials/poster-bulk.php');
+    check_bool('ポスターの一覧に✓の列(form="km-poster-bulk")と全部に✓がある', str_contains($postersPage, 'form="km-poster-bulk"') && str_contains($postersPage, 'data-km-bulk-all')
+        && str_contains($bulkPartial, 'id="km-poster-bulk"'));
+    check_bool('全て止めるは確かめを挟む・✓の操作は✓が無いと押せない', preg_match('/value="hide_all"((?!<\/button>).)*data-km-confirm=/s', $bulkPartial) === 1
+        && substr_count($bulkPartial, 'data-km-bulk-needs-check') >= 2);
+    check_bool('確かめの文は押したボタンのものを先に見る(scripts.php)', str_contains($read('admin/_inc/partials/scripts.php'), 'event.submitter?.dataset.kmConfirm ?? form.dataset.kmConfirm'));
+
+    km_check_heading('event-setup: 会期後の片付け(控えを書いて確かめてから消す)');
+    $archiveLib = $read('lib/poster-archive.php');
+    $clear = substr($archiveLib, (int) strpos($archiveLib, 'function km_poster_archive_and_clear'));
+    $at = static fn (string $needle): int => ($p = strpos($clear, $needle)) === false ? PHP_INT_MAX : $p;
+    check_bool('順番: 書く → 読み戻して確かめる → 名前を変える → 表に記録 → 消す', $at('km_poster_archive_write(') < $at('km_poster_archive_verify(')
+        && $at('km_poster_archive_verify(') < $at('rename(') && $at('rename(') < $at('INSERT INTO km_poster_archives') && $at('INSERT INTO km_poster_archives') < $at('DELETE FROM')
+        && $at('DELETE FROM') < $at('km_poster_remove_image('));
+    check_bool('控えのファイル名は形を確かめる(uploads の外へ出さない)', preg_match(KM_POSTER_ARCHIVE_NAME_PATTERN, 'posters-20261103-120000-' . str_repeat('a', 32) . '.zip') === 1
+        && preg_match(KM_POSTER_ARCHIVE_NAME_PATTERN, '../posters-20261103-120000-' . str_repeat('a', 32) . '.zip') !== 1
+        && preg_match(KM_POSTER_ARCHIVE_NAME_PATTERN, 'posters-20261103-120000-' . str_repeat('a', 32) . '.zip/x') !== 1);
+    $pathRefused = false;
+    try {
+        km_poster_archive_path(['storedName' => '../../config/db.local.php']);
+    } catch (RuntimeException $exception) {
+        $pathRefused = true;
+    }
+    check_bool('おかしな名前の控えはパスにしない', $pathRefused);
+
+    // 作業用の場所で、ポスター 2 件(画像 1 枚は無い)から zip を作って読み戻す
+    $dir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'km-check-poster-archive-' . bin2hex(random_bytes(6));
+    mkdir($dir);
+    try {
+        $stored = 'poster_' . str_repeat('ab', 16) . '.png';
+        $image = random_bytes(5000) . 'PNG';
+        file_put_contents($dir . DIRECTORY_SEPARATOR . $stored, $image);
+        $rows = [
+            ['id' => 11, 'title' => '広告', 'image_stored_name' => $stored, 'is_enabled' => 1],
+            ['id' => 12, 'title' => '画像なし', 'image_stored_name' => 'poster_' . str_repeat('cd', 16) . '.jpg', 'is_enabled' => 0],
+        ];
+        $plan = km_poster_archive_entries($rows, [11 => 'A-3'], [11 => [['day' => '2026-11-01', 'impressions' => 9, 'clicks' => 2]]], [11 => 4], '高専祭', 'admin', 1793678400, $dir);
+        check('zip の中身は README・posters.json・あった画像', ['README.txt', 'posters.json', 'images/11-' . $stored], array_column($plan['entries'], 'name'));
+        check('無かった画像は missing に残す(行は控えに入れる)', ['#12 画像なし'], $plan['missing']);
+        $zipPath = $dir . DIRECTORY_SEPARATOR . 'out.zip';
+        $written = km_poster_archive_write($plan['entries'], $zipPath, 1793678400);
+        km_poster_archive_verify($zipPath, $plan['entries']);
+        // km_zip_read_all は名前の最後の部分だけを返す(images/ は落ちる)
+        $files = array_column(km_zip_read_all($zipPath, 10, 1024 * 1024, 4 * 1024 * 1024), 'bytes', 'name');
+        $json = json_decode($files['posters.json'] ?? 'null', true);
+        check('読み戻した画像は元と同じ', hash('sha256', $image), hash('sha256', (string) ($files['11-' . $stored] ?? '')));
+        check('posters.json に企画の番号・♡・数・画像の名前', ['A-3', 4, 9, 'images/11-' . $stored, null], [$json['posters'][0]['project_no'] ?? '', $json['posters'][0]['likes'] ?? 0, $json['posters'][0]['stats'][0]['impressions'] ?? 0, $json['posters'][0]['image'] ?? '', array_key_exists('image', $json['posters'][1] ?? []) ? $json['posters'][1]['image'] : 'x']);
+        check('書いた大きさと sha256 を返す', [filesize($zipPath), hash_file('sha256', $zipPath)], [$written['bytes'], $written['sha256']]);
+        $overwrite = false;
+        try {
+            km_poster_archive_write($plan['entries'], $zipPath);
+        } catch (RuntimeException $exception) {
+            $overwrite = true;
+        }
+        check_bool('同じ名前には上書きしない', $overwrite);
+        // 元が変わった・zip が壊れたら確かめで止まる(= 消さない)
+        $broken = static function (string $path, array $entries): bool {
+            try {
+                km_poster_archive_verify($path, $entries);
+            } catch (RuntimeException $exception) {
+                return true;
+            }
+
+            return false;
+        };
+        $bytes = (string) file_get_contents($zipPath);
+        $spot = strpos($bytes, 'PNG');
+        file_put_contents($dir . DIRECTORY_SEPARATOR . 'bad.zip', substr_replace($bytes, 'XNG', (int) $spot, 3));
+        check_bool('zip の中の画像が壊れていたら止まる', $broken($dir . DIRECTORY_SEPARATOR . 'bad.zip', $plan['entries']));
+        file_put_contents($dir . DIRECTORY_SEPARATOR . $stored, $image . 'more');
+        check_bool('元の画像が書いている間に変わったら止まる', $broken($zipPath, $plan['entries']));
+    } finally {
+        foreach (glob($dir . DIRECTORY_SEPARATOR . '*') ?: [] as $leftover) {
+            @unlink($leftover);
+        }
+        @rmdir($dir);
+    }
+
+    km_check_heading('event-setup: 手順の印');
+    $facts = [
+        'event' => null, 'now' => '2026-11-03 10:00:00',
+        'scheduleInWindow' => 0, 'schedulePublic' => 0, 'stalls' => 0, 'posters' => 0, 'postersOn' => 0, 'posterMode' => 'event',
+        'tutorial' => true, 'notices' => true, 'noticesCurrent' => 0, 'eventCollect' => false,
+        'access' => ['mode' => 'password', 'mapMode' => 'public', 'hasPassword' => true, 'eventOpensMap' => false],
+        'releases' => [], 'appWindowIds' => [],
+    ];
+    // 印は 1 字ずつ(o = ✓ / ! / - = 任意)で並べて比べる
+    $states = static fn (array $f): string => implode('', array_map(static fn (array $s): string => ['ok' => 'o', 'warn' => '!', 'info' => '-'][$s['state']], km_event_setup_steps($f)));
+    check('手順は 10・8 が有効にする・9 がアプリへ配信', [10, '有効にする', 'アプリへ配信'], [count(KM_EVENT_SETUP_STEPS), KM_EVENT_SETUP_STEPS[8], KM_EVENT_SETUP_STEPS[9]]);
+    check('イベントが無い: 1・8・10 が !', '!------!-!', $states($facts));
+    $event = ['id' => 5, 'name' => '高専祭', 'startsAt' => '2026-11-10 09:00:00', 'endsAt' => '2026-11-11 17:00:00', 'isEnabled' => false, 'isActive' => false, 'isExpired' => false,
+        'closureCount' => 1, 'poiCount' => 2, 'aliasCount' => 0, 'hiddenCount' => 0, 'onlyEventNodes' => true, 'hideOccupantNames' => true, 'bannerText' => ''];
+    $preparing = ['event' => $event, 'scheduleInWindow' => 3, 'schedulePublic' => 2, 'posters' => 2, 'postersOn' => 2,
+        'releases' => ['kosen-event' => ['revision' => 4, 'expiresAt' => date(DATE_ATOM, (int) strtotime($event['endsAt'])), 'expired' => false, 'paused' => false]]] + $facts;
+    check('準備中(無効): 8 と 9 が !・9 は「先に 8」', ['o-oo---!!!', '先に 8 で有効にしてください(有効なイベントだけが配る地図に入ります)'],
+        [$states($preparing), km_event_setup_steps($preparing)[9]['reason']]);
+    $enabled = ['event' => ['isEnabled' => true] + $event, 'appWindowIds' => [5]] + $preparing;
+    check('有効にして配った(期限 = 会期の終わり): ! が無い', 'o-oo---ooo', $states($enabled));
+    check('開催中は 8 が「いま地図に出ています」', '有効・いま地図に出ています', km_event_setup_steps(['event' => ['isActive' => true] + $enabled['event']] + $enabled)[8]['reason']);
+    check('終わった会期は 8・9 が任意で、10 に ! が出ない', 'o-oo-----o', $states(['now' => '2026-11-12 00:00:00', 'appWindowIds' => []] + $enabled));
+    $wrongExpiry = ['releases' => ['kosen-event' => ['expiresAt' => '2026-12-31T00:00:00+09:00'] + $enabled['releases']['kosen-event']]] + $enabled;
+    check('配信の期限が会期の終わりと違えば 9 が !', 'warn', km_event_setup_steps($wrongExpiry)[9]['state']);
+    check('ポスターがあるのに出し方が off なら 4 が !', 'warn', km_event_setup_steps(['posterMode' => 'off'] + $enabled)[4]['state']);
+    check('全部止めていれば 4 が !', 'warn', km_event_setup_steps(['postersOn' => 0] + $enabled)[4]['state']);
+    check('錠があって合言葉が無ければ 7 が !', 'warn', km_event_setup_steps(['access' => ['hasPassword' => false] + $facts['access']] + $enabled)[7]['state']);
+    check('! が残れば 10 も ! で番号を出す', '! が残っています: 3', km_event_setup_steps(['scheduleInWindow' => 0] + $enabled)[10]['reason']);
+
+    km_check_heading('event-setup: 画面・つなぎ');
+    $page = $read('admin/event-setup.php');
+    check_bool('サイドバーの「会期」の先頭にある', preg_match("/'event' => \\[[^\\n]+\\n\\s+\\['eventSetup', '\\.\\/event-setup\\.php'/", $read('admin/_inc/partials/sidebar.php')) === 1);
+    check_bool('イベントモードの一覧からセットアップを開ける', str_contains($read('admin/map-events.php'), './event-setup.php?event='));
+    check_bool('新しいイベントは無効のまま作る(有効にするのは 8)', str_contains($page, "\$fields + ['isEnabled' => false,"));
+    check_bool('会期を終える: 控え → 無効化 → 配信を止める の順', ($a = strpos($page, 'km_poster_archive_and_clear(')) !== false
+        && ($b = strpos($page, "\$saveEvent(['isEnabled' => false])")) !== false && ($c = strpos($page, 'km_app_map_set_paused(')) !== false && $a < $b && $b < $c);
+    check_bool('会期を終えるは確かめを挟む', preg_match('/data-km-confirm="会期を終えます。/', $page) === 1);
+    check_bool('書き込みの権限が無ければ入力を止める', substr_count($page, "<fieldset <?= \$canWrite ? '' : 'disabled' ?>>") >= 6);
+    check_bool('style 属性を書かない', !preg_match('/\sstyle=/', $page . $bulkPartial . $read('admin/_inc/event-setup-status.php')));
+    $missingLabels = array_values(array_filter(['poster.bulk', 'poster.archive', 'poster.archive_download', 'poster.archive_delete', 'map.event_finish', 'map.pause', 'map.publish', 'map.event_toggle', 'map.event_create', 'map.event_update', 'map.switches', 'map.settings', 'test.settings', 'poster.mode'],
+        static fn (string $action): bool => !isset(KM_ADMIN_LOG_ACTION_LABELS[$action])));
+    check('記録の名前に文言がある', [], $missingLabels);
+    $i18nMissing = [];
+    foreach (['ja', 'en'] as $lang) {
+        $dict = $read('admin/assets/i18n/' . $lang . '.js');
+        foreach (['side.eventSetup', 'page.eventSetup.title', 'page.eventSetup.h1', 'page.mapEvents.setup'] as $key) {
+            if (!str_contains($dict, '"' . $key . '":')) {
+                $i18nMissing[] = $lang . ':' . $key;
+            }
+        }
+    }
+    check('文言は ja と en の両方', [], $i18nMissing);
+}
+
 function km_check_qr(): void
 {
     require_once __DIR__ . '/../lib/qr.php';
@@ -10731,6 +10902,9 @@ foreach ($selected as $name) {
             break;
         case 'qr':
             km_check_qr();
+            break;
+        case 'event-setup':
+            km_check_event_setup();
             break;
         case 'recaptcha':
             // 環境依存。数えず、終了コードだけを持ち帰る。

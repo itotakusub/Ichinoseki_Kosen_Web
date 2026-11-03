@@ -93,6 +93,19 @@ try {
             exit;
         }
 
+        // 一括の出す・止める(2026-11-03。部品は _inc/partials/poster-bulk.php)
+        if ($formAction === 'poster_bulk') {
+            try {
+                $bulk = km_poster_bulk_plan((string) ($_POST['bulk'] ?? ''), $_POST['ids'] ?? null);
+                $changed = km_posters_set_enabled_many($pdo, $bulk['ids'], $bulk['enabled']);
+                km_admin_log_record('content', 'poster.bulk', $bulk['label'] . '(' . ($bulk['ids'] === null ? '全部' : count($bulk['ids']) . ' 件') . '・変わったもの ' . $changed . ' 件)');
+                header('Location: ./posters.php?saved=bulk&n=' . $changed . '#posters', true, 303);
+                exit;
+            } catch (InvalidArgumentException $exception) {
+                $errors[] = $exception->getMessage();
+            }
+        }
+
         if ($formAction === 'delete') {
             try {
                 $title = km_poster_delete($pdo, (int) ($_POST['id'] ?? 0));
@@ -124,6 +137,7 @@ try {
         'toggled' => 'ポスターの出し入れを変えました。',
         'deleted' => 'ポスターを消しました(画像も消しました)。',
         'likes_reset' => 'いいねを 0 に戻しました。',
+        'bulk' => 'まとめて切り替えました(変わったもの ' . (ctype_digit((string) ($_GET['n'] ?? '')) ? (int) $_GET['n'] : 0) . ' 件)。',
     ][(string) ($_GET['saved'] ?? '')] ?? null;
 
     $mode = km_poster_mode($pdo);
@@ -296,8 +310,13 @@ require __DIR__ . '/_inc/partials/page-header.php';
 
             <div class="row">
               <div class="col-12 col-xxl-7">
-                <div class="card mb-4">
+                <div class="card mb-4" id="posters">
                   <div class="card-header"><h3 class="card-title">ポスター(<?= count($posters) ?> 枚)</h3></div>
+                  <?php if ($posters !== []): ?>
+                    <div class="card-body border-bottom py-2">
+                      <?php $kmPosterBulkList = false; require __DIR__ . '/_inc/partials/poster-bulk.php'; ?>
+                    </div>
+                  <?php endif; ?>
                   <div class="card-body p-0">
                     <?php if ($posters === []): ?>
                       <p class="text-body-secondary fs-7 p-3 mb-0">まだありません。右(または下)のフォームから足してください。</p>
@@ -305,11 +324,14 @@ require __DIR__ . '/_inc/partials/page-header.php';
                       <div class="table-responsive">
                         <table class="table table-sm align-middle mb-0">
                           <thead>
-                            <tr><th scope="col">画像</th><th scope="col">見出し・地点・URL</th><th scope="col">数<span class="fw-normal fs-7">(合計 / 7 日)</span></th><th scope="col">並び</th><th scope="col">状態</th><th scope="col"></th></tr>
+                            <tr><th scope="col" class="km-poster-bulk-check"><input class="form-check-input" type="checkbox" data-km-bulk-all aria-label="全部に✓を付ける"></th><th scope="col">画像</th><th scope="col">見出し・地点・URL</th><th scope="col">数<span class="fw-normal fs-7">(合計 / 7 日)</span></th><th scope="col">並び</th><th scope="col">状態</th><th scope="col"></th></tr>
                           </thead>
                           <tbody>
                             <?php foreach ($posters as $poster): ?>
                               <tr id="poster-<?= (int) $poster['id'] ?>" class="<?= $editId === $poster['id'] ? 'table-active' : '' ?>">
+                                <td class="km-poster-bulk-check">
+                                  <input class="form-check-input" type="checkbox" form="km-poster-bulk" name="ids[]" value="<?= (int) $poster['id'] ?>" data-km-bulk-item aria-label="「<?= km_e($poster['title']) ?>」を選ぶ">
+                                </td>
                                 <td class="km-poster-thumb-cell">
                                   <img class="km-poster-thumb" src="./api/poster-image.php?id=<?= (int) $poster['id'] ?>&amp;v=<?= (int) $poster['updatedEpoch'] ?>" alt="" loading="lazy" width="<?= (int) $poster['width'] ?>" height="<?= (int) $poster['height'] ?>">
                                 </td>
