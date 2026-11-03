@@ -890,6 +890,20 @@ switch ($Action) {
     'deploy' {
         Write-Host '      ファイルを置いただけです。コンテナには触れていません。'
         Write-Host '      compose.yaml を変えたなら -Action up、default.conf だけなら -Action restart -Services reverse-proxy'
+        <#
+          **compose に書いてあるのにコンテナが無いサービスを知らせる**(2026-11-03)。
+          phpMyAdmin を compose に戻して `-Action up` なしで配ったら、ファイルだけ置かれて
+          コンテナが作られず、「つながらない」になった。名前を出して、要る操作を書く。
+          (profile の内側のもの = mailpit は config --services に出ないので数えない)
+        #>
+        if ((Get-RemoteShell) -eq 'sh') {
+            $configured = @("$(Invoke-RemoteIn -Path $RemotePath -Command 'docker compose config --services 2>/dev/null' -AllowFailure)" -split '\s+' | Where-Object { $_ -ne '' })
+            $present = @("$(Invoke-RemoteIn -Path $RemotePath -Command 'docker compose ps -a --services 2>/dev/null' -AllowFailure)" -split '\s+' | Where-Object { $_ -ne '' })
+            $notCreated = @($configured | Where-Object { $present -notcontains $_ })
+            if ($configured.Count -gt 0 -and $notCreated.Count -gt 0) {
+                Write-Warning ('compose にあるのにコンテナが無いサービス: ' + ($notCreated -join ', ') + ' —— -Action up で作ってください(いまは動いていません)')
+            }
+        }
     }
     'up' {
         <#
