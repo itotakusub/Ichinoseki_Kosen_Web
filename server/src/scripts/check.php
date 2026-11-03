@@ -10646,6 +10646,11 @@ function km_check_event_setup(): void
     check_bool('会期を終えるは確かめを挟む', preg_match('/data-km-confirm="会期を終えます。/', $page) === 1);
     check_bool('書き込みの権限が無ければ入力を止める', substr_count($page, "<fieldset <?= \$canWrite ? '' : 'disabled' ?>>") >= 6);
     check_bool('style 属性を書かない', !preg_match('/\sstyle=/', $page . $bulkPartial . $read('admin/_inc/event-setup-status.php')));
+    // 上のバーの文字が狭い幅で 1 字ずつ縦に折れていた(11-03)。折らず、狭ければ文字を隠して名前は aria-label に残す
+    $headerPart = $read('admin/_inc/partials/header.php');
+    check_bool('上のバーは折らない・狭い幅はアイコンだけ(名前は aria-label と title)', str_contains($read('admin/assets/css/km-admin.css'), '.app-header .navbar-nav .nav-link { white-space: nowrap; }')
+        && str_contains($headerPart, '<span class="d-none d-sm-inline" data-i18n="nav.backToMap">')
+        && substr_count($headerPart, 'data-i18n-attr="aria-label:nav.') >= 3 && !str_contains($headerPart, 'aria-label:nav.backToMap,'));
     $missingLabels = array_values(array_filter(['poster.bulk', 'poster.archive', 'poster.archive_download', 'poster.archive_delete', 'map.event_finish', 'map.pause', 'map.publish', 'map.event_toggle', 'map.event_create', 'map.event_update', 'map.switches', 'map.settings', 'test.settings', 'poster.mode'],
         static fn (string $action): bool => !isset(KM_ADMIN_LOG_ACTION_LABELS[$action])));
     check('記録の名前に文言がある', [], $missingLabels);

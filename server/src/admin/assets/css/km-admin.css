@@ -92,6 +92,8 @@
 /* 一括の出す・止める(2026-11-03。_inc/partials/poster-bulk.php)。✓の列は狭く、セットアップの短い一覧は高さを抑える */
 .km-poster-bulk-check { width: 2.25rem; }
 .km-poster-bulk-list { max-height: 22rem; overflow-y: auto; }
+/* 上のバーの項目は折らない(狭い幅では文字を隠してアイコンだけにする。_inc/partials/header.php) */
+.app-header .navbar-nav .nav-link { white-space: nowrap; }
 /* イベントのセットアップ(admin/event-setup.php)。手順の印は幅をそろえ、理由は小さく */
 .km-setup-mark { flex: 0 0 auto; width: 1.6rem; align-self: flex-start; margin-top: 0.15rem; }
 .km-setup-steps .list-group-item.active .km-setup-reason { color: inherit; opacity: 0.85; }

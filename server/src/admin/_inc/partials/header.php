@@ -84,22 +84,31 @@ $notifyBadge = ($unreadForms ?? 0) + ($staffWaiting ?? 0) + ($apkWaiting ?? 0);
              */
             ?>
             <li class="nav-item">
-              <a href="<?= km_e(km_site_url(null, '/')) ?>" class="nav-link" data-km-back-to-map>
+              <?php
+              /*
+               * 狭い幅では文字を隠してアイコンだけにする(2026-11-03。文字が 1 字ずつ縦に折れていた)。
+               * 隠しても名前が残るように aria-label と title を付ける(言語の切り替えに追随する)
+               */
+              ?>
+              <a href="<?= km_e(km_site_url(null, '/')) ?>" class="nav-link" data-km-back-to-map
+                 aria-label="マップへ" title="マップへ" data-i18n-attr="aria-label:nav.backToMap;title:nav.backToMap">
                 <i class="bi bi-map me-1" aria-hidden="true"></i>
-                <span data-i18n="nav.backToMap">マップへ</span>
+                <span class="d-none d-sm-inline" data-i18n="nav.backToMap">マップへ</span>
               </a>
             </li>
             <li class="nav-item d-none d-md-block">
-              <a href="./index.php" class="nav-link">
+              <a href="./index.php" class="nav-link"
+                 aria-label="ダッシュボード" title="ダッシュボード" data-i18n-attr="aria-label:nav.dashboard;title:nav.dashboard">
                 <i class="bi bi-speedometer2 me-1" aria-hidden="true"></i>
-                <span data-i18n="nav.dashboard">ダッシュボード</span>
+                <span class="d-none d-xl-inline" data-i18n="nav.dashboard">ダッシュボード</span>
               </a>
             </li>
             <li class="nav-item d-none d-md-block">
               <?php // サービス監視は 2026-11-02 にタスクマネージャーの「サービス」へまとめた ?>
-              <a href="./taskmgr.php" class="nav-link">
+              <a href="./taskmgr.php" class="nav-link"
+                 aria-label="タスクマネージャー" title="タスクマネージャー" data-i18n-attr="aria-label:nav.taskmgr;title:nav.taskmgr">
                 <i class="bi bi-cpu me-1" aria-hidden="true"></i>
-                <span data-i18n="nav.taskmgr">タスクマネージャー</span>
+                <span class="d-none d-xl-inline" data-i18n="nav.taskmgr">タスクマネージャー</span>
               </a>
             </li>
           </ul>
