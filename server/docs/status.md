@@ -755,7 +755,10 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
       配備の退避の一覧から `docker/phpmyadmin` を外した。compose は本番の `.env` で `config -q` を通した(一時フォルダ)。**配備は `-Action up` が要る**
   - **上のバーの文字が狭い幅で縦に折れていた(11-03)**: 項目は折らない(`white-space: nowrap`)。「マップへ」は sm 未満、ダッシュボード・タスクマネージャーは xl 未満でアイコンだけにし、
     名前は aria-label と title に残す(言語の切り替えにも追随)。写しで 375・800・1024・1280 幅とも 1 行・はみ出しなしを測った。配備待ち
-  - **配備のあと**: host-setup で check-updates.sh と host-geoblock.sh を配り直す。phpMyAdmin の名残(`pma` 利用者・`phpmyadmin` の DB・ボリューム `test_phpmyadmin_sessions`)を消すかは利用者の判断(docs/05 §1-2 のセル)
+  - **配備のあと**: host-setup で check-updates.sh と host-geoblock.sh を配り直す(スクリプトの中身は 11-03 に本番と同じと確かめた。ファイアウォールの規則を入れ直したかは root でないと読めない)。
+    phpMyAdmin の名残は消さない(11-03 に戻して使う)
+  - **11-03 夕方に `-Action up` で配備済み(利用者)**: km-phpmyadmin が healthy・ホストの 127.0.0.1:8281 が 200。上のバーの修正も入っている。
+    カーネルは 6.8.0-147 のまま(CVE-2026-98432 を直した版は apt にまだ無い)。つなぎの km-ipopt は active・MPTCP 0
 - **試しのイベントを本番で見た(2026-11-01 22 時、利用者がイベント「Test」(id 9)を始めた)**: 公開の地図データは錠なし・予定 34 件(21:00〜11-02 21:00)・
   企画の番号付きの地点 33(1F 8・2F 9・3F 9・4F 4・外 3)。ポスター・一時地点・屋台は 0。
   - Website(内蔵のブラウザ・幅 1149): 🎪 イベントと 📅 予定のチップが出る。拡大すると 1F の企画の地点 8 か所が赤い縁(`km-node-event`)、ほか 38 か所が薄い(`km-node-unrelated`)。
