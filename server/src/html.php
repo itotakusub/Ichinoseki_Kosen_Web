@@ -146,6 +146,7 @@ $limits = [
         .km-html-agree input { width: 1.15rem; height: 1.15rem; flex: none; }
         .km-html-recaptcha { margin: 0 0 0.75rem; min-height: 78px; }
         .km-html-gate .km-html-status { margin: 0.5rem 0 0; }
+        .km-html-password-input { display: block; width: 100%; max-width: 22rem; margin: 0.3rem 0 0; font: inherit; padding: 0.45rem 0.6rem; border-radius: 8px; border: 1px solid var(--border); }
     </style>
     <?php if (!$gatePassed && $gateReady): ?>
         <?php // 関門を出すときだけ Google の reCAPTCHA を読む(contact.php と同じ。方式で読む JS が違うので lib/recaptcha.php が決める) ?>
@@ -220,6 +221,7 @@ $limits = [
         <div class="km-html-drop" id="km-html-drop">
             <p class="km-html-drop-title">ここに落とす</p>
             <p class="km-html-drop-note">ZIP・HTML・CSS・JS・画像・フォルダ(<?= intdiv(KM_HTML_MAX_TOTAL_BYTES, 1024 * 1024) ?>MB・<?= KM_HTML_MAX_FILES ?> 個まで。サーバーへ送るときは、まとめて <?= intdiv(KM_HTML_MAX_UPLOAD_BYTES, 1024 * 1024) ?>MB まで)</p>
+            <p class="km-html-drop-note">パスワード付きの ZIP(ZipCrypto・AES)も開けます。7z・RAR・tar・gz などは使えません(ZIP にしてください)。exe など、ページに使わないファイルは除きます。</p>
             <div class="km-html-buttons">
                 <label class="km-doc-button" for="km-html-pick-files">ファイルを選ぶ</label>
                 <label class="km-doc-link" for="km-html-pick-folder">フォルダを選ぶ</label>
@@ -235,6 +237,19 @@ $limits = [
             <div class="km-html-server-options" id="km-html-server-options" hidden>
                 <label>保存先 <select id="km-html-target"><option value="">新しいサイト</option></select></label>
                 <label>名前 <input type="text" id="km-html-name" maxlength="100" placeholder="(落としたものの名前)"></label>
+            </div>
+        </fieldset>
+
+        <?php // パスワード付きの ZIP。パスワードはこのブラウザの中だけで使う(Main/html-zip.js。サーバーへは送らない) ?>
+        <fieldset class="km-html-chooser" id="km-html-password" hidden>
+            <legend>この ZIP にはパスワードが付いています</legend>
+            <p class="km-html-note">パスワードはこのブラウザの中で ZIP を開くのにだけ使い、サーバーへは送りません。</p>
+            <label for="km-html-password-input">パスワード</label>
+            <input type="password" id="km-html-password-input" class="km-html-password-input" autocomplete="off" spellcheck="false">
+            <p class="km-html-status" id="km-html-password-message" role="status" aria-live="polite"></p>
+            <div class="km-html-buttons">
+                <button type="button" class="km-doc-button" id="km-html-password-ok">開く</button>
+                <button type="button" class="km-doc-link" id="km-html-password-cancel">やめる</button>
             </div>
         </fieldset>
 
@@ -273,6 +288,8 @@ $limits = [
             人に見せるためのものではありません(開けるのは置いた人だけです)。使い方は<a href="/terms.php">利用規約</a>の第8条の2をご覧ください。
         </p>
     </main>
+    <?php // ZIP を読む・作る・パスワード付きを解く(window.KmHtmlZip)。html-host.js より先に ?>
+    <script defer src="<?= km_html_page_e(km_public_asset('Main/html-zip.js')) ?>"></script>
     <script defer src="<?= km_html_page_e(km_public_asset('Main/html-host.js')) ?>"></script>
 </body>
 

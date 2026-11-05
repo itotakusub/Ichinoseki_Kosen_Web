@@ -188,6 +188,7 @@ function km_html_ignored_path(string $path): bool
 /**
  * 上げたファイルの組を整える。
  *   - パスを確かめる・飛ばすものを除く・大文字小文字だけ違う同じ名前は断る
+ *   - 型の表(KM_HTML_TYPES)に無いものは除く(2026-11-05)
  *   - 全部が 1 つのフォルダの中なら、そのフォルダを外す(フォルダごと zip にしたもの)。何段でも
  *   - 数と合計の上限
  *
@@ -205,6 +206,10 @@ function km_html_normalize_files(array $entries): array
             continue;
         }
         $path = km_html_clean_path($name);
+        // 型の表に無いもの(exe・docx・中の zip・7z など)は使わない(2026-11-05。道具のページの JS も同じく除く)
+        if (km_html_type($path) === 'application/octet-stream') {
+            continue;
+        }
         $key = mb_strtolower($path);
         if (isset($lower[$key])) {
             throw new InvalidArgumentException('大文字と小文字だけが違う同じ名前があります(' . mb_substr($path, 0, 80) . ')。');

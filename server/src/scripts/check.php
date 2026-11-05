@@ -10621,6 +10621,42 @@ function km_check_html_host(): void
         }
         check_bool('zip: 外へ出る名前(../)は断る', $escaped);
 
+        /*
+         * 2026-11-05(利用者の試しの ZIP): パスワード付き(ZipCrypto・AES)とドライブ名付きの名前は、道具のページの JS
+         * (Main/html-zip.js)が解いて・整えてから、暗号化しない ZIP に作り直して送る。**サーバーは最後の守りとして断ったまま**
+         */
+        $flagZip = static function (string $name, string $data, int $flags, int $method): string {
+            $crc = crc32($data);
+            $body = pack('VvvvvvVVVvv', 0x04034b50, 20, $flags, $method, 0, 33, $crc, strlen($data), strlen($data), strlen($name), 0) . $name . $data;
+            $central = pack('VvvvvvvVVVvvvvvVV', 0x02014b50, 20, 20, $flags, $method, 0, 33, $crc, strlen($data), strlen($data), strlen($name), 0, 0, 0, 0, 0, 0) . $name;
+
+            return $body . $central . pack('VvvvvVVv', 0x06054b50, 0, 0, 1, 1, strlen($central), strlen($body), 0);
+        };
+        $refused = static function (string $file) use ($work): bool {
+            try {
+                km_zip_read_all($work . '/' . $file, 10, 1000, 10000, true);
+            } catch (InvalidArgumentException) {
+                return true;
+            }
+
+            return false;
+        };
+        file_put_contents($work . '/zipcrypto.zip', $flagZip('index.html', str_repeat('x', 20), 0x0801, 0));
+        file_put_contents($work . '/aes.zip', $flagZip('index.html', str_repeat('x', 40), 0x0801, 99));
+        file_put_contents($work . '/drive.zip', $rawZip(['C:/Users/a/web/index.html' => 'x']));
+        check_bool('zip(サーバー): パスワード付き(ZipCrypto)は断る', $refused('zipcrypto.zip'));
+        check_bool('zip(サーバー): AES(方式 99)は断る', $refused('aes.zip'));
+        check_bool('zip(サーバー): ドライブ名付きの名前は断る(整えるのは道具のページ)', $refused('drive.zip'));
+        file_put_contents($work . '/mixed.zip', $rawZip(['index.html' => 'a', 'tool.exe' => 'MZ', 'inner.zip' => 'PK', 'old.7z' => '7z', 'README.md' => '#', 'note.docx' => 'd']));
+        check('上げた zip を読む: 型の表に無いもの(exe・zip・7z・docx)は除く・md は残す', ['README.md', 'index.html'], array_keys(km_html_read_upload($work . '/mixed.zip')));
+        $onlyOther = false;
+        try {
+            km_html_normalize_files([['name' => 'tool.exe', 'bytes' => 'MZ']]);
+        } catch (InvalidArgumentException) {
+            $onlyOther = true;
+        }
+        check_bool('型の表に無いものしか無ければ断る', $onlyOther);
+
         $siteDir = $work . '/site';
         $v1 = km_html_write_blobs($siteDir, ['index.html' => 'A', 'css/a.css' => 'B']);
         km_html_write_manifest($siteDir . '/v1.json', 'index.html', $v1);
@@ -10702,6 +10738,17 @@ function km_check_html_host(): void
     check('関門の action は口とページで同じ名前', 'html_host', KM_RECAPTCHA_ACTION_HTML_HOST);
     check_bool('ほかのページの CSP は枠を許さないまま', str_contains(km_csp_policy('public'), "frame-src 'none';"));
     check_bool('style 属性・innerHTML を使わない(名前は textContent)', preg_match('/\sstyle="/', $page) !== 1 && !str_contains($pageJs, 'innerHTML') && !str_contains($pageJs, '.style.'));
+    $zipJs = (string) @file_get_contents($src . '/Main/html-zip.js');
+    check_bool('ZIP の部品(html-zip.js)は通信しない(パスワードはブラウザの中だけ)', $zipJs !== '' && !str_contains($zipJs, 'fetch(')
+        && !str_contains($zipJs, 'XMLHttpRequest') && !str_contains($zipJs, 'sendBeacon') && !str_contains($zipJs, 'innerHTML'));
+    check_bool('ZIP の部品は ZipCrypto と AES(方式 99・HMAC を先に確かめる)を解く', str_contains($zipJs, 'function zipCryptoDecrypt(')
+        && str_contains($zipJs, 'function winzipAesDecrypt(') && strpos($zipJs, "s.sign('HMAC'") < strpos($zipJs, 'return winzipAesCtr('));
+    check_bool('ZIP の部品は 7z・RAR・gz などを先頭のバイトで見分ける', str_contains($zipJs, "return '7z';") && str_contains($zipJs, "return 'RAR';") && str_contains($zipJs, "return 'gzip';"));
+    check_bool('道具のページは html-zip.js を html-host.js より先に読む', ($zipAt = strpos($page, "km_public_asset('Main/html-zip.js')")) !== false
+        && $zipAt < (int) strpos($page, "km_public_asset('Main/html-host.js')"));
+    check_bool('道具のページの JS: ドライブ名・先頭の / を外し、型の表に無いものを除き、ZIP 以外の圧縮は断る', str_contains($pageJs, ".replace(/^[A-Za-z]:(?=\\/|$)/, '')")
+        && str_contains($pageJs, "return typeOf(path) !== 'application/octet-stream';") && str_contains($pageJs, 'Z.isArchiveName(name) || (kind !== null && kind !== \'zip\')'));
+    check_bool('道具のページの JS: パスワードを口へ送らない', !preg_match("/post\\([^)]*password/i", $pageJs));
     check_bool('道具のページの JS は見せる側のオリジンからの返事だけ受ける', str_contains($pageJs, 'event.origin !== HTML_ORIGIN || event.source !== frame.contentWindow'));
     check_bool('リンク集に載せる道具のページは公開の場所に在る(管理画面の外)', is_file($src . '/html.php') && !is_file($src . '/admin/html.php'));
 
