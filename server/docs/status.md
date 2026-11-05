@@ -808,6 +808,9 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
       - 確かめ: check.php 全部通る。写し(`share.app.localhost`)で: なし・ありで開く(CSS・JS が効く)、違うパスワード 401・9 回目 429(正しくても)、よそのオリジン・Origin なし・PUT は断る、
         新しい版を保存すると共有も新しい版、止めた・サイトを消したら(印があっても)404、5 本目の次は断る、画面のフォームから作れる、共有のページから html の IndexedDB は見えない、375 幅ではみ出しなし
       - **配備の手順**: (1) DNS に `share.ito4.jp`(A。AAAA は要らない)→ (2) `-Action up` で配備 → (3) **kmops で** `host-cert.sh issue` に `--also share.ito4.jp` を足して取る(今の名前も並べる。issue が自分で reload する)
+      - **11-05 に配備済み(利用者)。本番で確かめた(読むだけ)**: 証明書に 5 つの名前(share 入り)・nginx の証明書と一致・web の `KM_SHARE_URL` は `https://share.ito4.jp`・
+        `share.ito4.jp/` は 302 で道具のページへ・robots は Disallow・でたらめな番号は 404(CSP `default-src 'none'`・`Referrer-Policy: same-origin`・noindex)・スラッシュなしは 308・
+        `/s/` の道は 404・よそからの POST は 404・PUT は 405・html のホストで共有の道は 404。表 `km_html_shares`・`km_html_share_grants` はでき、共有は 0 本(外れの回数の表は初めて間違えたときに作る)
 - **試しのイベントを本番で見た(2026-11-01 22 時、利用者がイベント「Test」(id 9)を始めた)**: 公開の地図データは錠なし・予定 34 件(21:00〜11-02 21:00)・
   企画の番号付きの地点 33(1F 8・2F 9・3F 9・4F 4・外 3)。ポスター・一時地点・屋台は 0。
   - Website(内蔵のブラウザ・幅 1149): 🎪 イベントと 📅 予定のチップが出る。拡大すると 1F の企画の地点 8 か所が赤い縁(`km-node-event`)、ほか 38 か所が薄い(`km-node-unrelated`)。
