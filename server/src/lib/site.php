@@ -307,6 +307,24 @@ function km_site_logto_endpoint(): string
     return $parts['scheme'] . '://auth.' . $parts['host'];
 }
 
+/**
+ * **HTML 展開サイトの見せる側**(2026-11-05、利用者の指示。lib/html-host.php)。末尾にスラッシュは付けない。
+ * 正本は環境変数 `KM_HTML_URL`(compose が渡す)。無ければ `https://html.<本体のホスト>`(本体と同じポートなら付けない)。
+ *
+ * **本体と別のオリジンにする**のが要点。上げた HTML のスクリプトは自由に動くので、本体の上で動かすと
+ * 来場者として地図やアカウントの画面を操作できてしまう(本体の Cookie `__Host-KMSID` は別オリジンへ渡らない)
+ */
+function km_site_html_origin(): string
+{
+    $url = trim((string) getenv('KM_HTML_URL'));
+    if ($url !== '' && is_array($parsed = parse_url($url)) && isset($parsed['host'], $parsed['scheme'])) {
+        return strtolower($parsed['scheme']) . '://' . strtolower($parsed['host']) . (isset($parsed['port']) ? ':' . (int) $parsed['port'] : '');
+    }
+    $parts = km_site_parts();
+
+    return $parts['scheme'] . '://html.' . $parts['host'] . ($parts['port'] === null ? '' : ':' . $parts['port']);
+}
+
 /** 「host:port」の表示用。接続先を人に見せるところで使う。 */
 function km_site_host_port(string $service): string
 {

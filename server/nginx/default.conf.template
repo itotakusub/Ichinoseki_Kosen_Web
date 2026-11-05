@@ -250,6 +250,9 @@ limit_req_zone $binary_remote_addr zone=km_appmap:10m rate=30r/m;
 # 1 回ごとに自宅 PC の LLM を 2 回呼ぶ(数秒〜数十秒)。使えるのはテストユーザー 1 人だけなので狭くてよい。
 # 本丸は PHP 側(セッションで 1 分 6 回・1 日の上限。lib/guide-chat.php)
 limit_req_zone $binary_remote_addr zone=km_guide:10m rate=10r/m;
+# HTML 展開サイトの道具のページの口(/api/html-host.php。2026-11-05。lib/html-host.php)。書き込み(POST)だけ数える。
+# 1 回で最大 20MB を受けるので狭く取る。一覧の読み込みも POST なので、開くたびに 1 つ使う
+limit_req_zone $km_write_key zone=km_html:10m rate=20r/m;
 
 # 同時接続の上限(2026-09-14 の診断で追加)。1 つの送信元が同時に張れる本数。
 # **HTTP/2 では 1 本の中の同時リクエストが 1 つずつ数えられる**ので、443 は広めに取る(server ごとの値は各 server に)。
@@ -452,6 +455,16 @@ server {
     # `vendor-web/`(Leaflet)と `admin/vendor/`(AdminLTE)は**ブラウザが読む資材なので塞がない**
     # —— この正規表現は `/vendor/` で始まるものにしか当たらない。
     location ~ ^/(lib|config|scripts|uploads|cache|vendor)/ {
+        return 404;
+    }
+
+    # HTML 展開サイトの見せる側(html.<ドメイン>。2026-11-05)だけが使うもの。本体のホストでは開かせない。
+    #   /html-host/     bridge.html・bridge.js・sw.js。本体のオリジンから配ると Service Worker を本体に登録できてしまう
+    #   /html-view.php  見せる側の入口(PHP もホストを見て 404 にする)
+    location ^~ /html-host/ {
+        return 404;
+    }
+    location = /html-view.php {
         return 404;
     }
 
@@ -748,6 +761,15 @@ server {
         proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
     }
 
+    # HTML 展開サイトの道具のページの口(2026-11-05。lib/html-host.php)。上げる zip は 20MB まで(PHP の KM_HTML_MAX_UPLOAD_BYTES)。
+    # multipart の分の余裕を足す。回数は km_html(POST だけ)で数える
+    location = /api/html-host.php {
+        client_max_body_size 21m;
+        limit_req zone=km_html burst=20 nodelay;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+
     location = /api/app-map.php {
         limit_req zone=km_appmap burst=30 nodelay;
         include /etc/nginx/km/proxy-web.conf;
@@ -846,6 +868,47 @@ server {
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
         proxy_read_timeout 300s;
+    }
+}
+
+# ---------------------------------------------------------------------------
+# **HTML 展開サイトの見せる側: html.<ドメイン>**(2026-11-05、利用者の指示。仕組みは src/lib/html-host.php)
+#
+# 利用者が上げた HTML を、**本体と別のオリジン**で返す。上げたもののスクリプトは自由に動くので、本体の上で動かすと
+# 来場者として地図やアカウントの画面を操作できてしまう(本体の Cookie __Host-KMSID は、この名前には渡らない)。
+# どの要求も web の html-view.php へ書き換えて渡す(元の URI は X-KM-Html-Uri)。本体の PHP のページはここからは開けない。
+#
+# - 上げるのは本体の /api/html-host.php。ここは GET と HEAD だけ(本文は受けない)
+# - X-Frame-Options は付けない —— bridge.html を本体のページの枠に入れるため。枠の許可は PHP が CSP の frame-ancestors で出す
+#   (上げたものは frame-ancestors 'none')
+# - ゲートは掛けない(誰でも開ける入口。見られるのは本人が上げたものだけで、PHP が印で確かめる)
+#
+# 名前は**証明書に入っていること**(host-cert.sh issue --also html.<ドメイン>)と、**DNS が向いていること**。
+# ---------------------------------------------------------------------------
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name ${KM_HTML_DOMAIN};
+    keepalive_timeout 30s;
+    limit_conn km_conn 100;
+    client_max_body_size 1m;
+
+    add_header X-Content-Type-Options nosniff always;
+    include /etc/nginx/km/hsts-*.conf;
+
+    # web が居ないときは、メンテナンス中の画面にする(km/maintenance.conf)
+    include /etc/nginx/km/maintenance.conf;
+
+    location / {
+        # 1 つのページが CSS・JS・画像をまとめて読むので、km_api(1 分 240・まとめて 120)で数える
+        limit_req zone=km_api burst=120 nodelay;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port 443;
+        proxy_set_header X-KM-Html-Uri $request_uri;
+        # 札(/auth?t=…)は 1 回限りで 60 秒の値だが、ログに残さない
+        access_log /var/log/nginx/access.log km_no_query;
+        rewrite ^ /html-view.php? break;
     }
 }
 

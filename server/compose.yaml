@@ -282,7 +282,7 @@ services:
   # (docs/05-containers の §5-2。デスクトップの「トンネル開通SSH.cmd」がこれを行う)
   phpmyadmin:
     # 2026-09-15 に動いていた中身(タグを残す理由は postgres と同じ)
-    image: phpmyadmin:5.2.3-apache@sha256:fb0cb638f7d1c2529407921d86679b2b2faf5bb8542314821e9f16e7e3d2954f
+    image: phpmyadmin:5.2.3-apache@sha256:9feb3b1734e2538ba633c1301ca5d08fc06cc8902428fe578034edef7897792a
     container_name: km-phpmyadmin
     restart: unless-stopped
     security_opt:
@@ -640,6 +640,9 @@ services:
       # 443 番の Logto の入口の名前(2026-10-19。nginx の auth の server)。**いつも定義する**(空だと server_name が壊れる)。
       # web と logto の LOGTO_ENDPOINT と同じ導き方。VPS は compose.vps.yaml が auth.<ドメイン> を渡す
       KM_AUTH_DOMAIN: ${KM_AUTH_DOMAIN:-auth.${KM_DOMAIN:-192.168.3.29}}
+      # HTML 展開サイトの見せる側の名前(2026-11-05。nginx の html の server・src/lib/html-host.php)。**いつも定義する**(空だと server_name が壊れる)。
+      # web の KM_HTML_URL と同じ名前にすること(VPS は compose.vps.yaml が html.<ドメイン> を渡す)
+      KM_HTML_DOMAIN: ${KM_HTML_DOMAIN:-html.${KM_DOMAIN:-192.168.3.29}}
     ports:
       - "192.168.3.29:8080:80"
       - "192.168.3.29:9443:443"

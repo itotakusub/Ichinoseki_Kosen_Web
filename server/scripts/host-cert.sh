@@ -208,6 +208,14 @@ do_status() {
           *) echo "★ サインインの名前(${_auth})が証明書にありません。issue --domain ${_domain} --also ${_admin:-${_domain}} --also ${_auth} で足してください。"; _rc=1 ;;
         esac
       fi
+      # HTML 展開サイトの見せる側(2026-11-05。nginx の html の server)。.env に無ければ html.<ドメイン>(compose.vps.yaml と同じ導き方)。
+      # 入っていないと、上げたページを開いた時点でブラウザが証明書の名前の不一致で止める
+      _html="$(env_value KM_HTML_DOMAIN)"
+      _html="${_html:-html.${_domain}}"
+      case ",${_san}," in
+        *",DNS:${_html},"*) echo "   HTML 展開の名前(${_html})も入っています。" ;;
+        *) echo "★ HTML 展開の名前(${_html})が証明書にありません。issue --domain ${_domain} --also ${_admin:-${_domain}} --also ${_auth:-auth.${_domain}} --also ${_html} で足してください。"; _rc=1 ;;
+      esac
       _served="$(served_fingerprint "$_domain" || true)"
       if [ -z "$_served" ]; then
         echo "★ 443 番から証明書を受け取れません(nginx が動いているか確かめてください)"

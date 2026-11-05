@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<!--
+  HTML 展開サイトのローカルの置き場(2026-11-05。lib/html-host.php の「置き場所は 3 つ」の 1)。
+  本体の道具のページ(html.php)が見えない iframe で開く。受け取るのは km-parent のオリジンからの postMessage だけ。
+  km-parent は html-view.php が本体のオリジンに置き換える(枠に入れてよいのも本体だけ。CSP の frame-ancestors)
+-->
+<meta name="km-parent" content="{{KM_PARENT}}">
+<title>HTML 展開(ローカル)</title>
+<script src="/bridge.js" defer></script>
+</head>
+<body></body>
+</html>

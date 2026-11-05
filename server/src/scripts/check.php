@@ -99,6 +99,8 @@ const KM_CHECK_PURE = [
     'qr',
     // イベントのセットアップ・ポスターの一括と会期後の片付け(2026-11-03)
     'event-setup',
+    // HTML 展開サイト(2026-11-05)
+    'html-host',
 ];
 
 /** 名前を明示したときだけ走る検査。置かれている設定を読む。 */
@@ -8428,9 +8430,10 @@ function km_check_layout(): void
     $backupsPage = (string) file_get_contents(__DIR__ . '/../admin/backups.php');
     check_bool('管理画面: バックアップを見る・落とす・消す・控えを戻す(消す・戻すは書き込みの権限と CSRF)', str_contains($backupsPage, "require __DIR__ . '/_inc/guard.php';")
         && str_contains($backupsPage, "if (\$formAction === 'map_delete') {") && str_contains($backupsPage, "if (\$formAction === 'learning_restore') {")
-        // 囲みは 3 つ: 地図の控えを消す・学習の控えを戻す・ポスターの控えを消す(2026-11-03)
+        // 囲みは 4 つ: 地図の控えを消す・学習の控えを戻す・ポスターの控えを消す(2026-11-03)・HTML 展開のサイトを消す(2026-11-05)
         && str_contains($backupsPage, "if (\$formAction === 'poster_archive_delete') {")
-        && str_contains($backupsPage, '!km_csrf_verify()') && substr_count($backupsPage, '<?php if ($KM_ADMIN_CAN_WRITE): ?>') === 3
+        && str_contains($backupsPage, "if (\$formAction === 'html_site_delete') {")
+        && str_contains($backupsPage, '!km_csrf_verify()') && substr_count($backupsPage, '<?php if ($KM_ADMIN_CAN_WRITE): ?>') === 4
         && str_contains((string) file_get_contents(__DIR__ . '/../admin/_inc/partials/sidebar.php'), "['backups', './backups.php'"));
     check_bool('監査ログ: 落とす・戻すに文言', isset(KM_ADMIN_LOG_ACTION_LABELS['map.backup_download'], KM_ADMIN_LOG_ACTION_LABELS['learning.backup_download'], KM_ADMIN_LOG_ACTION_LABELS['learning.backup_restore']));
 
@@ -9359,7 +9362,10 @@ function km_check_layout(): void
         $mainInclude = isset($shieldServers['443 の Web アプリ']) && str_contains($shieldServers['443 の Web アプリ'], "    include /etc/nginx/km/maintenance.conf;\n");
         $authInclude = preg_match('/^server \{\n    listen 443 ssl;\n    listen \[::\]:443 ssl;\n    http2 on;\n    server_name \$\{KM_AUTH_DOMAIN\};.*?\n\}\n/ms', $shieldCode, $maintAuth) === 1
             && str_contains($maintAuth[0], "    include /etc/nginx/km/maintenance.conf;\n");
-        check_bool('443 の Web アプリと Logto の入口(auth)が読み込む', $mainInclude && $authInclude && substr_count($shieldCode, 'include /etc/nginx/km/maintenance.conf;') === 2);
+        // 2026-11-05 から HTML 展開の見せる側(html.<ドメイン>)の server も読み込む
+        $htmlInclude = preg_match('/^server \{\n    listen 443 ssl;\n    listen \[::\]:443 ssl;\n    http2 on;\n    server_name \$\{KM_HTML_DOMAIN\};.*?\n\}\n/ms', $shieldCode, $maintHtmlServer) === 1
+            && str_contains($maintHtmlServer[0], "    include /etc/nginx/km/maintenance.conf;\n");
+        check_bool('443 の Web アプリと Logto の入口(auth)と HTML 展開(html)が読み込む', $mainInclude && $authInclude && $htmlInclude && substr_count($shieldCode, 'include /etc/nginx/km/maintenance.conf;') === 3);
         check_bool('管理用のホストでも公開側へ飛ばさない($km_leave_admin_host の例外)', str_contains($shieldCode, '|__km_maintenance$)"  0;'));
         check_bool('画面は外のものを読まず、JS を持たない', $maintHtml !== '' && !preg_match('/<script|https?:\/\/|<link|<img|@import/i', $maintHtml)
             && str_contains($maintHtml, 'メンテナンス中'));
@@ -10504,6 +10510,196 @@ function km_check_recaptcha(): int
  * こちらは配備のたびに走る側なので、**壊れたことに気づくための1点**を持つ。
  */
 /**
+ * HTML 展開サイト(2026-11-05、利用者の指示。lib/html-host.php・html.php・html-view.php・api/html-host.php)。
+ * DB は使わない。パス・入口・版・見せる側のパスは純粋関数を、zip と中身の置き方は作業用の場所で実際に書いて読み戻す
+ */
+function km_check_html_host(): void
+{
+    require_once __DIR__ . '/../lib/html-host.php';
+    require_once __DIR__ . '/../lib/csp.php';
+    $src = __DIR__ . '/..';
+
+    km_check_heading('html-host: パス・入口・版(2026-11-05)');
+    $rejects = static function (string $path): bool {
+        try {
+            km_html_clean_path($path);
+            return false;
+        } catch (InvalidArgumentException) {
+            return true;
+        }
+    };
+    check('パス: 外へ出る・先頭の / ・空の段・ドライブ名・制御文字・. の段は断る', [true, true, true, true, true, true, false, false],
+        [$rejects('../a.html'), $rejects('/a.html'), $rejects('a//b.css'), $rejects('C:/a.html'), $rejects("a\x01.js"), $rejects('a/./b.js'), $rejects('css/a.css'), $rejects('日本語/ページ.html')]);
+    check('パス: \\ は / に', 'css/a.css', km_html_clean_path('css\\a.css'));
+    check('整える: 1 つのフォルダは外す・隠しファイルと macOS の付録は除く', ['css/a.css', 'index.html'], array_keys(km_html_normalize_files([
+        ['name' => 'site/index.html', 'bytes' => '<h1>a</h1>'], ['name' => 'site/css/a.css', 'bytes' => 'b'],
+        ['name' => 'site/.DS_Store', 'bytes' => 'x'], ['name' => '__MACOSX/site/._index.html', 'bytes' => 'x'], ['name' => 'site/Thumbs.db', 'bytes' => 'x'],
+    ])));
+    check('整える: 何段でも外す', ['c.js', 'index.html'], array_keys(km_html_normalize_files([['name' => 'a/b/index.html', 'bytes' => 'x'], ['name' => 'a/b/c.js', 'bytes' => 'y']])));
+    check('整える: 上がそろっていなければ外さない', ['a/x.html', 'b/y.css'], array_keys(km_html_normalize_files([['name' => 'a/x.html', 'bytes' => '1'], ['name' => 'b/y.css', 'bytes' => '2']])));
+    $duplicate = false;
+    try {
+        km_html_normalize_files([['name' => 'A.html', 'bytes' => '1'], ['name' => 'a.html', 'bytes' => '2']]);
+    } catch (InvalidArgumentException) {
+        $duplicate = true;
+    }
+    check_bool('整える: 大文字小文字だけ違う同じ名前は断る', $duplicate);
+    check('入口: index.html・HTML が 1 つならそれ・決められない・選んだもの', ['index.html', 'about.html', null, 'b.html'], [
+        km_html_pick_entry(['a.css', 'index.html', 'b.html']), km_html_pick_entry(['about.html', 'a.css']),
+        km_html_pick_entry(['a.html', 'b.html']), km_html_pick_entry(['a.html', 'b.html'], 'b.html'),
+    ]);
+    check('入口: 選んだものが HTML でなければ使わない', null, km_html_pick_entry(['a.html', 'b.html'], 'a.css'));
+    check('版: 新しい 10 を残し、それより古いものを消す(利用者の指示)', ['keep' => [11, 10, 9, 8, 7, 6, 5, 4, 3, 2], 'remove' => [1]], km_html_versions_split(range(1, 11)));
+    check('版: 10 以下なら消さない', [], km_html_versions_split(range(1, 10))['remove']);
+    check('型: CSS・JS・HTML・mjs・知らないもの', ['text/css', 'text/javascript', 'text/html', 'text/javascript', 'application/octet-stream'],
+        [km_html_type('a/b.CSS'), km_html_type('app.js'), km_html_type('index.htm'), km_html_type('m.mjs'), km_html_type('evil.php')]);
+    check('型の表に、サーバーで動くもの・実行ファイルが無い', [], array_values(array_intersect(array_keys(KM_HTML_TYPES), ['php', 'phtml', 'phar', 'cgi', 'pl', 'py', 'sh', 'exe', 'htaccess', 'shtml'])));
+
+    $id = str_repeat('a', 24);
+    check('見せる側のパス: サーバー・版・一時(スラッシュなし)・ローカル', [
+        ['kind' => 'site', 'id' => $id, 'version' => null, 'path' => 'css/a b.css', 'slash' => true],
+        ['kind' => 'site', 'id' => $id, 'version' => 3, 'path' => '', 'slash' => true],
+        ['kind' => 'temp', 'id' => $id, 'version' => null, 'path' => '', 'slash' => false],
+        ['kind' => 'local', 'id' => $id, 'version' => null, 'path' => 'x/', 'slash' => true],
+    ], [km_html_parse_view_path("/s/{$id}/css/a%20b.css"), km_html_parse_view_path("/s/{$id}/v3/"), km_html_parse_view_path("/t/{$id}"), km_html_parse_view_path("/l/{$id}/x/")]);
+    check('見せる側のパス: 外へ出る・%2F・番号の形が違う・空の段は null', [null, null, null, null],
+        [km_html_parse_view_path("/s/{$id}/../x"), km_html_parse_view_path("/s/{$id}/a%2Fb"), km_html_parse_view_path('/s/abc/'), km_html_parse_view_path("/s/{$id}/a//b")]);
+    $manifestFiles = ['index.html' => ['h' => 'x', 's' => 1], 'docs/index.html' => ['h' => 'y', 's' => 1]];
+    check('開く: 空なら index.html・フォルダなら中の index.html・入口が別ならそこへ移る・無ければ null', [
+        ['redirect' => null, 'path' => 'index.html'], ['redirect' => null, 'path' => 'docs/index.html'],
+        ['redirect' => 'page.html', 'path' => null], ['redirect' => null, 'path' => null],
+    ], [
+        km_html_resolve($manifestFiles, 'index.html', ''), km_html_resolve($manifestFiles, 'index.html', 'docs/'),
+        km_html_resolve(['page.html' => ['h' => 'z', 's' => 1]], 'page.html', ''), km_html_resolve($manifestFiles, 'index.html', 'none.js'),
+    ]);
+    $app = 'https://ito4.jp';
+    check('札を受けるのは本体から開いたときだけ(ほかのサイト・貼り付けた URL・見せる側の中からは断る)', [true, true, true, false, false, false, false, false], [
+        km_html_auth_request_allowed(['HTTP_SEC_FETCH_SITE' => 'same-site', 'HTTP_REFERER' => 'https://ito4.jp/html.php'], $app),
+        km_html_auth_request_allowed(['HTTP_SEC_FETCH_SITE' => 'same-site'], $app),
+        km_html_auth_request_allowed(['HTTP_REFERER' => 'https://ito4.jp/html.php'], $app),
+        km_html_auth_request_allowed(['HTTP_SEC_FETCH_SITE' => 'cross-site', 'HTTP_REFERER' => 'https://evil.example/'], $app),
+        km_html_auth_request_allowed(['HTTP_SEC_FETCH_SITE' => 'none'], $app),
+        km_html_auth_request_allowed(['HTTP_REFERER' => 'https://evil.example/'], $app),
+        km_html_auth_request_allowed(['HTTP_SEC_FETCH_SITE' => 'same-site', 'HTTP_REFERER' => 'https://html.ito4.jp/s/x/'], $app),
+        km_html_auth_request_allowed([], $app),
+    ]);
+
+    km_check_heading('html-host: フォルダを残す zip・中身の置き方');
+    // 名前を自由に書ける素の zip(格納・UTF-8 の印)。km_zip_stream_stored は名前を絞るので、外へ出る名前の試しに使えない
+    $rawZip = static function (array $entries): string {
+        $body = '';
+        $central = '';
+        foreach ($entries as $name => $data) {
+            $crc = crc32($data);
+            $offset = strlen($body);
+            $body .= pack('VvvvvvVVVvv', 0x04034b50, 20, 0x0800, 0, 0, 33, $crc, strlen($data), strlen($data), strlen($name), 0) . $name . $data;
+            $central .= pack('VvvvvvvVVVvvvvvVV', 0x02014b50, 20, 20, 0x0800, 0, 0, 33, $crc, strlen($data), strlen($data), strlen($name), 0, 0, 0, 0, 0, $offset) . $name;
+        }
+
+        return $body . $central . pack('VvvvvVVv', 0x06054b50, 0, 0, count($entries), count($entries), strlen($central), strlen($body), 0);
+    };
+    $work = sys_get_temp_dir() . '/km-html-check-' . bin2hex(random_bytes(4));
+    @mkdir($work, 0700, true);
+    try {
+        $zipFile = $work . '/a.zip';
+        file_put_contents($zipFile, $rawZip([
+            'site/' => '', 'site/index.html' => '<link href="css/style.css"><script src="js/style.css"></script>',
+            'site/css/style.css' => 'body{color:red}', 'site/js/style.css' => 'x', 'site/.git/config' => 'secret', 'site/日本語.html' => 'y',
+        ]));
+        check('zip: フォルダを残す(同じ名前の別のフォルダも別のもの)・隠しの段は飛ばす', ['site/index.html', 'site/css/style.css', 'site/js/style.css', 'site/日本語.html'],
+            array_column(km_zip_read_all($zipFile, 10, 1000, 10000, true), 'name'));
+        check('zip: 今までの呼び出し(階の画像)は名前の最後だけのまま', ['index.html', 'style.css', 'style.css', 'config', '日本語.html'],
+            array_column(km_zip_read_all($zipFile, 10, 1000, 10000), 'name'));
+        check('上げた zip を読む: 上のフォルダを外して並べる', ['css/style.css', 'index.html', 'js/style.css', '日本語.html'], array_keys(km_html_read_upload($zipFile)));
+        file_put_contents($work . '/evil.zip', $rawZip(['../evil.html' => 'x']));
+        $escaped = false;
+        try {
+            km_zip_read_all($work . '/evil.zip', 10, 1000, 10000, true);
+        } catch (InvalidArgumentException) {
+            $escaped = true;
+        }
+        check_bool('zip: 外へ出る名前(../)は断る', $escaped);
+
+        $siteDir = $work . '/site';
+        $v1 = km_html_write_blobs($siteDir, ['index.html' => 'A', 'css/a.css' => 'B']);
+        km_html_write_manifest($siteDir . '/v1.json', 'index.html', $v1);
+        $v2 = array_merge($v1, km_html_write_blobs($siteDir, ['css/a.css' => 'C']));
+        km_html_write_manifest($siteDir . '/v2.json', 'index.html', $v2);
+        $blobs = glob($siteDir . '/blobs/*') ?: [];
+        check('中身はハッシュの名前で 1 つだけ(版どうしで同じものは増えない)', 3, count($blobs));
+        check_bool('置き場の名前に上げた名前を使わない(sha256 だけ)', $blobs !== [] && array_filter($blobs, static fn (string $b): bool => preg_match('/^[0-9a-f]{64}$/', basename($b)) !== 1) === []);
+        check('目録を読み戻す', ['entry' => 'index.html', 'files' => $v2], km_html_read_manifest($siteDir . '/v2.json'));
+        @unlink($siteDir . '/v1.json');
+        $remaining = km_html_prune_blobs($siteDir);
+        check('古い版を消したら、どこからも指されない中身を消す(残りの大きさ)', [2, 2], [count(glob($siteDir . '/blobs/*') ?: []), $remaining]);
+    } finally {
+        km_html_remove_dir($work);
+    }
+    check_bool('作業用の場所を片付けた', !is_dir($work));
+
+    km_check_heading('html-host: 見せる側・道具のページ・口');
+    $view = (string) file_get_contents($src . '/html-view.php');
+    check_bool('見せる側はホストを見て、違えば 404(本体のホストでは開かない)', str_contains($view, "if (!km_html_view_host_ok()) {\n    km_html_view_not_found();"));
+    check_bool('見せる側は本体のサインイン・セッションを読まない', preg_match('/require[^;]*(logto-client|session|csrf)\.php/', $view) !== 1 && !str_contains($view, 'session_start('));
+    check_bool('見せる側は持ち主・一時の印が合うときだけ返す', str_contains($view, "hash_equals(\$site['ownerSub'], \$viewer['owner'])") && str_contains($view, "in_array(\$route['id'], \$viewer['temps'], true)"));
+    check_bool('札は本体から開いたときだけ受ける(使い切る前に確かめる)', str_contains($view, 'km_html_auth_request_allowed($_SERVER, $appOrigin)')
+        && strpos($view, 'km_html_auth_request_allowed($_SERVER, $appOrigin)') < strpos($view, 'km_html_ticket_consume('));
+    check_bool('bridge.html は本体の枠にだけ入る・上げたものは枠に入れさせない', str_contains($view, "frame-ancestors \" . \$appOrigin") && str_contains(KM_HTML_CONTENT_CSP, "frame-ancestors 'none'"));
+    check_bool('型の表に無いものは落とさせる(表示しない)', str_contains($view, "if (km_html_type(\$path) === 'application/octet-stream') {\n        header('Content-Disposition: attachment');"));
+    $sw = (string) file_get_contents($src . '/html-host/sw.js');
+    check_bool('Service Worker の CSP は見せる側と同じ文', str_contains($sw, 'const KM_HTML_CONTENT_CSP = "' . KM_HTML_CONTENT_CSP . '";'));
+    check_bool('Service Worker は /l/ だけに答える', str_contains($sw, "if (url.origin !== self.location.origin || !url.pathname.startsWith('/l/')) return;"));
+    $bridge = (string) file_get_contents($src . '/html-host/bridge.js');
+    check_bool('bridge は本体のオリジンの、親の窓からだけ受ける', str_contains($bridge, 'event.origin !== parentOrigin || event.source !== window.parent'));
+    $api = (string) file_get_contents($src . '/api/html-host.php');
+    check_bool('口は POST・CSRF を先に確かめる', str_contains($api, "require_method('POST');") && strpos($api, 'km_csrf_verify()') < strpos($api, '$action = '));
+    check_bool('保存は止められた・テスト用のアカウントを通さない', str_contains($api, 'km_logto_user_is_suspended($owner)') && str_contains($api, 'km_test_account_is_marked($pdo, $owner)'));
+    check_bool('ほかの人のサイトは「見つかりません」・行き先は本体が組む', str_contains($api, "hash_equals(\$site['ownerSub'], \$owner)") && str_contains($api, "\$to = '/s/' . \$site['id'] . '/'"));
+    check_bool('DB の例外の文を利用者に返さない', str_contains($api, '!$exception instanceof PDOException'));
+    $page = (string) file_get_contents($src . '/html.php');
+    $pageJs = (string) file_get_contents($src . '/Main/html-host.js');
+    check_bool('道具のページは html-host の CSP(枠は見せる側だけ)', str_contains($page, "km_csp_send('html-host');") && str_contains(km_csp_policy('html-host'), 'frame-src ' . km_site_html_origin() . ';'));
+    check_bool('ほかのページの CSP は枠を許さないまま', str_contains(km_csp_policy('public'), "frame-src 'none';"));
+    check_bool('style 属性・innerHTML を使わない(名前は textContent)', preg_match('/\sstyle="/', $page) !== 1 && !str_contains($pageJs, 'innerHTML') && !str_contains($pageJs, '.style.'));
+    check_bool('道具のページの JS は見せる側のオリジンからの返事だけ受ける', str_contains($pageJs, 'event.origin !== HTML_ORIGIN || event.source !== frame.contentWindow'));
+    check_bool('リンク集に載せる道具のページは公開の場所に在る(管理画面の外)', is_file($src . '/html.php') && !is_file($src . '/admin/html.php'));
+
+    km_check_heading('html-host: 規約・記録・後片付け');
+    $legalText = (string) file_get_contents($src . '/lib/legal.php');
+    check_bool('規約に第8条の2(本人だけ・一時は 24 時間・版は 10)', str_contains($legalText, "'heading' => '第8条の2(HTML 展開サイト)'")
+        && str_contains($legalText, '**上げたファイルを開けるのは、上げた本人(またはそのブラウザ)だけです。**') && str_contains($legalText, '24 時間で削除します'));
+    check_bool('プライバシーポリシーの表と Cookie に書いてある', str_contains($legalText, 'HTML 展開でサーバーに置いたファイル')
+        && str_contains($legalText, 'この Cookie は、ブラウザを閉じたとき・サインアウトしたとき・12 時間たったときのどれかで無効になります。'));
+    // 共用の端末でサインアウトしたあと、次の人が履歴から本人のサイトを開けないように(2026-11-05 に写しで見つけた)
+    check_bool('印はブラウザを閉じたら消え、本体でサインアウトすると取り消す', str_contains((string) file_get_contents($src . '/lib/html-host.php'), "'expires' => 0,")
+        && str_contains((string) file_get_contents($src . '/sign-out.php'), "km_html_viewers_revoke_owner(km_db(), (string) (\$KM_USER['sub'] ?? ''));"));
+    check('規約の版と、一時の時間・版の数・印の時間', [10, 86400, 43200], [KM_HTML_MAX_VERSIONS, KM_HTML_TEMP_TTL, KM_HTML_VIEWER_TTL]);
+    require_once __DIR__ . '/../lib/admin-log.php';
+    check_bool('管理者が消したときの記録の文言', isset(KM_ADMIN_LOG_ACTION_LABELS['html.delete']));
+    check_bool('アカウントを消すと、サーバーに保存したサイトも消える', str_contains((string) file_get_contents($src . '/lib/account-delete.php'), 'km_html_sites_delete_owner($pdo, $userId)'));
+
+    $repo = km_check_repo_root();
+    if ($repo === null) {
+        check_skip('html-host: nginx・compose・控え', '手元の作業ツリーで確認する。配備先に nginx/ は出ない');
+        return;
+    }
+    $nginx = (string) preg_replace('/^\s*#.*$/m', '', (string) file_get_contents($repo . '/nginx/default.conf.template'));
+    preg_match('/^server \{\n    listen 443 ssl;\n    listen \[::\]:443 ssl;\n    http2 on;\n    server_name \$\{KM_HTML_DOMAIN\};.*?\n\}\n/ms', $nginx, $htmlServer);
+    $htmlServer = $htmlServer[0] ?? '';
+    check_bool('nginx: html の server があり、どれも html-view.php へ書き換える', $htmlServer !== '' && str_contains($htmlServer, 'rewrite ^ /html-view.php? break;')
+        && str_contains($htmlServer, 'proxy_set_header X-KM-Html-Uri $request_uri;') && str_contains($htmlServer, 'limit_conn km_conn 100;'));
+    check_bool('nginx: html の server は X-Frame-Options を付けない・札をログに残さない', $htmlServer !== '' && !str_contains($htmlServer, 'X-Frame-Options') && str_contains($htmlServer, 'km_no_query'));
+    check_bool('nginx: 本体では html-view.php と html-host/ を 404', preg_match('#location = /html-view\.php \{\s*return 404;#', $nginx) === 1 && preg_match('#location \^~ /html-host/ \{\s*return 404;#', $nginx) === 1);
+    check_bool('nginx: 上げる口は 21m と km_html(PHP の上限 20MB より大きい)', preg_match('#location = /api/html-host\.php \{\s*client_max_body_size 21m;\s*limit_req zone=km_html burst=20 nodelay;#', $nginx) === 1
+        && str_contains($nginx, 'zone=km_html:10m') && KM_HTML_MAX_UPLOAD_BYTES < 21 * 1024 * 1024);
+    check_bool('compose: nginx に KM_HTML_DOMAIN をいつも渡す・web に KM_HTML_URL', str_contains((string) file_get_contents($repo . '/compose.yaml'), 'KM_HTML_DOMAIN: ${KM_HTML_DOMAIN:-html.${KM_DOMAIN:-192.168.3.29}}')
+        && str_contains((string) file_get_contents($repo . '/compose.vps.yaml'), 'KM_HTML_DOMAIN: ${KM_HTML_DOMAIN:-html.${KM_DOMAIN}}')
+        && str_contains((string) file_get_contents($repo . '/compose.vps.yaml'), 'KM_HTML_URL: ${KM_HTML_URL:-https://${KM_HTML_DOMAIN:-html.${KM_DOMAIN}}}'));
+    check_bool('夜の控えに一時フォルダを入れない', str_contains((string) file_get_contents($repo . '/scripts/host-backup.sh'), "--exclude='uploads/html-temp'"));
+    check_bool('証明書の確かめに html の名前がある', str_contains((string) file_get_contents($repo . '/scripts/host-cert.sh'), '_html="${_html:-html.${_domain}}"'));
+}
+
+/**
  * イベントのセットアップ(admin/event-setup.php)・ポスターの一括の出す/止める・会期後の片付け(2026-11-03、利用者の指示)。
  * DB は使わない。手順の印・一括の受け方は純粋関数を、控えの zip は作業用の場所で実際に書いて読み戻す。
  */
@@ -10919,6 +11115,9 @@ foreach ($selected as $name) {
             break;
         case 'event-setup':
             km_check_event_setup();
+            break;
+        case 'html-host':
+            km_check_html_host();
             break;
         case 'recaptcha':
             // 環境依存。数えず、終了コードだけを持ち帰る。
