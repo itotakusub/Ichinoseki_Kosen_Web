@@ -6032,8 +6032,8 @@ function km_check_hardening(): void
     check_bool('配備の $mustContain に2本と logto-domain.php', str_contains($mustContain, "'./scripts/host-cert.sh'") && str_contains($mustContain, "'./scripts/host-domain.sh'") && str_contains($mustContain, "'./src/scripts/logto-domain.php'"));
     $setup = $file('scripts/host-updates-setup.sh');
     // 版 6 で証明書を足し、版 7(2026-10-05)でタスクマネージャーの集計と使用率の警告を、版 8(2026-10-06)で訪問者の記録の片付けを、
-    // 版 9(2026-10-09)でアプリの受け箱を、版 10(2026-11-06)でイメージの検査を、版 11(同日)でイメージの片付けを足した
-    check_bool('cron は版 11', preg_match('/^CRON_VERSION=11$/m', $setup) === 1);
+    // 版 9(2026-10-09)でアプリの受け箱を、版 10(2026-11-06)でイメージの検査を、版 11(同日)でイメージの片付けを、版 12(同日)で phpMyAdmin の時間の見張りを足した
+    check_bool('cron は版 12', preg_match('/^CRON_VERSION=12$/m', $setup) === 1);
     // 国単位のアクセス拒否(2026-10-06)。毎月の取り直しと、再起動のあとの当て直し
     check_bool('cron(版 8)に国の拒否の取り直しと再起動後の当て直しがある', str_contains($setup, '53 4 2 * *  root  sh $GEOBLOCK_SCRIPT --path $PATH_ROOT update')
         && str_contains($setup, '@reboot     root  sleep 30 && sh $GEOBLOCK_SCRIPT --path $PATH_ROOT apply'));
@@ -10928,8 +10928,25 @@ function km_check_image_scan(): void
     check_bool('片付け: ビルドのキャッシュは古いものだけ', str_contains($pruneCode, 'docker builder prune -f --filter "until=$((BUILD_CACHE_DAYS * 24))h"'));
     check_bool('片付け: cron(版 11)は日曜 5:47・検査のあと・失敗は send-log.sh・配備物と実行ビットの一覧にある', preg_match('/^CRON_VERSION=(1[1-9]|[2-9][0-9])$/m', $setup) === 1
         && str_contains($setup, '47 5 * * 0  root  $SEND_LOG_SCRIPT --path $PATH_ROOT --label イメージの片付け --only-failure --run "$DOCKER_PRUNE_SCRIPT --path $PATH_ROOT --apply"')
-        && str_contains($setup, '"$IMAGE_SCAN_SCRIPT" "$DOCKER_PRUNE_SCRIPT"; do') && preg_match("/^HOST_SCRIPTS='[^']*\\bhost-docker-prune\\.sh\\b[^']*'$/m", $file('scripts/host-setup.sh')) === 1
+        && str_contains($setup, '"$IMAGE_SCAN_SCRIPT" "$DOCKER_PRUNE_SCRIPT"') && preg_match("/^HOST_SCRIPTS='[^']*\\bhost-docker-prune\\.sh\\b[^']*'$/m", $file('scripts/host-setup.sh')) === 1
         && substr_count($file('scripts/deploy-to-host.ps1'), "'./scripts/host-docker-prune.sh'") === 2);
+    // phpMyAdmin は 18〜21 時(日本時間)だけ動かす(scripts/host-pma-window.sh。2026-11-06、利用者の指示)。時間の外は --open で手で起こす
+    $pma = $file('scripts/host-pma-window.sh');
+    $pmaCode = (string) preg_replace('/^\s*#.*$/m', '', $pma);
+    check_bool('phpMyAdmin の時間: スクリプトがある(LF・sh)・18〜21 時・日本時間で決める・root だけ', $pma !== '' && !str_contains($pma, "\r")
+        && str_contains($pmaCode, 'FROM_HOUR=18') && str_contains($pmaCode, 'UNTIL_HOUR=21') && str_contains($pmaCode, 'TZ=Asia/Tokyo date +%H')
+        && str_contains($pmaCode, 'if [ "$(id -u)" -ne 0 ]; then'));
+    check_bool('phpMyAdmin の時間: 触るのは phpmyadmin だけ(起こす・止めるのみ。消さない)', str_contains($pmaCode, 'SERVICE="phpmyadmin"')
+        && substr_count($pmaCode, 'docker compose up -d "$SERVICE"') === 1 && substr_count($pmaCode, 'docker compose stop "$SERVICE"') === 1
+        && !preg_match('/docker compose (down|rm)|docker (rm|kill)|volume/', $pmaCode));
+    check_bool('phpMyAdmin の時間: 手で起こすのは 1〜180 分まで・数だけ受け取る', str_contains($pmaCode, 'MAX_OPEN_MINUTES=180')
+        && str_contains($pmaCode, "''|*[!0-9]*)") && str_contains($pmaCode, '[ "$OPEN_MINUTES" -gt "$MAX_OPEN_MINUTES" ]'));
+    check_bool('phpMyAdmin の時間: cron(版 12)は 5 分ごと・配備物と実行ビットの一覧にある', preg_match('/^CRON_VERSION=(1[2-9]|[2-9][0-9])$/m', $setup) === 1
+        && str_contains($setup, '*/5 * * * *  root  $PMA_WINDOW_SCRIPT --path $PATH_ROOT >>$LOG_DIR/pma-window.log 2>&1')
+        && str_contains($setup, '"$DOCKER_PRUNE_SCRIPT" "$PMA_WINDOW_SCRIPT"; do') && preg_match("/^HOST_SCRIPTS='[^']*\\bhost-pma-window\\.sh\\b[^']*'$/m", $file('scripts/host-setup.sh')) === 1
+        && substr_count($file('scripts/deploy-to-host.ps1'), "'./scripts/host-pma-window.sh'") === 2);
+    // nginx は phpMyAdmin を通さない(止まっていても nginx が起動できる)
+    check_bool('phpMyAdmin の時間: nginx の設定が phpmyadmin を名前で引かない', !preg_match('/\bphpmyadmin:80\b|proxy_pass http:\/\/phpmyadmin/', $file('nginx/default.conf.template')));
     // JAVA_HOME(この PC。2026-11-06)。既定は調べるだけ
     $javaHome = $file('scripts/java-home.ps1');
     // 書く所は 5 つ(JAVA_HOME 3・PATH 1・gradle.properties 1)。JAVA_HOME と gradle は if ($Fix) の中、PATH は if (-not $Fix) { continue } のあと
