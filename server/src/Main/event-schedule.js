@@ -43,6 +43,36 @@
         try { window.localStorage.setItem(VIEW_KEY, view); } catch (e) { /* 覚えられなくても動く */ }
     }
 
+    /** 日ごとの見出し。天気は decorateWeather があとから足す(data-day の日付で当てる) */
+    function dayHeading(value) {
+        const heading = el('h3', 'km-schedule-day', dayLabel(value));
+        heading.dataset.day = String(value || '').slice(0, 10);
+        return heading;
+    }
+
+    /*
+     * 見出しに一関の天気を足す(2026-11-05、利用者の指示「日程表などに天気を表示」。Main/weather.js・api/weather.php)。
+     * 予報のある日(今日から 7 日)だけ。取れなければ何も出さない。出典「気象庁」を下に添える
+     */
+    function decorateWeather(container, weather) {
+        const api = window.KmWeather;
+        if (!api || !weather) return;
+        const lang = typeof api.lang === 'function' ? api.lang() : 'ja';
+        let shown = 0;
+        container.querySelectorAll('.km-schedule-day[data-day]').forEach(function (heading) {
+            if (heading.querySelector('.km-schedule-weather')) return;
+            const text = api.dayText(api.dayOf(weather, heading.dataset.day), lang);
+            if (!text) return;
+            heading.appendChild(el('span', 'km-schedule-weather', text));
+            shown++;
+        });
+        if (shown > 0 && !container.querySelector('.km-schedule-source')) {
+            container.appendChild(el('p', 'km-schedule-source', lang === 'en'
+                ? 'Weather: Ichinoseki (inland Iwate), Japan Meteorological Agency'
+                : '天気: 一関(岩手県内陸)・気象庁の予報'));
+        }
+    }
+
     function staffTag() {
         const tag = el('span', 'km-schedule-staff', 'スタッフだけ');
         tag.title = '教職員・係のアカウントにだけ見えています';
@@ -59,7 +89,7 @@
         const now = new Date();
         if (!grid) return;
         grid.layout(entries, nodes, pois).forEach(function (day) {
-            container.appendChild(el('h3', 'km-schedule-day', dayLabel(day.day)));
+            container.appendChild(dayHeading(day.day));
             const scroller = el('div', 'km-schedule-grid-scroll');
             const table = el('div', 'km-schedule-grid');
             table.setAttribute('role', 'table');
@@ -153,6 +183,9 @@
             body.textContent = '';
             if (view === 'grid' && window.KmScheduleGrid) renderGrid(body, entries);
             else renderList(body, entries);
+            if (window.KmWeather && typeof window.KmWeather.load === 'function') {
+                window.KmWeather.load(false).then(function (weather) { decorateWeather(body, weather); });
+            }
         }
         show(savedView());
         if (sheet) {
@@ -173,7 +206,7 @@
             const day = dayLabel(entry.startsAt);
             if (day !== currentDay) {
                 currentDay = day;
-                container.appendChild(el('h3', 'km-schedule-day', day));
+                container.appendChild(dayHeading(entry.startsAt));
                 list = el('ul', 'km-history-list');
                 container.appendChild(list);
             }

@@ -711,6 +711,8 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
                         <div class="km-route-pref km-route-conditions">
                             <label class="km-route-check"><input type="checkbox" id="route-fewer-floors"> 階の移動を減らす</label>
                             <label class="km-route-check"><input type="checkbox" id="route-rain"> 雨の日(外をなるべく通らない)</label>
+                            <?php /* 一関の天気で自動に付け外しする(2026-11-05。Main/weather.js・app.js)。自分で切り替えたら、その日だけ手動 */ ?>
+                            <p class="km-route-weather" id="route-rain-weather" aria-live="polite" hidden><span id="route-rain-weather-text"></span> <button type="button" class="km-route-weather-reset" id="route-rain-auto" hidden>自動に戻す</button></p>
                         </div>
                         </details>
                         <div class="button-group">
@@ -1265,6 +1267,8 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
         <?php /* テスト用アカウントとイベント中だけ。**app.js より先に**読み、window.kmTestLog を用意しておく(app.js は在れば呼ぶ) */ ?>
         <script defer src="<?= km_home_e(km_public_asset('Main/test-mode.js')) ?>"></script>
     <?php endif; ?>
+    <?php /* 一関の天気(2026-11-05)。**app.js より先に**読む(「雨の日」の自動。予定の見出しも使う) */ ?>
+    <script defer src="<?= km_home_e(km_public_asset('Main/weather.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/app.js')) ?>"></script>
     <?php /* 全画面のボタンと、全画面・横画面で上の帯を隠す(2026-10-30、振り返りのフェーズ 2)。**app.js の後に**読む(地図の右下にボタンを置く) */ ?>
     <script defer src="<?= km_home_e(km_public_asset('Main/top-bar.js')) ?>"></script>

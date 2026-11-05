@@ -101,6 +101,12 @@ const KM_CHECK_PURE = [
     'event-setup',
     // HTML 展開サイト(2026-11-05)
     'html-host',
+    // 一関の天気と「雨の日」の自動(2026-11-05)
+    'weather',
+    // コンテナのイメージの検査(Trivy。2026-11-06)
+    'image-scan',
+    // ベンチマーク(2026-11-06)
+    'bench',
 ];
 
 /** 名前を明示したときだけ走る検査。置かれている設定を読む。 */
@@ -5223,7 +5229,8 @@ function km_check_hardening(): void
      */
     $taskmgrPage = $file('src/admin/taskmgr.php');
     preg_match_all("/^    \['([a-z]+)', 'bi-[a-z0-9-]+', 'page\.taskmgr\.tab[A-Za-z]+', '[^']+'\],$/m", $taskmgrPage, $tmTabs);
-    check('タスクマネージャーのタブはプロセス・パフォーマンス・コンテナ・サービス・詳細', ['processes', 'performance', 'containers', 'services', 'details'], $tmTabs[1]);
+    // 2026-11-06 にイメージの検査(Trivy)とベンチマークを足した
+    check('タスクマネージャーのタブはプロセス・パフォーマンス・コンテナ・サービス・詳細・イメージの検査・ベンチマーク', ['processes', 'performance', 'containers', 'services', 'details', 'images', 'bench'], $tmTabs[1]);
     check_bool('?tab= は決まった名前だけ受ける(ほかはプロセス)', str_contains($taskmgrPage, "in_array(\$_GET['tab'], \$tabIds, true) ? \$_GET['tab'] : 'processes'"));
     check_bool('サービスのタブは services.js の表(data-km-services="table")・確かめはタブを開いている間だけ', str_contains($taskmgrPage, '<tbody data-km-services="table"></tbody>')
         && str_contains($taskmgrJs, "services.startAuto(SERVICES_INTERVAL_MS);") && str_contains($taskmgrJs, 'services.stopAuto();'));
@@ -5713,7 +5720,7 @@ function km_check_hardening(): void
         && str_contains($inboxSh, '-H @"$WORK/auth"') && !str_contains($inboxSh, 'Bearer $GITHUB_TOKEN"') && str_contains($inboxSh, 'docker compose exec -T -u www-data web php scripts/apk-inbox.php stage'));
     check_bool('受け箱(ホスト): cron 版 9 で 5 分ごと・失敗だけ送る・配備物と実行ビットの一覧にある', preg_match('/^CRON_VERSION=(9|[1-9][0-9])$/m', $file('scripts/host-updates-setup.sh')) === 1
         && str_contains($file('scripts/host-updates-setup.sh'), '*/5 * * * *  root  $SEND_LOG_SCRIPT --path $PATH_ROOT --label アプリの受け箱 --only-failure --run "$APK_INBOX_SCRIPT --path $PATH_ROOT"')
-        && str_contains($file('scripts/deploy-to-host.ps1'), "'./scripts/host-apk-inbox.sh'") && str_contains($file('scripts/host-setup.sh'), 'host-apk-inbox.sh\'')
+        && str_contains($file('scripts/deploy-to-host.ps1'), "'./scripts/host-apk-inbox.sh'") && preg_match("/^HOST_SCRIPTS='[^']*\\bhost-apk-inbox\\.sh\\b[^']*'$/m", $file('scripts/host-setup.sh')) === 1
         && !is_file(km_check_repo_root() . '/apk-inbox.local.conf') && is_file(km_check_repo_root() . '/apk-inbox.local.conf.example'));
     $pushPs = $file('scripts/apk-push.ps1');
     check_bool('受け箱(PC): 2 つが同じ鍵・枠のパッケージ名・同じ版でなければ送らない・3 つのファイルだけ', str_contains($pushPs, "throw '2 つが違う鍵で署名されています'")
@@ -6025,8 +6032,8 @@ function km_check_hardening(): void
     check_bool('配備の $mustContain に2本と logto-domain.php', str_contains($mustContain, "'./scripts/host-cert.sh'") && str_contains($mustContain, "'./scripts/host-domain.sh'") && str_contains($mustContain, "'./src/scripts/logto-domain.php'"));
     $setup = $file('scripts/host-updates-setup.sh');
     // 版 6 で証明書を足し、版 7(2026-10-05)でタスクマネージャーの集計と使用率の警告を、版 8(2026-10-06)で訪問者の記録の片付けを、
-    // 版 9(2026-10-09)でアプリの受け箱を足した
-    check_bool('cron は版 9', preg_match('/^CRON_VERSION=9$/m', $setup) === 1);
+    // 版 9(2026-10-09)でアプリの受け箱を、版 10(2026-11-06)でイメージの検査を足した
+    check_bool('cron は版 10', preg_match('/^CRON_VERSION=10$/m', $setup) === 1);
     // 国単位のアクセス拒否(2026-10-06)。毎月の取り直しと、再起動のあとの当て直し
     check_bool('cron(版 8)に国の拒否の取り直しと再起動後の当て直しがある', str_contains($setup, '53 4 2 * *  root  sh $GEOBLOCK_SCRIPT --path $PATH_ROOT update')
         && str_contains($setup, '@reboot     root  sleep 30 && sh $GEOBLOCK_SCRIPT --path $PATH_ROOT apply'));
@@ -10871,6 +10878,281 @@ function km_check_html_host(): void
 }
 
 /**
+ * コンテナのイメージの検査(scripts/host-image-scan.sh・lib/image-scan.php・タスクマネージャー。2026-11-06、
+ * 利用者の答え「Trivy を週 1 回回す・増えたらメール」)。
+ */
+function km_check_image_scan(): void
+{
+    require_once __DIR__ . '/../lib/image-scan.php';
+    $root = dirname(__DIR__, 2);
+    $file = static fn (string $path): string => (string) @file_get_contents($root . '/' . $path);
+    $scan = $file('scripts/host-image-scan.sh');
+    check_bool('スクリプトがある(LF・sh)', $scan !== '' && !str_contains($scan, "\r") && str_starts_with($scan, "#!/bin/sh\n"));
+    // docker.sock を渡すとホストの root を渡すのと同じ。tar を読み取り専用で渡すだけにする
+    $code = (string) preg_replace('/^\s*#.*$/m', '', $scan);
+    check_bool('docker.sock を渡さない', !str_contains($code, 'docker.sock') && !str_contains($code, '/var/run/docker'));
+    check_bool('tar を読み取り専用で渡し、--input で読む', str_contains($code, '-v "$WORK:/scan:ro"') && str_contains($code, '--input /scan/img.tar')
+        && str_contains($code, 'docker save -o "$WORK/img.tar" "$IMG_ID"'));
+    check_bool('Trivy のコンテナは root の FS も読み取り専用・権限なし・上限つき', str_contains($code, '--read-only') && str_contains($code, '--cap-drop ALL')
+        && str_contains($code, '--security-opt no-new-privileges') && str_contains($code, '--memory 1g'));
+    // 供給網の事件(CVE-2026-33634)。v0.69.4 と Docker Hub の 0.69.5・0.69.6 は使わない。版と digest の両方で固定
+    $pinned = preg_match('/^TRIVY_IMAGE="aquasec\/trivy:(\d+\.\d+\.\d+)@sha256:[0-9a-f]{64}"$/m', $scan, $m) === 1;
+    check_bool('Trivy を版と digest で固定(事件の版ではない)', $pinned && !in_array($m[1], ['0.69.4', '0.69.5', '0.69.6'], true)
+        && str_contains($scan, 'TRIVY_VERSION="' . $m[1] . '"'));
+    check_bool('DB は最初に 1 回だけ取り、イメージごとは取りに行かない', str_contains($code, '--download-db-only') && str_contains($code, '--skip-db-update'));
+    // Go のテンプレートは文字の \t を解かない。{{"\t"}} で書く
+    check_bool('結果の区切りはテンプレートの文字列で(タブ・改行)', str_contains($scan, '{{"\t"}}') && str_contains($scan, '{{"\n"}}'));
+    check_bool('tar は調べるたびに消し、作業場所は終わったら消す', str_contains($code, 'rm -f "$WORK/img.tar"') && str_contains($code, 'trap cleanup EXIT INT TERM'));
+    check_bool('同時に 2 本走らせない(flock)', str_contains($code, 'flock -n 9'));
+    check_bool('知らせは notify-security.php で、送れてから覚える', preg_match('/if printf .*notify-security\.php; then\n\s+remember/', $code) === 1);
+    check_bool('知らせの種別 images に見出しがある', str_contains($file('src/scripts/notify-security.php'), "'images' => "));
+    check_bool('要約は run/hoststats に書いてから mv する', str_contains($code, 'mv "$TMP_JSON" "$OUT_DIR/image-scan.json"'));
+
+    $setup = $file('scripts/host-updates-setup.sh');
+    check_bool('cron(版 10)に毎週日曜 4:47 の行がある・失敗は send-log.sh', preg_match('/^CRON_VERSION=(1[0-9]|[2-9][0-9])$/m', $setup) === 1
+        && str_contains($setup, '47 4 * * 0  root  $SEND_LOG_SCRIPT --path $PATH_ROOT --label イメージの検査 --only-failure --run "$IMAGE_SCAN_SCRIPT --path $PATH_ROOT --notify"'));
+    check_bool('実行ビットの一覧・HOST_SCRIPTS・配備の 2 つの一覧にある', str_contains($setup, '"$APK_INBOX_SCRIPT" "$IMAGE_SCAN_SCRIPT"; do')
+        && preg_match("/^HOST_SCRIPTS='[^']*\\bhost-image-scan\\.sh\\b[^']*'$/m", $file('scripts/host-setup.sh')) === 1
+        && substr_count($file('scripts/deploy-to-host.ps1'), "'./scripts/host-image-scan.sh'") === 2);
+
+    // 読む側: 形の合わない項目は捨て、数は 0 以上の整数に。直す必要の大きい順に並べる
+    $sample = json_encode([
+        'generatedAt' => 1_762_400_000, 'trivy' => '0.76.1', 'dbUpdatedAt' => '2026-11-05T06:00:00Z', 'failed' => 1,
+        'images' => [
+            ['image' => 'mariadb:11.4', 'status' => 'ok', 'critical' => 0, 'high' => 3, 'criticalFixable' => 0, 'highFixable' => 1, 'osVulns' => 3, 'top' => []],
+            ['image' => 'kosenmap-web', 'status' => 'ok', 'critical' => 2, 'high' => 5, 'criticalFixable' => 1, 'highFixable' => 2, 'osVulns' => 6,
+                'os' => 'kosenmap-web (debian 13.1)',
+                'top' => [['id' => 'CVE-2026-0001', 'severity' => 'CRITICAL', 'pkg' => 'libssl3', 'installed' => '3.5.1-1', 'fixed' => '3.5.1-2'], 'bad']],
+            ['image' => 'mailpit', 'status' => 'missing', 'critical' => -4, 'high' => '9'],
+            ['status' => 'ok'],
+            ['image' => 'x', 'status' => 'weird'],
+        ],
+    ]);
+    $parsed = km_image_scan_parse((string) $sample);
+    check_bool('読む: 名前の無い項目は捨てる', $parsed !== null && count($parsed['images']) === 4);
+    check_bool('読む: 直る版のある CRITICAL の多い順', $parsed !== null && $parsed['images'][0]['image'] === 'kosenmap-web' && $parsed['images'][1]['image'] === 'mariadb:11.4');
+    check_bool('読む: 負の数・文字列の数は 0、知らない状態は error', $parsed !== null && $parsed['images'][2]['critical'] === 0 && $parsed['images'][2]['high'] === 0
+        && $parsed['images'][3]['status'] === 'error' && $parsed['failed'] === 1);
+    check_bool('読む: 直る版の一覧の壊れた行は捨てる', $parsed !== null && count($parsed['images'][0]['top']) === 1 && $parsed['images'][0]['top'][0]['fixed'] === '3.5.1-2');
+    check_bool('読む: 形が違えば null', km_image_scan_parse('{"images":[]}') === null && km_image_scan_parse('nope') === null
+        && km_image_scan_read($root . '/no-such-image-scan.json') === null);
+
+    $page = $file('src/admin/taskmgr.php');
+    check_bool('タスクマネージャーにタブがあり、名前は km_e で逃がす', str_contains($page, "['images', 'bi-shield-check', 'page.taskmgr.tabImages'")
+        && str_contains($page, 'data-km-tm-panel="images"') && str_contains($page, '<code><?= km_e($img[\'image\']) ?></code>')
+        && str_contains($page, '<?= km_e($v[\'pkg\']) ?>') && !preg_match('/\sstyle=/', $page));
+    $ja = $file('src/admin/assets/i18n/ja.js');
+    $en = $file('src/admin/assets/i18n/en.js');
+    preg_match_all('/data-i18n="(page\.taskmgr\.(?:images|col(?:Image|Fixable|OsVulns|Base)|tabImages)[A-Za-z]*)"/', $page, $keys);
+    $missing = array_filter(array_unique(array_merge($keys[1], ['page.taskmgr.tabImages'])), static fn (string $k): bool => !str_contains($ja, '"' . $k . '"') || !str_contains($en, '"' . $k . '"'));
+    check_bool('文言の鍵が日英の辞書にある', count($keys[1]) >= 10 && $missing === [], implode(', ', $missing));
+}
+
+/**
+ * ベンチマーク(lib/bench.php・admin/api/bench.php・assets/js/bench.js・scripts/bench*.php。2026-11-06、
+ * 利用者の指示「サーバーでベンチマーク」「簡単な処理だと比較が難しいので考慮」「性能とスコアを保存」)。
+ * 重い段そのものはここでは回さない(本番で測って基準を固定した。lib の KM_BENCH_REFERENCE)。
+ */
+function km_check_bench(): void
+{
+    require_once __DIR__ . '/../lib/bench.php';
+    require_once __DIR__ . '/../lib/admin-log.php';
+    $root = dirname(__DIR__, 2);
+    $file = static fn (string $path): string => (string) @file_get_contents($root . '/' . $path);
+
+    // 計算
+    $s = km_bench_stats([0.3, 0.1, 0.2]);
+    check_bool('中央値(奇数)・最小・最大', abs($s['median'] - 0.2) < 1e-9 && $s['min'] === 0.1 && $s['max'] === 0.3 && $s['reps'] === 3);
+    check_bool('中央値(偶数)', abs(km_bench_stats([0.1, 0.4, 0.2, 0.3])['median'] - 0.25) < 1e-9);
+    check_bool('ばらつき 10% を超えたら印', km_bench_stats([1.0, 1.3, 0.7])['unstable'] === true && km_bench_stats([1.0, 1.01, 0.99])['unstable'] === false);
+    check_bool('回数は予算に合わせて 3〜5', km_bench_reps_for(0.1) === 5 && km_bench_reps_for(3.0) === 3 && km_bench_reps_for(2.0) === 5 && km_bench_reps_for(2.5) === 3);
+    check_bool('スコア = 1000 × 基準 ÷ 中央値', km_bench_score('db', 0.208, [], ['db' => 0.416]) === 2000.0 && km_bench_score('db', 0.416, [], ['db' => 0.416]) === 1000.0
+        && km_bench_score('db', 0.5, [], []) === null && km_bench_score('db', 0.0) === null);
+    check_bool('並列: 基準の日と同じコアの数で、きれいに並列なら 1000・倍のコアなら 2000', km_bench_score('cpu.parallel', 0.123, ['workers' => 2], ['cpu.route' => 0.123]) === 1000.0
+        && km_bench_score('cpu.parallel', 0.123, ['workers' => 4], ['cpu.route' => 0.123]) === 2000.0 && km_bench_score('cpu.parallel', 0.1, [], ['cpu.route' => 0.1]) === null);
+    check_bool('相乗平均(null と 0 は数えない)', km_bench_geomean([1000, 4000, null, 0]) === 2000.0 && km_bench_geomean([]) === null);
+    $sum = km_bench_summarize(['cpu.hash' => ['score' => 1000.0], 'cpu.sort' => ['score' => 4000.0], 'db' => ['score' => 2000.0],
+        'app' => ['score' => 10.0], 'web' => ['score' => 10.0], 'web.pc' => ['score' => 500.0], 'mem' => ['error' => 'x', 'score' => null]]);
+    check_bool('合計は固定の仕事だけ(アプリ・Web は分野にだけ出る)', $sum['total'] === 2000.0 && $sum['groups']['cpu'] === 2000.0
+        && $sum['groups']['app'] === 10.0 && $sum['groups']['pc'] === 500.0 && $sum['groups']['mem'] === null);
+    $a = ['suiteVersion' => 1, 'totalScore' => 1100.0, 'results' => ['steps' => ['db' => ['score' => 900.0]]]];
+    $b = ['suiteVersion' => 1, 'totalScore' => 1000.0, 'results' => ['steps' => ['db' => ['score' => 1000.0]]]];
+    $cmp = km_bench_compare($a, $b);
+    check_bool('比べる: 差は % で、版が違えば比べない', $cmp !== null && $cmp['total'] === 10.0 && $cmp['steps']['db'] === -10.0
+        && km_bench_compare($a, ['suiteVersion' => 2] + $b) === null);
+
+    // 毎回同じ仕事
+    $st1 = 5;
+    $st2 = 5;
+    check_bool('疑似乱数は種で決まる', km_bench_rng($st1) === km_bench_rng($st2) && $st1 === $st2);
+    check_bool('材料の文は毎回同じ(大きさも決まりどおり)', km_bench_text(4096) === km_bench_text(4096) && strlen(km_bench_text(12345)) === 12345);
+    check_bool('最短経路の答えは毎回同じ(格子 400×400 で 2793)', km_bench_route() === 2793 && km_bench_route(3, 3) === km_bench_route(3, 3));
+    $known = true;
+    foreach (array_keys(KM_BENCH_STEPS) as $step) {
+        $job = km_bench_job($step);
+        $known = $known && is_callable($job['prepare']) && is_callable($job['work']);
+    }
+    check_bool('段ごとに仕事がある・知らない段は断る', $known && (static function (): bool {
+        try {
+            km_bench_job('nope');
+        } catch (InvalidArgumentException) {
+            return true;
+        }
+
+        return false;
+    })());
+    $noRef = array_filter(array_keys(KM_BENCH_STEPS), static fn (string $s): bool => $s !== 'cpu.parallel' && !is_numeric(KM_BENCH_REFERENCE[$s] ?? null));
+    check_bool('並列以外のすべての段に基準の時間がある', $noRef === [] && is_numeric(KM_BENCH_REFERENCE['web.pc'] ?? null), implode(', ', $noRef));
+    check_bool('合計に入れないのはアプリと Web だけ', array_keys(array_filter(KM_BENCH_STEPS, static fn (array $s): bool => $s[3] === false)) === ['app', 'web']);
+
+    // 本番を壊さない
+    $lib = $file('src/lib/bench.php');
+    preg_match_all('/\bCREATE\s+(TEMPORARY\s+)?TABLE\s+(IF NOT EXISTS\s+)?(\w+)/i', $lib, $creates, PREG_SET_ORDER);
+    $tables = array_map(static fn (array $m): string => ($m[1] !== '' ? 'tmp:' : '') . $m[3], $creates);
+    check_bool('作る表は km_bench_runs(新しい表)と一時表だけ', $tables === ['tmp:km_bench_tmp', 'km_bench_runs'] && !preg_match('/\bALTER\s+TABLE\b/i', $lib), implode(', ', $tables));
+    preg_match_all('/\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+(\w+)/', $lib, $writes);
+    check_bool('書く表は km_bench_runs と一時表だけ', array_diff(array_unique($writes[1]), ['km_bench_runs', 'km_bench_tmp']) === [], implode(', ', array_unique($writes[1])));
+    check_bool('段は同時に 1 つ・回は動いている回があれば断る', str_contains($lib, "GET_LOCK('km_bench_step', 0)") && str_contains($lib, "SELECT COUNT(*) FROM km_bench_runs WHERE status = 'running'"));
+    km_bench_disk_dir();
+    @file_put_contents(dirname(__DIR__) . '/cache/bench/left.bin', 'x');
+    km_bench_disk_cleanup();
+    check_bool('ディスクの段の置き場所は後で消える', !is_dir(dirname(__DIR__) . '/cache/bench'));
+    check_bool('並列はシェルを通さずに起こす(固定の引数)', str_contains($lib, "proc_open([\$php, \$worker, 'cpu.route']") && !preg_match('/shell_exec|(?<!->)\bexec\(|(?<!->)\bsystem\(|passthru|popen\(/', $lib));
+
+    // 口と画面
+    $api = $file('src/admin/api/bench.php');
+    check_bool('口: POST は CSRF を確かめ、数字は受け取らない', str_contains($api, 'if (!km_csrf_verify())') && !preg_match('/\$input\[\'(median|score|seconds)/', $api));
+    check_bool('口: 管理の記録(bench.run・bench.delete)の文言がある', str_contains($api, "'bench.run'") && str_contains($api, "'bench.delete'")
+        && isset(KM_ADMIN_LOG_ACTION_LABELS['bench.run'], KM_ADMIN_LOG_ACTION_LABELS['bench.delete']));
+    check_bool('口: DB の文言は画面に出さない(PDOException を先に拾う)', strpos($api, 'catch (PDOException') < strpos($api, 'catch (RuntimeException'));
+    check_bool('nginx: タスクマネージャーと同じく IP で絞る', preg_match('/location = \/admin\/api\/bench\.php \{\s+include \/etc\/nginx\/km\/taskmgr-allow\*\.local\.conf;\s+deny all;/', $file('nginx/default.conf.template')) === 1);
+    $js = $file('src/admin/assets/js/bench.js');
+    $page = $file('src/admin/taskmgr.php');
+    check_bool('画面: タブと script があり、HTML を文字列で組まない', str_contains($page, "['bench', 'bi-speedometer2', 'page.taskmgr.tabBench'") && str_contains($page, "km_asset('./assets/js/bench.js')")
+        && !str_contains($js, 'innerHTML') && !str_contains($js, 'insertAdjacentHTML') && !preg_match('/\sstyle=/', $page));
+    preg_match_all("/tr\\('(page\\.taskmgr\\.bench\\w+)'/", $js, $jsKeys);
+    preg_match_all('/data-i18n="(page\.taskmgr\.(?:bench\w*|tabBench))"/', $page, $pageKeys);
+    $ja = $file('src/admin/assets/i18n/ja.js');
+    $en = $file('src/admin/assets/i18n/en.js');
+    $keys = array_unique(array_merge($jsKeys[1], $pageKeys[1]));
+    $missing = array_values(array_filter($keys, static fn (string $k): bool => !str_contains($ja, '"' . $k . '"') || !str_contains($en, '"' . $k . '"')));
+    check_bool('文言の鍵が日英の辞書にある', count($keys) >= 40 && $missing === [], implode(', ', $missing));
+
+    // CLI
+    check_bool('CLI: root では動かさない・worker は cpu.route だけ', str_contains($file('src/scripts/bench.php'), 'posix_geteuid() === 0')
+        && str_contains($file('src/scripts/bench-worker.php'), "if (\$step !== 'cpu.route')"));
+    check_bool('外から: 回数の上限(300 回・同時 10)と、保存は bench-record.php', str_contains($file('scripts/bench-web.ps1'), '[ValidateRange(10, 300)][int]$Requests')
+        && str_contains($file('scripts/bench-web.ps1'), '[ValidateRange(1, 10)][int]$Concurrency') && str_contains($file('scripts/bench-web.ps1'), 'php scripts/bench-record.php'));
+    check_bool('中と外で同じ URL の組', str_contains($file('scripts/bench-web.ps1'), "\$paths = @('" . implode("', '", KM_BENCH_WEB_URLS) . "')"));
+    if (extension_loaded('pdo_sqlite')) {
+        $bad = 0;
+        foreach ([['seconds' => -1], ['seconds' => 1.0, 'requests' => 5000, 'concurrency' => 5, 'errors' => 0, 'rps' => 1, 'p50' => 1, 'p95' => 1], ['seconds' => '1']] as $data) {
+            try {
+                km_bench_record_external(new PDO('sqlite::memory:'), $data, 'x');
+            } catch (InvalidArgumentException) {
+                $bad++;
+            } catch (Throwable) {
+            }
+        }
+        check_bool('外からの記録: 範囲の外の数は書く前に断る', $bad === 3);
+    } else {
+        echo "  (pdo_sqlite が無いので、外からの記録の範囲の検査は飛ばします)\n";
+    }
+}
+
+/**
+ * 一関の天気(lib/weather.php・api/weather.php・Main/weather.js。2026-11-05、利用者の指示「一関の天気で天候の項目に自動でチェック」)。
+ * 気象庁の JSON は scripts/fixtures/weather/ に写した見本で読む(ネットには行かない)。
+ */
+function km_check_weather(): void
+{
+    require_once __DIR__ . '/../lib/weather.php';
+    require_once __DIR__ . '/../lib/csp.php';
+    $src = __DIR__ . '/..';
+    $fixtures = __DIR__ . '/fixtures/weather';
+
+    km_check_heading('weather: 気象庁の JSON を読み解く');
+    $forecast = km_weather_parse_forecast(json_decode((string) file_get_contents($fixtures . '/forecast-030000.json'), true));
+    check_bool('予報の見本を読める', is_array($forecast));
+    $forecast ??= ['days' => [], 'blocks' => [], 'reportedAt' => 0];
+    check('内陸の天気は今日から 8 日(3 日の詳しい予報 + 週間)', ['2026-11-05', '2026-11-12', 8], [array_key_first($forecast['days']), array_key_last($forecast['days']), count($forecast['days'])]);
+    check('今日: 天気の番号・文(全角の空白を詰める)・その日の一番高い降水確率', ['313', '雨 夜遅く くもり', 60], [$forecast['days']['2026-11-05']['code'] ?? null, $forecast['days']['2026-11-05']['text'] ?? null, $forecast['days']['2026-11-05']['pop'] ?? null]);
+    check('明日: 一関の最低・最高(0 時と 9 時の値)と降水確率', [10, 18, 50], [$forecast['days']['2026-11-06']['min'] ?? null, $forecast['days']['2026-11-06']['max'] ?? null, $forecast['days']['2026-11-06']['pop'] ?? null]);
+    check('週間の日は週間の降水確率(気温は盛岡しか無いので出さない)', [30, null, null], [$forecast['days']['2026-11-08']['pop'] ?? null, $forecast['days']['2026-11-08']['max'] ?? null, $forecast['days']['2026-11-08']['min'] ?? null]);
+    check('6 時間ごとの降水確率は 5 つ', [5, 60], [count($forecast['blocks']), $forecast['blocks'][0]['pop'] ?? null]);
+    check('沿岸(大船渡)の区分は読まない', null, km_weather_parse_forecast(json_decode((string) file_get_contents($fixtures . '/forecast-030000.json'), true), '030030')['days']['2026-11-05']['text'] === '雨 夜遅く くもり' ? null : 'x');
+    check('形の違うものは null', [null, null, null], [km_weather_parse_forecast(null), km_weather_parse_forecast([['timeSeries' => 'x']]), km_weather_parse_forecast([['reportDatetime' => 'bad', 'timeSeries' => []]])]);
+    $amedas = km_weather_parse_amedas(json_decode((string) file_get_contents($fixtures . '/amedas-point-33911.json'), true));
+    check('アメダス 一関の一番新しい観測', ['2026-11-05T23:20:00+09:00', 13.0, 0.0, 0.0], [$amedas === null ? null : km_weather_jst($amedas['at'], 'c'), $amedas['temp'] ?? null, $amedas['precip10m'] ?? null, $amedas['precip1h'] ?? null]);
+    check('品質が正常・準正常でない値は使わない', [null, 1.5], [km_weather_parse_amedas(['20261105120000' => ['precipitation1h' => [1.5, 5]]])['precip1h'], km_weather_parse_amedas(['20261105120000' => ['precipitation1h' => [1.5, 1]]])['precip1h']]);
+    check('アメダスの 3 時間のファイルの名前(日本時間)', ['20261105_21', '20261106_00', '20261105_00', null], [km_weather_amedas_block('2026-11-05T23:20:00+09:00'), km_weather_amedas_block('2026-11-06T02:59:00+09:00'), km_weather_amedas_block('2026-11-04T15:10:00Z'), km_weather_amedas_block('nope')]);
+    check('天気の番号の表(気象庁の Const.TELOPS)', [['kind' => 'rain', 'ja' => '雨後曇', 'en' => 'RAIN,CLOUDY LATER'], 'snow', 'rain', 118], [km_weather_telop('313'), km_weather_telop('260')['kind'], km_weather_telop('399')['kind'], count(KM_WEATHER_TELOPS)]);
+
+    km_check_heading('weather: 「雨の日」にするか(観測 → 今の 6 時間の降水確率)');
+    $now = (int) strtotime('2026-11-05T19:00:00+09:00');
+    $base = ['forecast' => $forecast, 'forecastAt' => $now - 600];
+    $obs = static fn (float $tenMin, float $hour, float $temp, int $age = 300): array => ['at' => $now - $age, 'temp' => $temp, 'precip10m' => $tenMin, 'precip1h' => $hour];
+    $reason = static fn (array $state): string => km_weather_rain_now($state, $now)['reason'];
+    check('降っている(10 分の雨量)→ observed', 'observed', $reason($base + ['amedas' => $obs(0.5, 0.0, 10.0)]));
+    check('1 時間に 0.5mm 以上 → observed', 'observed', $reason(['amedas' => $obs(0.0, 0.5, 10.0)]));
+    check('1 時間に 0.5mm 未満で 10 分は 0 → 雨とみなさない', 'none', $reason(['amedas' => $obs(0.0, 0.4, 10.0)]));
+    check('寒くて降っていれば雪(雨の日は付ける)', [true, true], [km_weather_rain_now(['amedas' => $obs(0.5, 1.0, 0.5)], $now)['snow'], km_weather_rain_now(['amedas' => $obs(0.5, 1.0, 0.5)], $now)['rain']]);
+    check('降っていなくても、今の 6 時間が 60% → forecast', ['forecast', 60], [$reason($base + ['amedas' => $obs(0.0, 0.0, 10.0)]), km_weather_rain_now($base, $now)['pop']]);
+    $later = (int) strtotime('2026-11-06T13:00:00+09:00');
+    check('今の 6 時間が 40% → none', ['none', false], [km_weather_rain_now(['forecast' => $forecast, 'forecastAt' => $later], $later)['reason'], km_weather_rain_now(['forecast' => $forecast, 'forecastAt' => $later], $later)['rain']]);
+    check('30 分より古い観測は使わない', 'none', km_weather_rain_now(['amedas' => $obs(1.0, 3.0, 10.0, 1801), 'forecast' => $forecast, 'forecastAt' => $later], $later)['reason']);
+    check('6 時間より古い予報は使わない・何も無ければ unknown(付けない)', ['unknown', false, 'unknown'], [$reason(['forecast' => $forecast, 'forecastAt' => $now - 21601]), km_weather_rain_now([], $now)['rain'], $reason([])]);
+    $morning = (int) strtotime('2026-11-06T08:00:00+09:00');
+    $public = km_weather_public(['forecast' => $forecast, 'forecastAt' => $morning - 600], $morning);
+    check('口: 今日より前の日を出さず 7 日まで・出典は気象庁', ['2026-11-06', 7, '気象庁', '一関'], [$public['days'][0]['date'] ?? null, count($public['days']), $public['source'], $public['place']]);
+    check('口: 日の形', ['date', 'code', 'kind', 'telop', 'telopEn', 'pop', 'min', 'max'], array_keys($public['days'][0] ?? []));
+
+    km_check_heading('weather: 取りに行く・置く');
+    check('気象庁の決まった道だけ(外へ出る・よそのホストは取らない)', [null, null, null], [km_weather_fetch('../x.json'), km_weather_fetch('https://evil.example/'), km_weather_fetch('forecast/../../x')]);
+    $lib = (string) file_get_contents($src . '/lib/weather.php');
+    check_bool('取る先は https://www.jma.go.jp/bosai/ だけ・転送しない・https だけ・大きさの上限', str_contains($lib, "const KM_WEATHER_BASE = 'https://www.jma.go.jp/bosai/';")
+        && str_contains($lib, 'CURLOPT_FOLLOWLOCATION => false,') && str_contains($lib, 'CURLOPT_PROTOCOLS => CURLPROTO_HTTPS,')
+        && str_contains($lib, 'strlen($body) + strlen($chunk) > KM_WEATHER_MAX_BYTES') && substr_count($lib, 'curl_init(') === 1);
+    if (DIRECTORY_SEPARATOR === '/') {
+        // 置き場所の持ち主と権限を見るので Linux だけ(Windows では信じられず、取りに行ってしまう)
+        $work = sys_get_temp_dir() . '/km-weather-check-' . bin2hex(random_bytes(4));
+        @mkdir($work, 0700, true);
+        $cachePath = $work . '/weather.json';
+        $tried = time();
+        km_weather_cache_write($cachePath, ['forecast' => $forecast, 'forecastAt' => $tried, 'forecastTriedAt' => $tried, 'amedasTriedAt' => $tried]);
+        $state = km_weather_state($tried + 60, $cachePath);
+        check('置いたものが新しければ取りに行かない(そのまま返す)', [$tried, 8], [$state['forecastTriedAt'] ?? null, count($state['forecast']['days'] ?? [])]);
+        @chmod($cachePath, 0666);
+        check('ほかの人が書ける置き場所は信じない', [], km_weather_cache_read($cachePath));
+        @unlink($cachePath);
+        @unlink($cachePath . '.lock');
+        @rmdir($work);
+    } else {
+        check_skip('置き場所(新しければ取りに行かない・ほかの人が書けるものは信じない)', 'ファイルの持ち主と権限を見るので Linux(配備先)で確かめる');
+    }
+
+    km_check_heading('weather: 口・地図・予定');
+    $api = (string) file_get_contents($src . '/api/weather.php');
+    check_bool('口は GET だけで、何も受け取らない・5 分は使い回してよい', str_contains($api, "if (\$method !== 'GET' && \$method !== 'HEAD') {")
+        && !preg_match('/\$_(GET|POST|REQUEST|COOKIE)|km_api_json_body/', $api) && str_contains($api, "header('Cache-Control: public, max-age=300');"));
+    check_bool('アプリの予定の口は天気の日を足すだけ(取れなくても予定は返す)', str_contains((string) file_get_contents($src . '/api/app-schedule.php'), "'weather' => ['days' => \$weatherDays, 'place' => KM_WEATHER_PLACE, 'source' => '気象庁']"));
+    $index = (string) file_get_contents($src . '/index.php');
+    check_bool('地図は weather.js を app.js より先に読む', ($weatherAt = strpos($index, "<script defer src=\"<?= km_home_e(km_public_asset('Main/weather.js')) ?>\"></script>")) !== false
+        && $weatherAt < (int) strpos($index, "<script defer src=\"<?= km_home_e(km_public_asset('Main/app.js')) ?>\"></script>"));
+    check_bool('「雨の日」の横に自動の表示と「自動に戻す」', str_contains($index, 'id="route-rain-weather"') && str_contains($index, 'id="route-rain-auto" hidden>自動に戻す</button>'));
+    $app = (string) file_get_contents($src . '/Main/app.js');
+    check_bool('app.js: 手で切り替えたらその日だけ手動・共有のリンクの選択は天気で変えない', str_contains($app, "if (key === 'rain' && weatherApi) savedRouteOptions.rainManualDay = weatherApi.localDay();")
+        && str_contains($app, 'if (!routeOptionsFromShare) {') && str_contains($app, 'routeOptionsFromShare = true;'));
+    check_bool('app.js: 端末に覚えるのは手で選んだ値(天気で付けた値は書かない)', str_contains($app, 'window.localStorage.setItem(KM_ROUTE_OPTIONS_KEY, JSON.stringify(savedRouteOptions));')
+        && !str_contains($app, 'JSON.stringify(routeOptions)'));
+    $weatherJs = (string) file_get_contents($src . '/Main/weather.js');
+    check_bool('weather.js: 読むのはこのサーバーの口だけ・innerHTML を使わない', str_contains($weatherJs, "root.fetch('/api/weather.php'") && substr_count($weatherJs, 'fetch(') === 1 && !str_contains($weatherJs, 'innerHTML'));
+    $schedule = (string) file_get_contents($src . '/Main/event-schedule.js');
+    check_bool('予定: 日ごとの見出しに天気と出典(textContent で入れる)', str_contains($schedule, "heading.appendChild(el('span', 'km-schedule-weather', text));") && str_contains($schedule, '気象庁の予報') && !str_contains($schedule, 'innerHTML'));
+    check_bool('公開の地図の CSP の connect-src は self のまま(天気はこのサーバーを通す)', str_contains(km_csp_policy('public'), "connect-src 'self';"));
+    check_bool('node の検査がある', is_file(__DIR__ . '/js/weather.test.js'));
+}
+/**
  * イベントのセットアップ(admin/event-setup.php)・ポスターの一括の出す/止める・会期後の片付け(2026-11-03、利用者の指示)。
  * DB は使わない。手順の印・一括の受け方は純粋関数を、控えの zip は作業用の場所で実際に書いて読み戻す。
  */
@@ -11289,6 +11571,15 @@ foreach ($selected as $name) {
             break;
         case 'html-host':
             km_check_html_host();
+            break;
+        case 'weather':
+            km_check_weather();
+            break;
+        case 'image-scan':
+            km_check_image_scan();
+            break;
+        case 'bench':
+            km_check_bench();
             break;
         case 'recaptcha':
             // 環境依存。数えず、終了コードだけを持ち帰る。

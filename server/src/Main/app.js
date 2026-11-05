@@ -333,16 +333,38 @@ document.addEventListener('DOMContentLoaded', async () => {
      */
     const KM_ROUTE_OPTIONS_KEY = 'km-route-options-v1';
 
+    /*
+     * 「雨の日」は一関の天気で自動に付け外しする(2026-11-05。Main/weather.js)。**自分で切り替えたら、その日だけ手動**
+     * (rainManualDay にその日を覚える)。端末に覚えるのは手で選んだ値(savedRouteOptions)で、効いている値(routeOptions)とは分ける
+     */
     function loadRouteOptions() {
         try {
             const saved = JSON.parse(window.localStorage.getItem(KM_ROUTE_OPTIONS_KEY) || '{}');
-            return { fewerFloors: saved.fewerFloors === true, rain: saved.rain === true };
+            return {
+                fewerFloors: saved.fewerFloors === true,
+                rain: saved.rain === true,
+                rainManualDay: typeof saved.rainManualDay === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(saved.rainManualDay) ? saved.rainManualDay : null,
+            };
         } catch (e) {
-            return { fewerFloors: false, rain: false };
+            return { fewerFloors: false, rain: false, rainManualDay: null };
         }
     }
 
-    let routeOptions = loadRouteOptions();
+    function saveRouteOptions() {
+        try {
+            window.localStorage.setItem(KM_ROUTE_OPTIONS_KEY, JSON.stringify(savedRouteOptions));
+        } catch (e) {
+            // 保存できなくても、この画面の間は効く
+        }
+    }
+
+    let savedRouteOptions = loadRouteOptions();
+    const weatherApi = window.KmWeather || null;
+    let routeOptions = {
+        fewerFloors: savedRouteOptions.fewerFloors,
+        // 天気を読む前は、その日に手で選んでいればそれ、無ければ付けない(天気が届いたら合わせる)
+        rain: weatherApi ? weatherApi.rainState(savedRouteOptions, null, weatherApi.localDay()).rain : savedRouteOptions.rain,
+    };
 
     function dijkstraOptions() {
         return {
@@ -2405,18 +2427,88 @@ document.addEventListener('DOMContentLoaded', async () => {
         box.checked = routeOptions[key];
         box.addEventListener('change', () => {
             routeOptions = Object.assign({}, routeOptions, { [key]: box.checked });
-            try {
-                window.localStorage.setItem(KM_ROUTE_OPTIONS_KEY, JSON.stringify(routeOptions));
-            } catch (e) {
-                // 保存できなくても、この画面の間は効く
-            }
+            savedRouteOptions = Object.assign({}, savedRouteOptions, { [key]: box.checked });
+            // 雨の日を手で切り替えたら、その日だけ手動(天気で変えない)
+            if (key === 'rain' && weatherApi) savedRouteOptions.rainManualDay = weatherApi.localDay();
+            saveRouteOptions();
             rebuildDijkstra();
             updateRouteOptionsState();
+            if (key === 'rain') showRainWeather();
             if (currentRoutePath && startInput && endInput && startInput.value && endInput.value) {
                 searchBtn.click();
             }
         });
     });
+
+    /*
+     * 「雨の日」の自動(2026-11-05)。地図を開いたときと、15 分ごと(画面が表に出ているとき)に天気を読み直す。
+     * 共有のリンクの経路の選択で開いたページ(routeOptionsFromShare)では、天気で変えない(共有した人の選択を優先)
+     */
+    let lastWeather = null;
+    let routeOptionsFromShare = false;
+    const rainWeatherBox = document.getElementById('route-rain-weather');
+    const rainWeatherText = document.getElementById('route-rain-weather-text');
+    const rainAutoButton = document.getElementById('route-rain-auto');
+
+    function showRainWeather() {
+        if (!weatherApi || !rainWeatherBox || !rainWeatherText) return;
+        const state = weatherApi.rainState(savedRouteOptions, lastWeather, weatherApi.localDay());
+        const lang = typeof weatherApi.lang === 'function' ? weatherApi.lang() : 'ja';
+        if (routeOptionsFromShare) {
+            rainWeatherText.textContent = lang === 'en' ? 'Using the shared route settings' : '共有された経路の設定を使っています';
+        } else if (state.mode === 'manual') {
+            rainWeatherText.textContent = lang === 'en' ? 'Set by you for today' : '今日は手で選んだ設定';
+        } else {
+            rainWeatherText.textContent = weatherApi.autoText(lastWeather, lang);
+        }
+        if (rainAutoButton) rainAutoButton.hidden = state.mode !== 'manual' || routeOptionsFromShare;
+        rainWeatherBox.hidden = false;
+    }
+
+    function applyRainWeather() {
+        if (!weatherApi) return;
+        if (!routeOptionsFromShare) {
+            const state = weatherApi.rainState(savedRouteOptions, lastWeather, weatherApi.localDay());
+            if (state.rain !== routeOptions.rain) {
+                routeOptions = Object.assign({}, routeOptions, { rain: state.rain });
+                const rainBox = document.getElementById('route-rain');
+                if (rainBox) rainBox.checked = state.rain;
+                rebuildDijkstra();
+                updateRouteOptionsState();
+                if (currentRoutePath && startInput && endInput && startInput.value && endInput.value) {
+                    searchBtn.click();
+                }
+            }
+        }
+        showRainWeather();
+    }
+
+    function loadRainWeather(force) {
+        if (!weatherApi || typeof weatherApi.load !== 'function') return;
+        weatherApi.load(force).then((weather) => {
+            if (weather) lastWeather = weather;
+            applyRainWeather();
+        });
+    }
+
+    if (rainAutoButton) {
+        rainAutoButton.addEventListener('click', () => {
+            savedRouteOptions = Object.assign({}, savedRouteOptions, { rainManualDay: null });
+            saveRouteOptions();
+            applyRainWeather();
+        });
+    }
+    if (weatherApi) {
+        loadRainWeather(false);
+        const WEATHER_REFRESH_MS = 15 * 60 * 1000;
+        window.setInterval(() => {
+            if (!document.hidden) loadRainWeather(true);
+            else applyRainWeather();   // 日付が変わったら手動を外す
+        }, WEATHER_REFRESH_MS);
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden && typeof weatherApi.age === 'function' && weatherApi.age() >= WEATHER_REFRESH_MS) loadRainWeather(true);
+        });
+    }
 
     /*
      * 「経路の設定」は畳んである(2026-10-24。スマホで経路の欄を短くし、キーボードに隠れないようにした)。
@@ -5088,6 +5180,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (shared[0] === 'elevator' || shared[0] === 'stairs' || shared[0] === 'any') {
                 verticalPreference = shared[0];
                 routeOptions = { fewerFloors: shared.includes('ff'), rain: shared.includes('rain') };
+                // 天気の自動より共有した人の選択を優先する(このページの間だけ)
+                routeOptionsFromShare = true;
+                showRainWeather();
                 if (verticalSelect) verticalSelect.value = verticalPreference;
                 const ffBox = document.getElementById('route-fewer-floors');
                 const rainBox = document.getElementById('route-rain');

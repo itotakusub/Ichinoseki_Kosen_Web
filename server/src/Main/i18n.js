@@ -164,6 +164,7 @@
         '階の移動を減らす': 'Fewer floor changes',
         '雨の日(外をなるべく通らない)': 'Rainy day (stay indoors)',
         '雨の日': 'Rainy day',
+        '自動に戻す': 'Back to auto',
         '案内開始': 'Start guidance',
         '案内をやめる': 'Stop guidance',
         '📍 画面で順に案内する': '📍 Step-by-step guidance',

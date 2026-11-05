@@ -644,6 +644,14 @@ server {
         include /etc/nginx/km/proxy-web.conf;
         proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
     }
+    # ベンチマーク(2026-11-06。タスクマネージャーの「ベンチマーク」タブ)。サーバーに負荷を掛ける口なので同じく IP で絞る
+    location = /admin/api/bench.php {
+        include /etc/nginx/km/taskmgr-allow*.local.conf;
+        deny all;
+        error_page 403 = @km_taskmgr_hide;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
     location @km_taskmgr_hide {
         return 444;
     }

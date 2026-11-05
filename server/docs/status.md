@@ -811,6 +811,27 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
       - **11-05 に配備済み(利用者)。本番で確かめた(読むだけ)**: 証明書に 5 つの名前(share 入り)・nginx の証明書と一致・web の `KM_SHARE_URL` は `https://share.ito4.jp`・
         `share.ito4.jp/` は 302 で道具のページへ・robots は Disallow・でたらめな番号は 404(CSP `default-src 'none'`・`Referrer-Policy: same-origin`・noindex)・スラッシュなしは 308・
         `/s/` の道は 404・よそからの POST は 404・PUT は 405・html のホストで共有の道は 404。表 `km_html_shares`・`km_html_share_grants` はでき、共有は 0 本(外れの回数の表は初めて間違えたときに作る)
+- **一関の天気で「雨の日」を自動に・予定に天気・イメージの検査(Trivy)・ベンチマーク(2026-11-05〜06、利用者の指示。手元で済み・配備待ち)**:
+  依頼は「一関の天気で天候の項目に自動でチェック」「distroless・Chainguard はどうか。Trivy・Docker Scout は入っているか」「サーバーでベンチマーク」。計画は `~/.claude/plans/stateful-whistling-kazoo.md`。
+  - **頂いた `weather.tsukumijima.net` の `city=030030` は大船渡(沿岸南部)で、一関ではない。** 一関は気象庁の「内陸(030010)」・予報の気温の地点 33911・アメダス 一関 33911。答えは「気象庁の JSON を直接」。
+  - **天気(サーバー)**: `lib/weather.php`(予報 30 分・アメダス 10 分で取り直し、`cache/weather.json` に flock で置く。失敗しても 6 時間までは古いものを使う。取る先は `www.jma.go.jp/bosai/` だけ・転送しない・512KB まで)と
+    `api/weather.php`(GET。`Cache-Control: public, max-age=300`)。雨とみなすのは、30 分以内の観測で 10 分の雨量 > 0 か 1 時間 0.5mm 以上、または今の 6 時間の降水確率 50% 以上(雪も同じ。気温 1℃ 以下の観測は雪と出す)。
+    天気の文は `lib/weather-telops.php`(気象庁の 118 の番号)。`api/app-schedule.php` に `weather.days` を足した(今の形はそのまま)。
+  - **Web の地図**: 「雨の日」は**既定で自動**(15 分ごと・表に出ている間だけ読み直す)。自分で切り替えたらその日だけ手動(`km-route-options-v1` の `rainManualDay`)で「自動に戻す」が出る。
+    共有のリンクの `rain=1` は今までどおり優先して天気では変えない。天気が分からなければ外す。予定(一覧と「会場 × 時間」)の日の見出しに天気と出典。`Main/weather.js`・試験 `scripts/js/weather.test.js`(20 件)
+  - **Android(版 49 = 1000049・署名 d71fbf0a…。両フレーバー。apk-push で送った = 検めに通れば公開)**: `RouteWeather.kt`。決め方は Web と同じで、**分からないときは今の値のまま**(オフラインで使う人の設定を壊さない)。
+    設定に「雨の日を天気で決める」・予定の日の見出しに天気。試験 `RouteWeatherTest.kt`。手元の `JAVA_HOME` が無くなった JDK(21.0.12.101)を指していたので `gradle.properties` を 21.0.13.9 に直した
+  - **イメージの検査**: Trivy も Grype も Docker Scout も入っていなかった(10-06 に手で 1 回回しただけ)。`scripts/host-image-scan.sh` を足し、cron 版 10 で**毎週日曜 4:47**。
+    **docker.sock は渡さない**(`docker save` した tar を読み取り専用で `--input`)。Trivy のコンテナは root の FS も読み取り専用・権限なし・1GB・1 コア。
+    **Trivy の配布物に供給網の事件があった**(CVE-2026-33634。v0.69.4 と Docker Hub の 0.69.5・0.69.6)ので `aquasec/trivy:0.76.1@sha256:790fd66d…` に固定(Docker Hub と GHCR で同じ digest。0.76.2 は出たばかりで避けた)。
+    直る版のある HIGH・CRITICAL が**新しく出たときだけ** `notify-security.php` で送る(種別 `images`)。結果はタスクマネージャーの「イメージの検査」。**distroless・Chainguard は初回の結果を見てから決める**(利用者の答え)
+  - **ベンチマーク**: タスクマネージャーの「ベンチマーク」(押す・履歴・前の回や選んだ回との差・消す)・`scripts/bench.php`(ホスト)・`scripts/bench-web.ps1`(この PC から外の応答。`bench-record.php` で同じ表へ)。
+    13 段(CPU 6・メモリ・ディスク 2・DB(一時表だけ)・画像・アプリ・Web(中から))。**1 回空回し → 3〜5 回の中央値・ばらつき 10% 超えに印・スコア = 1000 × 基準 ÷ 中央値・合計は相乗平均(データで変わるアプリと Web は入れない)・版が違えば比べない**。
+    基準は 11-06 に本番で 2 回測って固定した(2 回の差は 3% 以内。1 回 25〜35 秒)。sha256 は本番の CPU に専用の命令が無く手元の 8 倍かかるので 128MB にした。同時に 1 つ(GET_LOCK と running の行)。新しい表 `km_bench_runs`。
+    口 `admin/api/bench.php` は nginx でタスクマネージャーと同じく IP で絞る。記録 `bench.run`・`bench.delete`
+  - 確かめ: check.php 全部通る(組 `weather`・`image-scan`・`bench` を足した)。写しで天気(雨の予報・観測・雪・晴れ・分からない・手動のその日だけ・375 幅・英語)、ベンチマークの画面(進み具合・失敗した段・差・375 幅)、
+    イメージの検査の表(名前は逃がす)。検査のスクリプトの awk・sed は Git の道具で確かめた(この PC の sh は子のプロセスを起こせない)
+  - **配備のあと(利用者)**: (1) `deploy-to-host.ps1 -Backup -Yes -Action up`(nginx の設定が変わる)→ (2) km で `sudo sh /opt/kosenmap/scripts/host-updates-setup.sh --path /opt/kosenmap --fix`(cron 版 10・実行ビット)→ (3) 初回の検査 `sudo sh /opt/kosenmap/scripts/host-image-scan.sh --path /opt/kosenmap`(数分〜十数分)→ 結果を見て distroless・Chainguard を決める
 - **試しのイベントを本番で見た(2026-11-01 22 時、利用者がイベント「Test」(id 9)を始めた)**: 公開の地図データは錠なし・予定 34 件(21:00〜11-02 21:00)・
   企画の番号付きの地点 33(1F 8・2F 9・3F 9・4F 4・外 3)。ポスター・一時地点・屋台は 0。
   - Website(内蔵のブラウザ・幅 1149): 🎪 イベントと 📅 予定のチップが出る。拡大すると 1F の企画の地点 8 か所が赤い縁(`km-node-event`)、ほか 38 か所が薄い(`km-node-unrelated`)。

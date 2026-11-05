@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 define('KM_ADMIN', true);
 require __DIR__ . '/_inc/guard.php';
+require_once dirname(__DIR__) . '/lib/image-scan.php';
 
 /**
  * タスクマネージャー(2026-10-05、利用者の指示)。
@@ -28,7 +29,12 @@ $tabs = [
     ['containers', 'bi-box-seam', 'page.taskmgr.tabContainers', 'コンテナ'],
     ['services', 'bi-hdd-network', 'page.taskmgr.tabServices', 'サービス'],
     ['details', 'bi-card-list', 'page.taskmgr.tabDetails', '詳細'],
+    // 週 1 回の Trivy の結果(2026-11-06。scripts/host-image-scan.sh)。数秒ごとに読み直さないので、このページが描く
+    ['images', 'bi-shield-check', 'page.taskmgr.tabImages', 'イメージの検査'],
+    // ベンチマーク(2026-11-06。admin/api/bench.php・assets/js/bench.js・lib/bench.php)
+    ['bench', 'bi-speedometer2', 'page.taskmgr.tabBench', 'ベンチマーク'],
 ];
+$imageScan = km_image_scan_read();
 $tabIds = array_column($tabs, 0);
 $tab = is_string($_GET['tab'] ?? null) && in_array($_GET['tab'], $tabIds, true) ? $_GET['tab'] : 'processes';
 
@@ -244,10 +250,101 @@ require __DIR__ . '/_inc/partials/page-header.php';
                     </div>
                   </div>
                 </section>
+
+                <!--begin::イメージの検査(2026-11-06)-->
+                <section class="km-tm-panel" id="km-tm-panel-images" role="tabpanel" aria-labelledby="km-tm-tab-images" data-km-tm-panel="images"<?= $tab === 'images' ? '' : ' hidden' ?>>
+                  <p class="km-tm-hint" data-i18n="page.taskmgr.imagesHint">コンテナのイメージにある既知の脆弱性(HIGH・CRITICAL)。毎週日曜 4:47 にホストが Trivy で調べます(docker.sock は渡しません)。直る版のあるものが新しく出たときだけメールが届きます。</p>
+                  <?php if ($imageScan === null): ?>
+                    <p class="mb-0" data-i18n="page.taskmgr.imagesNone">まだ結果がありません。ホストで sudo sh scripts/host-image-scan.sh --path /opt/kosenmap を一度流すと出ます。</p>
+                  <?php else: ?>
+                    <?php $scanOld = time() - $imageScan['generatedAt'] > KM_IMAGE_SCAN_STALE; ?>
+                    <p class="fs-7 mb-2<?= $scanOld ? ' text-danger' : ' text-body-secondary' ?>">
+                      <span data-i18n="page.taskmgr.imagesAt">調べた日時</span>: <?= km_e(date('Y-m-d H:i', $imageScan['generatedAt'])) ?>
+                      ・Trivy <?= km_e($imageScan['trivy']) ?>
+                      <?php if ($imageScan['dbUpdatedAt'] !== ''): ?>・DB <?= km_e(substr($imageScan['dbUpdatedAt'], 0, 10)) ?><?php endif; ?>
+                      <?php if ($scanOld): ?>・<span data-i18n="page.taskmgr.imagesStale">1 週間より古い結果です(cron が止まっていないか確かめてください)</span><?php endif; ?>
+                      <?php if ($imageScan['failed'] > 0): ?>・<span class="text-danger"><span data-i18n="page.taskmgr.imagesFailed">調べられなかったイメージ</span> <?= (int) $imageScan['failed'] ?></span><?php endif; ?>
+                    </p>
+                    <div class="table-responsive">
+                      <table class="table table-sm table-hover align-middle mb-0 km-tm-table">
+                        <thead>
+                          <tr>
+                            <th scope="col" data-i18n="page.taskmgr.colImage">イメージ</th>
+                            <th scope="col" class="text-end text-nowrap">CRITICAL</th>
+                            <th scope="col" class="text-end text-nowrap">HIGH</th>
+                            <th scope="col" class="text-end text-nowrap" data-i18n="page.taskmgr.colFixable">直る版あり</th>
+                            <th scope="col" class="text-end text-nowrap" data-i18n="page.taskmgr.colOsVulns">うち OS</th>
+                            <th scope="col" class="text-nowrap" data-i18n="page.taskmgr.colBase">土台</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <?php foreach ($imageScan['images'] as $img): ?>
+                            <tr>
+                              <td class="text-break">
+                                <code><?= km_e($img['image']) ?></code>
+                                <?php if ($img['status'] === 'missing'): ?>
+                                  <span class="badge text-bg-secondary" data-i18n="page.taskmgr.imagesMissing">このホストに無い</span>
+                                <?php elseif ($img['status'] === 'error'): ?>
+                                  <span class="badge text-bg-danger" data-i18n="page.taskmgr.imagesError">調べられず</span>
+                                <?php endif; ?>
+                                <?php if ($img['top'] !== []): ?>
+                                  <details class="mt-1">
+                                    <summary class="fs-7" data-i18n="page.taskmgr.imagesTop">直る版のあるもの</summary>
+                                    <ul class="fs-7 mb-0 ps-3">
+                                      <?php foreach ($img['top'] as $v): ?>
+                                        <li>
+                                          <span class="badge <?= $v['severity'] === 'CRITICAL' ? 'text-bg-danger' : 'text-bg-warning' ?>"><?= km_e($v['severity']) ?></span>
+                                          <?= km_e($v['id']) ?> — <?= km_e($v['pkg']) ?> <?= km_e($v['installed']) ?> → <?= km_e($v['fixed']) ?>
+                                        </li>
+                                      <?php endforeach; ?>
+                                    </ul>
+                                  </details>
+                                <?php endif; ?>
+                              </td>
+                              <td class="text-end<?= $img['critical'] > 0 ? ' text-danger fw-bold' : '' ?>"><?= $img['critical'] ?></td>
+                              <td class="text-end"><?= $img['high'] ?></td>
+                              <td class="text-end<?= $img['criticalFixable'] + $img['highFixable'] > 0 ? ' fw-bold' : '' ?>"><?= $img['criticalFixable'] + $img['highFixable'] ?></td>
+                              <td class="text-end"><?= $img['osVulns'] ?></td>
+                              <td class="fs-7 text-body-secondary"><?= km_e(preg_replace('/^.*\((.*)\)$/', '$1', $img['os']) ?? '') ?></td>
+                            </tr>
+                          <?php endforeach; ?>
+                        </tbody>
+                      </table>
+                    </div>
+                  <?php endif; ?>
+                </section>
+
+                <!--begin::ベンチマーク(2026-11-06)-->
+                <section class="km-tm-panel" id="km-tm-panel-bench" role="tabpanel" aria-labelledby="km-tm-tab-bench" data-km-tm-panel="bench"<?= $tab === 'bench' ? '' : ' hidden' ?>>
+                  <div id="km-bench" data-src="./api/bench.php">
+                    <p class="km-tm-hint" data-i18n="page.taskmgr.benchHint">決まった仕事を 1 回空回ししてから 3〜5 回測り、中央値でスコアを出します(1000 = 基準の日と同じ速さ)。1 回で 1 分ほど、同時に 1 つだけ。測っている間はサーバーが重くなります。</p>
+                    <div class="alert alert-warning py-2 fs-7" data-km-bench="event" role="alert" hidden></div>
+                    <form class="d-flex flex-wrap align-items-end gap-2 mb-3" data-km-bench="form">
+                      <div>
+                        <label class="form-label fs-7 mb-1" for="km-bench-label" data-i18n="page.taskmgr.benchLabel">名前(任意)</label>
+                        <input type="text" class="form-control form-control-sm" id="km-bench-label" maxlength="60" autocomplete="off" />
+                      </div>
+                      <button type="submit" class="btn btn-sm btn-primary" data-km-bench="start">
+                        <i class="bi bi-play-fill me-1" aria-hidden="true"></i><span data-i18n="page.taskmgr.benchStart">測る</span>
+                      </button>
+                      <span class="fs-7 text-body-secondary" data-km-bench="status" role="status" aria-live="polite"></span>
+                    </form>
+                    <div data-km-bench="detail"></div>
+                    <h3 class="km-tm-subtitle mt-3" data-i18n="page.taskmgr.benchHistory">履歴</h3>
+                    <div class="table-responsive">
+                      <table class="table table-sm table-hover align-middle mb-0 km-tm-table">
+                        <thead data-km-bench="historyHead"></thead>
+                        <tbody data-km-bench="history"></tbody>
+                      </table>
+                    </div>
+                    <p class="fs-7 text-body-secondary mt-2 mb-0" data-i18n="page.taskmgr.benchCli">ホストからは php scripts/bench.php、この PC から外の応答は scripts/bench-web.ps1 で測れます(どちらも履歴に残ります)。</p>
+                  </div>
+                </section>
               </div>
             </div>
           </div>
         </div>
         <!--end::App Content-->
         <script src="<?= km_e(km_asset('./assets/js/taskmgr.js')) ?>"></script>
+        <script src="<?= km_e(km_asset('./assets/js/bench.js')) ?>"></script>
 <?php require __DIR__ . '/_inc/partials/footer.php'; ?>
