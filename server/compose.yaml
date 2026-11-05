@@ -66,7 +66,7 @@ services:
   postgres:
     # 2026-09-15 に動いていた中身。**タグも残す**(`名前:タグ@digest`)—— 動くのは digest で、
     # タグは scripts/check-updates.sh が「固定した digest より新しい修正版が出たか」を読むため
-    image: postgres:17-alpine@sha256:266d3c257594e195b309ae9d1805e54c788f1d7b375f56bf6c367aac6c917e7b
+    image: postgres:17-alpine@sha256:5d9ee39acd134b44f52fc49ca3b88fc651f0560b0db93292fcd37ff150c71d3a
     container_name: km-postgres
     restart: unless-stopped
     security_opt:
@@ -282,7 +282,7 @@ services:
   # (docs/05-containers の §5-2。デスクトップの「トンネル開通SSH.cmd」がこれを行う)
   phpmyadmin:
     # 2026-09-15 に動いていた中身(タグを残す理由は postgres と同じ)
-    image: phpmyadmin:5.2.3-apache@sha256:9feb3b1734e2538ba633c1301ca5d08fc06cc8902428fe578034edef7897792a
+    image: phpmyadmin:5.2.3-apache@sha256:f54a37b908b26caa7032c4eb0c7f3495fdd90208a06eed9c4b2c8e691dd1662c
     container_name: km-phpmyadmin
     restart: unless-stopped
     security_opt:

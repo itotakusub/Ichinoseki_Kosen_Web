@@ -859,6 +859,11 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
     - (3) phpMyAdmin: `scripts/host-pma-window.sh`。cron 版 12 で 5 分ごと、**18:00〜20:59(日本時間)だけ動かし、外は止める**。時間の外に使うときは km で `--open 60`(1〜180 分)、取り消しは `--close`。
       配備の `up -d` で起きても 5 分以内に止まる。nginx は phpMyAdmin を通さないので、止まっていても他に響かない
     - (4) 次の検査(配備のあと手で、または日曜 4:47)で残った分を見て、nginx だけ Chainguard を試すか決める
+    - **結果(11-06 朝、利用者が refresh・cron 版 12・再検査を済ませた)**: 直る版のある HIGH・CRITICAL は **606 → 156**。
+      **nginx は 0 件(CRITICAL・HIGH とも 0)なので Chainguard は試さない**(判断済み)。web は直る版 0(残り 85 は Debian に直しが出ていないもの)、postfix は 2(残り 131 も同じ)。
+      残りの多くは Logto 1.45.0 の npm(60)・MariaDB/Postgres の gosu(28・26)・glances(24)・phpMyAdmin(11)・certbot(5)で、上流の作り直しか Logto 1.46.0 待ち。
+      postfix 5.2.1 は opendkim で `DKIM-Signature … (s=mail, d=ito4.jp)` を付けている(ログで確認)。phpMyAdmin は時間の外で止まっている(7:55 に Exited)。
+      手で回した検査は知らせ済みにならないので、11-08 4:47 のメールは 156 件ぶん
 - **試しのイベントを本番で見た(2026-11-01 22 時、利用者がイベント「Test」(id 9)を始めた)**: 公開の地図データは錠なし・予定 34 件(21:00〜11-02 21:00)・
   企画の番号付きの地点 33(1F 8・2F 9・3F 9・4F 4・外 3)。ポスター・一時地点・屋台は 0。
   - Website(内蔵のブラウザ・幅 1149): 🎪 イベントと 📅 予定のチップが出る。拡大すると 1F の企画の地点 8 か所が赤い縁(`km-node-event`)、ほか 38 か所が薄い(`km-node-unrelated`)。

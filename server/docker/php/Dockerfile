@@ -5,9 +5,9 @@
 # **タグは系列(8.4)のまま残す** —— 使われるのは digest で、タグは scripts/check-updates.sh が
 # 「8.4 の修正版が出たか」を読むため。知らせが来たら digest をここで書き換えて build する。
 # 2026-10-12: PHP 8.4.26 のまま土台(Debian)だけ作り直された版(2026-10-06 作成)に上げた
-FROM php:8.4-apache@sha256:4af38a0245996e700e20ec211b9f1c44fb789ad8cc7d24c7ea81ff382b641052
+FROM php:8.4-apache@sha256:f32426503c85a6a61cbd8c89d75365917b7ae021f222e036ca1a7ba466f2025c
 # composer は実行時には使わない(ホスト側で vendor を入れるときの道具)。今の web を作った版に固定する
-COPY --from=composer:2@sha256:5190d9b445add2fa26090108273cb1ef1e1af98175201c737b85b3c4f90fbf7c /usr/bin/composer /usr/local/bin/composer
+COPY --from=composer:2@sha256:f9d168f53e738474b41c77672c61b1d543fca096d827b80e6c7c2b7626933825 /usr/bin/composer /usr/local/bin/composer
 
 # **使わない拡張を入れない**(2026-09-15。security-review-2026-09-14 §7 の 14)。
 # 以前は pdo_pgsql と、そのための libpq-dev を入れていたが、PHP は Postgres を一度も使わない
