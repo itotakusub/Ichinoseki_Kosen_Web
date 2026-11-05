@@ -63,6 +63,8 @@ const KM_MAP_UNLOCK_SCOPES = [
     'app' => 'km_app_unlock_attempts',
     // お試しの閲覧の再入場コード(guest.php。2026-09-30)。上限は 'web' と同じ
     'guest' => 'km_guest_unlock_attempts',
+    // HTML 展開の共有リンクのパスワード(html-view.php。2026-11-05)。上限は 'web' と同じ 15 分 8 回(共有をまたいで数える)
+    'html-share' => 'km_html_share_unlock_attempts',
 ];
 
 /**

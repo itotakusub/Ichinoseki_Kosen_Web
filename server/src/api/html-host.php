@@ -17,6 +17,8 @@ declare(strict_types=1);
  *   delete_site    サイトを消す。site
  *   delete_version 版を消す。site・version
  *   ticket         見るための札を作って、開く URL を返す。site(・version)か、id・key(一時)
+ *   share_create   共有リンクを作る(2026-11-05)。site・password(空ならなし)・expires(1d/7d/30d/none)。関門が要る
+ *   share_delete   共有リンクを止める。site・share
  *
  * 上げるものは道具のページが **1 つの zip にまとめて**送る(フォルダの形を保つため。落とした zip はそのまま)。
  * 誰のものかはサインインのセッションの sub だけで決める(利用者の ID は受け取らない)。
@@ -74,10 +76,10 @@ if ($action === 'gate') {
     } catch (KmUserError $exception) {
         respond(['success' => false, 'message' => $exception->getMessage()], 400);
     }
-    $_SESSION[KM_HTML_GATE_SESSION_KEY] = km_html_gate_record(KM_LEGAL_UPDATED);
+    $_SESSION[KM_HTML_GATE_SESSION_KEY] = km_html_gate_record(km_html_gate_terms(KM_LEGAL_UPDATED));
     respond(['success' => true, 'gateUntil' => $_SESSION[KM_HTML_GATE_SESSION_KEY]['until']]);
 }
-$gateUntil = km_html_gate_until(is_array($_SESSION ?? null) ? $_SESSION : [], KM_LEGAL_UPDATED);
+$gateUntil = km_html_gate_until(is_array($_SESSION ?? null) ? $_SESSION : [], km_html_gate_terms(KM_LEGAL_UPDATED));
 
 // 大きな本文を読む間、同じ人のほかの要求を待たせない
 if (session_status() === PHP_SESSION_ACTIVE) {
@@ -171,6 +173,7 @@ function km_html_api_site_out(array $site): array
         'bytes' => $site['bytes'],
         'updatedAt' => $site['updatedAt'],
         'versions' => $site['versions'] ?? [],
+        'shares' => $site['shares'] ?? [],
     ];
 }
 
@@ -202,6 +205,10 @@ try {
     switch ($action) {
         case 'state':
             $sites = ($owner !== null && $blocked === null) ? km_html_sites_of($pdo, $owner) : [];
+            // 共有リンク(2026-11-05)。サイトごとに、期限の中のもの
+            foreach ($sites as $index => $site) {
+                $sites[$index]['shares'] = array_map('km_html_share_out', km_html_shares_of_site($pdo, $site['dbId']));
+            }
             respond([
                 'success' => true,
                 'signedIn' => $owner !== null,
@@ -270,6 +277,20 @@ try {
         case 'delete_version':
             $site = km_html_api_own_site($pdo, km_html_api_require_saver($owner, $blocked));
             km_html_version_delete($pdo, $site, (int) km_html_api_str('version', 10));
+            respond(['success' => true]);
+
+        case 'share_create':
+            // 共有リンクを作る(2026-11-05)。保存できる人で、関門(規約に共有のことを足した版)を通った人だけ
+            $site = km_html_api_own_site($pdo, km_html_api_require_saver($owner, $blocked));
+            km_html_api_require_gate($gateUntil);
+            km_html_temp_sweep($pdo);
+            $password = is_string($_POST['password'] ?? null) ? $_POST['password'] : '';
+            $share = km_html_share_create($pdo, $site, $password, km_html_api_str('expires', 8));
+            respond(['success' => true, 'share' => km_html_share_out($share)]);
+
+        case 'share_delete':
+            $site = km_html_api_own_site($pdo, km_html_api_require_saver($owner, $blocked));
+            km_html_share_delete($pdo, $site, km_html_api_str('share', 40));
             respond(['success' => true]);
 
         case 'ticket':

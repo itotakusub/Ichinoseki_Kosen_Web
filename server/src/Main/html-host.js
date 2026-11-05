@@ -68,6 +68,8 @@
         busy: false,
         // 使い始める前の関門の期限(秒。0 なら未通過)。サーバーのセッションの印と同じ値(api/html-host.php の gate)
         gateUntil: Number(root.dataset.gateUntil || 0),
+        // 共有リンクの欄を開いているサイト(一覧を描き直しても閉じないように)
+        openShares: new Set(),
     };
 
     // ------------------------------------------------------------------
@@ -924,8 +926,128 @@
             });
             details.appendChild(ol);
             row.li.appendChild(details);
+            row.li.appendChild(shareBlock(site));
             el.server.appendChild(row.li);
         });
+    }
+
+    // ------------------------------------------------------------------
+    // 共有リンク(2026-11-05、利用者の指示)。サーバーに保存したものだけ。https://share.<本体>/<番号>/ でいつも最新の版
+    // 受け取った人はサインインなしで開ける(注意の画面を挟む。パスワード付きならそこで入れる)
+    // ------------------------------------------------------------------
+
+    function shareMeta(share) {
+        const expires = share.expiresAt ? formatTime(share.expiresAt) + ' まで' : '止めるまで';
+        return (share.hasPassword ? '🔒 パスワードあり' : 'パスワードなし') + '・' + expires + '・開かれた回数 ' + share.opened;
+    }
+
+    function copyText(input, buttonEl) {
+        const done = function () {
+            const before = buttonEl.textContent;
+            buttonEl.textContent = 'コピーしました';
+            setTimeout(function () { buttonEl.textContent = before; }, 1500);
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(input.value).then(done, function () { input.select(); });
+        } else {
+            input.select();
+        }
+    }
+
+    function shareBlock(site) {
+        const shares = site.shares || [];
+        const details = document.createElement('details');
+        details.className = 'km-html-versions km-html-share';
+        details.open = state.openShares.has(site.id);
+        details.addEventListener('toggle', function () {
+            if (details.open) state.openShares.add(site.id); else state.openShares.delete(site.id);
+        });
+        const summary = document.createElement('summary');
+        summary.textContent = '共有リンク(' + shares.length + ' 本)';
+        details.appendChild(summary);
+
+        const note = document.createElement('p');
+        note.className = 'km-html-note';
+        note.textContent = 'リンクを知っている人は、サインインしなくても開けます(いつも新しい版。開く前に注意の画面が出ます)。'
+            + 'パスワードを付けると、パスワードも知っている人だけになります。止めたリンクは二度と使えません。';
+        details.appendChild(note);
+
+        const list = document.createElement('ul');
+        list.className = 'km-html-share-list';
+        shares.forEach(function (share) {
+            const li = document.createElement('li');
+            const url = document.createElement('input');
+            url.type = 'text';
+            url.readOnly = true;
+            url.value = share.url;
+            url.className = 'km-html-share-url';
+            url.setAttribute('aria-label', '共有リンク');
+            url.addEventListener('focus', function () { url.select(); });
+            const meta = document.createElement('span');
+            meta.className = 'km-html-item-meta';
+            meta.textContent = shareMeta(share);
+            const actions = document.createElement('div');
+            actions.className = 'km-html-item-actions';
+            const copy = button('コピー', 'km-doc-button', function () { copyText(url, copy); });
+            actions.appendChild(copy);
+            actions.appendChild(button('止める', 'km-doc-link km-html-danger', function () {
+                if (!confirm('この共有リンクを止めます。同じリンクは二度と使えません。')) return;
+                post('share_delete', { site: site.id, share: share.id }).then(function () {
+                    setStatus('共有リンクを止めました。');
+                    return refreshServer();
+                }, function (error) { setStatus(error.message, true); });
+            }));
+            li.append(url, meta, actions);
+            list.appendChild(li);
+        });
+        details.appendChild(list);
+
+        const form = document.createElement('div');
+        form.className = 'km-html-share-form';
+        const passwordLabel = document.createElement('label');
+        passwordLabel.textContent = 'パスワード(付けないなら空のまま。6 文字以上)';
+        const password = document.createElement('input');
+        password.type = 'password';
+        password.autocomplete = 'new-password';
+        password.maxLength = 72;
+        passwordLabel.appendChild(password);
+        const expiresLabel = document.createElement('label');
+        expiresLabel.textContent = '期限';
+        const expires = document.createElement('select');
+        [['1d', '1 日'], ['7d', '7 日'], ['30d', '30 日'], ['none', '止めるまで']].forEach(function (pair) {
+            const option = document.createElement('option');
+            option.value = pair[0];
+            option.textContent = pair[1];
+            expires.appendChild(option);
+        });
+        expires.value = '7d';
+        expiresLabel.appendChild(expires);
+        const create = button('リンクを作る', 'km-doc-button', function () {
+            if (password.value !== '' && Array.from(password.value).length < 6) {
+                setStatus('パスワードは 6 文字以上にしてください(付けないなら空のまま)。', true);
+                return;
+            }
+            create.disabled = true;
+            post('share_create', { site: site.id, password: password.value, expires: expires.value }).then(function (result) {
+                password.value = '';
+                state.openShares.add(site.id);
+                setStatus('共有リンクを作りました。「コピー」して渡してください' + (result.share.hasPassword ? '(パスワードは別に伝えてください)。' : '。'));
+                return refreshServer();
+            }, function (error) {
+                if (error && error.gate) {
+                    showGate(error.message);
+                    return;
+                }
+                setStatus(error && error.userFacing ? error.message : '作れませんでした。', true);
+            }).then(function () { create.disabled = false; });
+        });
+        if (shares.length >= 5) {
+            create.disabled = true;
+            create.title = '1 つのサイトに 5 本までです';
+        }
+        form.append(passwordLabel, expiresLabel, create);
+        details.appendChild(form);
+        return details;
     }
 
     function renderAll() {

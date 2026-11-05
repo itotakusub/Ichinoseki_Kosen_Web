@@ -797,6 +797,17 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
       - 確かめ: check.php 2772 件。写しで利用者の 5 つ(web・webfull・webzettai・webpass(パスワード 1234)・1web)がどれも 4 個で開き CSS・JS・README.md が効く。
         7-Zip で作った ZipCrypto(格納・deflate)・AES-128・AES-256 は正しいパスワードで開き、違えば聞き直す。本文を壊した AES は HMAC で断る。7z・tar・gz・`.zip` に改名した 7z/gz・BZip2 方式・ZIP 2 つ同時は断る。
         サーバーへの保存も解いた 4 個で届き、パスに `C:/Users/…` は残らない
+    - **共有リンク(11-05、利用者の指示「パスワードあり・なしで共有できるように(要アカウントログイン)」。手元で済み・配備待ち)**:
+      答え: ログインが要るのは共有する人だけ・いつも最新の版・期限は作るときに選ぶ(1 日・7 日・30 日・止めるまで)・中身の前に注意の画面を挟む。
+      - **共有の中身は別のアドレス `https://share.ito4.jp/<32 字>/`**(html.ito4.jp の IndexedDB・Service Worker に他人の共有のスクリプトを届かせない)。
+        nginx は html の server に `${KM_SHARE_DOMAIN}` を足しただけ。`html-view.php` がホストで `lib/html-share-view.php` へ振り分ける(本体のセッションは読まない)
+      - 新しい表 `km_html_shares`(パスワードは `password_hash`・期限・開かれた回数)と `km_html_share_grants`(Cookie `__Host-KMSH`・12 時間・ブラウザを閉じたら消える)。1 サイト 5 本まで
+      - 注意の画面はスクリプトなし(CSP `default-src 'none'`)。「開く」の POST は share のオリジンだけ → 止められた持ち主 → 外れの回数(IP ごと 15 分 8 回。先に数え、成功しても消さない)→ `password_verify`
+      - 止めた・期限切れ・サイトを消したものは 404(行を消す)。管理画面のバックアップのカードに「共有を止める」(記録 `html.share_stop`)。規約第8条の2とポリシーを直し、関門の版を `#share` 付きにした(同意し直し)
+      - 写しで見つけて直した: 注意の画面を `Referrer-Policy: no-referrer` にしていたので「開く」が `Origin: null` になり 403 → `same-origin` にし、`null` は `Sec-Fetch-Site` で見る
+      - 確かめ: check.php 全部通る。写し(`share.app.localhost`)で: なし・ありで開く(CSS・JS が効く)、違うパスワード 401・9 回目 429(正しくても)、よそのオリジン・Origin なし・PUT は断る、
+        新しい版を保存すると共有も新しい版、止めた・サイトを消したら(印があっても)404、5 本目の次は断る、画面のフォームから作れる、共有のページから html の IndexedDB は見えない、375 幅ではみ出しなし
+      - **配備の手順**: (1) DNS に `share.ito4.jp`(A。AAAA は要らない)→ (2) `-Action up` で配備 → (3) **kmops で** `host-cert.sh issue` に `--also share.ito4.jp` を足して取る(今の名前も並べる。issue が自分で reload する)
 - **試しのイベントを本番で見た(2026-11-01 22 時、利用者がイベント「Test」(id 9)を始めた)**: 公開の地図データは錠なし・予定 34 件(21:00〜11-02 21:00)・
   企画の番号付きの地点 33(1F 8・2F 9・3F 9・4F 4・外 3)。ポスター・一時地点・屋台は 0。
   - Website(内蔵のブラウザ・幅 1149): 🎪 イベントと 📅 予定のチップが出る。拡大すると 1F の企画の地点 8 か所が赤い縁(`km-node-event`)、ほか 38 か所が薄い(`km-node-unrelated`)。

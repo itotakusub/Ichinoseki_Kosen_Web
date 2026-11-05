@@ -20,6 +20,7 @@
 #   LOGTO_ENDPOINT         https://${KM_AUTH_DOMAIN}(無ければ https://auth.${KM_DOMAIN}。2026-10-19 に :3001 から移した)
 #   KM_AUTH_DOMAIN(nginx)  auth.${KM_DOMAIN}(443 番の Logto の入口の名前。証明書と DNS が要る)
 #   KM_HTML_DOMAIN(nginx)・KM_HTML_URL(web)  html.${KM_DOMAIN}(HTML 展開サイトの見せる側。2026-11-05。証明書と DNS が要る)
+#   KM_SHARE_DOMAIN(nginx)・KM_SHARE_URL(web)  share.${KM_DOMAIN}(HTML 展開サイトの共有リンク。2026-11-05。証明書と DNS が要る)
 #   LOGTO_ADMIN_ENDPOINT   http://localhost:3002(2026-11-02 から。Console は SSH のトンネルで開く。compose.yaml の logto)
 #   MAIL_HOST / MAIL_PORT  mailserver / 587
 #   MAIL_FROM              noreply@${KM_DOMAIN}
@@ -127,6 +128,8 @@ services:
       LOGTO_ENDPOINT: ${LOGTO_ENDPOINT:-https://${KM_AUTH_DOMAIN:-auth.${KM_DOMAIN}}}
       # HTML 展開サイトの見せる側(2026-11-05。src/lib/site.php の km_site_html_origin)。reverse-proxy の KM_HTML_DOMAIN と同じ導き方
       KM_HTML_URL: ${KM_HTML_URL:-https://${KM_HTML_DOMAIN:-html.${KM_DOMAIN}}}
+      # 共有リンク(2026-11-05。src/lib/site.php の km_site_share_origin)。reverse-proxy の KM_SHARE_DOMAIN と同じ導き方
+      KM_SHARE_URL: ${KM_SHARE_URL:-https://${KM_SHARE_DOMAIN:-share.${KM_DOMAIN}}}
       # アクセストークンの audience(compose.yaml の web の注記を参照)。
       # 導いた値はドメインを変えた瞬間に変わってしまうので、**移すときは host-domain.sh apply が
       # KM_API_RESOURCE を .env に書く**(据え置くなら旧の値、--api-resource なら新しい値。Logto の登録と揃える)。
@@ -227,6 +230,8 @@ services:
       # HTML 展開サイトの見せる側の名前(2026-11-05。nginx の html の server)。**いつも定義する**(空だと server_name が壊れる)。
       # web の KM_HTML_URL と同じ導き方。証明書(host-cert.sh issue --also)と DNS が要る
       KM_HTML_DOMAIN: ${KM_HTML_DOMAIN:-html.${KM_DOMAIN}}
+      # 共有リンクの名前(2026-11-05。html の server に一緒に並べる)。web の KM_SHARE_URL と同じ導き方。証明書と DNS が要る
+      KM_SHARE_DOMAIN: ${KM_SHARE_DOMAIN:-share.${KM_DOMAIN}}
     # **`!override` が要る。** compose の `volumes:` は上書きではなく**併合**される
     # (対象パスの違う項目は基底のものが残る)。基底には mkcert の
     #     ./certs/192.168.3.29.pem:/etc/nginx/certs/192.168.3.29.pem

@@ -48,7 +48,7 @@ $csrf = km_csrf_token();
  * 通るまで落とす場所を出さない。通ったかはセッションの印(api/html-host.php の gate が置く)で決める。
  * reCAPTCHA のスクリプト(Google)は、関門を出すときだけ読む
  */
-$gateUntil = km_html_gate_until(is_array($_SESSION ?? null) ? $_SESSION : [], KM_LEGAL_UPDATED);
+$gateUntil = km_html_gate_until(is_array($_SESSION ?? null) ? $_SESSION : [], km_html_gate_terms(KM_LEGAL_UPDATED));
 $gatePassed = $gateUntil > 0;
 $gateReady = km_recaptcha_configured();
 $gateArticle = array_values(array_filter(km_legal_terms(), static fn (array $section): bool => ($section['heading'] ?? '') === '第8条の2(HTML 展開サイト)'));
@@ -146,6 +146,13 @@ $limits = [
         .km-html-agree input { width: 1.15rem; height: 1.15rem; flex: none; }
         .km-html-recaptcha { margin: 0 0 0.75rem; min-height: 78px; }
         .km-html-gate .km-html-status { margin: 0.5rem 0 0; }
+        .km-html-share-list { list-style: none; margin: 0.4rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.6rem; }
+        .km-html-share-list li { display: flex; flex-direction: column; gap: 0.25rem; padding: 0.5rem 0.6rem; border: 1px dashed var(--border); border-radius: 10px; }
+        .km-html-share-url { width: 100%; box-sizing: border-box; font: 0.85rem ui-monospace, SFMono-Regular, Consolas, monospace; padding: 0.35rem 0.5rem; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: inherit; }
+        .km-html-share-form { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: flex-end; margin: 0.6rem 0 0.2rem; }
+        .km-html-share-form label { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.85rem; }
+        .km-html-share-form input, .km-html-share-form select { font: inherit; padding: 0.3rem 0.5rem; border-radius: 8px; border: 1px solid var(--border); max-width: 100%; }
+        .km-html-share-form .km-doc-button { margin: 0; min-height: 2.25rem; padding: 0.25rem 0.9rem; font-size: 0.85rem; }
         .km-html-password-input { display: block; width: 100%; max-width: 22rem; margin: 0.3rem 0 0; font: inherit; padding: 0.45rem 0.6rem; border-radius: 8px; border: 1px solid var(--border); }
     </style>
     <?php if (!$gatePassed && $gateReady): ?>
@@ -233,7 +240,7 @@ $limits = [
         <fieldset class="km-html-place" id="km-html-place">
             <legend>置き場所</legend>
             <label><input type="radio" name="km-html-place" value="local" checked> <span>このブラウザ(このブラウザでだけ開けます。置けなければサーバーの一時フォルダに 24 時間置きます)</span></label>
-            <label><input type="radio" name="km-html-place" value="server" id="km-html-place-server"<?= $signedIn ? '' : ' disabled' ?>> <span>サーバーに保存(サインインした本人だけが開けます。版 <?= KM_HTML_MAX_VERSIONS ?> まで)<?= $signedIn ? '' : ' —— サインインすると使えます' ?></span></label>
+            <label><input type="radio" name="km-html-place" value="server" id="km-html-place-server"<?= $signedIn ? '' : ' disabled' ?>> <span>サーバーに保存(サインインした本人が開けます。共有リンクを作れば、ほかの人にも見せられます。版 <?= KM_HTML_MAX_VERSIONS ?> まで)<?= $signedIn ? '' : ' —— サインインすると使えます' ?></span></label>
             <div class="km-html-server-options" id="km-html-server-options" hidden>
                 <label>保存先 <select id="km-html-target"><option value="">新しいサイト</option></select></label>
                 <label>名前 <input type="text" id="km-html-name" maxlength="100" placeholder="(落としたものの名前)"></label>
@@ -279,13 +286,14 @@ $limits = [
 
         <section class="km-html-section" aria-labelledby="km-html-server-title" id="km-html-server-section"<?= $signedIn ? '' : ' hidden' ?>>
             <h2 id="km-html-server-title">サーバーに保存したもの</h2>
-            <p class="km-html-note" id="km-html-server-note"><?= $signedIn ? km_html_page_e(($displayName !== '' ? $displayName . ' さんの' : '') . 'サイトです。開けるのはご本人だけです。') : '' ?></p>
+            <p class="km-html-note" id="km-html-server-note"><?= $signedIn ? km_html_page_e(($displayName !== '' ? $displayName . ' さんの' : '') . 'サイトです。開けるのはご本人と、共有リンクを渡した人だけです。') : '' ?></p>
             <ul class="km-html-list" id="km-html-server"></ul>
         </section>
 
         <p class="km-html-note km-html-section">
             上げた HTML のスクリプトは、地図とは別のアドレス(<?= km_html_page_e(km_site_html_origin()) ?>)で動きます。
-            人に見せるためのものではありません(開けるのは置いた人だけです)。使い方は<a href="/terms.php">利用規約</a>の第8条の2をご覧ください。
+            開けるのは置いた人だけです。サーバーに保存したものは「共有リンク」で、リンク(とパスワード)を知る人にも見せられます(共有のページは <?= km_html_page_e(km_site_share_origin()) ?>)。
+            使い方は<a href="/terms.php">利用規約</a>の第8条の2をご覧ください。
         </p>
     </main>
     <?php // ZIP を読む・作る・パスワード付きを解く(window.KmHtmlZip)。html-host.js より先に ?>

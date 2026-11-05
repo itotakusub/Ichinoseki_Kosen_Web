@@ -251,6 +251,7 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     'poster.archive_delete' => 'がポスターの控えを消しました',
     // HTML 展開サイト(2026-11-05、lib/html-host.php・admin/backups.php)。利用者が保存したサイトを管理者が消した
     'html.delete' => 'が HTML 展開サイトのサイトを消しました',
+    'html.share_stop' => 'が HTML 展開サイトの共有リンクを止めました',
     // テーブル管理の外部接続(table.api_*)は 2026-11-02 に口ごと外した(本番のキーは 0 件だった)
     'poster.tutorial_end' => 'がチュートリアルの終わりの知らせを変更しました',
     'map.node_link' => 'が地点の URL を変更しました',

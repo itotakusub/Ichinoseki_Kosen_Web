@@ -4243,7 +4243,7 @@ function km_check_security_review(): void
 
     km_check_heading('security-review 3・7: 解除の試行は錠ごとに、DB が落ちても数える');
     require_once __DIR__ . '/../lib/map-rate-limit.php';
-    check('錠は web と app と guest(お試しの閲覧の再入場コード)', ['web', 'app', 'guest'], array_keys(KM_MAP_UNLOCK_SCOPES));
+    check('錠は web と app と guest(お試しの閲覧の再入場コード)と html-share(共有リンクのパスワード)', ['web', 'app', 'guest', 'html-share'], array_keys(KM_MAP_UNLOCK_SCOPES));
     check_bool('表は別々', KM_MAP_UNLOCK_SCOPES['web'] !== KM_MAP_UNLOCK_SCOPES['app']);
     $unlockApi = $code($read('api/map-unlock.php'));
     $appMapApi = $code($read('api/app-map.php'));
@@ -9363,7 +9363,7 @@ function km_check_layout(): void
         $authInclude = preg_match('/^server \{\n    listen 443 ssl;\n    listen \[::\]:443 ssl;\n    http2 on;\n    server_name \$\{KM_AUTH_DOMAIN\};.*?\n\}\n/ms', $shieldCode, $maintAuth) === 1
             && str_contains($maintAuth[0], "    include /etc/nginx/km/maintenance.conf;\n");
         // 2026-11-05 から HTML 展開の見せる側(html.<ドメイン>)の server も読み込む
-        $htmlInclude = preg_match('/^server \{\n    listen 443 ssl;\n    listen \[::\]:443 ssl;\n    http2 on;\n    server_name \$\{KM_HTML_DOMAIN\};.*?\n\}\n/ms', $shieldCode, $maintHtmlServer) === 1
+        $htmlInclude = preg_match('/^server \{\n    listen 443 ssl;\n    listen \[::\]:443 ssl;\n    http2 on;\n    server_name \$\{KM_HTML_DOMAIN\} \$\{KM_SHARE_DOMAIN\};.*?\n\}\n/ms', $shieldCode, $maintHtmlServer) === 1
             && str_contains($maintHtmlServer[0], "    include /etc/nginx/km/maintenance.conf;\n");
         check_bool('443 の Web アプリと Logto の入口(auth)と HTML 展開(html)が読み込む', $mainInclude && $authInclude && $htmlInclude && substr_count($shieldCode, 'include /etc/nginx/km/maintenance.conf;') === 3);
         check_bool('管理用のホストでも公開側へ飛ばさない($km_leave_admin_host の例外)', str_contains($shieldCode, '|__km_maintenance$)"  0;'));
@@ -10713,7 +10713,7 @@ function km_check_html_host(): void
     check('関門: 期限は通ったときだけ返す', [$gateNow + 7200, 0], [km_html_gate_until($gateSession, '2026-11-05', $gateNow), km_html_gate_until($gateSession, '2026-11-05', $gateNow + 7200)]);
     $apiGate = (string) preg_replace('/^\s*(\/\/|\*|\/\*).*$/m', '', $api);
     check_bool('口: 関門は規約への同意と reCAPTCHA(action 付き)を確かめてから印を置く', str_contains($apiGate, "km_html_api_str('agree', 2) !== '1'")
-        && strpos($apiGate, 'km_recaptcha_verify(') < strpos($apiGate, '$_SESSION[KM_HTML_GATE_SESSION_KEY] = km_html_gate_record(KM_LEGAL_UPDATED);')
+        && strpos($apiGate, 'km_recaptcha_verify(') < strpos($apiGate, '$_SESSION[KM_HTML_GATE_SESSION_KEY] = km_html_gate_record(km_html_gate_terms(KM_LEGAL_UPDATED));')
         && str_contains($apiGate, 'KM_RECAPTCHA_ACTION_HTML_HOST);'));
     check_bool('口: 関門の印はセッションを閉じる前に書く', strpos($apiGate, '$_SESSION[KM_HTML_GATE_SESSION_KEY] = ') < strpos($apiGate, 'session_write_close();'));
     foreach (['temp', 'temp_patch', 'save'] as $gateAction) {
@@ -10748,14 +10748,89 @@ function km_check_html_host(): void
         && $zipAt < (int) strpos($page, "km_public_asset('Main/html-host.js')"));
     check_bool('道具のページの JS: ドライブ名・先頭の / を外し、型の表に無いものを除き、ZIP 以外の圧縮は断る', str_contains($pageJs, ".replace(/^[A-Za-z]:(?=\\/|$)/, '')")
         && str_contains($pageJs, "return typeOf(path) !== 'application/octet-stream';") && str_contains($pageJs, 'Z.isArchiveName(name) || (kind !== null && kind !== \'zip\')'));
-    check_bool('道具のページの JS: パスワードを口へ送らない', !preg_match("/post\\([^)]*password/i", $pageJs));
+    // ZIP のパスワード(km-html-password-input)は Z.unzip にだけ渡す。共有リンクのパスワード(share_create)は口へ送る
+    check_bool('道具のページの JS: ZIP のパスワードを口へ送らない', !preg_match('/post\([^)]*passwordInput/', $pageJs)
+        && str_contains($pageJs, 'askPassword: askPassword,') && substr_count($pageJs, 'el.passwordInput.value') === 4);
     check_bool('道具のページの JS は見せる側のオリジンからの返事だけ受ける', str_contains($pageJs, 'event.origin !== HTML_ORIGIN || event.source !== frame.contentWindow'));
     check_bool('リンク集に載せる道具のページは公開の場所に在る(管理画面の外)', is_file($src . '/html.php') && !is_file($src . '/admin/html.php'));
 
     km_check_heading('html-host: 規約・記録・後片付け');
     $legalText = (string) file_get_contents($src . '/lib/legal.php');
     check_bool('規約に第8条の2(本人だけ・一時は 24 時間・版は 10)', str_contains($legalText, "'heading' => '第8条の2(HTML 展開サイト)'")
-        && str_contains($legalText, '**上げたファイルを開けるのは、上げた本人(またはそのブラウザ)だけです。**') && str_contains($legalText, '24 時間で削除します'));
+        && str_contains($legalText, '**上げたファイルを開けるのは、原則として上げた本人(またはそのブラウザ)だけです。**') && str_contains($legalText, '24 時間で削除します'));
+    check_bool('規約に共有リンク(期限・止めたら二度と使えない・入力させない)とポリシーに共有の Cookie', str_contains($legalText, '期限(1 日・7 日・30 日・止めるまで)を選んで作り、いつでも止められます。止めたリンクは二度と使えません。')
+        && str_contains($legalText, '**共有したページで、開いた人にパスワード・クレジットカード番号・個人情報などを入力させないでください。**')
+        && str_contains($legalText, '共有リンクのパスワードは、元に戻せない形(ハッシュ)で保存します。'));
+
+    /*
+     * 共有リンク(2026-11-05、利用者の指示「パスワードあり・なしで共有できるように(要アカウントログイン)」)
+     */
+    km_check_heading('html-host: 共有リンク');
+    check('共有の道: /<32 字>/<パス>', ['id' => str_repeat('a', 32), 'path' => 'v3/css/a.css', 'slash' => true], km_html_parse_share_path('/' . str_repeat('a', 32) . '/v3/css/a.css'));
+    check('共有の道: 終わりのスラッシュが無ければ移る印', ['id' => str_repeat('b', 32), 'path' => '', 'slash' => false], km_html_parse_share_path('/' . str_repeat('b', 32)));
+    check('共有の道: 外へ出る・短い番号・/s/ の形は null', [null, null, null], [
+        km_html_parse_share_path('/' . str_repeat('a', 32) . '/../x'),
+        km_html_parse_share_path('/' . str_repeat('a', 24) . '/'),
+        km_html_parse_share_path('/s/' . str_repeat('a', 24) . '/'),
+    ]);
+    check('共有の期限: 1 日・7 日・30 日・止めるまで', [86400, 604800, 2592000, null], array_map('km_html_share_expires_seconds', ['1d', '7d', '30d', 'none']));
+    $badChoice = false;
+    try {
+        km_html_share_expires_seconds('99y');
+    } catch (InvalidArgumentException) {
+        $badChoice = true;
+    }
+    check_bool('共有の期限: 知らない選び方は断る', $badChoice);
+    $passwordVerdicts = [];
+    foreach (['', '12345', '123456', str_repeat('a', 72), str_repeat('a', 73), "abc\ndef"] as $candidate) {
+        try {
+            km_html_share_password_check($candidate);
+            $passwordVerdicts[] = true;
+        } catch (InvalidArgumentException) {
+            $passwordVerdicts[] = false;
+        }
+    }
+    check('共有のパスワード: 空(なし)か 6〜72 バイト・制御文字なし', [true, false, true, true, false, false], $passwordVerdicts);
+    $shareOrigin = 'https://share.example.jp';
+    check('「開く」の POST は share のオリジンからだけ(Origin: null は Sec-Fetch-Site で見る)', [true, false, true, false, false, true, false], [
+        km_html_share_post_allowed(['HTTP_ORIGIN' => 'https://share.example.jp'], $shareOrigin),
+        km_html_share_post_allowed(['HTTP_ORIGIN' => 'https://evil.example'], $shareOrigin),
+        km_html_share_post_allowed(['HTTP_SEC_FETCH_SITE' => 'same-origin'], $shareOrigin),
+        km_html_share_post_allowed(['HTTP_SEC_FETCH_SITE' => 'cross-site'], $shareOrigin),
+        km_html_share_post_allowed([], $shareOrigin),
+        km_html_share_post_allowed(['HTTP_ORIGIN' => 'null', 'HTTP_SEC_FETCH_SITE' => 'same-origin'], $shareOrigin),
+        km_html_share_post_allowed(['HTTP_ORIGIN' => 'null', 'HTTP_SEC_FETCH_SITE' => 'cross-site'], $shareOrigin),
+    ]);
+    check_bool('注意の画面は Referrer-Policy: same-origin(no-referrer だと「開く」が Origin: null になる)', str_contains((string) file_get_contents($src . '/lib/html-share-view.php'), "header('Referrer-Policy: same-origin');"));
+    check('関門の規約の版に共有の印(今日同意した人にも同意し直してもらう)', '2026-11-05#share', km_html_gate_terms('2026-11-05'));
+    check('共有は 1 サイトに 5 本・印は 12 時間・Cookie は __Host-', [5, 43200, '__Host-KMSH'], [KM_HTML_SHARES_PER_SITE, KM_HTML_SHARE_GRANT_TTL, KM_HTML_SHARE_COOKIE]);
+    $shareView = (string) file_get_contents($src . '/lib/html-share-view.php');
+    $shareCode = (string) preg_replace('/^\s*(\/\/|\*|\/\*).*$/m', '', $shareView);
+    check_bool('見せる側: share のホストは共有の入口へ、html のホストより先に振り分ける', ($shareAt = strpos($view, 'if (km_html_view_host_matches(km_site_share_origin())) {')) !== false
+        && $shareAt < (int) strpos($view, "if (!km_html_view_host_ok()) {\n    km_html_view_not_found();"));
+    check_bool('共有: 本体のセッションを読まない・注意の画面はスクリプトなし', preg_match('/require[^;]*(logto-client|session|csrf)\.php/', $shareCode) !== 1
+        && str_contains($shareCode, "Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+        && !str_contains($shareCode, '<script'));
+    check_bool('共有: 「開く」は オリジン → 止められた持ち主 → 回数(先に数える) → password_verify の順', ($o1 = strpos($shareCode, 'km_html_share_post_allowed(')) !== false
+        && $o1 < (int) strpos($shareCode, 'km_logto_user_is_suspended(') && strpos($shareCode, 'km_logto_user_is_suspended(') < (int) strpos($shareCode, "km_map_unlock_attempt(\$pdo, 'html-share')")
+        && strpos($shareCode, "km_map_unlock_attempt(\$pdo, 'html-share')") < (int) strpos($shareCode, 'password_verify('));
+    check_bool('共有: 外れの回数は成功しても消さない(別の共有で数え直させない)', !str_contains($shareCode, 'km_map_clear_unlock_failures'));
+    check_bool('共有: 印が無ければ中身を出さず注意の画面', str_contains($shareCode, "if (!in_array(\$share['id'], \$granted, true)) {\n            km_html_share_view_gate(\$share, \$site);"));
+    check_bool('共有: いつも最新の版(版を指定しない)', str_contains($shareCode, 'km_html_site_manifest($pdo, $site, null)'));
+    check_bool('口: 共有を作るのは保存できる人で関門を通った人だけ(自分のサイトだけ)', str_contains($apiGate, "case 'share_create':")
+        && str_contains($apiGate, "\$site = km_html_api_own_site(\$pdo, km_html_api_require_saver(\$owner, \$blocked));\n            km_html_api_require_gate(\$gateUntil);\n            km_html_temp_sweep(\$pdo);")
+        && str_contains($apiGate, "case 'share_delete':\n            \$site = km_html_api_own_site(\$pdo, km_html_api_require_saver(\$owner, \$blocked));"));
+    $hostLib = (string) file_get_contents($src . '/lib/html-host.php');
+    $shareOut = preg_match('/^function km_html_share_out\(.*?^\}$/ms', $hostLib, $shareOutMatch) === 1 ? $shareOutMatch[0] : '';
+    check_bool('口: 画面へ返す形にパスワードのハッシュを入れない(有無だけ)', $shareOut !== '' && str_contains($shareOut, "'hasPassword' => \$share['passwordHash'] !== null,")
+        && substr_count($shareOut, 'passwordHash') === 1);
+    check_bool('パスワードは password_hash で置く', str_contains($hostLib, "\$password === '' ? null : password_hash(\$password, PASSWORD_DEFAULT),"));
+    check_bool('サイトを消すと共有も消す・片付けで期限切れの共有と印を消す', str_contains($hostLib, "\$pdo->prepare('DELETE FROM km_html_shares WHERE site_id = ?')->execute([\$site['dbId']]);")
+        && str_contains($hostLib, "DELETE FROM km_html_shares WHERE expires_at IS NOT NULL AND expires_at <= ?")
+        && str_contains($hostLib, "DELETE FROM km_html_share_grants WHERE expires_at <= ?"));
+    require_once __DIR__ . '/../lib/admin-log.php';
+    check_bool('管理画面: 共有を止める(記録 html.share_stop)', str_contains((string) file_get_contents($src . '/admin/backups.php'), "if (\$formAction === 'html_share_stop') {")
+        && isset(KM_ADMIN_LOG_ACTION_LABELS['html.share_stop']));
     check_bool('プライバシーポリシーの表と Cookie に書いてある', str_contains($legalText, 'HTML 展開でサーバーに置いたファイル')
         && str_contains($legalText, 'この Cookie は、ブラウザを閉じたとき・サインアウトしたとき・12 時間たったときのどれかで無効になります。'));
     // 共用の端末でサインアウトしたあと、次の人が履歴から本人のサイトを開けないように(2026-11-05 に写しで見つけた)
@@ -10772,7 +10847,7 @@ function km_check_html_host(): void
         return;
     }
     $nginx = (string) preg_replace('/^\s*#.*$/m', '', (string) file_get_contents($repo . '/nginx/default.conf.template'));
-    preg_match('/^server \{\n    listen 443 ssl;\n    listen \[::\]:443 ssl;\n    http2 on;\n    server_name \$\{KM_HTML_DOMAIN\};.*?\n\}\n/ms', $nginx, $htmlServer);
+    preg_match('/^server \{\n    listen 443 ssl;\n    listen \[::\]:443 ssl;\n    http2 on;\n    server_name \$\{KM_HTML_DOMAIN\} \$\{KM_SHARE_DOMAIN\};.*?\n\}\n/ms', $nginx, $htmlServer);
     $htmlServer = $htmlServer[0] ?? '';
     check_bool('nginx: html の server があり、どれも html-view.php へ書き換える', $htmlServer !== '' && str_contains($htmlServer, 'rewrite ^ /html-view.php? break;')
         && str_contains($htmlServer, 'proxy_set_header X-KM-Html-Uri $request_uri;') && str_contains($htmlServer, 'limit_conn km_conn 100;'));
@@ -10786,6 +10861,11 @@ function km_check_html_host(): void
     check_bool('夜の控えに一時フォルダを入れない', str_contains((string) file_get_contents($repo . '/scripts/host-backup.sh'), "--exclude='uploads/html-temp'"));
     $certScript = (string) file_get_contents($repo . '/scripts/host-cert.sh');
     check_bool('証明書の確かめに html の名前がある', str_contains($certScript, '_html="${_html:-html.${_domain}}"'));
+    check_bool('証明書の確かめに share の名前がある', str_contains($certScript, '_share="${_share:-share.${_domain}}"'));
+    check_bool('nginx: html の server は share の名前も受け、/ を km_html で数える', $htmlServer !== '' && preg_match('#location / \{\s*limit_req zone=km_api burst=120 nodelay;\s*limit_req zone=km_html burst=10 nodelay;#', $htmlServer) === 1);
+    check_bool('compose: nginx に KM_SHARE_DOMAIN・web に KM_SHARE_URL', str_contains((string) file_get_contents($repo . '/compose.yaml'), 'KM_SHARE_DOMAIN: ${KM_SHARE_DOMAIN:-share.${KM_DOMAIN:-192.168.3.29}}')
+        && str_contains((string) file_get_contents($repo . '/compose.vps.yaml'), 'KM_SHARE_DOMAIN: ${KM_SHARE_DOMAIN:-share.${KM_DOMAIN}}')
+        && str_contains((string) file_get_contents($repo . '/compose.vps.yaml'), 'KM_SHARE_URL: ${KM_SHARE_URL:-https://${KM_SHARE_DOMAIN:-share.${KM_DOMAIN}}}'));
     // 今のドメインに名前を足した issue は、その場で reload する(11-05 に reload 漏れで html.ito4.jp が古い証明書のままだった)
     check_bool('issue で今のドメインに名前を足したら reload する', preg_match('/if \[ "\$DOMAIN" = "\$\(env_value KM_DOMAIN\)" \]; then\s+echo\s+echo "取れました[^\n]*\n\s+reload_proxy\n\s+do_status\n\s+return 0/', $certScript) === 1);
 }

@@ -16,6 +16,8 @@ declare(strict_types=1);
  *   /bridge.html・/bridge.js・/sw.js  ローカルの仕組み(src/html-host/)
  *   /robots.txt          検索に載せない
  *   /                    道具のページへ
+ *
+ * share.<本体>(共有リンク。2026-11-05)は lib/html-share-view.php が答える(注意の画面・パスワード・いつも最新の版)
  */
 
 require_once __DIR__ . '/lib/site.php';
@@ -40,7 +42,13 @@ function km_html_view_not_found(string $message = 'ページが見つかりま�
 /** このホストが見せる側か(Host は利用者が書けるので、設定した名前と同じときだけ) */
 function km_html_view_host_ok(): bool
 {
-    $parts = parse_url(km_site_html_origin());
+    return km_html_view_host_matches(km_site_html_origin());
+}
+
+/** Host がそのオリジンの名前(とポート)と同じか */
+function km_html_view_host_matches(string $origin): bool
+{
+    $parts = parse_url($origin);
     if (!is_array($parts) || !isset($parts['host'])) {
         return false;
     }
@@ -97,6 +105,11 @@ function km_html_view_send_static(string $name, string $type, string $csp): neve
     exit;
 }
 
+// 共有リンク(share.<本体>。2026-11-05)は別の入口の関数が答える。html のホストでは共有の道に答えない
+if (km_html_view_host_matches(km_site_share_origin())) {
+    require __DIR__ . '/lib/html-share-view.php';
+    km_html_share_view_main();
+}
 if (!km_html_view_host_ok()) {
     km_html_view_not_found();
 }

@@ -325,6 +325,24 @@ function km_site_html_origin(): string
     return $parts['scheme'] . '://html.' . $parts['host'] . ($parts['port'] === null ? '' : ':' . $parts['port']);
 }
 
+/**
+ * **HTML 展開サイトの共有リンク**(2026-11-05、利用者の指示。lib/html-host.php)。末尾にスラッシュは付けない。
+ * 正本は環境変数 `KM_SHARE_URL`。無ければ `https://share.<本体のホスト>`。
+ *
+ * 見せる側(html.<本体>)とも別のオリジンにする。html.<本体> にはほかの人が「このブラウザ」に置いたもの(IndexedDB)と
+ * Service Worker があり、他人の共有ページのスクリプトが同じオリジンで動くと、それを読んだり消したりできてしまうため
+ */
+function km_site_share_origin(): string
+{
+    $url = trim((string) getenv('KM_SHARE_URL'));
+    if ($url !== '' && is_array($parsed = parse_url($url)) && isset($parsed['host'], $parsed['scheme'])) {
+        return strtolower($parsed['scheme']) . '://' . strtolower($parsed['host']) . (isset($parsed['port']) ? ':' . (int) $parsed['port'] : '');
+    }
+    $parts = km_site_parts();
+
+    return $parts['scheme'] . '://share.' . $parts['host'] . ($parts['port'] === null ? '' : ':' . $parts['port']);
+}
+
 /** 「host:port」の表示用。接続先を人に見せるところで使う。 */
 function km_site_host_port(string $service): string
 {

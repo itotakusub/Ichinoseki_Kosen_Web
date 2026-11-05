@@ -76,6 +76,21 @@ const KM_HTML_VIEWER_TEMPS_MAX = 30;
  */
 const KM_HTML_GATE_TTL = 7200;
 const KM_HTML_GATE_SESSION_KEY = 'km_html_gate';
+/** 関門で同意してもらう規約の版。共有リンク(第8条の2 を改めた)で同意し直してもらうため、規約の日付に印を足す */
+const KM_HTML_GATE_TERMS_SUFFIX = '#share';
+
+/*
+ * 共有リンク(2026-11-05、利用者の指示「パスワードあり・なしで共有できるように(要アカウントログイン)」)。
+ * サインインして保存したサイトだけ。https://share.<本体>/<32 字>/ で、いつも最新の版を見せる。
+ * 開く前に注意の画面を挟む(パスワード付きならここで入れる)。期限は 1 日・7 日・30 日・止めるまで。止めたら行を消す
+ */
+const KM_HTML_SHARE_COOKIE = '__Host-KMSH';
+const KM_HTML_SHARES_PER_SITE = 5;
+const KM_HTML_SHARE_GRANT_TTL = 43200;
+const KM_HTML_SHARE_GRANT_MAX = 30;
+const KM_HTML_SHARE_PASSWORD_MIN = 6;
+const KM_HTML_SHARE_PASSWORD_MAX = 72;   // password_hash(bcrypt)が見るのは 72 バイトまで
+const KM_HTML_SHARE_EXPIRES = ['1d' => 86400, '7d' => 604800, '30d' => 2592000, 'none' => null];
 
 /**
  * 返すときの型(拡張子 → Content-Type)。**ここに無いものは application/octet-stream で落とさせる。**
@@ -351,6 +366,14 @@ function km_html_parse_view_path(string $uriPath): ?array
         }
         $rest = substr($v[2], 1);
     }
+    $path = km_html_decode_view_rest($rest);
+
+    return $path === null ? null : ['kind' => $kind, 'id' => $m[2], 'version' => $version, 'path' => $path, 'slash' => true];
+}
+
+/** 番号より後ろのパスを読む(%xx を戻し、外へ出る段・制御文字は断る)。純粋関数 */
+function km_html_decode_view_rest(string $rest): ?string
+{
     $segments = $rest === '' ? [] : explode('/', $rest);
     $decoded = [];
     foreach ($segments as $index => $segment) {
@@ -366,7 +389,7 @@ function km_html_parse_view_path(string $uriPath): ?array
         $decoded[] = $segment;
     }
 
-    return ['kind' => $kind, 'id' => $m[2], 'version' => $version, 'path' => implode('/', $decoded), 'slash' => true];
+    return implode('/', $decoded);
 }
 
 /**
@@ -678,6 +701,30 @@ function km_html_ensure_tables(PDO $pdo): void
             INDEX (expires_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         SQL);
+    // 共有リンク(2026-11-05)。public_id がリンクそのもの。パスワードは password_hash で置く(NULL ならなし)。expires_at が NULL なら止めるまで
+    $pdo->exec(<<<'SQL'
+        CREATE TABLE IF NOT EXISTS km_html_shares (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            public_id CHAR(32) NOT NULL,
+            site_id INT NOT NULL,
+            owner_sub VARCHAR(191) NOT NULL,
+            password_hash VARCHAR(255) NULL,
+            expires_at DATETIME NULL,
+            created_at DATETIME NOT NULL,
+            opened_count INT NOT NULL DEFAULT 0,
+            UNIQUE KEY (public_id),
+            INDEX (site_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        SQL);
+    // 共有を開けた印(share.<本体> の Cookie __Host-KMSH の値のハッシュ → 開けた共有の番号)
+    $pdo->exec(<<<'SQL'
+        CREATE TABLE IF NOT EXISTS km_html_share_grants (
+            hash CHAR(64) NOT NULL PRIMARY KEY,
+            shares TEXT NOT NULL,
+            expires_at DATETIME NOT NULL,
+            INDEX (expires_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        SQL);
     $done = true;
 }
 
@@ -923,6 +970,9 @@ function km_html_version_delete(PDO $pdo, array $site, int $version): void
 /** サイトを消す(版と中身ごと)。行を消してからファイル */
 function km_html_site_delete(PDO $pdo, array $site): void
 {
+    km_html_ensure_tables($pdo);
+    // 共有リンクも一緒に止める(2026-11-05)。最後の版を消したとき・アカウントの削除・管理画面からも、ここを通る
+    $pdo->prepare('DELETE FROM km_html_shares WHERE site_id = ?')->execute([$site['dbId']]);
     $pdo->prepare('DELETE FROM km_html_versions WHERE site_id = ?')->execute([$site['dbId']]);
     $pdo->prepare('DELETE FROM km_html_sites WHERE id = ?')->execute([$site['dbId']]);
     km_html_remove_dir(km_html_site_dir($site['id']));
@@ -975,6 +1025,16 @@ function km_html_admin_summary(PDO $pdo): array
     $temp = $pdo->prepare('SELECT COUNT(*), COALESCE(SUM(bytes), 0) FROM km_html_temp WHERE expires_at > ?');
     $temp->execute([km_html_now()]);
     [$tempCount, $tempBytes] = $temp->fetch(PDO::FETCH_NUM) ?: [0, 0];
+    // 共有リンクの数(期限の中のもの。2026-11-05)
+    $shares = $pdo->prepare('SELECT site_id, COUNT(*) FROM km_html_shares WHERE expires_at IS NULL OR expires_at > ? GROUP BY site_id');
+    $shares->execute([km_html_now()]);
+    $shareCounts = [];
+    foreach ($shares->fetchAll(PDO::FETCH_NUM) as [$siteId, $count]) {
+        $shareCounts[(int) $siteId] = (int) $count;
+    }
+    foreach ($sites as $index => $site) {
+        $sites[$index]['shares'] = $shareCounts[$site['dbId']] ?? 0;
+    }
 
     return ['owners' => array_values($owners), 'sites' => $sites, 'tempCount' => (int) $tempCount, 'tempBytes' => (int) $tempBytes];
 }
@@ -1008,6 +1068,9 @@ function km_html_temp_sweep(PDO $pdo): int
     }
     $pdo->prepare('DELETE FROM km_html_tickets WHERE expires_at <= ?')->execute([km_html_now()]);
     $pdo->prepare('DELETE FROM km_html_viewers WHERE expires_at <= ?')->execute([km_html_now()]);
+    // 期限の過ぎた共有リンクと、開けた印(2026-11-05)
+    $pdo->prepare('DELETE FROM km_html_shares WHERE expires_at IS NOT NULL AND expires_at <= ?')->execute([km_html_now()]);
+    $pdo->prepare('DELETE FROM km_html_share_grants WHERE expires_at <= ?')->execute([km_html_now()]);
 
     return $removed;
 }
@@ -1220,6 +1283,247 @@ function km_html_viewers_revoke_owner(PDO $pdo, string $ownerSub): int
 function km_html_viewer_cookie_set(string $token): void
 {
     setcookie(KM_HTML_VIEWER_COOKIE, $token, [
+        'expires' => 0,
+        'path' => '/',
+        'secure' => true,
+        'httponly' => true,
+        'samesite' => 'Lax',
+    ]);
+}
+
+// ---------------------------------------------------------------------------
+// 共有リンク(2026-11-05、利用者の指示)。見せるのは share.<本体>(html-view.php がホストで振り分ける)
+// ---------------------------------------------------------------------------
+
+/** 関門で同意してもらう規約の版(KM_LEGAL_UPDATED に印を足したもの) */
+function km_html_gate_terms(string $legalUpdated): string
+{
+    return $legalUpdated . KM_HTML_GATE_TERMS_SUFFIX;
+}
+
+function km_html_share_id_valid(string $id): bool
+{
+    return preg_match('/^[0-9a-f]{32}$/', $id) === 1;
+}
+
+/** 期限の選び方 → 秒(止めるまでは null)。知らない値は断る(純粋関数) */
+function km_html_share_expires_seconds(string $choice): ?int
+{
+    if (!array_key_exists($choice, KM_HTML_SHARE_EXPIRES)) {
+        throw new InvalidArgumentException('期限の選び方が違います。');
+    }
+
+    return KM_HTML_SHARE_EXPIRES[$choice];
+}
+
+/** 共有のパスワード。空ならなし。あるなら 6〜72 バイト・制御文字なし(純粋関数) */
+function km_html_share_password_check(string $password): void
+{
+    if ($password === '') {
+        return;
+    }
+    if (mb_strlen($password) < KM_HTML_SHARE_PASSWORD_MIN || strlen($password) > KM_HTML_SHARE_PASSWORD_MAX) {
+        throw new InvalidArgumentException('パスワードは ' . KM_HTML_SHARE_PASSWORD_MIN . ' 文字以上(英数字なら ' . KM_HTML_SHARE_PASSWORD_MAX . ' 文字まで)にしてください。');
+    }
+    if (preg_match('/[\x00-\x1F\x7F]/', $password) === 1) {
+        throw new InvalidArgumentException('パスワードに使えない文字があります。');
+    }
+}
+
+/**
+ * 共有の道(share.<本体> の上の URI のパス)を読む(純粋関数)。
+ * /<32 字>[/<パス>] → {id, path, slash}。合わなければ null
+ *
+ * @return array{id:string, path:string, slash:bool}|null
+ */
+function km_html_parse_share_path(string $uriPath): ?array
+{
+    if (preg_match('#^/([0-9a-f]{32})(/.*)?$#', $uriPath, $m) !== 1) {
+        return null;
+    }
+    $rest = $m[2] ?? '';
+    if ($rest === '') {
+        return ['id' => $m[1], 'path' => '', 'slash' => false];
+    }
+    // 中のパスの読み方は /s/ と同じ。版(v3/)は無い(いつも最新の版)
+    $path = km_html_decode_view_rest(substr($rest, 1));
+
+    return $path === null ? null : ['id' => $m[1], 'path' => $path, 'slash' => true];
+}
+
+/**
+ * 注意の画面の「開く」(POST)を受けてよいか(純粋関数)。**share のオリジンから送られたときだけ。**
+ * Origin があればそれで決める。無ければ Sec-Fetch-Site が same-origin のときだけ
+ */
+function km_html_share_post_allowed(array $server, string $shareOrigin): bool
+{
+    $origin = strtolower(trim((string) ($server['HTTP_ORIGIN'] ?? '')));
+    // Origin: null(Referrer-Policy: no-referrer のページから送ったときなど)は、無いものとして Sec-Fetch-Site で見る
+    if ($origin !== '' && $origin !== 'null') {
+        return $origin === strtolower($shareOrigin);
+    }
+
+    return strtolower(trim((string) ($server['HTTP_SEC_FETCH_SITE'] ?? ''))) === 'same-origin';
+}
+
+function km_html_share_url(string $shareId): string
+{
+    return km_site_share_origin() . '/' . $shareId . '/';
+}
+
+/** @return array<string, mixed> */
+function km_html_share_row(array $row): array
+{
+    return [
+        'id' => (string) $row['public_id'],
+        'dbId' => (int) $row['id'],
+        'siteDbId' => (int) $row['site_id'],
+        'ownerSub' => (string) $row['owner_sub'],
+        'passwordHash' => $row['password_hash'] === null ? null : (string) $row['password_hash'],
+        'expiresAt' => $row['expires_at'] === null ? null : (string) $row['expires_at'],
+        'createdAt' => (string) $row['created_at'],
+        'opened' => (int) $row['opened_count'],
+    ];
+}
+
+/** 画面に返す形(パスワードのハッシュと持ち主は返さない) */
+function km_html_share_out(array $share): array
+{
+    return [
+        'id' => $share['id'],
+        'url' => km_html_share_url($share['id']),
+        'hasPassword' => $share['passwordHash'] !== null,
+        'expiresAt' => $share['expiresAt'],
+        'createdAt' => $share['createdAt'],
+        'opened' => $share['opened'],
+    ];
+}
+
+/** そのサイトの共有(期限の中のもの。新しい順) @return list<array<string, mixed>> */
+function km_html_shares_of_site(PDO $pdo, int $siteDbId): array
+{
+    km_html_ensure_tables($pdo);
+    $statement = $pdo->prepare('SELECT * FROM km_html_shares WHERE site_id = ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY id DESC');
+    $statement->execute([$siteDbId, km_html_now()]);
+
+    return array_map('km_html_share_row', $statement->fetchAll(PDO::FETCH_ASSOC));
+}
+
+/** 期限の中の共有(無い・止めた・期限切れは null) */
+function km_html_share_find(PDO $pdo, string $shareId): ?array
+{
+    if (!km_html_share_id_valid($shareId)) {
+        return null;
+    }
+    km_html_ensure_tables($pdo);
+    $statement = $pdo->prepare('SELECT * FROM km_html_shares WHERE public_id = ? AND (expires_at IS NULL OR expires_at > ?)');
+    $statement->execute([$shareId, km_html_now()]);
+    $row = $statement->fetch(PDO::FETCH_ASSOC);
+
+    return is_array($row) ? km_html_share_row($row) : null;
+}
+
+/** 共有のサイト(持ち主が変わっていないことも確かめる) */
+function km_html_share_site(PDO $pdo, array $share): ?array
+{
+    $statement = $pdo->prepare('SELECT * FROM km_html_sites WHERE id = ?');
+    $statement->execute([$share['siteDbId']]);
+    $row = $statement->fetch(PDO::FETCH_ASSOC);
+    if (!is_array($row)) {
+        return null;
+    }
+    $site = km_html_site_row($row);
+
+    return hash_equals($site['ownerSub'], $share['ownerSub']) ? $site : null;
+}
+
+/** 共有リンクを作る(1 サイトに 5 本まで) */
+function km_html_share_create(PDO $pdo, array $site, string $password, string $expiresChoice): array
+{
+    km_html_share_password_check($password);
+    $seconds = km_html_share_expires_seconds($expiresChoice);
+    if (count(km_html_shares_of_site($pdo, $site['dbId'])) >= KM_HTML_SHARES_PER_SITE) {
+        throw new InvalidArgumentException('共有リンクは 1 つのサイトに ' . KM_HTML_SHARES_PER_SITE . ' 本までです。使わないものを止めてから作ってください。');
+    }
+    $publicId = bin2hex(random_bytes(16));
+    $pdo->prepare('INSERT INTO km_html_shares (public_id, site_id, owner_sub, password_hash, expires_at, created_at, opened_count) VALUES (?, ?, ?, ?, ?, ?, 0)')
+        ->execute([
+            $publicId,
+            $site['dbId'],
+            $site['ownerSub'],
+            $password === '' ? null : password_hash($password, PASSWORD_DEFAULT),
+            $seconds === null ? null : km_html_now($seconds),
+            km_html_now(),
+        ]);
+    $share = km_html_share_find($pdo, $publicId);
+    if ($share === null) {
+        throw new RuntimeException('共有リンクを作れませんでした。');
+    }
+
+    return $share;
+}
+
+/** 共有リンクを止める(行を消す。同じリンクは二度と使えない) */
+function km_html_share_delete(PDO $pdo, array $site, string $shareId): void
+{
+    km_html_ensure_tables($pdo);
+    $statement = $pdo->prepare('DELETE FROM km_html_shares WHERE public_id = ? AND site_id = ?');
+    $statement->execute([$shareId, $site['dbId']]);
+    if ($statement->rowCount() === 0) {
+        throw new InvalidArgumentException('その共有リンクは見つかりません。');
+    }
+}
+
+/** そのサイトの共有リンクを全部止める(管理画面)。止めた数 */
+function km_html_shares_delete_site(PDO $pdo, int $siteDbId): int
+{
+    km_html_ensure_tables($pdo);
+    $statement = $pdo->prepare('DELETE FROM km_html_shares WHERE site_id = ?');
+    $statement->execute([$siteDbId]);
+
+    return $statement->rowCount();
+}
+
+function km_html_share_opened(PDO $pdo, array $share): void
+{
+    $pdo->prepare('UPDATE km_html_shares SET opened_count = opened_count + 1 WHERE id = ?')->execute([$share['dbId']]);
+}
+
+/** 開けた共有の印に足す(無ければ作る)。印の値を返す */
+function km_html_share_grant(PDO $pdo, string $currentToken, string $shareId): string
+{
+    km_html_ensure_tables($pdo);
+    $shares = km_html_share_grant_find($pdo, $currentToken);
+    $known = preg_match('/^[0-9a-f]{64}$/', $currentToken) === 1 && $shares !== null;
+    $shares = array_slice(array_values(array_unique(array_merge([$shareId], $shares ?? []))), 0, KM_HTML_SHARE_GRANT_MAX);
+    $token = $known ? $currentToken : bin2hex(random_bytes(32));
+    $pdo->prepare('REPLACE INTO km_html_share_grants (hash, shares, expires_at) VALUES (?, ?, ?)')
+        ->execute([hash('sha256', $token), json_encode($shares), km_html_now(KM_HTML_SHARE_GRANT_TTL)]);
+
+    return $token;
+}
+
+/** @return list<string>|null 開けた共有の番号(印が無い・切れていれば null) */
+function km_html_share_grant_find(PDO $pdo, string $token): ?array
+{
+    if (preg_match('/^[0-9a-f]{64}$/', $token) !== 1) {
+        return null;
+    }
+    km_html_ensure_tables($pdo);
+    $statement = $pdo->prepare('SELECT shares FROM km_html_share_grants WHERE hash = ? AND expires_at > ?');
+    $statement->execute([hash('sha256', $token), km_html_now()]);
+    $value = $statement->fetchColumn();
+    if ($value === false) {
+        return null;
+    }
+
+    return array_values(array_filter(json_decode((string) $value, true) ?: [], static fn ($id): bool => is_string($id) && km_html_share_id_valid($id)));
+}
+
+/** 印の Cookie(share.<本体> だけ。ブラウザを閉じたら消える。DB 側は 12 時間) */
+function km_html_share_cookie_set(string $token): void
+{
+    setcookie(KM_HTML_SHARE_COOKIE, $token, [
         'expires' => 0,
         'path' => '/',
         'secure' => true,
