@@ -21,8 +21,10 @@ require_once __DIR__ . '/lib/release.php';   // km_release_tags(): 配備のあ�
 require_once __DIR__ . '/lib/csp.php';
 require_once __DIR__ . '/lib/csrf.php';
 require_once __DIR__ . '/lib/html-host.php';
+require_once __DIR__ . '/lib/legal.php';      // 使い始める前に見せる規約(第8条の2)
+require_once __DIR__ . '/lib/recaptcha.php';  // 使い始める前の「私はロボットではありません」
 
-// 見せる側の bridge.html を見えない iframe で開く(ローカルの置き場)。許すのは見せる側のオリジンだけ
+// 見せる側の bridge.html を見えない iframe で開く(ローカルの置き場)。枠に許すのは reCAPTCHA と見せる側のオリジンだけ
 km_csp_send('html-host');
 
 $signedIn = false;
@@ -40,6 +42,16 @@ try {
     km_session_start();
 }
 $csrf = km_csrf_token();
+
+/*
+ * 使い始める前の関門(2026-11-05、利用者の指示「展開する前に、利用規約と I'm not a robot を表示」)。
+ * 通るまで落とす場所を出さない。通ったかはセッションの印(api/html-host.php の gate が置く)で決める。
+ * reCAPTCHA のスクリプト(Google)は、関門を出すときだけ読む
+ */
+$gateUntil = km_html_gate_until(is_array($_SESSION ?? null) ? $_SESSION : [], KM_LEGAL_UPDATED);
+$gatePassed = $gateUntil > 0;
+$gateReady = km_recaptcha_configured();
+$gateArticle = array_values(array_filter(km_legal_terms(), static fn (array $section): bool => ($section['heading'] ?? '') === '第8条の2(HTML 展開サイト)'));
 
 function km_html_page_e(?string $value): string
 {
@@ -122,7 +134,23 @@ $limits = [
         .km-html-empty { color: var(--secondary); font-size: 0.9rem; margin: 0; }
         .km-html-danger { color: #b91c1c; border-color: #b91c1c; }
         .km-html-current-badge { font-size: 0.75rem; font-weight: 700; color: var(--on-primary); background: var(--primary); border-radius: 999px; padding: 0.05rem 0.5rem; }
+        .km-html-gate { padding: 1rem 1.1rem; border: 2px solid var(--primary); border-radius: var(--radius-lg); background: var(--glass-heavy); }
+        .km-html-gate[hidden], .km-html-work[hidden] { display: none; }
+        .km-html-gate > h2 { font-size: 1.15rem; margin: 0 0 0.5rem; }
+        .km-html-terms { max-height: 18rem; overflow-y: auto; padding: 0.25rem 0.9rem; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg, transparent); line-height: 1.7; font-size: 0.92rem; }
+        .km-html-terms .km-doc-section h2 { font-size: 1rem; margin: 0.6rem 0 0.4rem; }
+        .km-html-terms ul { padding-left: 1.2rem; }
+        .km-html-terms details { margin: 0.5rem 0 0.75rem; }
+        .km-html-terms summary { cursor: pointer; color: var(--primary-dark); font-weight: 700; }
+        .km-html-agree { display: flex; gap: 0.5rem; align-items: baseline; margin: 0.9rem 0; font-weight: 700; line-height: 1.5; }
+        .km-html-agree input { width: 1.15rem; height: 1.15rem; flex: none; }
+        .km-html-recaptcha { margin: 0 0 0.75rem; min-height: 78px; }
+        .km-html-gate .km-html-status { margin: 0.5rem 0 0; }
     </style>
+    <?php if (!$gatePassed && $gateReady): ?>
+        <?php // 関門を出すときだけ Google の reCAPTCHA を読む(contact.php と同じ。方式で読む JS が違うので lib/recaptcha.php が決める) ?>
+        <script id="km-html-recaptcha-js" src="<?= km_html_page_e(km_recaptcha_script_url()) ?>" async defer></script>
+    <?php endif; ?>
     <?php // 配備のあとに「ページを更新してください」と出す(2026-11-02。lib/release.php・Main/release-watch.js) ?>
     <?= km_release_tags() ?>
 </head>
@@ -145,7 +173,9 @@ $limits = [
         data-api="/api/html-host.php"
         data-types="<?= km_html_page_e((string) json_encode(KM_HTML_TYPES, JSON_UNESCAPED_SLASHES)) ?>"
         data-limits="<?= km_html_page_e((string) json_encode($limits)) ?>"
-        data-signed-in="<?= $signedIn ? '1' : '0' ?>">
+        data-signed-in="<?= $signedIn ? '1' : '0' ?>"
+        data-gate-until="<?= (int) $gateUntil ?>"
+        data-recaptcha-src="<?= $gateReady ? km_html_page_e(km_recaptcha_script_url()) : '' ?>">
         <p class="km-html-lead">
             ZIP・HTML・CSS・JS(フォルダごとでも)を落とすと、<strong><?= km_html_page_e(km_site_html_origin()) ?></strong> の実際の URL で開けます。
             CSS・JS・画像は、HTML から相対パスで読めます。
@@ -156,6 +186,37 @@ $limits = [
             <?php endif; ?>
         </p>
 
+        <section class="km-html-gate" id="km-html-gate" aria-labelledby="km-html-gate-title"<?= $gatePassed ? ' hidden' : '' ?>>
+            <h2 id="km-html-gate-title">使う前に —— 利用規約と確認</h2>
+            <p class="km-html-note">
+                展開する前に、下の利用規約(とくに第8条の2)を読んで同意し、「私はロボットではありません」にチェックを入れてください。
+                確認は <?= intdiv(KM_HTML_GATE_TTL, 3600) ?> 時間、このブラウザで有効です。
+            </p>
+            <div class="km-html-terms" tabindex="0" role="region" aria-label="利用規約">
+                <?php // エスケープは km_legal_render_sections() の中で済ませてある ?>
+                <?= km_legal_render_sections($gateArticle) ?>
+                <details>
+                    <summary>利用規約の全文を読む</summary>
+                    <?= km_legal_render_sections(km_legal_terms()) ?>
+                </details>
+            </div>
+            <p class="km-html-note">別のタブで読む: <a href="/terms.php" target="_blank" rel="noopener">利用規約</a>・<a href="/privacy.php" target="_blank" rel="noopener">プライバシーポリシー</a></p>
+            <label class="km-html-agree"><input type="checkbox" id="km-html-agree"> <span>利用規約に同意します</span></label>
+            <?php if ($gateReady): ?>
+                <?php // data-action はサーバーの照合(KM_RECAPTCHA_ACTION_HTML_HOST)と対。Enterprise だけが見る ?>
+                <div class="g-recaptcha km-html-recaptcha" data-sitekey="<?= km_html_page_e(km_recaptcha_site_key()) ?>"
+                     data-action="<?= km_html_page_e(KM_RECAPTCHA_ACTION_HTML_HOST) ?>"></div>
+                <p class="km-html-note">確認のため、接続元の IP アドレスやブラウザの情報が Google(reCAPTCHA)へ送られます(<a href="/privacy.php" target="_blank" rel="noopener">プライバシーポリシー</a>の 7)。</p>
+            <?php else: ?>
+                <p class="km-html-status is-error">いま確認の仕組みが使えないため、始められません。管理者へお知らせください。</p>
+            <?php endif; ?>
+            <div class="km-html-buttons">
+                <button type="button" class="km-doc-button" id="km-html-gate-ok"<?= $gateReady ? '' : ' disabled' ?>>同意して始める</button>
+            </div>
+            <p class="km-html-status" id="km-html-gate-status" role="status" aria-live="polite"></p>
+        </section>
+
+        <div class="km-html-work" id="km-html-work"<?= $gatePassed ? '' : ' hidden' ?>>
         <div class="km-html-drop" id="km-html-drop">
             <p class="km-html-drop-title">ここに落とす</p>
             <p class="km-html-drop-note">ZIP・HTML・CSS・JS・画像・フォルダ(<?= intdiv(KM_HTML_MAX_TOTAL_BYTES, 1024 * 1024) ?>MB・<?= KM_HTML_MAX_FILES ?> 個まで。サーバーへ送るときは、まとめて <?= intdiv(KM_HTML_MAX_UPLOAD_BYTES, 1024 * 1024) ?>MB まで)</p>
@@ -177,8 +238,6 @@ $limits = [
             </div>
         </fieldset>
 
-        <p class="km-html-status" id="km-html-status" role="status" aria-live="polite"></p>
-
         <fieldset class="km-html-chooser" id="km-html-chooser" hidden>
             <legend>最初に開く HTML を選んでください</legend>
             <div id="km-html-chooser-list"></div>
@@ -187,6 +246,10 @@ $limits = [
                 <button type="button" class="km-doc-link" id="km-html-chooser-cancel">やめる</button>
             </div>
         </fieldset>
+        </div>
+
+        <?php // 一覧の操作(開く・消す)の結果も出すので、関門の間も見える所に置く ?>
+        <p class="km-html-status" id="km-html-status" role="status" aria-live="polite"></p>
 
         <section class="km-html-section" aria-labelledby="km-html-local-title">
             <h2 id="km-html-local-title">このブラウザに置いたもの</h2>

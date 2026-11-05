@@ -68,6 +68,15 @@ const KM_HTML_DEPTH_MAX = 16;
 /** 一時の印をいくつまで 1 つのブラウザに覚えるか */
 const KM_HTML_VIEWER_TEMPS_MAX = 30;
 
+/*
+ * 使い始める前の関門(2026-11-05、利用者の指示「展開する前に、利用規約と I'm not a robot を表示」)。
+ * 道具のページで規約(第8条の2)に同意し、reCAPTCHA を通すと、本体のセッションに「いつまで・どの版の規約に」を置く。
+ * サーバーに置く口(temp・temp_patch・save)はこれが無ければ断る。このブラウザの中に置くときは、道具のページの JS が同じ印を見る。
+ * 規約を改めたら(KM_LEGAL_UPDATED が変わったら)同意し直してもらう
+ */
+const KM_HTML_GATE_TTL = 7200;
+const KM_HTML_GATE_SESSION_KEY = 'km_html_gate';
+
 /**
  * 返すときの型(拡張子 → Content-Type)。**ここに無いものは application/octet-stream で落とさせる。**
  * 道具のページ(ローカルの Service Worker)にも同じ表を渡す(html.php の data-km-types)。
@@ -410,6 +419,32 @@ function km_html_auth_request_allowed(array $server, string $appOrigin): bool
 }
 
 /** バイト数の表示 */
+/**
+ * セッションに置いた関門の印が、今も効いているか(純粋関数)。
+ *
+ * @param array<mixed> $session $_SESSION
+ */
+function km_html_gate_passed(array $session, string $termsVersion, ?int $now = null): bool
+{
+    $record = $session[KM_HTML_GATE_SESSION_KEY] ?? null;
+
+    return is_array($record)
+        && ($record['terms'] ?? null) === $termsVersion
+        && is_int($record['until'] ?? null)
+        && $record['until'] > ($now ?? time());
+}
+
+/** 関門の印(同意した規約の版と期限) @return array{terms: string, until: int} */
+function km_html_gate_record(string $termsVersion, ?int $now = null): array
+{
+    return ['terms' => $termsVersion, 'until' => ($now ?? time()) + KM_HTML_GATE_TTL];
+}
+
+/** 印の期限(無い・切れていれば 0) @param array<mixed> $session */
+function km_html_gate_until(array $session, string $termsVersion, ?int $now = null): int
+{
+    return km_html_gate_passed($session, $termsVersion, $now) ? (int) $session[KM_HTML_GATE_SESSION_KEY]['until'] : 0;
+}
 function km_html_size_label(int $bytes): string
 {
     if ($bytes >= 1024 * 1024) {

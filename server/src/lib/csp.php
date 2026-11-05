@@ -105,16 +105,7 @@ function km_csp_policy(string $profile): string
         $connect[] = 'https://api.country.is';
     }
 
-    if ($profile === 'html-host') {
-        /*
-         * HTML 展開サイトの道具のページ(html.php。2026-11-05)。見せる側(html.<ドメイン>)の bridge.html を
-         * 見えない iframe で開き、ブラウザの中(IndexedDB と Service Worker)に置く(lib/html-host.php)。
-         * 許すのは見せる側のオリジンだけ。上げたものを本体のオリジンで動かすことはない
-         */
-        $frame = [km_site_html_origin()];
-    }
-
-    if ($profile === 'contact') {
+    if ($profile === 'contact' || $profile === 'html-host') {
         /*
          * reCAPTCHA。**このプロジェクト唯一の意図的な外部依存**で、自前ホストできない。
          * スクリプトは google.com、部品は gstatic.com、チェックボックスの本体は iframe。
@@ -129,6 +120,16 @@ function km_csp_policy(string $profile): string
         $script[] = 'https://www.gstatic.com/recaptcha/';
         $frame = ['https://www.google.com/recaptcha/'];
         $style[] = 'https://www.gstatic.com/recaptcha/';
+    }
+
+    if ($profile === 'html-host') {
+        /*
+         * HTML 展開サイトの道具のページ(html.php。2026-11-05)。見せる側(html.<ドメイン>)の bridge.html を
+         * 見えない iframe で開き、ブラウザの中(IndexedDB と Service Worker)に置く(lib/html-host.php)。
+         * 枠に許すのは reCAPTCHA(使い始める前の確認。上の contact と同じ)と見せる側のオリジンだけ。
+         * 上げたものを本体のオリジンで動かすことはない
+         */
+        $frame[] = km_site_html_origin();
     }
 
     $directives = [

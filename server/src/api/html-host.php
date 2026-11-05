@@ -7,7 +7,8 @@ declare(strict_types=1);
  *
  * どれも POST・CSRF(X-KM-CSRF。html.php の meta km-csrf)。action で分ける:
  *
- *   state          サインインしているか・保存できるか・サーバーのサイトの一覧(版つき)
+ *   state          サインインしているか・保存できるか・サーバーのサイトの一覧(版つき)・関門を通ったか
+ *   gate           使い始める前の関門(2026-11-05)。agree=1・g-recaptcha-response → セッションに印(2 時間・規約の版つき)
  *   temp           一時フォルダに置く(サインインしていなくてよい)。zip・name・entry → id・key(鍵は道具のページが覚える)
  *   temp_patch     一時のものに CSS・JS を足す。id・key・zip
  *   temp_delete    一時のものを消す。id・key
@@ -26,6 +27,9 @@ require_once __DIR__ . '/../api_bootstrap.php';
 require_once __DIR__ . '/../lib/db.php';
 require_once __DIR__ . '/../lib/csrf.php';
 require_once __DIR__ . '/../lib/html-host.php';
+require_once __DIR__ . '/../lib/legal.php';           // KM_LEGAL_UPDATED: 同意した規約の版
+require_once __DIR__ . '/../lib/recaptcha.php';
+require_once __DIR__ . '/../lib/map-rate-limit.php';  // km_map_rate_limit_ip(): reCAPTCHA に渡す接続元
 
 require_method('POST');
 
@@ -51,12 +55,34 @@ try {
 if (!km_csrf_verify()) {
     respond(['success' => false, 'message' => 'ページを読み込み直してからやり直してください。'], 403);
 }
+
+$action = is_string($_POST['action'] ?? null) ? $_POST['action'] : '';
+
+/*
+ * 使い始める前の関門(2026-11-05、利用者の指示)。規約への同意と reCAPTCHA を確かめ、セッションに印を置く。
+ * **セッションへ書くので、閉じる前に済ませる。** reCAPTCHA に届かないときは通さない(lib/recaptcha.php の決まり)
+ */
+if ($action === 'gate') {
+    if (session_status() !== PHP_SESSION_ACTIVE) {
+        respond(['success' => false, 'message' => 'ページを読み込み直してからやり直してください。'], 403);
+    }
+    if (km_html_api_str('agree', 2) !== '1') {
+        respond(['success' => false, 'message' => '利用規約を読んで、「同意します」にチェックを入れてください。'], 400);
+    }
+    try {
+        km_recaptcha_verify(km_html_api_str('g-recaptcha-response', 4000), km_map_rate_limit_ip(), KM_RECAPTCHA_ACTION_HTML_HOST);
+    } catch (KmUserError $exception) {
+        respond(['success' => false, 'message' => $exception->getMessage()], 400);
+    }
+    $_SESSION[KM_HTML_GATE_SESSION_KEY] = km_html_gate_record(KM_LEGAL_UPDATED);
+    respond(['success' => true, 'gateUntil' => $_SESSION[KM_HTML_GATE_SESSION_KEY]['until']]);
+}
+$gateUntil = km_html_gate_until(is_array($_SESSION ?? null) ? $_SESSION : [], KM_LEGAL_UPDATED);
+
 // 大きな本文を読む間、同じ人のほかの要求を待たせない
 if (session_status() === PHP_SESSION_ACTIVE) {
     session_write_close();
 }
-
-$action = is_string($_POST['action'] ?? null) ? $_POST['action'] : '';
 
 try {
     $pdo = km_db();
@@ -160,6 +186,18 @@ function km_html_api_require_saver(?string $owner, ?string $blocked): string
     return $owner;
 }
 
+/** サーバーに置く前に、関門を通っているか(通っていなければ道具のページが関門を出し直す) */
+function km_html_api_require_gate(int $gateUntil): void
+{
+    if ($gateUntil <= 0) {
+        respond([
+            'success' => false,
+            'gate' => true,
+            'message' => '先に利用規約への同意と「私はロボットではありません」の確認をしてください(確認は ' . intdiv(KM_HTML_GATE_TTL, 3600) . ' 時間有効です)。',
+        ], 403);
+    }
+}
+
 try {
     switch ($action) {
         case 'state':
@@ -172,6 +210,7 @@ try {
                 'name' => $ownerName,
                 'sites' => array_map('km_html_api_site_out', $sites),
                 'usedBytes' => $owner !== null && $blocked === null ? km_html_owner_bytes($pdo, $owner) : 0,
+                'gateUntil' => $gateUntil,
                 'limits' => [
                     'uploadBytes' => KM_HTML_MAX_UPLOAD_BYTES,
                     'totalBytes' => KM_HTML_MAX_TOTAL_BYTES,
@@ -183,10 +222,12 @@ try {
             ]);
 
         case 'temp':
+            km_html_api_require_gate($gateUntil);
             $result = km_html_temp_save($pdo, km_html_api_files(), km_html_api_str('name', 200), km_html_api_str('entry'));
             respond(['success' => true, 'temp' => $result]);
 
         case 'temp_patch':
+            km_html_api_require_gate($gateUntil);
             $row = km_html_api_own_temp($pdo);
             $result = km_html_temp_save($pdo, km_html_api_files(), '', km_html_api_str('entry'), $row);
             respond(['success' => true, 'temp' => $result]);
@@ -197,6 +238,7 @@ try {
 
         case 'save':
             $saver = km_html_api_require_saver($owner, $blocked);
+            km_html_api_require_gate($gateUntil);
             $siteId = km_html_api_str('site', 40);
             $result = km_html_site_save(
                 $pdo,

@@ -47,6 +47,11 @@
         server: document.getElementById('km-html-server'),
         serverSection: document.getElementById('km-html-server-section'),
         serverNote: document.getElementById('km-html-server-note'),
+        gate: document.getElementById('km-html-gate'),
+        work: document.getElementById('km-html-work'),
+        agree: document.getElementById('km-html-agree'),
+        gateOk: document.getElementById('km-html-gate-ok'),
+        gateStatus: document.getElementById('km-html-gate-status'),
     };
 
     const state = {
@@ -56,6 +61,8 @@
         // CSS・JS だけを落としたときの足す先 {kind: 'local'|'temp'|'site', id}
         current: readJson(CURRENT_KEY, null),
         busy: false,
+        // 使い始める前の関門の期限(秒。0 なら未通過)。サーバーのセッションの印と同じ値(api/html-host.php の gate)
+        gateUntil: Number(root.dataset.gateUntil || 0),
     };
 
     // ------------------------------------------------------------------
@@ -138,12 +145,93 @@
             .then(function (response) {
                 return response.json().catch(function () { return null; }).then(function (json) {
                     if (json && json.success) return json;
-                    if (json && json.message) throw fail(json.message);
+                    if (json && json.message) {
+                        const error = fail(json.message);
+                        error.gate = Boolean(json.gate);
+                        throw error;
+                    }
                     if (response.status === 413) throw fail('大きすぎます(' + sizeLabel(LIMITS.uploadBytes || 0) + ' まで)。');
                     if (response.status === 429) throw fail('続けて送りすぎました。少し待ってからやり直してください。');
                     throw fail('送れませんでした(' + response.status + ')。');
                 });
             });
+    }
+
+    // ------------------------------------------------------------------
+    // 使い始める前の関門(2026-11-05、利用者の指示): 利用規約への同意と「私はロボットではありません」
+    // 通るまで落とす場所を出さない。サーバーに置く口も、セッションの印が無ければ断る(error.gate)
+    // ------------------------------------------------------------------
+
+    function gatePassed() {
+        return state.gateUntil * 1000 > Date.now();
+    }
+
+    function setGateStatus(text, isError) {
+        el.gateStatus.textContent = text || '';
+        el.gateStatus.classList.toggle('is-error', Boolean(isError));
+    }
+
+    // クラシック(grecaptcha)と Enterprise(grecaptcha.enterprise)で口が違う
+    function recaptchaApi() {
+        const g = window.grecaptcha;
+        if (!g) return null;
+        return g.enterprise || g;
+    }
+
+    function recaptchaReset() {
+        const api = recaptchaApi();
+        if (api && typeof api.reset === 'function') {
+            try { api.reset(); } catch (error) { /* まだ描かれていない */ }
+        }
+    }
+
+    // ページを開いたときに通っていた人は読んでいない。期限が切れたら、ここで初めて読む
+    function ensureRecaptcha() {
+        const src = root.dataset.recaptchaSrc || '';
+        if (!src || window.grecaptcha || document.getElementById('km-html-recaptcha-js')) return;
+        const script = document.createElement('script');
+        script.id = 'km-html-recaptcha-js';
+        script.src = src;
+        script.async = true;
+        document.head.appendChild(script);
+    }
+
+    function showGate(message) {
+        state.gateUntil = 0;
+        el.work.hidden = true;
+        el.gate.hidden = false;
+        el.agree.checked = false;
+        ensureRecaptcha();
+        recaptchaReset();
+        setGateStatus(message || '', Boolean(message));
+        el.gate.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    }
+
+    function submitGate() {
+        if (!el.agree.checked) {
+            setGateStatus('利用規約を読んで、「利用規約に同意します」にチェックを入れてください。', true);
+            return;
+        }
+        const field = el.gate.querySelector('[name="g-recaptcha-response"]');
+        const token = field ? field.value : '';
+        if (!token) {
+            setGateStatus('「私はロボットではありません」にチェックを入れてください。', true);
+            return;
+        }
+        el.gateOk.disabled = true;
+        setGateStatus('確かめています…');
+        post('gate', { agree: '1', 'g-recaptcha-response': token }).then(function (result) {
+            state.gateUntil = Number(result.gateUntil || 0);
+            setGateStatus('');
+            el.gate.hidden = true;
+            el.work.hidden = false;
+            setStatus('確認できました。ファイルを落としてください。');
+        }, function (error) {
+            recaptchaReset();
+            setGateStatus(error && error.userFacing ? error.message : '確かめられませんでした。もう一度お試しください。', true);
+        }).then(function () {
+            el.gateOk.disabled = false;
+        });
     }
 
     // ------------------------------------------------------------------
@@ -568,6 +656,11 @@
 
     async function handle(rawList) {
         if (state.busy) return;
+        // このブラウザの中に置くときも、関門を通ってから(期限が切れていたら出し直す)
+        if (!gatePassed()) {
+            showGate('確認の期限が切れました。もう一度、同意と確認をお願いします。');
+            return;
+        }
         state.busy = true;
         setStatus('読み込んでいます…');
         try {
@@ -623,6 +716,12 @@
             renderAll();
             setStatus('このブラウザの中に置けなかったので、サーバーの一時フォルダに置きました(24 時間で消えます): ' + temp.name);
         } catch (error) {
+            if (error && error.gate) {
+                // サーバーのセッションの印が無い・切れた(サインインで入れ替わったときなど)
+                setStatus('');
+                showGate(error.message);
+                return;
+            }
             setStatus(error && error.userFacing ? error.message : '置けませんでした。もう一度お試しください。', true);
             if (!(error && error.userFacing)) console.error(error);
         } finally {
@@ -846,6 +945,8 @@
         return post('state', {}).then(function (result) {
             state.server = { signedIn: result.signedIn, canSave: result.canSave, blocked: result.blocked, sites: result.sites || [] };
             if (el.placeServer) el.placeServer.disabled = !result.canSave;
+            // サーバーの印が切れていたら、次に落としたときに関門を出す(ここでは画面を変えない)
+            if (typeof result.gateUntil === 'number') state.gateUntil = result.gateUntil;
             renderAll();
         }, function () {
             renderAll();
@@ -881,6 +982,7 @@
             handle(list);
         });
     });
+    el.gateOk.addEventListener('click', submitGate);
     document.querySelectorAll('input[name="km-html-place"]').forEach(function (radio) {
         radio.addEventListener('change', function () {
             writeJson(PLACE_KEY, radio.value);

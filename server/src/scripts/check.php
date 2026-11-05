@@ -10517,6 +10517,7 @@ function km_check_html_host(): void
 {
     require_once __DIR__ . '/../lib/html-host.php';
     require_once __DIR__ . '/../lib/csp.php';
+    require_once __DIR__ . '/../lib/recaptcha.php';   // KM_RECAPTCHA_ACTION_HTML_HOST(使い始める前の関門)
     $src = __DIR__ . '/..';
 
     km_check_heading('html-host: パス・入口・版(2026-11-05)');
@@ -10658,7 +10659,47 @@ function km_check_html_host(): void
     check_bool('DB の例外の文を利用者に返さない', str_contains($api, '!$exception instanceof PDOException'));
     $page = (string) file_get_contents($src . '/html.php');
     $pageJs = (string) file_get_contents($src . '/Main/html-host.js');
-    check_bool('道具のページは html-host の CSP(枠は見せる側だけ)', str_contains($page, "km_csp_send('html-host');") && str_contains(km_csp_policy('html-host'), 'frame-src ' . km_site_html_origin() . ';'));
+    check_bool('道具のページは html-host の CSP(枠は reCAPTCHA と見せる側だけ)', str_contains($page, "km_csp_send('html-host');") && str_contains(km_csp_policy('html-host'), 'frame-src https://www.google.com/recaptcha/ ' . km_site_html_origin() . ';'));
+    check_bool('html-host の CSP は reCAPTCHA をパスまで絞って読む', str_contains(km_csp_policy('html-host'), "https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/;") && !str_contains(km_csp_policy('html-host'), 'https://www.google.com;'));
+
+    /*
+     * 使い始める前の関門(2026-11-05、利用者の指示「展開する前に、利用規約と I'm not a robot を表示」)
+     */
+    km_check_heading('html-host: 使い始める前の関門(規約と reCAPTCHA)');
+    $gateNow = 1_800_000_000;
+    $gateSession = [KM_HTML_GATE_SESSION_KEY => km_html_gate_record('2026-11-05', $gateNow)];
+    check('関門の印は 2 時間', $gateNow + 7200, $gateSession[KM_HTML_GATE_SESSION_KEY]['until']);
+    check_bool('関門: 期限内で規約の版が同じなら通る', km_html_gate_passed($gateSession, '2026-11-05', $gateNow + 7199));
+    check_bool('関門: 期限を過ぎたら通らない', !km_html_gate_passed($gateSession, '2026-11-05', $gateNow + 7200));
+    check_bool('関門: 規約を改めたら同意し直し', !km_html_gate_passed($gateSession, '2026-12-01', $gateNow + 10));
+    check_bool('関門: 印が無い・形が違うなら通らない', !km_html_gate_passed([], '2026-11-05', $gateNow)
+        && !km_html_gate_passed([KM_HTML_GATE_SESSION_KEY => ['terms' => '2026-11-05', 'until' => (string) ($gateNow + 99)]], '2026-11-05', $gateNow));
+    check('関門: 期限は通ったときだけ返す', [$gateNow + 7200, 0], [km_html_gate_until($gateSession, '2026-11-05', $gateNow), km_html_gate_until($gateSession, '2026-11-05', $gateNow + 7200)]);
+    $apiGate = (string) preg_replace('/^\s*(\/\/|\*|\/\*).*$/m', '', $api);
+    check_bool('口: 関門は規約への同意と reCAPTCHA(action 付き)を確かめてから印を置く', str_contains($apiGate, "km_html_api_str('agree', 2) !== '1'")
+        && strpos($apiGate, 'km_recaptcha_verify(') < strpos($apiGate, '$_SESSION[KM_HTML_GATE_SESSION_KEY] = km_html_gate_record(KM_LEGAL_UPDATED);')
+        && str_contains($apiGate, 'KM_RECAPTCHA_ACTION_HTML_HOST);'));
+    check_bool('口: 関門の印はセッションを閉じる前に書く', strpos($apiGate, '$_SESSION[KM_HTML_GATE_SESSION_KEY] = ') < strpos($apiGate, 'session_write_close();'));
+    foreach (['temp', 'temp_patch', 'save'] as $gateAction) {
+        $caseAt = strpos($apiGate, "case '{$gateAction}':");
+        $nextCase = $caseAt === false ? false : strpos($apiGate, 'case ', $caseAt + 6);
+        $body = ($caseAt === false || $nextCase === false) ? '' : substr($apiGate, $caseAt, $nextCase - $caseAt);
+        check_bool("口: {$gateAction} は関門を通った人だけ(置く前に確かめる)", str_contains($body, 'km_html_api_require_gate($gateUntil);')
+            && strpos($body, 'km_html_api_require_gate(') < (strpos($body, 'km_html_temp_save(') ?: strpos($body, 'km_html_site_save(')));
+    }
+    check_bool('口: 関門で断るときは gate の印を付ける(ページが関門を出し直す)', str_contains($apiGate, "'gate' => true,"));
+    check_bool('ページ: 関門を通るまで落とす場所を出さない', str_contains($page, '<div class="km-html-work" id="km-html-work"<?= $gatePassed ? \'\' : \' hidden\' ?>>')
+        && str_contains($page, 'id="km-html-gate" aria-labelledby="km-html-gate-title"<?= $gatePassed ? \' hidden\' : \'\' ?>>'));
+    check_bool('ページ: 規約(第8条の2と全文)・同意・reCAPTCHA(action は口と同じ)を出す', str_contains($page, "'第8条の2(HTML 展開サイト)'")
+        && str_contains($page, 'km_legal_render_sections(km_legal_terms())') && str_contains($page, 'id="km-html-agree"')
+        && str_contains($page, 'class="g-recaptcha km-html-recaptcha"') && str_contains($page, 'data-action="<?= km_html_page_e(KM_RECAPTCHA_ACTION_HTML_HOST) ?>"'));
+    check_bool('ページ: Google のスクリプトは関門を出すときだけ読む', str_contains($page, '<?php if (!$gatePassed && $gateReady): ?>'));
+    check_bool('JS: このブラウザに置くときも関門を見る・断られたら関門を出し直す', str_contains($pageJs, "if (!gatePassed()) {\n            showGate(")
+        && str_contains($pageJs, "if (error && error.gate) {") && str_contains($pageJs, "post('gate', { agree: '1', 'g-recaptcha-response': token })"));
+    $legalGate = (string) file_get_contents($src . '/lib/legal.php');
+    check_bool('規約とポリシーに関門と reCAPTCHA を書いた', str_contains($legalGate, '使い始める前に、この規約への同意と、自動の操作でないことの確認(Google reCAPTCHA)をお願いします。')
+        && str_contains($legalGate, 'お問い合わせフォームの送信時と、HTML 展開を使い始めるときに'));
+    check('関門の action は口とページで同じ名前', 'html_host', KM_RECAPTCHA_ACTION_HTML_HOST);
     check_bool('ほかのページの CSP は枠を許さないまま', str_contains(km_csp_policy('public'), "frame-src 'none';"));
     check_bool('style 属性・innerHTML を使わない(名前は textContent)', preg_match('/\sstyle="/', $page) !== 1 && !str_contains($pageJs, 'innerHTML') && !str_contains($pageJs, '.style.'));
     check_bool('道具のページの JS は見せる側のオリジンからの返事だけ受ける', str_contains($pageJs, 'event.origin !== HTML_ORIGIN || event.source !== frame.contentWindow'));

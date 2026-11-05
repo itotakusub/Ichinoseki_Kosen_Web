@@ -42,6 +42,9 @@ const KM_RECAPTCHA_ASSESS_URL = 'https://recaptchaenterprise.googleapis.com/v1/p
 /** 問い合わせフォームの action。contact.php の `data-action` と対。 */
 const KM_RECAPTCHA_ACTION_CONTACT = 'contact';
 
+/** HTML 展開を使い始めるときの確認(2026-11-05)。html.php の `data-action` と、api/html-host.php の照合の対。 */
+const KM_RECAPTCHA_ACTION_HTML_HOST = 'html_host';
+
 /** @return array{siteKey:?string, secretKey:?string, projectId:?string, apiKey:?string} */
 function km_recaptcha_config(): array
 {
