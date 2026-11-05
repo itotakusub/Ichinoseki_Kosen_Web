@@ -6,7 +6,9 @@ declare(strict_types=1);
  * アプリの「予定」(2026-10-30、振り返りのフェーズ 5 の 1。Web の公開の地図の「スケジュール」と同じ中身)。
  *
  *   POST {"code":"…"}
- *   → {"success":true,"schedule":[{"title","organizer","description","startsAt","endsAt","projectNo","places":[{"uuid","name"}]}]}
+ *   → {"success":true,"schedule":[{"title","organizer","description","startsAt","endsAt","projectNo","places":[{"uuid","name"}]}],
+ *      "weather":{"days":[{"date","code","kind","telop","telopEn","pop","min","max"}],"place":"一関","source":"気象庁"}}
+ *   weather は 2026-11-05(予定の日ごとの見出しに一関の天気。lib/weather.php。取れなければ days が空)
  *
  * - **地図のアクセスコードが要る**(照合は学習データと同じ km_learning_code_allowed)。コードは URL に載せない
  * - 一般の行だけ(アプリはアクセスコードだけで、教職員か分からない)。今日より前に終わった行は出さない
@@ -21,6 +23,7 @@ require_once __DIR__ . '/../lib/node-visibility.php';
 require_once __DIR__ . '/../lib/map-node-projects.php';
 require_once __DIR__ . '/../lib/map-events.php';
 require_once __DIR__ . '/../lib/event-schedule.php';
+require_once __DIR__ . '/../lib/weather.php';
 
 require_method('POST');
 
@@ -62,4 +65,12 @@ try {
     respond(['success' => false, 'message' => '読めませんでした。'], 500);
 }
 
-respond(['success' => true, 'schedule' => $schedule]);
+// 予定の日ごとの見出しに出す一関の天気(2026-11-05。lib/weather.php。取れなければ空の days)
+$weatherDays = [];
+try {
+    $weatherDays = km_weather_public(km_weather_state(), time())['days'];
+} catch (Throwable $exception) {
+    error_log('api/app-schedule.php weather failed: ' . $exception->getMessage());
+}
+
+respond(['success' => true, 'schedule' => $schedule, 'weather' => ['days' => $weatherDays, 'place' => KM_WEATHER_PLACE, 'source' => '気象庁']]);

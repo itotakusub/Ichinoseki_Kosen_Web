@@ -643,6 +643,8 @@ services:
       # HTML 展開サイトの見せる側の名前(2026-11-05。nginx の html の server・src/lib/html-host.php)。**いつも定義する**(空だと server_name が壊れる)。
       # web の KM_HTML_URL と同じ名前にすること(VPS は compose.vps.yaml が html.<ドメイン> を渡す)
       KM_HTML_DOMAIN: ${KM_HTML_DOMAIN:-html.${KM_DOMAIN:-192.168.3.29}}
+      # HTML 展開サイトの共有リンクの名前(2026-11-05。html の server に一緒に並べる)。**いつも定義する**。web の KM_SHARE_URL と同じ名前
+      KM_SHARE_DOMAIN: ${KM_SHARE_DOMAIN:-share.${KM_DOMAIN:-192.168.3.29}}
     ports:
       - "192.168.3.29:8080:80"
       - "192.168.3.29:9443:443"

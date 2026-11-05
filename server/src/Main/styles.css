@@ -928,6 +928,23 @@ body {
     cursor: pointer;
 }
 .km-route-check input { width: 20px; height: 20px; }
+/* 「雨の日」の自動(2026-11-05。一関の天気。Main/weather.js)。チェックの下に小さく出す */
+.km-route-weather {
+    flex: 0 0 100%;
+    margin: 0;
+    font-size: 0.8rem;
+    color: var(--secondary);
+}
+.km-route-weather-reset {
+    min-height: var(--km-touch);
+    padding: 0 0.5rem;
+    border: 0;
+    background: none;
+    color: var(--primary, #2563eb);
+    text-decoration: underline;
+    font: inherit;
+    cursor: pointer;
+}
 
 .km-route-pref-select {
     flex: 1 1 auto;
@@ -3028,6 +3045,18 @@ a.icon-btn { text-decoration: none; color: inherit; }
     font-weight: 700;
     color: var(--secondary);
     margin: 4px 0 0;
+}
+/* 予定の日ごとの見出しの天気(2026-11-05。一関・気象庁。Main/weather.js の dayText) */
+.km-schedule-weather {
+    display: inline-block;
+    margin-left: 0.5em;
+    font-weight: 400;
+    color: var(--secondary);
+}
+.km-schedule-source {
+    margin: 8px 0 0;
+    font-size: 0.75rem;
+    color: var(--secondary);
 }
 .km-schedule-item {
     display: flex;

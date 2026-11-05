@@ -778,6 +778,79 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
     - **11-05 に (1)〜(3) を利用者が実施**: DNS は A だけ(ito4.jp の名前にはどれも AAAA が無い)。証明書は 17:14 に 4 つの名前で取れた(期限 2027-02-03)が、
       **`host-cert.sh issue` は今のドメインに名前を足すときも「ドメインを変える」案内を出して reload しなかった** ので、nginx が古い証明書のままだった。
       issue は今の `KM_DOMAIN` と同じなら reload して status を出すように直した(check.php 2742 件)。`km` で走らせると docker が無いので「certbot がありません」で何もせず終わる(`kmops` で走らせる)
+    - **renew で reload したあと本番で確かめた(11-05)**: `html.ito4.jp/` は 302 で道具のページへ・でたらめな `/s/`・`/t/`・`/l/` は 404・POST は 405・`/auth` の悪い札と cross-site は 404・
+      bridge.html の CSP は `frame-ancestors https://ito4.jp`・robots.txt は Disallow・本体の `/api/html-host.php` は GET 405・CSRF なし 403
+    - **使い始める前の関門(11-05、利用者の指示「展開する前に、利用規約と I'm not a robot を表示」。手元で済み・配備待ち)**:
+      道具のページは、規約の第8条の2(と全文を開ける details)・「利用規約に同意します」・reCAPTCHA を出し、通るまで落とす場所を出さない。
+      口の `gate` が同意と reCAPTCHA(action `html_host`。問い合わせと同じ `km_recaptcha_verify`、届かなければ通さない)を確かめ、**セッションに規約の版と期限(2 時間)を置く**。
+      サーバーに置く `temp`・`temp_patch`・`save` は印が無ければ 403(`gate: true`)で断り、ページが関門を出し直す。このブラウザに置くときはページの JS が同じ期限を見る。
+      Google のスクリプトは関門を出すときだけ読む。CSP の html-host に reCAPTCHA(パスまで)を足した。規約の第8条の2と、ポリシーの 7(reCAPTCHA の使い道)を直した。
+      check.php 2761 件。写しで: 同意なし・確認なし・違う確認は断る、口を直に叩いても 403/400、通ると落とせて一時フォルダにも置ける、読み直しても通ったまま、
+      期限切れで落とすと関門が出て reCAPTCHA を読み込む、375 幅ではみ出しなし(Google の試験用キーは今は無効と出るので、写しの判定だけ差し替えた)。本番の reCAPTCHA は enterprise・`ito4.jp` で使える状態
+      **11-05 に配備済み(利用者)**: 本番の道具のページは関門を出して落とす場所を隠す・関門の前の `temp` は 403(`gate`)・でたらめな確認は 400
+    - **ZIP の読み方を強くした(11-05、利用者の指示と試しの ZIP 5 つ。手元で済み・配備待ち)**: ZIP を読む・作る・解くを `Main/html-zip.js`(`window.KmHtmlZip`。通信しない)に分けた。
+      - 先頭のドライブ名(`C:/`)・`/`・`./` は断らずに外す(`..` は断る)。**同じ中身の木が 2 組**(`Users/…/web/` と `web/`)なら短い方の 1 組にする。いちばん上の階に HTML が 1 つならそれを入口に
+      - **パスワード付き ZIP**: ZipCrypto と WinZip AES(方式 99・AE-1/AE-2・128/192/256)。パスワードはブラウザの中だけで使い、解いたものを暗号化しない ZIP に作り直して送る。
+        AES の CTR は little-endian なので AES のブロック暗号化を JS に書いた(FIPS-197 の試験値 3 つで確かめた)。鍵は WebCrypto の PBKDF2-SHA1・HMAC を先に確かめる
+      - **ZIP 以外の圧縮は断る**(7z・RAR・tar・gz・bz2・xz・zst・lzh・cab… を拡張子と先頭のバイトで。`.zip` に名前を変えた 7z も)。ZIP は単独で 1 つだけ。
+        **型の表に無いもの(exe・docx・中の zip など)は除いて知らせる**(サーバーの `km_html_normalize_files` も除く)。サーバーは暗号化・方式 99・ドライブ名を断ったまま(最後の守り)
+      - 確かめ: check.php 2772 件。写しで利用者の 5 つ(web・webfull・webzettai・webpass(パスワード 1234)・1web)がどれも 4 個で開き CSS・JS・README.md が効く。
+        7-Zip で作った ZipCrypto(格納・deflate)・AES-128・AES-256 は正しいパスワードで開き、違えば聞き直す。本文を壊した AES は HMAC で断る。7z・tar・gz・`.zip` に改名した 7z/gz・BZip2 方式・ZIP 2 つ同時は断る。
+        サーバーへの保存も解いた 4 個で届き、パスに `C:/Users/…` は残らない
+    - **共有リンク(11-05、利用者の指示「パスワードあり・なしで共有できるように(要アカウントログイン)」。手元で済み・配備待ち)**:
+      答え: ログインが要るのは共有する人だけ・いつも最新の版・期限は作るときに選ぶ(1 日・7 日・30 日・止めるまで)・中身の前に注意の画面を挟む。
+      - **共有の中身は別のアドレス `https://share.ito4.jp/<32 字>/`**(html.ito4.jp の IndexedDB・Service Worker に他人の共有のスクリプトを届かせない)。
+        nginx は html の server に `${KM_SHARE_DOMAIN}` を足しただけ。`html-view.php` がホストで `lib/html-share-view.php` へ振り分ける(本体のセッションは読まない)
+      - 新しい表 `km_html_shares`(パスワードは `password_hash`・期限・開かれた回数)と `km_html_share_grants`(Cookie `__Host-KMSH`・12 時間・ブラウザを閉じたら消える)。1 サイト 5 本まで
+      - 注意の画面はスクリプトなし(CSP `default-src 'none'`)。「開く」の POST は share のオリジンだけ → 止められた持ち主 → 外れの回数(IP ごと 15 分 8 回。先に数え、成功しても消さない)→ `password_verify`
+      - 止めた・期限切れ・サイトを消したものは 404(行を消す)。管理画面のバックアップのカードに「共有を止める」(記録 `html.share_stop`)。規約第8条の2とポリシーを直し、関門の版を `#share` 付きにした(同意し直し)
+      - 写しで見つけて直した: 注意の画面を `Referrer-Policy: no-referrer` にしていたので「開く」が `Origin: null` になり 403 → `same-origin` にし、`null` は `Sec-Fetch-Site` で見る
+      - 確かめ: check.php 全部通る。写し(`share.app.localhost`)で: なし・ありで開く(CSS・JS が効く)、違うパスワード 401・9 回目 429(正しくても)、よそのオリジン・Origin なし・PUT は断る、
+        新しい版を保存すると共有も新しい版、止めた・サイトを消したら(印があっても)404、5 本目の次は断る、画面のフォームから作れる、共有のページから html の IndexedDB は見えない、375 幅ではみ出しなし
+      - **配備の手順**: (1) DNS に `share.ito4.jp`(A。AAAA は要らない)→ (2) `-Action up` で配備 → (3) **kmops で** `host-cert.sh issue` に `--also share.ito4.jp` を足して取る(今の名前も並べる。issue が自分で reload する)
+      - **11-05 に配備済み(利用者)。本番で確かめた(読むだけ)**: 証明書に 5 つの名前(share 入り)・nginx の証明書と一致・web の `KM_SHARE_URL` は `https://share.ito4.jp`・
+        `share.ito4.jp/` は 302 で道具のページへ・robots は Disallow・でたらめな番号は 404(CSP `default-src 'none'`・`Referrer-Policy: same-origin`・noindex)・スラッシュなしは 308・
+        `/s/` の道は 404・よそからの POST は 404・PUT は 405・html のホストで共有の道は 404。表 `km_html_shares`・`km_html_share_grants` はでき、共有は 0 本(外れの回数の表は初めて間違えたときに作る)
+- **一関の天気で「雨の日」を自動に・予定に天気・イメージの検査(Trivy)・ベンチマーク(2026-11-05〜06、利用者の指示。手元で済み・配備待ち)**:
+  依頼は「一関の天気で天候の項目に自動でチェック」「distroless・Chainguard はどうか。Trivy・Docker Scout は入っているか」「サーバーでベンチマーク」。計画は `~/.claude/plans/stateful-whistling-kazoo.md`。
+  - **頂いた `weather.tsukumijima.net` の `city=030030` は大船渡(沿岸南部)で、一関ではない。** 一関は気象庁の「内陸(030010)」・予報の気温の地点 33911・アメダス 一関 33911。答えは「気象庁の JSON を直接」。
+  - **天気(サーバー)**: `lib/weather.php`(予報 30 分・アメダス 10 分で取り直し、`cache/weather.json` に flock で置く。失敗しても 6 時間までは古いものを使う。取る先は `www.jma.go.jp/bosai/` だけ・転送しない・512KB まで)と
+    `api/weather.php`(GET。`Cache-Control: public, max-age=300`)。雨とみなすのは、30 分以内の観測で 10 分の雨量 > 0 か 1 時間 0.5mm 以上、または今の 6 時間の降水確率 50% 以上(雪も同じ。気温 1℃ 以下の観測は雪と出す)。
+    天気の文は `lib/weather-telops.php`(気象庁の 118 の番号)。`api/app-schedule.php` に `weather.days` を足した(今の形はそのまま)。
+  - **Web の地図**: 「雨の日」は**既定で自動**(15 分ごと・表に出ている間だけ読み直す)。自分で切り替えたらその日だけ手動(`km-route-options-v1` の `rainManualDay`)で「自動に戻す」が出る。
+    共有のリンクの `rain=1` は今までどおり優先して天気では変えない。天気が分からなければ外す。予定(一覧と「会場 × 時間」)の日の見出しに天気と出典。`Main/weather.js`・試験 `scripts/js/weather.test.js`(20 件)
+  - **Android(版 49 = 1000049・署名 d71fbf0a…。両フレーバー。apk-push で送った = 検めに通れば公開)**: `RouteWeather.kt`。決め方は Web と同じで、**分からないときは今の値のまま**(オフラインで使う人の設定を壊さない)。
+    設定に「雨の日を天気で決める」・予定の日の見出しに天気。試験 `RouteWeatherTest.kt`。手元の `JAVA_HOME` が無くなった JDK(21.0.12.101)を指していたので `gradle.properties` を 21.0.13.9 に直した
+  - **イメージの検査**: Trivy も Grype も Docker Scout も入っていなかった(10-06 に手で 1 回回しただけ)。`scripts/host-image-scan.sh` を足し、cron 版 10 で**毎週日曜 4:47**。
+    **docker.sock は渡さない**(`docker save` した tar を読み取り専用で `--input`)。Trivy のコンテナは root の FS も読み取り専用・権限なし・1GB・1 コア。
+    **Trivy の配布物に供給網の事件があった**(CVE-2026-33634。v0.69.4 と Docker Hub の 0.69.5・0.69.6)ので `aquasec/trivy:0.76.1@sha256:790fd66d…` に固定(Docker Hub と GHCR で同じ digest。0.76.2 は出たばかりで避けた)。
+    直る版のある HIGH・CRITICAL が**新しく出たときだけ** `notify-security.php` で送る(種別 `images`)。結果はタスクマネージャーの「イメージの検査」。**distroless・Chainguard は初回の結果を見てから決める**(利用者の答え)
+  - **ベンチマーク**: タスクマネージャーの「ベンチマーク」(押す・履歴・前の回や選んだ回との差・消す)・`scripts/bench.php`(ホスト)・`scripts/bench-web.ps1`(この PC から外の応答。`bench-record.php` で同じ表へ)。
+    13 段(CPU 6・メモリ・ディスク 2・DB(一時表だけ)・画像・アプリ・Web(中から))。**1 回空回し → 3〜5 回の中央値・ばらつき 10% 超えに印・スコア = 1000 × 基準 ÷ 中央値・合計は相乗平均(データで変わるアプリと Web は入れない)・版が違えば比べない**。
+    基準は 11-06 に本番で 2 回測って固定した(2 回の差は 3% 以内。1 回 25〜35 秒)。sha256 は本番の CPU に専用の命令が無く手元の 8 倍かかるので 128MB にした。同時に 1 つ(GET_LOCK と running の行)。新しい表 `km_bench_runs`。
+    口 `admin/api/bench.php` は nginx でタスクマネージャーと同じく IP で絞る。記録 `bench.run`・`bench.delete`
+  - 確かめ: check.php 全部通る(組 `weather`・`image-scan`・`bench` を足した)。写しで天気(雨の予報・観測・雪・晴れ・分からない・手動のその日だけ・375 幅・英語)、ベンチマークの画面(進み具合・失敗した段・差・375 幅)、
+    イメージの検査の表(名前は逃がす)。検査のスクリプトの awk・sed は Git の道具で確かめた(この PC の sh は子のプロセスを起こせない)
+  - **配備のあと(利用者)**: (1) `deploy-to-host.ps1 -Backup -Yes -Action up`(nginx の設定が変わる)→ (2) km で `sudo sh /opt/kosenmap/scripts/host-updates-setup.sh --path /opt/kosenmap --fix`(cron 版 10・実行ビット)→ (3) 初回の検査 `sudo sh /opt/kosenmap/scripts/host-image-scan.sh --path /opt/kosenmap`(数分〜十数分)→ 結果を見て distroless・Chainguard を決める
+  - **11-06 に配備済み(利用者)**: `api/weather.php` は 200(その時は「雨の予報 50%」)・cron 版 10。**初回の検査**(手で。`--notify` なし)は 9 イメージ・失敗 0・直る版のある HIGH・CRITICAL 606 件:
+    | イメージ | CRITICAL(直る) | HIGH(直る) | うち OS | 主なもの |
+    |---|---|---|---|---|
+    | boky/postfix | 38(30) | 409(286) | 431 | **イメージが 2026-01-01 のまま**(Debian 13.2)。openssl・perl・brotli… |
+    | phpmyadmin | 8(7) | 153(60) | 150 | 同梱の twig 3.11.3(3.26 以上で直る) |
+    | kosenmap-web | 2(1) | 139(55) | 141 | 土台(php:8.4-apache・Debian 13.7)の linux-libc-dev など。作るための -dev は外してある |
+    | logto 1.45.0 | 3(3) | 60(57) | 0 | npm の部品(shell-quote・dompurify・axios)と Go の stdlib |
+    | mariadb・postgres | 1(1) | 27・25 | 2・0 | ほぼ gosu の Go 1.24.6 の stdlib |
+    | nginx・glances・certbot | 1〜3 | 10〜23 | 11〜19 | Alpine の brotli・expat・pcre2、certifi |
+    **見立て: いま distroless・Chainguard に替える利点は小さい。** 直る版のある 606 件のほとんどは「digest を新しくする」(update-containers.ps1)と「web を新しい土台で作り直す」で消える。
+    多いところ(postfix・phpMyAdmin・web)は distroless に代わりが無く、Chainguard の無償の版は最新だけ(版を固定して上げる今の運用と合わない)。
+    順番: (1) 全部の digest を上げる(特に postfix)→ (2) web を作り直す → (3) phpMyAdmin は使わない間は止めることも考える → (4) 次の検査で残ったものを見て、nginx だけ Chainguard を試すか決める。
+    手で回した初回は「知らせ済み」を覚えていないので、**最初の日曜(11-08)の 4:47 に 606 件ぶんのメールが 1 通届く**(並べるのは 20 件まで)。そのあとは新しく出たものだけ
+  - **イメージとビルドのキャッシュの片付け(11-06、利用者の指示「自動で解放」。手元で済み・配備待ち)**: `scripts/host-docker-prune.sh`。cron 版 11 で毎週日曜 5:47(検査のあと。検査の錠を待つ)。
+    消さないもの: コンテナ(止まっているものも)が使う像・compose の像・Dockerfile の FROM・Trivy・道具(`alpine:latest`・`composer:2`)・**compose の像ごとに 1 つ前の版**。ボリュームには触らない。
+    ビルドのキャッシュは 14 日より古いものだけ。既定は見るだけ(`--apply` で消す)。本番で見るだけを流すと、消すのは 15 個・約 10.5GB(test-web・test-soketi・kosenmap-soketi・Logto 1.42/1.43・古い phpMyAdmin 5 つ…)、
+    残す 1 つ前の版は Logto・MariaDB・nginx・glances・phpMyAdmin・Postgres の 6 つ。起こしていない profile の mailpit は残さない
+  - **JAVA_HOME(11-06)**: `scripts/java-home.ps1`(この PC。既定は見るだけ、`-Fix` で直す)。原因は**ユーザーの JAVA_HOME が古い JDK(21.0.12 の build 101)を指したまま全体(21.0.13+9。インストーラーが直した)を上書きしていた**こと。
+    -Fix はユーザーの方を消し(次の更新でもインストーラーの値が効く)、全体の PATH に残った古い jdk の bin を外し(管理者のときだけ)、gradle.properties を新しい JDK に合わせる
 - **試しのイベントを本番で見た(2026-11-01 22 時、利用者がイベント「Test」(id 9)を始めた)**: 公開の地図データは錠なし・予定 34 件(21:00〜11-02 21:00)・
   企画の番号付きの地点 33(1F 8・2F 9・3F 9・4F 4・外 3)。ポスター・一時地点・屋台は 0。
   - Website(内蔵のブラウザ・幅 1149): 🎪 イベントと 📅 予定のチップが出る。拡大すると 1F の企画の地点 8 か所が赤い縁(`km-node-event`)、ほか 38 か所が薄い(`km-node-unrelated`)。

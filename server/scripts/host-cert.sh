@@ -214,7 +214,14 @@ do_status() {
       _html="${_html:-html.${_domain}}"
       case ",${_san}," in
         *",DNS:${_html},"*) echo "   HTML 展開の名前(${_html})も入っています。" ;;
-        *) echo "★ HTML 展開の名前(${_html})が証明書にありません。issue --domain ${_domain} --also ${_admin:-${_domain}} --also ${_auth:-auth.${_domain}} --also ${_html} で足してください。"; _rc=1 ;;
+        *) echo "★ HTML 展開の名前(${_html})が証明書にありません。issue --domain ${_domain} --also ${_admin:-${_domain}} --also ${_auth:-auth.${_domain}} --also ${_html} --also ${_share:-share.${_domain}} で足してください。"; _rc=1 ;;
+      esac
+      # HTML 展開の共有リンク(2026-11-05。同じ html の server)。.env に無ければ share.<ドメイン>
+      _share="$(env_value KM_SHARE_DOMAIN)"
+      _share="${_share:-share.${_domain}}"
+      case ",${_san}," in
+        *",DNS:${_share},"*) echo "   共有リンクの名前(${_share})も入っています。" ;;
+        *) echo "★ 共有リンクの名前(${_share})が証明書にありません。issue --domain ${_domain} --also ${_admin:-${_domain}} --also ${_auth:-auth.${_domain}} --also ${_html} --also ${_share} で足してください。"; _rc=1 ;;
       esac
       _served="$(served_fingerprint "$_domain" || true)"
       if [ -z "$_served" ]; then

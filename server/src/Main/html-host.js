@@ -47,6 +47,16 @@
         server: document.getElementById('km-html-server'),
         serverSection: document.getElementById('km-html-server-section'),
         serverNote: document.getElementById('km-html-server-note'),
+        gate: document.getElementById('km-html-gate'),
+        work: document.getElementById('km-html-work'),
+        agree: document.getElementById('km-html-agree'),
+        gateOk: document.getElementById('km-html-gate-ok'),
+        gateStatus: document.getElementById('km-html-gate-status'),
+        password: document.getElementById('km-html-password'),
+        passwordInput: document.getElementById('km-html-password-input'),
+        passwordMessage: document.getElementById('km-html-password-message'),
+        passwordOk: document.getElementById('km-html-password-ok'),
+        passwordCancel: document.getElementById('km-html-password-cancel'),
     };
 
     const state = {
@@ -56,6 +66,10 @@
         // CSS・JS だけを落としたときの足す先 {kind: 'local'|'temp'|'site', id}
         current: readJson(CURRENT_KEY, null),
         busy: false,
+        // 使い始める前の関門の期限(秒。0 なら未通過)。サーバーのセッションの印と同じ値(api/html-host.php の gate)
+        gateUntil: Number(root.dataset.gateUntil || 0),
+        // 共有リンクの欄を開いているサイト(一覧を描き直しても閉じないように)
+        openShares: new Set(),
     };
 
     // ------------------------------------------------------------------
@@ -138,12 +152,93 @@
             .then(function (response) {
                 return response.json().catch(function () { return null; }).then(function (json) {
                     if (json && json.success) return json;
-                    if (json && json.message) throw fail(json.message);
+                    if (json && json.message) {
+                        const error = fail(json.message);
+                        error.gate = Boolean(json.gate);
+                        throw error;
+                    }
                     if (response.status === 413) throw fail('大きすぎます(' + sizeLabel(LIMITS.uploadBytes || 0) + ' まで)。');
                     if (response.status === 429) throw fail('続けて送りすぎました。少し待ってからやり直してください。');
                     throw fail('送れませんでした(' + response.status + ')。');
                 });
             });
+    }
+
+    // ------------------------------------------------------------------
+    // 使い始める前の関門(2026-11-05、利用者の指示): 利用規約への同意と「私はロボットではありません」
+    // 通るまで落とす場所を出さない。サーバーに置く口も、セッションの印が無ければ断る(error.gate)
+    // ------------------------------------------------------------------
+
+    function gatePassed() {
+        return state.gateUntil * 1000 > Date.now();
+    }
+
+    function setGateStatus(text, isError) {
+        el.gateStatus.textContent = text || '';
+        el.gateStatus.classList.toggle('is-error', Boolean(isError));
+    }
+
+    // クラシック(grecaptcha)と Enterprise(grecaptcha.enterprise)で口が違う
+    function recaptchaApi() {
+        const g = window.grecaptcha;
+        if (!g) return null;
+        return g.enterprise || g;
+    }
+
+    function recaptchaReset() {
+        const api = recaptchaApi();
+        if (api && typeof api.reset === 'function') {
+            try { api.reset(); } catch (error) { /* まだ描かれていない */ }
+        }
+    }
+
+    // ページを開いたときに通っていた人は読んでいない。期限が切れたら、ここで初めて読む
+    function ensureRecaptcha() {
+        const src = root.dataset.recaptchaSrc || '';
+        if (!src || window.grecaptcha || document.getElementById('km-html-recaptcha-js')) return;
+        const script = document.createElement('script');
+        script.id = 'km-html-recaptcha-js';
+        script.src = src;
+        script.async = true;
+        document.head.appendChild(script);
+    }
+
+    function showGate(message) {
+        state.gateUntil = 0;
+        el.work.hidden = true;
+        el.gate.hidden = false;
+        el.agree.checked = false;
+        ensureRecaptcha();
+        recaptchaReset();
+        setGateStatus(message || '', Boolean(message));
+        el.gate.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    }
+
+    function submitGate() {
+        if (!el.agree.checked) {
+            setGateStatus('利用規約を読んで、「利用規約に同意します」にチェックを入れてください。', true);
+            return;
+        }
+        const field = el.gate.querySelector('[name="g-recaptcha-response"]');
+        const token = field ? field.value : '';
+        if (!token) {
+            setGateStatus('「私はロボットではありません」にチェックを入れてください。', true);
+            return;
+        }
+        el.gateOk.disabled = true;
+        setGateStatus('確かめています…');
+        post('gate', { agree: '1', 'g-recaptcha-response': token }).then(function (result) {
+            state.gateUntil = Number(result.gateUntil || 0);
+            setGateStatus('');
+            el.gate.hidden = true;
+            el.work.hidden = false;
+            setStatus('確認できました。ファイルを落としてください。');
+        }, function (error) {
+            recaptchaReset();
+            setGateStatus(error && error.userFacing ? error.message : '確かめられませんでした。もう一度お試しください。', true);
+        }).then(function () {
+            el.gateOk.disabled = false;
+        });
     }
 
     // ------------------------------------------------------------------
@@ -260,149 +355,10 @@
     }
 
     // ------------------------------------------------------------------
-    // ZIP を読む(このブラウザの中に置くとき)・ZIP にまとめる(サーバーへ送るとき)
+    // ZIP を読む・作る・パスワード付きを解く・ZIP 以外の圧縮ファイルを見分けるのは Main/html-zip.js(window.KmHtmlZip)
     // ------------------------------------------------------------------
 
-    const CRC_TABLE = (function () {
-        const table = new Uint32Array(256);
-        for (let n = 0; n < 256; n++) {
-            let c = n;
-            for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
-            table[n] = c >>> 0;
-        }
-        return table;
-    })();
-
-    function crc32(bytes) {
-        let c = 0xFFFFFFFF;
-        for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
-        return (c ^ 0xFFFFFFFF) >>> 0;
-    }
-
-    function decodeName(bytes, utf8) {
-        if (utf8) return new TextDecoder('utf-8').decode(bytes);
-        try {
-            return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-        } catch (error) {
-            // Windows の「送る → 圧縮」は日本語の名前を Shift_JIS で書く
-            return new TextDecoder('shift_jis').decode(bytes);
-        }
-    }
-
-    function inflateRaw(bytes) {
-        if (typeof DecompressionStream === 'undefined') {
-            const error = new Error('no-inflate');
-            error.noInflate = true;
-            return Promise.reject(error);
-        }
-        const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-        return new Response(stream).arrayBuffer().then(function (buffer) { return new Uint8Array(buffer); });
-    }
-
-    async function unzip(file) {
-        if (file.size > (LIMITS.totalBytes || 0)) throw fail('ZIP が大きすぎます(' + sizeLabel(LIMITS.totalBytes) + ' まで)。');
-        const buffer = await file.arrayBuffer();
-        const view = new DataView(buffer);
-        const bytes = new Uint8Array(buffer);
-        let eocd = -1;
-        for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 65557); i--) {
-            if (view.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
-        }
-        if (eocd < 0) throw fail('ZIP を読めませんでした(壊れているか、ZIP ではありません)。');
-        const count = view.getUint16(eocd + 10, true);
-        let pos = view.getUint32(eocd + 16, true);
-        if (count === 0xFFFF || pos === 0xFFFFFFFF) throw fail('この ZIP の形式(zip64)は扱えません。');
-        const out = [];
-        let total = 0;
-        for (let n = 0; n < count; n++) {
-            if (pos + 46 > bytes.length || view.getUint32(pos, true) !== 0x02014b50) throw fail('ZIP が壊れています。');
-            const flags = view.getUint16(pos + 8, true);
-            const method = view.getUint16(pos + 10, true);
-            const crc = view.getUint32(pos + 16, true);
-            const compSize = view.getUint32(pos + 20, true);
-            const size = view.getUint32(pos + 24, true);
-            const nameLen = view.getUint16(pos + 28, true);
-            const extraLen = view.getUint16(pos + 30, true);
-            const commentLen = view.getUint16(pos + 32, true);
-            const offset = view.getUint32(pos + 42, true);
-            const name = decodeName(bytes.subarray(pos + 46, pos + 46 + nameLen), (flags & 0x0800) !== 0).replace(/\\/g, '/');
-            pos += 46 + nameLen + extraLen + commentLen;
-            if (name === '' || name.endsWith('/') || ignored(name)) continue;
-            if (flags & 0x0001) throw fail('パスワード付きの ZIP は扱えません。');
-            if (method !== 0 && method !== 8) throw fail('この圧縮方式は扱えません(' + name + ')。');
-            total += size;
-            if (total > (LIMITS.totalBytes || 0)) throw fail('中身の合計が大きすぎます(' + sizeLabel(LIMITS.totalBytes) + ' まで)。');
-            if (view.getUint32(offset, true) !== 0x04034b50) throw fail('ZIP が壊れています(' + name + ')。');
-            const start = offset + 30 + view.getUint16(offset + 26, true) + view.getUint16(offset + 28, true);
-            const raw = bytes.subarray(start, start + compSize);
-            const data = method === 0 ? raw.slice() : await inflateRaw(raw);
-            if (data.length !== size || crc32(data) !== crc) throw fail('ZIP の中のファイルが壊れています(' + name + ')。');
-            out.push({ path: name, data: data });
-        }
-        return out;
-    }
-
-    function deflateRaw(bytes) {
-        if (typeof CompressionStream === 'undefined') return Promise.resolve(null);
-        const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate-raw'));
-        return new Response(stream).arrayBuffer().then(function (buffer) { return new Uint8Array(buffer); }, function () { return null; });
-    }
-
-    // サーバー(lib/zip-read.php)が読める形: 格納か deflate・UTF-8 の名前・zip64 なし
-    async function buildZip(files) {
-        const encoder = new TextEncoder();
-        const parts = [];
-        const central = [];
-        let offset = 0;
-        for (const file of files) {
-            const name = encoder.encode(file.path);
-            const data = file.data;
-            const crc = crc32(data);
-            let method = 0;
-            let body = data;
-            if (data.length > 256) {
-                const packed = await deflateRaw(data);
-                if (packed && packed.length < data.length) {
-                    method = 8;
-                    body = packed;
-                }
-            }
-            const local = new DataView(new ArrayBuffer(30));
-            local.setUint32(0, 0x04034b50, true);
-            local.setUint16(4, 20, true);
-            local.setUint16(6, 0x0800, true);
-            local.setUint16(8, method, true);
-            local.setUint16(12, 33, true);   // 1980-01-01
-            local.setUint32(14, crc, true);
-            local.setUint32(18, body.length, true);
-            local.setUint32(22, data.length, true);
-            local.setUint16(26, name.length, true);
-            parts.push(local.buffer, name, body);
-            const head = new DataView(new ArrayBuffer(46));
-            head.setUint32(0, 0x02014b50, true);
-            head.setUint16(4, 20, true);
-            head.setUint16(6, 20, true);
-            head.setUint16(8, 0x0800, true);
-            head.setUint16(10, method, true);
-            head.setUint16(14, 33, true);
-            head.setUint32(16, crc, true);
-            head.setUint32(20, body.length, true);
-            head.setUint32(24, data.length, true);
-            head.setUint16(28, name.length, true);
-            head.setUint32(42, offset, true);
-            central.push(head.buffer, name);
-            offset += 30 + name.length + body.length;
-        }
-        let centralSize = 0;
-        central.forEach(function (part) { centralSize += part.byteLength; });
-        const end = new DataView(new ArrayBuffer(22));
-        end.setUint32(0, 0x06054b50, true);
-        end.setUint16(8, files.length, true);
-        end.setUint16(10, files.length, true);
-        end.setUint32(12, centralSize, true);
-        end.setUint32(16, offset, true);
-        return new Blob(parts.concat(central, [end.buffer]), { type: 'application/zip' });
-    }
+    const Z = window.KmHtmlZip;
 
     // ------------------------------------------------------------------
     // 整える(サーバーの km_html_normalize_files と同じ決まり)
@@ -415,8 +371,30 @@
         return base === 'thumbs.db' || base === 'desktop.ini';
     }
 
+    // 型の表(lib/html-host.php の KM_HTML_TYPES)にあるものだけを使う。exe・docx・中の zip・7z などは除く(2026-11-05)
+    function allowedType(path) {
+        return typeOf(path) !== 'application/octet-stream';
+    }
+
+    /**
+     * 先頭を整える(2026-11-05、利用者の試しの ZIP)。ドライブ名(C:/)・先頭の / ・ ./ は断らずに外す
+     * (「C:/Users/…/web/index.html」のように、PC の場所ごと入った ZIP がある)。.. は外さない(下で断る)
+     */
+    function tidyPath(path) {
+        let p = path.replace(/\\/g, '/').replace(/^[A-Za-z]:(?=\/|$)/, '').replace(/^\/+/, '');
+        while (p.slice(0, 2) === './') p = p.slice(2);
+        return p;
+    }
+
+    // ZIP の中身用: 使う・黙って飛ばす(__MACOSX など)・使わないファイルとして数える
+    function zipVerdict(rawPath) {
+        const path = tidyPath(rawPath);
+        if (path === '' || ignored(path)) return 'ignore';
+        return allowedType(path) ? 'keep' : 'skip';
+    }
+
     function cleanPath(path) {
-        if (path === '' || path.charAt(0) === '/' || /^[A-Za-z]:/.test(path)) throw fail('使えないファイルの場所です(' + path + ')。');
+        if (path === '') throw fail('使えないファイルの場所です。');
         if (/[\u0000-\u001F\u007F]/.test(path)) throw fail('ファイル名に使えない文字があります(' + path + ')。');
         if (Array.from(path).length > (LIMITS.pathMax || 255)) throw fail('ファイルの場所が長すぎます(' + path.slice(0, 60) + '…)。');
         const segments = path.split('/');
@@ -429,24 +407,62 @@
         return item.data ? item.data.length : item.file.size;
     }
 
-    function normalize(list) {
-        const seen = new Set();
-        let total = 0;
+    /**
+     * 同じ中身の木が 2 組以上あれば 1 組にする(2026-11-05。「Users/…/web/」と「web/」の両方が入った ZIP)。
+     * index.html を持つフォルダを根の候補にし、全部のファイルがどれかの候補の下にあって、
+     * どの候補の下も「相対パス・大きさ・CRC32」が同じなら、パスがいちばん短い候補だけを残す。中身が違えば何もしない
+     */
+    function dedupeTrees(files) {
+        if (!files.every(function (f) { return f.data; })) return files;
+        const roots = new Set();
+        files.forEach(function (f) {
+            const m = f.path.match(/^(.*\/)?index\.html?$/i);
+            if (m) roots.add(m[1] || '');
+        });
+        if (roots.size < 2) return files;
+        const list = Array.from(roots).sort(function (a, b) { return a.length - b.length || (a < b ? -1 : 1); });
+        // 根の中に別の根がある(入れ子)なら、別のページなので触らない
+        if (list.some(function (r, i) { return list.some(function (o, j) { return i !== j && r.indexOf(o) === 0; }); })) return files;
+        const groups = list.map(function () { return []; });
+        for (const f of files) {
+            const i = list.findIndex(function (r) { return f.path.indexOf(r) === 0; });
+            if (i < 0) return files;
+            groups[i].push(f);
+        }
+        const signature = function (group, rootPath) {
+            return group.map(function (f) { return f.path.slice(rootPath.length) + '\u0000' + f.data.length + '\u0000' + Z.crc32(f.data); }).sort().join('\n');
+        };
+        const first = signature(groups[0], list[0]);
+        return groups.every(function (g, i) { return signature(g, list[i]) === first; }) ? groups[0] : files;
+    }
+
+    /** @returns {{files: Array, skipped: string[]}} skipped は使わなかったファイル(型の表に無いもの) */
+    function normalize(list, skippedBefore) {
+        const skipped = (skippedBefore || []).slice();
         let files = [];
         list.forEach(function (item) {
-            const path = item.path.replace(/\\/g, '/');
-            if (ignored(path)) return;
+            const path = tidyPath(item.path);
+            if (path === '' || ignored(path)) return;
+            if (!allowedType(path)) {
+                skipped.push(path);
+                return;
+            }
             cleanPath(path);
-            const key = path.toLowerCase();
-            if (seen.has(key)) throw fail('大文字と小文字だけが違う同じ名前があります(' + path + ')。');
-            seen.add(key);
-            total += sizeOf(item);
             files.push(Object.assign({}, item, { path: path }));
         });
-        if (files.length === 0) throw fail('使えるファイルがありませんでした。');
+        if (files.length === 0) throw fail(skipped.length ? '使えるファイルがありませんでした(HTML・CSS・JS・画像などだけを使います)。' : '使えるファイルがありませんでした。');
+        files = dedupeTrees(files);
+        const seen = new Set();
+        let total = 0;
+        files.forEach(function (f) {
+            const key = f.path.toLowerCase();
+            if (seen.has(key)) throw fail('大文字と小文字だけが違う同じ名前があります(' + f.path + ')。');
+            seen.add(key);
+            total += sizeOf(f);
+        });
         if (files.length > (LIMITS.files || 1000)) throw fail('ファイルは ' + LIMITS.files + ' 個までにしてください。');
         if (total > (LIMITS.totalBytes || 0)) throw fail('中身の合計が大きすぎます(' + sizeLabel(LIMITS.totalBytes) + ' まで)。');
-        // 全部が同じ 1 つのフォルダの中なら外す(何段でも)
+        // 全部が同じ 1 つのフォルダの中なら外す(何段でも。「Users/…/Downloads/web/」も消える)
         for (;;) {
             const tops = new Set(files.map(function (f) { const i = f.path.indexOf('/'); return i < 0 ? null : f.path.slice(0, i); }));
             if (tops.size !== 1 || tops.has(null)) break;
@@ -454,18 +470,85 @@
             files = files.map(function (f) { return Object.assign({}, f, { path: f.path.slice(top.length + 1) }); });
         }
         files.sort(function (a, b) { return a.path < b.path ? -1 : a.path > b.path ? 1 : 0; });
-        return files;
+        return { files: files, skipped: skipped };
     }
 
+    // 入口: いちばん上の index.html → いちばん上の階に HTML が 1 つだけならそれ → 全体で 1 つならそれ → 選んでもらう
     function pickEntry(paths) {
         for (const index of ['index.html', 'index.htm']) {
             const found = paths.find(function (p) { return p.toLowerCase() === index; });
             if (found) return found;
         }
         const htmls = paths.filter(isHtml);
+        const top = htmls.filter(function (p) { return p.indexOf('/') < 0; });
+        if (top.length === 1) return top[0];
         return htmls.length === 1 ? htmls[0] : null;
     }
 
+    function skippedNote(skipped) {
+        if (!skipped.length) return '';
+        const names = skipped.map(function (p) { return p.split('/').pop(); });
+        return '(使わないファイルを除きました: ' + names.slice(0, 3).join('・') + (names.length > 3 ? ' ほか ' + (names.length - 3) + ' 個' : '') + ')';
+    }
+
+    // ZIP 以外の圧縮ファイルを断る・ZIP は単独で 1 つだけ(2026-11-05)。返すのは ZIP(無ければ null)
+    async function screenDrop(rawList) {
+        const archiveMessage = 'ZIP 以外の圧縮ファイル(7z・RAR・tar・gz など)は使えません。ZIP にしてください';
+        let zip = null;
+        let zips = 0;
+        for (const item of rawList) {
+            const name = item.path.split('/').pop();
+            if (ignored(tidyPath(item.path))) continue;
+            const head = new Uint8Array(await item.file.slice(0, 512).arrayBuffer());
+            const kind = Z.archiveKind(head);
+            if (Z.isArchiveName(name) || (kind !== null && kind !== 'zip')) throw fail(archiveMessage + '(' + name + ')。');
+            if (/\.zip$/i.test(name)) {
+                zips++;
+                zip = item;
+            }
+        }
+        if (zips > 0 && (zips > 1 || rawList.length > 1)) throw fail('ZIP は 1 つだけ、ほかのファイルと混ぜずに落としてください。');
+        return zip;
+    }
+
+    // パスワード付きの ZIP(ZipCrypto・AES)。パスワードはこのブラウザの中だけで使い、サーバーへは送らない
+    function askPassword(wrong) {
+        return new Promise(function (resolve) {
+            el.password.hidden = false;
+            el.passwordInput.value = '';
+            el.passwordMessage.textContent = wrong ? 'パスワードが違います。もう一度入れてください。' : '';
+            el.passwordMessage.classList.toggle('is-error', Boolean(wrong));
+            setStatus(wrong ? '' : 'この ZIP にはパスワードが付いています。');
+            function done(value) {
+                el.password.hidden = true;
+                el.passwordInput.value = '';
+                el.passwordOk.removeEventListener('click', ok);
+                el.passwordCancel.removeEventListener('click', cancel);
+                el.passwordInput.removeEventListener('keydown', key);
+                resolve(value);
+            }
+            function ok() {
+                if (el.passwordInput.value === '') {
+                    el.passwordMessage.textContent = 'パスワードを入れてください。';
+                    el.passwordMessage.classList.add('is-error');
+                    return;
+                }
+                setStatus('パスワードを確かめています…');
+                done(el.passwordInput.value);
+            }
+            function cancel() { done(null); }
+            function key(event) {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    ok();
+                }
+            }
+            el.passwordOk.addEventListener('click', ok);
+            el.passwordCancel.addEventListener('click', cancel);
+            el.passwordInput.addEventListener('keydown', key);
+            el.passwordInput.focus();
+        });
+    }
     function labelOf(list) {
         if (list.length === 1) return list[0].path.split('/').pop().replace(/\.[^.]+$/, '');
         const tops = new Set(list.map(function (f) { const i = f.path.indexOf('/'); return i < 0 ? null : f.path.slice(0, i); }));
@@ -547,7 +630,7 @@
     }
 
     async function toTemp(files, entry, name, patchTemp) {
-        const zip = await buildZip(files);
+        const zip = await Z.buildZip(files);
         if (zip.size > (LIMITS.uploadBytes || 0)) throw fail('サーバーへ送るには大きすぎます(まとめて ' + sizeLabel(LIMITS.uploadBytes) + ' まで)。');
         const result = patchTemp
             ? await post('temp_patch', { id: patchTemp.id, key: patchTemp.key, entry: '' }, zip)
@@ -559,7 +642,7 @@
     }
 
     async function toServer(files, entry, name, siteId, patch) {
-        const zip = await buildZip(files);
+        const zip = await Z.buildZip(files);
         if (zip.size > (LIMITS.uploadBytes || 0)) throw fail('サーバーへ送るには大きすぎます(まとめて ' + sizeLabel(LIMITS.uploadBytes) + ' まで)。');
         const result = await post('save', { site: siteId || '', name: name, entry: entry, patch: patch ? '1' : '0' }, zip);
         await refreshServer();
@@ -568,25 +651,40 @@
 
     async function handle(rawList) {
         if (state.busy) return;
+        // このブラウザの中に置くときも、関門を通ってから(期限が切れていたら出し直す)
+        if (!gatePassed()) {
+            showGate('確認の期限が切れました。もう一度、同意と確認をお願いします。');
+            return;
+        }
         state.busy = true;
         setStatus('読み込んでいます…');
         try {
             if (rawList.length === 0) throw fail('ファイルがありませんでした。');
             let label = labelOf(rawList);
+            // ZIP 以外の圧縮ファイルは断る。ZIP は単独で 1 つだけ(パスワード付きなら、ここで聞く)
+            const zipItem = await screenDrop(rawList);
             let list = rawList;
-            if (rawList.length === 1 && /\.zip$/i.test(rawList[0].path)) {
-                list = await unzip(rawList[0].file).catch(function (error) {
-                    if (error && error.noInflate) throw fail('このブラウザでは ZIP を開けません。ZIP を展開してから、フォルダごと落としてください。');
-                    throw error;
+            let skippedInZip = [];
+            if (zipItem) {
+                if (zipItem.file.size > (LIMITS.totalBytes || 0)) throw fail('ZIP が大きすぎます(' + sizeLabel(LIMITS.totalBytes) + ' まで)。');
+                const opened = await Z.unzip(new Uint8Array(await zipItem.file.arrayBuffer()), {
+                    maxTotal: LIMITS.totalBytes || 0,
+                    keep: zipVerdict,
+                    askPassword: askPassword,
                 });
+                list = opened.files;
+                skippedInZip = opened.skipped;
             }
-            const files = normalize(list);
+            const normalized = normalize(list, skippedInZip);
+            const files = normalized.files;
+            const note = skippedNote(normalized.skipped);
             const paths = files.map(function (f) { return f.path; });
             const htmls = paths.filter(isHtml);
 
             // HTML の無い CSS・JS だけ → 選んでいるものに足す
             if (htmls.length === 0) {
                 await patchCurrent(await withData(files));
+                if (note) setStatus(el.status.textContent + note);
                 return;
             }
             let entry = pickEntry(paths);
@@ -605,14 +703,14 @@
                 const name = el.name.value.trim() || label;
                 const result = await toServer(data, entry, name, el.target.value, false);
                 setCurrent({ kind: 'site', id: result.site.id });
-                setStatus('サーバーに保存しました: ' + result.site.name + '(版 ' + result.version + ')' + (result.removed.length ? '。古い版(' + result.removed.join('・') + ')を消しました。' : '。'));
+                setStatus('サーバーに保存しました: ' + result.site.name + '(版 ' + result.version + ')' + (result.removed.length ? '。古い版(' + result.removed.join('・') + ')を消しました。' : '。') + note);
                 return;
             }
             if (await bridge.start()) {
                 try {
                     const site = await toLocal(data, entry, label, null);
                     setCurrent({ kind: 'local', id: site.id });
-                    setStatus('このブラウザに置きました: ' + site.name + '(「開く」で開けます)');
+                    setStatus('このブラウザに置きました: ' + site.name + '(「開く」で開けます)' + note);
                     return;
                 } catch (error) {
                     // 入りきらない(容量)など。一時フォルダへ
@@ -621,8 +719,18 @@
             const temp = await toTemp(data, entry, label, null);
             setCurrent({ kind: 'temp', id: temp.id });
             renderAll();
-            setStatus('このブラウザの中に置けなかったので、サーバーの一時フォルダに置きました(24 時間で消えます): ' + temp.name);
+            setStatus('このブラウザの中に置けなかったので、サーバーの一時フォルダに置きました(24 時間で消えます): ' + temp.name + note);
         } catch (error) {
+            if (error && error.cancelled) {
+                setStatus('やめました。');
+                return;
+            }
+            if (error && error.gate) {
+                // サーバーのセッションの印が無い・切れた(サインインで入れ替わったときなど)
+                setStatus('');
+                showGate(error.message);
+                return;
+            }
             setStatus(error && error.userFacing ? error.message : '置けませんでした。もう一度お試しください。', true);
             if (!(error && error.userFacing)) console.error(error);
         } finally {
@@ -818,8 +926,128 @@
             });
             details.appendChild(ol);
             row.li.appendChild(details);
+            row.li.appendChild(shareBlock(site));
             el.server.appendChild(row.li);
         });
+    }
+
+    // ------------------------------------------------------------------
+    // 共有リンク(2026-11-05、利用者の指示)。サーバーに保存したものだけ。https://share.<本体>/<番号>/ でいつも最新の版
+    // 受け取った人はサインインなしで開ける(注意の画面を挟む。パスワード付きならそこで入れる)
+    // ------------------------------------------------------------------
+
+    function shareMeta(share) {
+        const expires = share.expiresAt ? formatTime(share.expiresAt) + ' まで' : '止めるまで';
+        return (share.hasPassword ? '🔒 パスワードあり' : 'パスワードなし') + '・' + expires + '・開かれた回数 ' + share.opened;
+    }
+
+    function copyText(input, buttonEl) {
+        const done = function () {
+            const before = buttonEl.textContent;
+            buttonEl.textContent = 'コピーしました';
+            setTimeout(function () { buttonEl.textContent = before; }, 1500);
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(input.value).then(done, function () { input.select(); });
+        } else {
+            input.select();
+        }
+    }
+
+    function shareBlock(site) {
+        const shares = site.shares || [];
+        const details = document.createElement('details');
+        details.className = 'km-html-versions km-html-share';
+        details.open = state.openShares.has(site.id);
+        details.addEventListener('toggle', function () {
+            if (details.open) state.openShares.add(site.id); else state.openShares.delete(site.id);
+        });
+        const summary = document.createElement('summary');
+        summary.textContent = '共有リンク(' + shares.length + ' 本)';
+        details.appendChild(summary);
+
+        const note = document.createElement('p');
+        note.className = 'km-html-note';
+        note.textContent = 'リンクを知っている人は、サインインしなくても開けます(いつも新しい版。開く前に注意の画面が出ます)。'
+            + 'パスワードを付けると、パスワードも知っている人だけになります。止めたリンクは二度と使えません。';
+        details.appendChild(note);
+
+        const list = document.createElement('ul');
+        list.className = 'km-html-share-list';
+        shares.forEach(function (share) {
+            const li = document.createElement('li');
+            const url = document.createElement('input');
+            url.type = 'text';
+            url.readOnly = true;
+            url.value = share.url;
+            url.className = 'km-html-share-url';
+            url.setAttribute('aria-label', '共有リンク');
+            url.addEventListener('focus', function () { url.select(); });
+            const meta = document.createElement('span');
+            meta.className = 'km-html-item-meta';
+            meta.textContent = shareMeta(share);
+            const actions = document.createElement('div');
+            actions.className = 'km-html-item-actions';
+            const copy = button('コピー', 'km-doc-button', function () { copyText(url, copy); });
+            actions.appendChild(copy);
+            actions.appendChild(button('止める', 'km-doc-link km-html-danger', function () {
+                if (!confirm('この共有リンクを止めます。同じリンクは二度と使えません。')) return;
+                post('share_delete', { site: site.id, share: share.id }).then(function () {
+                    setStatus('共有リンクを止めました。');
+                    return refreshServer();
+                }, function (error) { setStatus(error.message, true); });
+            }));
+            li.append(url, meta, actions);
+            list.appendChild(li);
+        });
+        details.appendChild(list);
+
+        const form = document.createElement('div');
+        form.className = 'km-html-share-form';
+        const passwordLabel = document.createElement('label');
+        passwordLabel.textContent = 'パスワード(付けないなら空のまま。6 文字以上)';
+        const password = document.createElement('input');
+        password.type = 'password';
+        password.autocomplete = 'new-password';
+        password.maxLength = 72;
+        passwordLabel.appendChild(password);
+        const expiresLabel = document.createElement('label');
+        expiresLabel.textContent = '期限';
+        const expires = document.createElement('select');
+        [['1d', '1 日'], ['7d', '7 日'], ['30d', '30 日'], ['none', '止めるまで']].forEach(function (pair) {
+            const option = document.createElement('option');
+            option.value = pair[0];
+            option.textContent = pair[1];
+            expires.appendChild(option);
+        });
+        expires.value = '7d';
+        expiresLabel.appendChild(expires);
+        const create = button('リンクを作る', 'km-doc-button', function () {
+            if (password.value !== '' && Array.from(password.value).length < 6) {
+                setStatus('パスワードは 6 文字以上にしてください(付けないなら空のまま)。', true);
+                return;
+            }
+            create.disabled = true;
+            post('share_create', { site: site.id, password: password.value, expires: expires.value }).then(function (result) {
+                password.value = '';
+                state.openShares.add(site.id);
+                setStatus('共有リンクを作りました。「コピー」して渡してください' + (result.share.hasPassword ? '(パスワードは別に伝えてください)。' : '。'));
+                return refreshServer();
+            }, function (error) {
+                if (error && error.gate) {
+                    showGate(error.message);
+                    return;
+                }
+                setStatus(error && error.userFacing ? error.message : '作れませんでした。', true);
+            }).then(function () { create.disabled = false; });
+        });
+        if (shares.length >= 5) {
+            create.disabled = true;
+            create.title = '1 つのサイトに 5 本までです';
+        }
+        form.append(passwordLabel, expiresLabel, create);
+        details.appendChild(form);
+        return details;
     }
 
     function renderAll() {
@@ -846,6 +1074,8 @@
         return post('state', {}).then(function (result) {
             state.server = { signedIn: result.signedIn, canSave: result.canSave, blocked: result.blocked, sites: result.sites || [] };
             if (el.placeServer) el.placeServer.disabled = !result.canSave;
+            // サーバーの印が切れていたら、次に落としたときに関門を出す(ここでは画面を変えない)
+            if (typeof result.gateUntil === 'number') state.gateUntil = result.gateUntil;
             renderAll();
         }, function () {
             renderAll();
@@ -881,6 +1111,7 @@
             handle(list);
         });
     });
+    el.gateOk.addEventListener('click', submitGate);
     document.querySelectorAll('input[name="km-html-place"]').forEach(function (radio) {
         radio.addEventListener('change', function () {
             writeJson(PLACE_KEY, radio.value);

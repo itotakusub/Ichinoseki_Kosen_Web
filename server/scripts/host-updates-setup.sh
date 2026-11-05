@@ -43,7 +43,7 @@ done
 APT_CONF="/etc/apt/apt.conf.d/52kosenmap-unattended"
 CRON_FILE="/etc/cron.d/kosenmap-updates"
 # **並びを変えたら上げること。** 古いホストの cron を書き直す合図になる
-CRON_VERSION=9
+CRON_VERSION=11
 LOG_DIR="/var/log/kosenmap"
 CHECK_SCRIPT="$PATH_ROOT/scripts/check-updates.sh"
 SECURITY_SCRIPT="$PATH_ROOT/scripts/host-security-check.sh"
@@ -59,6 +59,10 @@ RESOURCE_SCRIPT="$PATH_ROOT/scripts/host-resource-alert.sh"
 GEOBLOCK_SCRIPT="$PATH_ROOT/scripts/host-geoblock.sh"
 # アプリの受け箱(版 9。2026-10-09)。設定(apk-inbox.local.conf)が無ければ何もしない
 APK_INBOX_SCRIPT="$PATH_ROOT/scripts/host-apk-inbox.sh"
+# コンテナのイメージの検査(版 10。2026-11-06)。Trivy を docker.sock なしで回す
+IMAGE_SCAN_SCRIPT="$PATH_ROOT/scripts/host-image-scan.sh"
+# 使っていないイメージと古いビルドのキャッシュの片付け(版 11。2026-11-06)
+DOCKER_PRUNE_SCRIPT="$PATH_ROOT/scripts/host-docker-prune.sh"
 
 PROBLEMS=0
 note() { echo "  $1"; }
@@ -119,7 +123,7 @@ echo "== 確認スクリプト =="
 # **配備は実行ビットを保たない。** tar 越しに置いた直後は 644 のことがあるので、
 # cron が呼ぶものをまとめて見る(1本ずつ手で chmod すると、必ずどれかを忘れる)。
 # 版 6 で host-cert.sh と、それを包む send-log.sh を足した。版 7 で host-stats.sh と host-resource-alert.sh。
-for _script in "$CHECK_SCRIPT" "$SECURITY_SCRIPT" "$EMERGENCY_SCRIPT" "$BACKUP_SCRIPT" "$CERT_SCRIPT" "$SEND_LOG_SCRIPT" "$STATS_SCRIPT" "$RESOURCE_SCRIPT" "$GEOBLOCK_SCRIPT" "$APK_INBOX_SCRIPT"; do
+for _script in "$CHECK_SCRIPT" "$SECURITY_SCRIPT" "$EMERGENCY_SCRIPT" "$BACKUP_SCRIPT" "$CERT_SCRIPT" "$SEND_LOG_SCRIPT" "$STATS_SCRIPT" "$RESOURCE_SCRIPT" "$GEOBLOCK_SCRIPT" "$APK_INBOX_SCRIPT" "$IMAGE_SCAN_SCRIPT" "$DOCKER_PRUNE_SCRIPT"; do
   if [ -x "$_script" ]; then
     note "あり: $_script"
   elif [ -f "$_script" ]; then
@@ -255,6 +259,19 @@ else
 # host-apk-inbox.sh が **5 分ごと**に GitHub の非公開リポジトリの latest.json を見て、新しい APK があれば取ってきて
 # web に検めさせる(受け箱に入れて管理者へメール。公開は管理者が管理画面で押す)。**失敗したときだけ**送る
 # (同じ失敗は 6 時間に 1 回まで)。**設定(apk-inbox.local.conf)が無ければ何もしない。**
+#
+# ## コンテナのイメージの検査(版 10 で足した。2026-11-06)
+#
+# host-image-scan.sh が **毎週日曜 4:47** に、compose の全イメージを Trivy(版と digest で固定)で調べる。
+# docker.sock は渡さない(docker save した tar を読み取り専用で渡す)。**直る版のある HIGH・CRITICAL が新しく出たときだけ**
+# 送る(セキュリティ確認と同じ notify-security.php)。検査そのものが失敗したときは send-log.sh が送る。
+# 日曜のバックアップ(2:40)・更新の確認(4:17)・訪問記録の片付け(4:37)と重ねない。
+#
+# ## 使っていないイメージとビルドのキャッシュの片付け(版 11 で足した。2026-11-06)
+#
+# host-docker-prune.sh が **毎週日曜 5:47** に、どのコンテナも compose も使っていないイメージを消す(compose のイメージごとに
+# 1 つ前の版は残す・ボリュームには触らない)。ビルドのキャッシュは 14 日より古いものだけ。検査(4:47)が終わるまで待つ。
+# **失敗したときだけ**送る。
 SHELL=/bin/sh
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
@@ -275,6 +292,8 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 @reboot     root  sleep 30 && sh $GEOBLOCK_SCRIPT --path $PATH_ROOT apply >>$LOG_DIR/geoblock.log 2>&1
 37 4 * * *  root  find $PATH_ROOT/run/visitlog -maxdepth 1 -type f -name 'visit-*.jsonl' -mtime +30 -delete >>$LOG_DIR/visitlog.log 2>&1
 */5 * * * *  root  $SEND_LOG_SCRIPT --path $PATH_ROOT --label アプリの受け箱 --only-failure --run "$APK_INBOX_SCRIPT --path $PATH_ROOT" >>$LOG_DIR/apk-inbox.log 2>&1
+47 4 * * 0  root  $SEND_LOG_SCRIPT --path $PATH_ROOT --label イメージの検査 --only-failure --run "$IMAGE_SCAN_SCRIPT --path $PATH_ROOT --notify" >>$LOG_DIR/image-scan.log 2>&1
+47 5 * * 0  root  $SEND_LOG_SCRIPT --path $PATH_ROOT --label イメージの片付け --only-failure --run "$DOCKER_PRUNE_SCRIPT --path $PATH_ROOT --apply" >>$LOG_DIR/docker-prune.log 2>&1
 CONF
     chmod 644 "$CRON_FILE"
     chown root:root "$CRON_FILE"

@@ -82,7 +82,8 @@ function km_notify_security_split_unknown(string $json): array
  */
 function km_notify_security_extra_lines(array $extra): array
 {
-    $labels = ['fail2ban' => 'fail2ban', 'logto' => 'Logto Console'];
+    // images: scripts/host-image-scan.sh(Trivy。2026-11-06)
+    $labels = ['fail2ban' => 'fail2ban', 'logto' => 'Logto Console', 'images' => 'コンテナのイメージ(Trivy)'];
     $lines = [];
     foreach ($extra as $item) {
         $lines[] = '- [' . ($labels[$item['kind']] ?? $item['kind']) . '] ' . $item['summary'];

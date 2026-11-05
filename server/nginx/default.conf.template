@@ -644,6 +644,14 @@ server {
         include /etc/nginx/km/proxy-web.conf;
         proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
     }
+    # ベンチマーク(2026-11-06。タスクマネージャーの「ベンチマーク」タブ)。サーバーに負荷を掛ける口なので同じく IP で絞る
+    location = /admin/api/bench.php {
+        include /etc/nginx/km/taskmgr-allow*.local.conf;
+        deny all;
+        error_page 403 = @km_taskmgr_hide;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
     location @km_taskmgr_hide {
         return 444;
     }
@@ -879,6 +887,9 @@ server {
 # どの要求も web の html-view.php へ書き換えて渡す(元の URI は X-KM-Html-Uri)。本体の PHP のページはここからは開けない。
 #
 # - 上げるのは本体の /api/html-host.php。ここは GET と HEAD だけ(本文は受けない)
+# - **共有リンク share.<ドメイン> も同じ server で受ける**(2026-11-05)。html-view.php がホストで振り分ける
+#   (share では共有の道だけ、html では共有の道に答えない)。POST は share の注意の画面の「開く」(パスワード)だけで、km_html で数える
+#   別の名前にしたのは、他人の共有ページのスクリプトが html.<ドメイン> の IndexedDB(このブラウザに置いたもの)に触れないため
 # - X-Frame-Options は付けない —— bridge.html を本体のページの枠に入れるため。枠の許可は PHP が CSP の frame-ancestors で出す
 #   (上げたものは frame-ancestors 'none')
 # - ゲートは掛けない(誰でも開ける入口。見られるのは本人が上げたものだけで、PHP が印で確かめる)
@@ -889,7 +900,7 @@ server {
     listen 443 ssl;
     listen [::]:443 ssl;
     http2 on;
-    server_name ${KM_HTML_DOMAIN};
+    server_name ${KM_HTML_DOMAIN} ${KM_SHARE_DOMAIN};
     keepalive_timeout 30s;
     limit_conn km_conn 100;
     client_max_body_size 1m;
@@ -903,6 +914,8 @@ server {
     location / {
         # 1 つのページが CSS・JS・画像をまとめて読むので、km_api(1 分 240・まとめて 120)で数える
         limit_req zone=km_api burst=120 nodelay;
+        # 書き込み(共有のパスワードの「開く」)だけを 1 分 20 回で数える(km_write_key は GET を数えない)。本丸は PHP の外れの回数
+        limit_req zone=km_html burst=10 nodelay;
         include /etc/nginx/km/proxy-web.conf;
         proxy_set_header X-Forwarded-Port 443;
         proxy_set_header X-KM-Html-Uri $request_uri;

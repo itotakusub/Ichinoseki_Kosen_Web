@@ -127,6 +127,16 @@ try {
             header('Location: ./backups.php?saved=html_deleted#html-sites', true, 303);
             exit;
         }
+        // 共有リンクを全部止める(2026-11-05)。サイトそのものは残す。止めたリンクは二度と使えない
+        if ($formAction === 'html_share_stop') {
+            $site = km_html_site_find($pdo, (string) ($_POST['site'] ?? ''));
+            if ($site !== null) {
+                $stopped = km_html_shares_delete_site($pdo, $site['dbId']);
+                km_admin_log_record('content', 'html.share_stop', $site['name'] . '(' . $site['id'] . ')・' . $stopped . ' 本');
+            }
+            header('Location: ./backups.php?saved=html_share_stopped#html-sites', true, 303);
+            exit;
+        }
     }
 
     $mapBackups = km_map_backup_list($pdo);
@@ -159,6 +169,7 @@ $notice = match ($saved) {
     'learning_restored' => '学習データを ' . (int) ($_GET['n'] ?? 0) . ' 件戻しました(各端末は次の同期で受け取ります)。',
     'poster_archive_deleted' => 'ポスターの控えを消しました。',
     'html_deleted' => 'HTML 展開サイトのサイトを消しました。',
+    'html_share_stopped' => 'HTML 展開サイトの共有リンクを止めました。',
     default => null,
 };
 
@@ -376,7 +387,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
               <div class="card-body">
                 <p class="text-body-secondary fs-7 mb-2">
                   利用者が <a href="/html.php" target="_blank" rel="noopener">HTML 展開</a>でサーバーに保存したもの(1 人 <?= KM_HTML_MAX_SITES_PER_OWNER ?> サイト・<?= km_e($size(KM_HTML_MAX_OWNER_BYTES)) ?> まで。各サイトは新しい版を <?= KM_HTML_MAX_VERSIONS ?> つ残します)。
-                  <strong>中身は本人だけが見られるので、ここからは開けません。</strong>規約に反するものと分かったときに消すための一覧です。
+                  <strong>中身はここからは開けません</strong>(本人と、本人が作った共有リンクを知る人だけが見られる約束)。規約に反するものと分かったときに、共有を止める・消すための一覧です。
                   <?php if ($htmlSummary !== null): ?>
                     一時フォルダ(24 時間で消えるもの)はいま <?= (int) $htmlSummary['tempCount'] ?> 件・<?= km_e($size($htmlSummary['tempBytes'])) ?>。
                   <?php endif; ?>
@@ -386,7 +397,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
                 <?php else: ?>
                   <div class="table-responsive">
                     <table class="table table-sm align-middle mb-0">
-                      <thead><tr><th>持ち主</th><th>サイト</th><th>版</th><th>大きさ</th><th>最後に保存</th><th></th></tr></thead>
+                      <thead><tr><th>持ち主</th><th>サイト</th><th>版</th><th>大きさ</th><th>共有リンク</th><th>最後に保存</th><th></th></tr></thead>
                       <tbody>
                         <?php foreach ($htmlSummary['sites'] as $site): ?>
                           <tr>
@@ -395,9 +406,18 @@ require __DIR__ . '/_inc/partials/page-header.php';
                             <td><?= km_e($site['name']) ?></td>
                             <td><?= max(0, (int) $site['nextVersion'] - 1) ?></td>
                             <td><?= km_e($size($site['bytes'])) ?></td>
+                            <td><?= (int) ($site['shares'] ?? 0) ?> 本</td>
                             <td><?= km_e($site['updatedAt']) ?></td>
                             <td class="text-nowrap">
                               <?php if ($KM_ADMIN_CAN_WRITE): ?>
+                                <?php if (($site['shares'] ?? 0) > 0): ?>
+                                  <form method="post" class="d-inline" data-km-confirm="「<?= km_e($site['name']) ?>」の共有リンクを全部止めますか？止めたリンクは二度と使えません。">
+                                    <?= km_csrf_field() ?>
+                                    <input type="hidden" name="form_action" value="html_share_stop">
+                                    <input type="hidden" name="site" value="<?= km_e($site['id']) ?>">
+                                    <button type="submit" class="btn btn-outline-warning btn-sm">共有を止める</button>
+                                  </form>
+                                <?php endif; ?>
                                 <form method="post" class="d-inline" data-km-confirm="「<?= km_e($site['name']) ?>」を版ごと消しますか？元に戻せません。">
                                   <?= km_csrf_field() ?>
                                   <input type="hidden" name="form_action" value="html_site_delete">
