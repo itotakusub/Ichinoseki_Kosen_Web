@@ -775,6 +775,9 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
     - 規約に第8条の2・プライバシーポリシーに Cookie と保存期間を足した(`KM_LEGAL_UPDATED` 2026-11-05)。nginx に zone `km_html`・compose に `KM_HTML_DOMAIN`/`KM_HTML_URL`・host-cert.sh の確かめに html の名前
     - 確かめ: check.php に組 `html-host`(全体 2741 件通過)。写し(PHP の組み込みサーバー・SQLite・`app.localhost` と `html.app.localhost`)で、ローカル・一時・保存・版 11・CSS だけ・入口の選択・札の使い回し 404・他人や Cookie なしの 404・サインアウト後の 404・375 幅を見た
     - **配備の手順**: (1) DNS に `html.ito4.jp` → (2) `-Action up` で配備 → (3) ホストで証明書に `html.ito4.jp` を足す(今の名前も並べる)→ (4) リンク集に `https://ito4.jp/html.php`
+    - **11-05 に (1)〜(3) を利用者が実施**: DNS は A だけ(ito4.jp の名前にはどれも AAAA が無い)。証明書は 17:14 に 4 つの名前で取れた(期限 2027-02-03)が、
+      **`host-cert.sh issue` は今のドメインに名前を足すときも「ドメインを変える」案内を出して reload しなかった** ので、nginx が古い証明書のままだった。
+      issue は今の `KM_DOMAIN` と同じなら reload して status を出すように直した(check.php 2742 件)。`km` で走らせると docker が無いので「certbot がありません」で何もせず終わる(`kmops` で走らせる)
 - **試しのイベントを本番で見た(2026-11-01 22 時、利用者がイベント「Test」(id 9)を始めた)**: 公開の地図データは錠なし・予定 34 件(21:00〜11-02 21:00)・
   企画の番号付きの地点 33(1F 8・2F 9・3F 9・4F 4・外 3)。ポスター・一時地点・屋台は 0。
   - Website(内蔵のブラウザ・幅 1149): 🎪 イベントと 📅 予定のチップが出る。拡大すると 1F の企画の地点 8 か所が赤い縁(`km-node-event`)、ほか 38 か所が薄い(`km-node-unrelated`)。

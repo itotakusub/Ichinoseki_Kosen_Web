@@ -383,6 +383,16 @@ do_issue() {
     return 0
   fi
 
+  # **今のドメインの証明書に名前を足しただけ**(--also html.… など)なら、切り替えは要らない。
+  # nginx は reload するまで古い証明書を出し続けるので、ここで読み込ませる(2026-11-05 に reload 漏れで html.ito4.jp が開けなかった)
+  if [ "$DOMAIN" = "$(env_value KM_DOMAIN)" ]; then
+    echo
+    echo "取れました: /etc/letsencrypt/live/$DOMAIN/(今のドメインの証明書を置き換えました)"
+    reload_proxy
+    do_status
+    return 0
+  fi
+
   cat <<EOF
 
 取れました: /etc/letsencrypt/live/$DOMAIN/

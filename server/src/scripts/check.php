@@ -10696,7 +10696,10 @@ function km_check_html_host(): void
         && str_contains((string) file_get_contents($repo . '/compose.vps.yaml'), 'KM_HTML_DOMAIN: ${KM_HTML_DOMAIN:-html.${KM_DOMAIN}}')
         && str_contains((string) file_get_contents($repo . '/compose.vps.yaml'), 'KM_HTML_URL: ${KM_HTML_URL:-https://${KM_HTML_DOMAIN:-html.${KM_DOMAIN}}}'));
     check_bool('夜の控えに一時フォルダを入れない', str_contains((string) file_get_contents($repo . '/scripts/host-backup.sh'), "--exclude='uploads/html-temp'"));
-    check_bool('証明書の確かめに html の名前がある', str_contains((string) file_get_contents($repo . '/scripts/host-cert.sh'), '_html="${_html:-html.${_domain}}"'));
+    $certScript = (string) file_get_contents($repo . '/scripts/host-cert.sh');
+    check_bool('証明書の確かめに html の名前がある', str_contains($certScript, '_html="${_html:-html.${_domain}}"'));
+    // 今のドメインに名前を足した issue は、その場で reload する(11-05 に reload 漏れで html.ito4.jp が古い証明書のままだった)
+    check_bool('issue で今のドメインに名前を足したら reload する', preg_match('/if \[ "\$DOMAIN" = "\$\(env_value KM_DOMAIN\)" \]; then\s+echo\s+echo "取れました[^\n]*\n\s+reload_proxy\n\s+do_status\n\s+return 0/', $certScript) === 1);
 }
 
 /**
