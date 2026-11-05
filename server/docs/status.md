@@ -832,6 +832,25 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
   - 確かめ: check.php 全部通る(組 `weather`・`image-scan`・`bench` を足した)。写しで天気(雨の予報・観測・雪・晴れ・分からない・手動のその日だけ・375 幅・英語)、ベンチマークの画面(進み具合・失敗した段・差・375 幅)、
     イメージの検査の表(名前は逃がす)。検査のスクリプトの awk・sed は Git の道具で確かめた(この PC の sh は子のプロセスを起こせない)
   - **配備のあと(利用者)**: (1) `deploy-to-host.ps1 -Backup -Yes -Action up`(nginx の設定が変わる)→ (2) km で `sudo sh /opt/kosenmap/scripts/host-updates-setup.sh --path /opt/kosenmap --fix`(cron 版 10・実行ビット)→ (3) 初回の検査 `sudo sh /opt/kosenmap/scripts/host-image-scan.sh --path /opt/kosenmap`(数分〜十数分)→ 結果を見て distroless・Chainguard を決める
+  - **11-06 に配備済み(利用者)**: `api/weather.php` は 200(その時は「雨の予報 50%」)・cron 版 10。**初回の検査**(手で。`--notify` なし)は 9 イメージ・失敗 0・直る版のある HIGH・CRITICAL 606 件:
+    | イメージ | CRITICAL(直る) | HIGH(直る) | うち OS | 主なもの |
+    |---|---|---|---|---|
+    | boky/postfix | 38(30) | 409(286) | 431 | **イメージが 2026-01-01 のまま**(Debian 13.2)。openssl・perl・brotli… |
+    | phpmyadmin | 8(7) | 153(60) | 150 | 同梱の twig 3.11.3(3.26 以上で直る) |
+    | kosenmap-web | 2(1) | 139(55) | 141 | 土台(php:8.4-apache・Debian 13.7)の linux-libc-dev など。作るための -dev は外してある |
+    | logto 1.45.0 | 3(3) | 60(57) | 0 | npm の部品(shell-quote・dompurify・axios)と Go の stdlib |
+    | mariadb・postgres | 1(1) | 27・25 | 2・0 | ほぼ gosu の Go 1.24.6 の stdlib |
+    | nginx・glances・certbot | 1〜3 | 10〜23 | 11〜19 | Alpine の brotli・expat・pcre2、certifi |
+    **見立て: いま distroless・Chainguard に替える利点は小さい。** 直る版のある 606 件のほとんどは「digest を新しくする」(update-containers.ps1)と「web を新しい土台で作り直す」で消える。
+    多いところ(postfix・phpMyAdmin・web)は distroless に代わりが無く、Chainguard の無償の版は最新だけ(版を固定して上げる今の運用と合わない)。
+    順番: (1) 全部の digest を上げる(特に postfix)→ (2) web を作り直す → (3) phpMyAdmin は使わない間は止めることも考える → (4) 次の検査で残ったものを見て、nginx だけ Chainguard を試すか決める。
+    手で回した初回は「知らせ済み」を覚えていないので、**最初の日曜(11-08)の 4:47 に 606 件ぶんのメールが 1 通届く**(並べるのは 20 件まで)。そのあとは新しく出たものだけ
+  - **イメージとビルドのキャッシュの片付け(11-06、利用者の指示「自動で解放」。手元で済み・配備待ち)**: `scripts/host-docker-prune.sh`。cron 版 11 で毎週日曜 5:47(検査のあと。検査の錠を待つ)。
+    消さないもの: コンテナ(止まっているものも)が使う像・compose の像・Dockerfile の FROM・Trivy・道具(`alpine:latest`・`composer:2`)・**compose の像ごとに 1 つ前の版**。ボリュームには触らない。
+    ビルドのキャッシュは 14 日より古いものだけ。既定は見るだけ(`--apply` で消す)。本番で見るだけを流すと、消すのは 15 個・約 10.5GB(test-web・test-soketi・kosenmap-soketi・Logto 1.42/1.43・古い phpMyAdmin 5 つ…)、
+    残す 1 つ前の版は Logto・MariaDB・nginx・glances・phpMyAdmin・Postgres の 6 つ。起こしていない profile の mailpit は残さない
+  - **JAVA_HOME(11-06)**: `scripts/java-home.ps1`(この PC。既定は見るだけ、`-Fix` で直す)。原因は**ユーザーの JAVA_HOME が古い JDK(21.0.12 の build 101)を指したまま全体(21.0.13+9。インストーラーが直した)を上書きしていた**こと。
+    -Fix はユーザーの方を消し(次の更新でもインストーラーの値が効く)、全体の PATH に残った古い jdk の bin を外し(管理者のときだけ)、gradle.properties を新しい JDK に合わせる
 - **試しのイベントを本番で見た(2026-11-01 22 時、利用者がイベント「Test」(id 9)を始めた)**: 公開の地図データは錠なし・予定 34 件(21:00〜11-02 21:00)・
   企画の番号付きの地点 33(1F 8・2F 9・3F 9・4F 4・外 3)。ポスター・一時地点・屋台は 0。
   - Website(内蔵のブラウザ・幅 1149): 🎪 イベントと 📅 予定のチップが出る。拡大すると 1F の企画の地点 8 か所が赤い縁(`km-node-event`)、ほか 38 か所が薄い(`km-node-unrelated`)。

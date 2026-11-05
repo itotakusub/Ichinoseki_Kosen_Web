@@ -6032,8 +6032,8 @@ function km_check_hardening(): void
     check_bool('配備の $mustContain に2本と logto-domain.php', str_contains($mustContain, "'./scripts/host-cert.sh'") && str_contains($mustContain, "'./scripts/host-domain.sh'") && str_contains($mustContain, "'./src/scripts/logto-domain.php'"));
     $setup = $file('scripts/host-updates-setup.sh');
     // 版 6 で証明書を足し、版 7(2026-10-05)でタスクマネージャーの集計と使用率の警告を、版 8(2026-10-06)で訪問者の記録の片付けを、
-    // 版 9(2026-10-09)でアプリの受け箱を、版 10(2026-11-06)でイメージの検査を足した
-    check_bool('cron は版 10', preg_match('/^CRON_VERSION=10$/m', $setup) === 1);
+    // 版 9(2026-10-09)でアプリの受け箱を、版 10(2026-11-06)でイメージの検査を、版 11(同日)でイメージの片付けを足した
+    check_bool('cron は版 11', preg_match('/^CRON_VERSION=11$/m', $setup) === 1);
     // 国単位のアクセス拒否(2026-10-06)。毎月の取り直しと、再起動のあとの当て直し
     check_bool('cron(版 8)に国の拒否の取り直しと再起動後の当て直しがある', str_contains($setup, '53 4 2 * *  root  sh $GEOBLOCK_SCRIPT --path $PATH_ROOT update')
         && str_contains($setup, '@reboot     root  sleep 30 && sh $GEOBLOCK_SCRIPT --path $PATH_ROOT apply'));
@@ -10911,9 +10911,32 @@ function km_check_image_scan(): void
     $setup = $file('scripts/host-updates-setup.sh');
     check_bool('cron(版 10)に毎週日曜 4:47 の行がある・失敗は send-log.sh', preg_match('/^CRON_VERSION=(1[0-9]|[2-9][0-9])$/m', $setup) === 1
         && str_contains($setup, '47 4 * * 0  root  $SEND_LOG_SCRIPT --path $PATH_ROOT --label イメージの検査 --only-failure --run "$IMAGE_SCAN_SCRIPT --path $PATH_ROOT --notify"'));
-    check_bool('実行ビットの一覧・HOST_SCRIPTS・配備の 2 つの一覧にある', str_contains($setup, '"$APK_INBOX_SCRIPT" "$IMAGE_SCAN_SCRIPT"; do')
+    check_bool('実行ビットの一覧・HOST_SCRIPTS・配備の 2 つの一覧にある', str_contains($setup, '"$APK_INBOX_SCRIPT" "$IMAGE_SCAN_SCRIPT" ')
         && preg_match("/^HOST_SCRIPTS='[^']*\\bhost-image-scan\\.sh\\b[^']*'$/m", $file('scripts/host-setup.sh')) === 1
         && substr_count($file('scripts/deploy-to-host.ps1'), "'./scripts/host-image-scan.sh'") === 2);
+
+    // 使っていないイメージとビルドのキャッシュの片付け(scripts/host-docker-prune.sh。2026-11-06、利用者の指示「自動で解放」)
+    $prune = $file('scripts/host-docker-prune.sh');
+    $pruneCode = (string) preg_replace('/^\s*#.*$/m', '', $prune);
+    check_bool('片付け: スクリプトがある(LF・sh)・既定は見るだけ(消すのは --apply のあと)', $prune !== '' && !str_contains($prune, "\r")
+        && strpos($pruneCode, 'if [ "$APPLY" -eq 0 ]; then') < strpos($pruneCode, 'docker image rm -f'));
+    check_bool('片付け: ボリュームとコンテナには触らない・まとめて消す命令を使わない', !preg_match('/volume (rm|prune)|system prune|container (rm|prune)|docker rm /', $pruneCode));
+    check_bool('片付け: コンテナ・compose・Dockerfile の FROM・Trivy・道具・1 つ前の版を残す', str_contains($pruneCode, "docker ps -a --format '{{.Image}}'")
+        && str_contains($pruneCode, 'docker compose config --images') && str_contains($pruneCode, 'docker/php/Dockerfile') && str_contains($pruneCode, 'scripts/host-image-scan.sh')
+        && str_contains($prune, 'KEEP_REFS="alpine:latest composer:2"') && str_contains($pruneCode, '> "$WORK/previous"'));
+    check_bool('片付け: compose の一覧が取れなければ消さない・検査の終わりを待つ', str_contains($pruneCode, 'if [ -z "$COMPOSE_IMAGES" ]; then') && str_contains($pruneCode, 'flock -w 3600 9'));
+    check_bool('片付け: ビルドのキャッシュは古いものだけ', str_contains($pruneCode, 'docker builder prune -f --filter "until=$((BUILD_CACHE_DAYS * 24))h"'));
+    check_bool('片付け: cron(版 11)は日曜 5:47・検査のあと・失敗は send-log.sh・配備物と実行ビットの一覧にある', preg_match('/^CRON_VERSION=(1[1-9]|[2-9][0-9])$/m', $setup) === 1
+        && str_contains($setup, '47 5 * * 0  root  $SEND_LOG_SCRIPT --path $PATH_ROOT --label イメージの片付け --only-failure --run "$DOCKER_PRUNE_SCRIPT --path $PATH_ROOT --apply"')
+        && str_contains($setup, '"$IMAGE_SCAN_SCRIPT" "$DOCKER_PRUNE_SCRIPT"; do') && preg_match("/^HOST_SCRIPTS='[^']*\\bhost-docker-prune\\.sh\\b[^']*'$/m", $file('scripts/host-setup.sh')) === 1
+        && substr_count($file('scripts/deploy-to-host.ps1'), "'./scripts/host-docker-prune.sh'") === 2);
+    // JAVA_HOME(この PC。2026-11-06)。既定は調べるだけ
+    $javaHome = $file('scripts/java-home.ps1');
+    // 書く所は 5 つ(JAVA_HOME 3・PATH 1・gradle.properties 1)。JAVA_HOME と gradle は if ($Fix) の中、PATH は if (-not $Fix) { continue } のあと
+    check_bool('java-home.ps1: 既定は調べるだけ(書き換えはどれも -Fix のときだけ)', str_contains($javaHome, '[switch]$Fix')
+        && substr_count($javaHome, 'SetEnvironmentVariable(') === 4 && substr_count($javaHome, 'if ($Fix) {') - substr_count($javaHome, 'elseif ($Fix) {') === 4
+        && strpos($javaHome, 'if (-not $Fix) { continue }') < strpos($javaHome, "[Environment]::SetEnvironmentVariable('Path'")
+        && substr_count($javaHome, 'WriteAllText(') === 1 && strpos($javaHome, 'if ($Fix) {', strpos($javaHome, '== Android の gradle.properties ==')) < strpos($javaHome, 'WriteAllText('));
 
     // 読む側: 形の合わない項目は捨て、数は 0 以上の整数に。直す必要の大きい順に並べる
     $sample = json_encode([

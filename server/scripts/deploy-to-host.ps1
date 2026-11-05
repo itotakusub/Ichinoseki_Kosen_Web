@@ -421,6 +421,8 @@ $include = @(
     './apk-inbox.local.conf.example'
     # コンテナのイメージの検査(2026-11-06)。root の cron が毎週日曜に呼ぶ(版 10)
     './scripts/host-image-scan.sh'
+    # 使っていないイメージとビルドのキャッシュの片付け(2026-11-06)。root の cron が毎週日曜に呼ぶ(版 11)
+    './scripts/host-docker-prune.sh'
     <#
       SSH ログインの知らせと、切る・BAN する道具(2026-09-25)。
       **ここに置くのは原本だけ。** PAM と sudo から root で走るのは、ssh-login-notify-setup.sh --fix が
@@ -486,6 +488,7 @@ $mustContain = @(
     './src/scripts/notify-security.php'
     # イメージの検査も知らせは notify-security.php(**対**)
     './scripts/host-image-scan.sh'
+    './scripts/host-docker-prune.sh'
     # バックアップと通知。こちらも**対**
     './scripts/host-backup.sh'
     './scripts/ssh-backup-gate.sh'
