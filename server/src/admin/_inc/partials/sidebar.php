@@ -43,6 +43,7 @@ $groups = [
         ['mapSettings', './map-settings.php', 'bi-shield-lock', 'side.mapSettings', '地図の公開設定'],
     ]],
     'event' => ['bi-calendar-event', 'side.groupEvent', '会期', [
+        ['eventSetup', './event-setup.php', 'bi-list-check', 'side.eventSetup', 'イベントのセットアップ'],
         ['mapEvents', './map-events.php', 'bi-cone-striped', 'side.mapEvents', 'イベントモード'],
         ['schedule', './schedule.php', 'bi-calendar-event', 'side.schedule', 'スケジュール'],
         ['stalls', './stalls.php', 'bi-shop', 'side.stalls', '屋台'],

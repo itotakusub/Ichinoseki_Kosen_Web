@@ -89,6 +89,17 @@
  * プレビューは公開ページの地点の詳細(Main/styles.css の .km-poster)に寄せてある —— 縦長のポスターも切らずに縮める。
  */
 .km-poster-thumb-cell { width: 4.5rem; }
+/* 一括の出す・止める(2026-11-03。_inc/partials/poster-bulk.php)。✓の列は狭く、セットアップの短い一覧は高さを抑える */
+.km-poster-bulk-check { width: 2.25rem; }
+.km-poster-bulk-list { max-height: 22rem; overflow-y: auto; }
+/* 上のバーの項目は折らない(狭い幅では文字を隠してアイコンだけにする。_inc/partials/header.php) */
+.app-header .navbar-nav .nav-link { white-space: nowrap; }
+/* イベントのセットアップ(admin/event-setup.php)。手順の印は幅をそろえ、理由は小さく */
+.km-setup-mark { flex: 0 0 auto; width: 1.6rem; align-self: flex-start; margin-top: 0.15rem; }
+.km-setup-steps .list-group-item.active .km-setup-reason { color: inherit; opacity: 0.85; }
+.km-setup-reason { color: var(--bs-secondary-color); }
+/* 書き込みの権限が無いときに止めるためだけの fieldset。AdminLTE の枠と余白は付けない */
+#km-setup-step fieldset, #km-setup-finish fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .km-poster-thumb { display: block; width: 4rem; height: 4rem; object-fit: contain; background: var(--bs-tertiary-bg); border-radius: 0.375rem; }
 .km-poster-url { max-width: 22rem; }
 .km-poster-preview { display: flex; gap: 0.75rem; align-items: flex-start; max-width: 32rem; padding: 0.75rem; border: 1px solid var(--bs-border-color); border-radius: 0.75rem; background: var(--bs-body-bg); }
@@ -150,6 +161,26 @@
   .km-tm-rail-foot { display: flex; align-items: center; gap: 0.5rem; white-space: nowrap; }
   .km-tm-rail-foot .form-label { margin-bottom: 0; }
   .km-tm-body { padding: 0.75rem; }
+}
+/*
+ * 縦は画面の残りを使う(2026-11-03、利用者「縦幅が小さいのがもったいない」。lg 以上だけ)。
+ * AdminLTE の .app-main は縦の flex なので、そこから .km-tm まで flex で伸ばし、
+ * パフォーマンスのグラフとプロセスの表(.km-tm-fill)が残りを受け取る。
+ * .km-tm-fill は contain: size で中身の行数に押し広げられないようにし、入る行数は taskmgr.js が数える
+ * (入らない行は hidden。低い窓では 15 行を出して枠の中でスクロール)。34rem は下限のまま。
+ */
+@media (min-width: 992px) {
+  .app-main > .app-content:has(> #km-taskmgr) { display: flex; flex-direction: column; flex: 1 0 auto; }
+  #km-taskmgr { display: flex; flex-direction: column; flex: 1 0 auto; }
+  /* 下の .km-tm-graph などより後で効かせるため、#km-taskmgr を前に付ける */
+  #km-taskmgr > .km-tm { flex: 1 0 auto; }
+  #km-taskmgr .km-tm-body { display: flex; flex-direction: column; }
+  #km-taskmgr .km-tm-panel:not([hidden]) { display: flex; flex-direction: column; flex: 1 1 auto; }
+  #km-taskmgr .km-tm-fill { flex: 1 1 0; min-height: 12rem; contain: size; overflow: auto; }
+  #km-taskmgr .km-tm-fill thead th { position: sticky; top: 0; z-index: 1; background: var(--bs-body-bg); }
+  #km-taskmgr .km-tm-perf { flex: 1 1 auto; }
+  #km-taskmgr .km-tm-main { display: flex; flex-direction: column; }
+  #km-taskmgr .km-tm-graph { flex: 1 1 16rem; height: auto; min-height: 16rem; }
 }
 
 /* 項目の色(CPU 青・メモリ紫・スワップ 橙・ディスク 緑・ネットワーク 桃) */

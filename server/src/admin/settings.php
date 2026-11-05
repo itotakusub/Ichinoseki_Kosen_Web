@@ -123,30 +123,30 @@ require __DIR__ . '/_inc/partials/page-header.php';
 
                 <?php
                 /*
-                 * Logto Console の開き方(2026-11-02、利用者の指示「Logto も SSH から」)。
-                 * Console はインターネットに出さず、ホストの 127.0.0.1:3002 だけで待つ(compose.yaml の logto)。
+                 * Logto Console と phpMyAdmin の開き方(2026-11-02 に Console を SSH の先へ。11-03 に phpMyAdmin も戻した)。
+                 * どちらもインターネットに出さず、ホストの 127.0.0.1(3002・8281)だけで待つ(compose.yaml の logto・phpmyadmin)。
+                 * **SOCKS のトンネル(ssh -D)を km の鍵で張る** —— kmops の鍵は転送が禁止(no-port-forwarding)で通らない。
                  * 学校の回線は 22 番を通さないので、自宅などから開く。
                  */
                 ?>
                 <div class="card mb-4">
                   <div class="card-header">
-                    <h3 class="card-title" data-i18n="page.settings.consoleTitle">Logto Console(利用者・ロールの管理)</h3>
+                    <h3 class="card-title" data-i18n="page.settings.consoleTitle">Logto Console と phpMyAdmin(SSH のトンネルの先)</h3>
                   </div>
                   <div class="card-body">
                     <p class="fs-7" data-i18n="page.settings.consoleHint">
-                      Console はインターネットに出していません。手元の PC で次のコマンドを実行してトンネルを張り、開いたままにして下のリンクを開きます。
+                      どちらもインターネットに出していません。手元の PC で 1 のトンネルを張って開いたままにし、2 の Chrome(トンネルを通す専用のもの)で開きます。デスクトップの「トンネル開通SSH.cmd」は 1 と 2 をまとめて行います。
                     </p>
-                    <pre class="km-api-example mb-3"><code class="user-select-all"><?= km_e(km_site_logto_console_tunnel()) ?></code></pre>
-                    <a
-                      href="<?= km_e(km_site_url('logto-admin', '/')) ?>"
-                      class="btn btn-sm btn-outline-primary"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      <i class="bi bi-box-arrow-up-right me-1" aria-hidden="true"></i><?= km_e(KM_SITE_LOGTO_CONSOLE_URL) ?>
-                    </a>
+                    <p class="fs-7 mb-1">1.</p>
+                    <pre class="km-api-example mb-2"><code class="user-select-all"><?= km_e(km_site_logto_console_tunnel()) ?></code></pre>
+                    <p class="fs-7 mb-1">2.</p>
+                    <pre class="km-api-example mb-3"><code class="user-select-all"><?= km_e(km_site_tunnel_chrome()) ?></code></pre>
+                    <ul class="fs-7 mb-0">
+                      <li>Logto Console: <code><?= km_e(KM_SITE_LOGTO_CONSOLE_URL) ?></code></li>
+                      <li>phpMyAdmin: <code><?= km_e(KM_SITE_PHPMYADMIN_URL) ?></code></li>
+                    </ul>
                     <p class="fs-7 text-body-secondary mt-3 mb-0" data-i18n="page.settings.consoleNote">
-                      学校の回線は 443 番しか通さないので、トンネルは自宅などから張ってください。鍵(km_ops)が無い PC からは開けません。
+                      ふだんのブラウザでは開けません(トンネルを通していないため)。学校の回線は 443 番しか通さないので、トンネルは自宅などから張ってください。鍵(km_vps)が無い PC からは開けません。
                     </p>
                   </div>
                 </div>

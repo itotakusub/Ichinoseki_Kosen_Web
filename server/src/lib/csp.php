@@ -67,7 +67,7 @@ function km_csp_nonce_attr(): string
 /**
  * プロファイルごとのディレクティブを組む。
  *
- * @param string $profile 'admin' | 'admin-geo' | 'public' | 'contact'
+ * @param string $profile 'admin' | 'admin-geo' | 'public' | 'contact' | 'html-host'
  */
 function km_csp_policy(string $profile): string
 {
@@ -103,6 +103,15 @@ function km_csp_policy(string $profile): string
          */
         $connect[] = 'https://ipwho.is';
         $connect[] = 'https://api.country.is';
+    }
+
+    if ($profile === 'html-host') {
+        /*
+         * HTML 展開サイトの道具のページ(html.php。2026-11-05)。見せる側(html.<ドメイン>)の bridge.html を
+         * 見えない iframe で開き、ブラウザの中(IndexedDB と Service Worker)に置く(lib/html-host.php)。
+         * 許すのは見せる側のオリジンだけ。上げたものを本体のオリジンで動かすことはない
+         */
+        $frame = [km_site_html_origin()];
     }
 
     if ($profile === 'contact') {

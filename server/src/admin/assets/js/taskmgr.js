@@ -528,6 +528,32 @@
       );
       return tr2;
     }));
+    fitProcesses();
+  };
+
+  /*
+   * プロセスの行数を画面の高さに合わせる(2026-11-03)。広い画面では表の枠(.km-tm-fill)が
+   * 残りの高さを受け取るので、入るだけ出して残りは hidden にする。狭い画面と、低くて入らない
+   * ときは 15 行(枠の中でスクロール)。タブを開いたときや窓の大きさが変わったときは下の
+   * ResizeObserver が数え直す。
+   */
+  const PROCESS_MIN_ROWS = 15;
+  const wideLayout = window.matchMedia('(min-width: 992px)');
+  const fitProcesses = () => {
+    const body = $('processes');
+    const wrap = body?.closest('.km-tm-fill');
+    if (!body || !wrap) {
+      return;
+    }
+    const rows = [...body.rows];
+    rows.forEach((row) => { row.hidden = false; });
+    let fits = PROCESS_MIN_ROWS;
+    const rowHeight = rows[0]?.offsetHeight ?? 0;
+    if (wideLayout.matches && wrap.clientHeight > 0 && rowHeight > 0) {
+      const head = wrap.querySelector('thead')?.offsetHeight ?? 0;
+      fits = Math.max(PROCESS_MIN_ROWS, Math.floor((wrap.clientHeight - head) / rowHeight));
+    }
+    rows.forEach((row, i) => { row.hidden = i >= fits; });
   };
 
   const renderContainers = (data) => {
@@ -796,6 +822,13 @@
   }
 
   document.addEventListener('visibilitychange', () => (document.hidden ? stop() : start()));
+
+  // 表の枠の高さが変わったら(窓の大きさ・タブを開いた・狭い画面との行き来)行数を数え直す
+  const processWrap = $('processes')?.closest('.km-tm-fill');
+  if (processWrap && 'ResizeObserver' in window) {
+    new ResizeObserver(() => fitProcesses()).observe(processWrap);
+  }
+  wideLayout.addEventListener('change', fitProcesses);
 
   // services.js と i18n.js はこのファイルの後で読まれる。揃ってから動かす
   const boot = () => {

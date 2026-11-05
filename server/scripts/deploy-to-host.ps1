@@ -816,12 +816,17 @@ Write-Host '      展開しました'
   mount しているので、手元で Old/ へ移したファイルも**ホストでは配信され続ける** ——
   外部接続の API(src/api/table.php)のように、外したつもりの入口が開いたまま残る。
 
-  消さずに `<ホスト>/Old/retired/` へ移す(手元の Old/ と同じ考え。戻すときは mv で戻す)。
+  消さずに `<ホスト>/retired/` へ移す(手元の Old/ と同じ考え。戻すときは mv で戻す)。
   一覧に書くのは**外したものだけ**。名前は英数と / . - _ だけ(シェルに渡すので、ここで形を確かめる)。
+
+  **ホストの Old/ は使わない**(2026-11-03)。本番の Old/ は 10-12 から root の持ち物で、配備の
+  kmops は中に書けず、`mkdir: cannot create directory 'Old/retired': Permission denied` で止まった。
+  retired/ は置き場の直下(kmops の持ち物)に作る。書けなければ最初の 1 つで止め、理由を出す。
 #>
 $retiredPaths = @(
-    # 2026-11-02: Soketi・チャット・サービス監視・外部接続 API・phpMyAdmin を外した(docs/status.md)
-    'docker/soketi', 'docker/phpmyadmin',
+    # 2026-11-02: Soketi・チャット・サービス監視・外部接続 API を外した(docs/status.md)。
+    # phpMyAdmin(docker/phpmyadmin)は 11-03 にトンネルの先だけで戻したので、ここには書かない(書くと配るたびに退避される)
+    'docker/soketi',
     'src/lib/soketi.php', 'src/lib/chat.php', 'src/lib/table-api.php', 'src/api/table.php',
     'src/admin/chat.php',
     'src/admin/api/chat-auth.php', 'src/admin/api/chat-send.php', 'src/admin/api/chat-read.php', 'src/admin/api/chat-history.php',
@@ -838,7 +843,11 @@ set -u
 cd '__KM_REMOTE_PATH__' || exit 1
 for p in __KM_RETIRED__; do
     if [ -e "$p" ]; then
-        mkdir -p "Old/retired/$(dirname "$p")" && rm -rf "Old/retired/$p" && mv "$p" "Old/retired/$p" && echo "      退避: $p"
+        if ! { mkdir -p "retired/$(dirname "$p")" && rm -rf "retired/$p" && mv "$p" "retired/$p"; }; then
+            echo "★ $p を retired/ へ移せませんでした($(id -un) に書く権限が無い?)。ls -ld retired retired/$(dirname "$p") を見てください" >&2
+            exit 1
+        fi
+        echo "      退避: $p → retired/$p"
     fi
 done
 '@ -replace '__KM_REMOTE_PATH__', $RemotePath -replace '__KM_RETIRED__', ($retiredPaths -join ' ')
@@ -881,6 +890,20 @@ switch ($Action) {
     'deploy' {
         Write-Host '      ファイルを置いただけです。コンテナには触れていません。'
         Write-Host '      compose.yaml を変えたなら -Action up、default.conf だけなら -Action restart -Services reverse-proxy'
+        <#
+          **compose に書いてあるのにコンテナが無いサービスを知らせる**(2026-11-03)。
+          phpMyAdmin を compose に戻して `-Action up` なしで配ったら、ファイルだけ置かれて
+          コンテナが作られず、「つながらない」になった。名前を出して、要る操作を書く。
+          (profile の内側のもの = mailpit は config --services に出ないので数えない)
+        #>
+        if ((Get-RemoteShell) -eq 'sh') {
+            $configured = @("$(Invoke-RemoteIn -Path $RemotePath -Command 'docker compose config --services 2>/dev/null' -AllowFailure)" -split '\s+' | Where-Object { $_ -ne '' })
+            $present = @("$(Invoke-RemoteIn -Path $RemotePath -Command 'docker compose ps -a --services 2>/dev/null' -AllowFailure)" -split '\s+' | Where-Object { $_ -ne '' })
+            $notCreated = @($configured | Where-Object { $present -notcontains $_ })
+            if ($configured.Count -gt 0 -and $notCreated.Count -gt 0) {
+                Write-Warning ('compose にあるのにコンテナが無いサービス: ' + ($notCreated -join ', ') + ' —— -Action up で作ってください(いまは動いていません)')
+            }
+        }
     }
     'up' {
         <#

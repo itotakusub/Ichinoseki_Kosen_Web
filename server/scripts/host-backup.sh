@@ -315,7 +315,9 @@ if [ -d "$PATH_ROOT/src/uploads" ]; then
   # AR の撮影の画像(uploads/ar-captures、lib/ar-capture.php)も入れない(2026-10-06): PC に落として 3D を作ったら消す
   # 一時置き場で、最大 5GB になり、**顔が写った元の画像を控えに何世代も残さない**ため。
   # 表(km_ar_frames)の行は DB の控えに入るが、zip は無いファイルを飛ばすので壊れない
-  tar czf "$WORK/km-uploads.tar.gz" -C "$PATH_ROOT/src" --exclude='uploads/.km-attach' --exclude='uploads/ar-captures' uploads
+  # HTML 展開サイトの一時フォルダ(uploads/html-temp、lib/html-host.php)も入れない(2026-11-05): 24 時間で消える置き場で、
+  # 戻しても期限切れの行しか無い。サーバーに保存したもの(uploads/html-sites)は入れる
+  tar czf "$WORK/km-uploads.tar.gz" -C "$PATH_ROOT/src" --exclude='uploads/.km-attach' --exclude='uploads/ar-captures' --exclude='uploads/html-temp' uploads
   _bytes="$(wc -c < "$WORK/km-uploads.tar.gz")"
   add_part "uploads" "$_bytes" ""
   echo "  uploads ${_bytes} バイト"

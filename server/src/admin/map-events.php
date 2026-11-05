@@ -397,6 +397,9 @@ $fmt = static fn (?string $value): string => $value === null || $value === ''
                               <a class="btn btn-sm btn-outline-primary"
                                  href="./map-editor.php?event=<?= $event['id'] ?>"
                                  data-i18n="page.mapEvents.editMap">地図</a>
+                              <a class="btn btn-sm btn-outline-primary"
+                                 href="./event-setup.php?event=<?= $event['id'] ?>"
+                                 data-i18n="page.mapEvents.setup">セットアップ</a>
                               <form method="post" class="d-inline">
                                 <?= km_csrf_field() ?>
                                 <input type="hidden" name="form_action" value="toggle">

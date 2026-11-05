@@ -15,12 +15,16 @@ declare(strict_types=1);
  *   - CRC を照らす(壊れたものを画像として置かない)
  *   - 名前は**最後の部分だけ**使う(`../` やフォルダは捨てる)。フォルダ・`__MACOSX/`・`.` で始まるものは飛ばす
  *   - 名前の文字コード: UTF-8 の印(bit 11)が無く、UTF-8 として読めなければ CP932(Windows の日本語)として読む
+ *
+ * `$keepPaths`(2026-11-05。HTML 展開サイト lib/html-host.php)を渡すと、名前は**フォルダを残した相対パス**になる
+ * (`css/a.css` と `js/a.css` を別のものとして扱う)。そのときも `..`・先頭の `/`・ドライブ名は断り(例外)、
+ * `__MACOSX/` と `.` で始まる段を含むものは飛ばす。ベース名だけの今の呼び出し(階の画像)は変わらない
  */
 
 /**
  * @return array<int, array{name:string, bytes:string}>
  */
-function km_zip_read_all(string $path, int $maxEntries, int $maxEntryBytes, int $maxTotalBytes): array
+function km_zip_read_all(string $path, int $maxEntries, int $maxEntryBytes, int $maxTotalBytes, bool $keepPaths = false): array
 {
     $handle = @fopen($path, 'rb');
     if ($handle === false) {
@@ -62,7 +66,9 @@ function km_zip_read_all(string $path, int $maxEntries, int $maxEntryBytes, int 
             $rawName = substr($cd, $pos + 46, $h['nameLen']);
             $pos += 46 + $h['nameLen'] + $h['extraLen'] + $h['commentLen'];
 
-            $name = km_zip_entry_name($rawName, ($h['flags'] & 0x0800) !== 0);
+            $name = $keepPaths
+                ? km_zip_entry_path($rawName, ($h['flags'] & 0x0800) !== 0)
+                : km_zip_entry_name($rawName, ($h['flags'] & 0x0800) !== 0);
             if ($name === null) {
                 continue;   // フォルダ・隠しファイル・macOS の付録
             }
@@ -137,4 +143,33 @@ function km_zip_entry_name(string $raw, bool $utf8Flag): ?string
     }
 
     return mb_substr($base, 0, 100);
+}
+
+/**
+ * zip の中の名前を、フォルダを残した相対パス(`/` 区切り)にする。飛ばすものは null、外へ出る名前は例外。
+ * 長さ・深さ・使えない文字の確かめは使う側(lib/html-host.php の km_html_clean_path)がもう一度行う
+ */
+function km_zip_entry_path(string $raw, bool $utf8Flag): ?string
+{
+    if ($raw === '' || str_ends_with($raw, '/') || str_ends_with($raw, '\\')) {
+        return null;
+    }
+    $name = $raw;
+    if (!$utf8Flag && !mb_check_encoding($raw, 'UTF-8')) {
+        $name = (string) mb_convert_encoding($raw, 'UTF-8', 'CP932');
+    }
+    $normalized = str_replace('\\', '/', $name);
+    if (str_starts_with($normalized, '/') || preg_match('/^[A-Za-z]:/', $normalized) === 1) {
+        throw new InvalidArgumentException('zip の中に、外の場所を指す名前があります(' . mb_substr($normalized, 0, 100) . ')。');
+    }
+    foreach (explode('/', $normalized) as $segment) {
+        if ($segment === '..') {
+            throw new InvalidArgumentException('zip の中に、外の場所を指す名前があります(' . mb_substr($normalized, 0, 100) . ')。');
+        }
+        if ($segment === '__MACOSX' || str_starts_with($segment, '.')) {
+            return null;   // macOS の付録・隠しファイル(.DS_Store・.git など)。`.` だけの段もここで飛ばす
+        }
+    }
+
+    return $normalized;
 }

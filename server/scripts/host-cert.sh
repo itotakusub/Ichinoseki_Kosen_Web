@@ -208,6 +208,14 @@ do_status() {
           *) echo "★ サインインの名前(${_auth})が証明書にありません。issue --domain ${_domain} --also ${_admin:-${_domain}} --also ${_auth} で足してください。"; _rc=1 ;;
         esac
       fi
+      # HTML 展開サイトの見せる側(2026-11-05。nginx の html の server)。.env に無ければ html.<ドメイン>(compose.vps.yaml と同じ導き方)。
+      # 入っていないと、上げたページを開いた時点でブラウザが証明書の名前の不一致で止める
+      _html="$(env_value KM_HTML_DOMAIN)"
+      _html="${_html:-html.${_domain}}"
+      case ",${_san}," in
+        *",DNS:${_html},"*) echo "   HTML 展開の名前(${_html})も入っています。" ;;
+        *) echo "★ HTML 展開の名前(${_html})が証明書にありません。issue --domain ${_domain} --also ${_admin:-${_domain}} --also ${_auth:-auth.${_domain}} --also ${_html} で足してください。"; _rc=1 ;;
+      esac
       _served="$(served_fingerprint "$_domain" || true)"
       if [ -z "$_served" ]; then
         echo "★ 443 番から証明書を受け取れません(nginx が動いているか確かめてください)"
@@ -372,6 +380,16 @@ do_issue() {
 
   if [ "$DRY" -eq 1 ]; then
     echo "試しの発行は通りました。--dry-run を外すと本物を取ります。"
+    return 0
+  fi
+
+  # **今のドメインの証明書に名前を足しただけ**(--also html.… など)なら、切り替えは要らない。
+  # nginx は reload するまで古い証明書を出し続けるので、ここで読み込ませる(2026-11-05 に reload 漏れで html.ito4.jp が開けなかった)
+  if [ "$DOMAIN" = "$(env_value KM_DOMAIN)" ]; then
+    echo
+    echo "取れました: /etc/letsencrypt/live/$DOMAIN/(今のドメインの証明書を置き換えました)"
+    reload_proxy
+    do_status
     return 0
   fi
 

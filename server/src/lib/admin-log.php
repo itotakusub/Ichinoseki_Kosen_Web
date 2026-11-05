@@ -229,6 +229,8 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     'map.event_alias' => 'がイベントの臨時名称を変更しました',
     'map.event_hidden' => 'がイベント中に出さない地点を切り替えました',
     'map.event_import' => 'が管理アプリのイベントを取り込みました',
+    // イベントのセットアップの「会期を終える」(2026-11-03、admin/event-setup.php)。詳細に何をしたかを書く
+    'map.event_finish' => 'が会期を終えました',
     'test.mark' => 'がアカウントにテスト用の印を付けました',
     'test.unmark' => 'がアカウントのテスト用の印を外しました',
     'test.settings' => 'がテスト用の表示(アンケート・操作方法)を変更しました',
@@ -242,6 +244,13 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     'poster.import' => 'がポスターをまとめて取り込みました',
     'node.likes_reset' => 'が部屋のいいねを 0 に戻しました',
     'poster.likes_reset' => 'がポスターの ♡ を 0 に戻しました',
+    // 一括の出す・止めると、会期の終わりの片付け(2026-11-03。admin/_inc/partials/poster-bulk.php・lib/poster-archive.php)
+    'poster.bulk' => 'がポスターをまとめて出す・止めるに切り替えました',
+    'poster.archive' => 'がポスター・広告を控えへ移して消しました',
+    'poster.archive_download' => 'がポスターの控えをダウンロードしました',
+    'poster.archive_delete' => 'がポスターの控えを消しました',
+    // HTML 展開サイト(2026-11-05、lib/html-host.php・admin/backups.php)。利用者が保存したサイトを管理者が消した
+    'html.delete' => 'が HTML 展開サイトのサイトを消しました',
     // テーブル管理の外部接続(table.api_*)は 2026-11-02 に口ごと外した(本番のキーは 0 件だった)
     'poster.tutorial_end' => 'がチュートリアルの終わりの知らせを変更しました',
     'map.node_link' => 'が地点の URL を変更しました',

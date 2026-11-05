@@ -639,6 +639,85 @@ function km_poster_set_enabled(PDO $pdo, int $id, bool $enabled): void
     $pdo->prepare('UPDATE km_posters SET is_enabled = ?, updated_at = NOW() WHERE id = ?')->execute([$enabled ? 1 : 0, $id]);
 }
 
+/**
+ * 一括の出す・止める(2026-11-03、利用者の指示「全て出す・全て止める・✓を付けたものは止める・出す」)。
+ * $ids が null なら全部。**すでにその状態のものは触らない**(updated_at = 画像の ?v= を無駄に変えない)。
+ * 戻り値は変わった件数。
+ *
+ * @param list<int>|null $ids km_poster_bulk_ids() で整えたもの
+ */
+function km_posters_set_enabled_many(PDO $pdo, ?array $ids, bool $enabled): int
+{
+    km_posters_ensure_tables($pdo);
+    if ($ids === null) {
+        $statement = $pdo->prepare('UPDATE km_posters SET is_enabled = ?, updated_at = NOW() WHERE is_enabled <> ?');
+        $statement->execute([$enabled ? 1 : 0, $enabled ? 1 : 0]);
+
+        return $statement->rowCount();
+    }
+    if ($ids === []) {
+        return 0;
+    }
+    $marks = implode(',', array_fill(0, count($ids), '?'));
+    $statement = $pdo->prepare("UPDATE km_posters SET is_enabled = ?, updated_at = NOW() WHERE is_enabled <> ? AND id IN ({$marks})");
+    $statement->execute([$enabled ? 1 : 0, $enabled ? 1 : 0, ...$ids]);
+
+    return $statement->rowCount();
+}
+
+/**
+ * 画面から来た ids[] を、正の整数の重なりの無い並びにする。**DB を使わない**(scripts/check.php が試す)。
+ *
+ * @return list<int>
+ */
+function km_poster_bulk_ids(mixed $raw): array
+{
+    if (!is_array($raw)) {
+        return [];
+    }
+    $ids = [];
+    foreach ($raw as $value) {
+        if (is_string($value) && preg_match('/^[1-9][0-9]{0,9}$/', $value) === 1) {
+            $ids[(int) $value] = true;
+        } elseif (is_int($value) && $value > 0) {
+            $ids[$value] = true;
+        }
+    }
+
+    return array_keys($ids);
+}
+
+/** 一括の 4 つ: 名前 => [✓だけか, 出すか, 記録と画面の言葉] */
+const KM_POSTER_BULK_ACTIONS = [
+    'show_all' => [false, true, '全て出す'],
+    'hide_all' => [false, false, '全て止める'],
+    'show_checked' => [true, true, '✓を付けたものを出す'],
+    'hide_checked' => [true, false, '✓を付けたものを止める'],
+];
+
+/**
+ * 押したボタンと✓から、何をするかを決める。**DB を使わない**(scripts/check.php が試す)。
+ * ✓だけの操作で✓が 0 件なら、何もせずに断る(全部が変わる取り違えを起こさない)。
+ *
+ * @return array{ids:?list<int>, enabled:bool, label:string}
+ */
+function km_poster_bulk_plan(string $bulk, mixed $rawIds): array
+{
+    if (!isset(KM_POSTER_BULK_ACTIONS[$bulk])) {
+        throw new InvalidArgumentException('操作を選び直してください。');
+    }
+    [$checkedOnly, $enabled, $label] = KM_POSTER_BULK_ACTIONS[$bulk];
+    $ids = null;
+    if ($checkedOnly) {
+        $ids = km_poster_bulk_ids($rawIds);
+        if ($ids === []) {
+            throw new InvalidArgumentException('ポスターに✓を付けてから押してください。');
+        }
+    }
+
+    return ['ids' => $ids, 'enabled' => $enabled, 'label' => $label];
+}
+
 // ---------------------------------------------------------------- 公開ページ
 
 /** 公開ページでの画像の URL。**番号と版だけ**(?v= は差し替えたときにキャッシュを捨てさせる) */

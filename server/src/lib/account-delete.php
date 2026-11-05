@@ -211,12 +211,25 @@ function km_account_delete_data(PDO $pdo, string $userId): array
         $avatarRemoved = true;
     }
 
+    /*
+     * HTML 展開サイトにサーバーに保存したもの(2026-11-05。lib/html-host.php)。行とファイルを一緒に消すので、取引の外で行う
+     * (ここで失敗しても、上の後片付けは済んでいる。記録に残して続ける)
+     */
+    $htmlSites = 0;
+    try {
+        require_once __DIR__ . '/html-host.php';
+        $htmlSites = km_html_sites_delete_owner($pdo, $userId);
+    } catch (Throwable $exception) {
+        error_log('km_account_delete_data: html sites cleanup failed: ' . $exception->getMessage());
+    }
+
     return [
         'tables' => $deleted,
         'auditAnonymized' => $anonymized,
         'auditDetailScrubbed' => $detailScrubbed,
         'chatAnonymized' => $chatAnonymized,
         'avatarRemoved' => $avatarRemoved,
+        'htmlSites' => $htmlSites,
     ];
 }
 
@@ -273,6 +286,9 @@ function km_account_delete_summary(array $result): string
     }
     if ($result['avatarRemoved']) {
         $parts[] = 'avatar=1';
+    }
+    if ((int) ($result['htmlSites'] ?? 0) > 0) {
+        $parts[] = 'html=' . $result['htmlSites'];
     }
 
     return $parts === [] ? '対象なし' : implode(' ', $parts);

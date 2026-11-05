@@ -59,7 +59,8 @@ $isApp = ($KM_PAGE['layout'] ?? 'app') === 'app';
     <!--begin::KosenMap Admin(送信前の確認)-->
     <?php
     /*
-     * **取り返しのつかない送信の前に確認を出す。** フォームに `data-km-confirm="文言"` を書く。
+     * **取り返しのつかない送信の前に確認を出す。** フォームに `data-km-confirm="文言"` を書く
+     * (送信のボタンに書けば、そのボタンで送ったときだけ確かめる)。
      *
      * 以前は各ページが `onsubmit="return confirm(…)"` と書いていたが、
      * 管理画面の CSP は script-src が 'self' と nonce だけなので、**インラインの属性は動かず、
@@ -77,7 +78,8 @@ $isApp = ($KM_PAGE['layout'] ?? 'app') === 'app';
         if (!(form instanceof HTMLFormElement) || form.dataset.kmConfirmFallback !== undefined) {
           return;
         }
-        const message = form.dataset.kmConfirm;
+        // 押したボタンに data-km-confirm があればそちらを使う(2026-11-03。1 つのフォームでボタンごとに確かめを変える)
+        const message = event.submitter?.dataset.kmConfirm ?? form.dataset.kmConfirm;
         if (message && !window.confirm(message)) {
           event.preventDefault();
         }

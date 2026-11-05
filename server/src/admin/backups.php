@@ -7,6 +7,8 @@ require __DIR__ . '/_inc/guard.php';
 require_once dirname(__DIR__) . '/lib/db.php';
 require_once dirname(__DIR__) . '/lib/map-backup.php';
 require_once dirname(__DIR__) . '/lib/learning-backup.php';
+require_once dirname(__DIR__) . '/lib/poster-archive.php';
+require_once dirname(__DIR__) . '/lib/html-host.php';
 require_once dirname(__DIR__) . '/lib/admin-log.php';
 
 /**
@@ -15,6 +17,11 @@ require_once dirname(__DIR__) . '/lib/admin-log.php';
  * - 地図のバックアップ: 管理アプリの「サーバーにバックアップ」(api/map-backup.php・lib/map-backup.php)。新しい方から 20 件
  * - Wi-Fi 学習の控え: サーバーの学習データを消すときに、消す前の中身を自動で取ったもの(lib/learning-backup.php)。新しい方から 30 件。
  *   **戻す**と同じ記録をサーバーへ入れ直し、各端末は次の同期で受け取る
+ *
+ * - ポスターの控え: 会期の終わりに「ポスター・広告を全部、控えへ移して消す」で作った zip(2026-11-03、lib/poster-archive.php)。
+ *   利用者の決定で**ダウンロードだけ**(戻すボタンは無い)。自動では消さない
+ * - HTML 展開サイト: 利用者がサーバーに保存したもの(2026-11-05、lib/html-host.php)。持ち主ごとの数と大きさ・消す。
+ *   **中身は管理画面からも開かない**(本人だけが見られる約束。規約 第8条の2)。規約に反するものを消すためにある
  *
  * 中身には教職員の氏名が入りうる(地図のバックアップ)。見る・落とすは管理者だけ(この画面は guard.php の内側)。
  * 消す・戻すは書き込みの権限が要る(guard.php が POST を見る)。
@@ -25,6 +32,8 @@ $notice = null;
 $dbError = null;
 $mapBackups = [];
 $learningBackups = [];
+$posterArchives = [];
+$htmlSummary = null;
 $mapView = null;
 $learningView = null;
 
@@ -61,6 +70,20 @@ try {
         }
         $errors[] = 'その控えはありません(古いものは自動で消えます)。';
     }
+    if (($downloadId = $idParam('poster_archive_download')) > 0) {
+        $row = km_poster_archive_find($pdo, $downloadId);
+        $path = $row === null ? null : km_poster_archive_path($row);
+        if ($path !== null && is_file($path)) {
+            km_admin_log_record('content', 'poster.archive_download', $row['storedName']);
+            header('Content-Type: application/zip');
+            header('Content-Length: ' . (string) filesize($path));
+            header('Content-Disposition: attachment; filename="' . $row['storedName'] . '"');
+            header('Cache-Control: no-store');
+            readfile($path);
+            exit;
+        }
+        $errors[] = 'そのポスターの控えはありません(消されたか、ファイルが見つかりません)。';
+    }
 
     if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && !km_csrf_verify()) {
         $errors[] = 'セッションの有効期限が切れています。ページを再読み込みしてからやり直してください。';
@@ -84,10 +107,32 @@ try {
                 $errors[] = $exception->getMessage();
             }
         }
+        if ($formAction === 'poster_archive_delete') {
+            try {
+                $removed = km_poster_archive_delete($pdo, $targetId);
+                km_admin_log_record('content', 'poster.archive_delete', $removed);
+                header('Location: ./backups.php?saved=poster_archive_deleted#poster-archives', true, 303);
+                exit;
+            } catch (InvalidArgumentException | RuntimeException $exception) {
+                $errors[] = $exception->getMessage();
+            }
+        }
+        if ($formAction === 'html_site_delete') {
+            $site = km_html_site_find($pdo, (string) ($_POST['site'] ?? ''));
+            if ($site !== null) {
+                km_html_site_delete($pdo, $site);
+                // 持ち主の名前は記録に書かない(利用者 ID も)。サイトの名前と番号だけ
+                km_admin_log_record('content', 'html.delete', $site['name'] . '(' . $site['id'] . ')');
+            }
+            header('Location: ./backups.php?saved=html_deleted#html-sites', true, 303);
+            exit;
+        }
     }
 
     $mapBackups = km_map_backup_list($pdo);
+    $htmlSummary = km_html_admin_summary($pdo);
     $learningBackups = km_learning_backup_list($pdo);
+    $posterArchives = km_poster_archives_list($pdo);
 
     // 中身を見る(内訳)
     if (($viewId = $idParam('map_view')) > 0) {
@@ -112,6 +157,8 @@ $saved = (string) ($_GET['saved'] ?? '');
 $notice = match ($saved) {
     'map_deleted' => '地図のバックアップを消しました。',
     'learning_restored' => '学習データを ' . (int) ($_GET['n'] ?? 0) . ' 件戻しました(各端末は次の同期で受け取ります)。',
+    'poster_archive_deleted' => 'ポスターの控えを消しました。',
+    'html_deleted' => 'HTML 展開サイトのサイトを消しました。',
     default => null,
 };
 
@@ -264,6 +311,99 @@ require __DIR__ . '/_inc/partials/page-header.php';
                               <?php endif; ?>
                               <?php if ($backup['restoredAt'] !== null): ?>
                                 <span class="badge text-bg-secondary">戻した <?= km_e($backup['restoredAt']) ?></span>
+                              <?php endif; ?>
+                            </td>
+                          </tr>
+                        <?php endforeach; ?>
+                      </tbody>
+                    </table>
+                  </div>
+                <?php endif; ?>
+              </div>
+            </div>
+
+            <div class="card mb-4" id="poster-archives">
+              <div class="card-header">
+                <h3 class="card-title">ポスターの控え(会期の終わり)</h3>
+              </div>
+              <div class="card-body">
+                <p class="text-body-secondary fs-7 mb-2">
+                  会期を終えるときに「ポスター・広告を全部、控えへ移して消す」で作ったもの(<a href="./event-setup.php">イベントのセットアップ</a>の「会期を終える」)。
+                  zip の中は、全部の項目(posters.json)と元の画像です。画面から戻す機能はありません(戻すときは「ポスター・広告」で入れ直します)。
+                  自動では消えません<?= $posterArchives !== [] ? '(いま合計 ' . km_e($size(array_sum(array_column($posterArchives, 'bytes')))) . ')' : '' ?>。
+                </p>
+                <?php if ($posterArchives === []): ?>
+                  <p class="mb-0">まだありません。</p>
+                <?php else: ?>
+                  <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                      <thead><tr><th>#</th><th>日時</th><th>会期</th><th>件数</th><th>画像</th><th>大きさ</th><th>作った人</th><th></th></tr></thead>
+                      <tbody>
+                        <?php foreach ($posterArchives as $archive): ?>
+                          <tr>
+                            <td><?= (int) $archive['id'] ?></td>
+                            <td><?= km_e($archive['createdAt']) ?></td>
+                            <td><?= km_e($archive['label']) ?></td>
+                            <td><?= (int) $archive['posterCount'] ?></td>
+                            <td><?= (int) $archive['imageCount'] ?></td>
+                            <td><?= km_e($size($archive['bytes'])) ?></td>
+                            <td><?= km_e($archive['createdBy']) ?></td>
+                            <td class="text-nowrap">
+                              <a class="btn btn-outline-primary btn-sm" href="./backups.php?poster_archive_download=<?= (int) $archive['id'] ?>">ダウンロード</a>
+                              <?php if ($KM_ADMIN_CAN_WRITE): ?>
+                                <form method="post" class="d-inline" data-km-confirm="このポスターの控え(#<?= (int) $archive['id'] ?>・<?= (int) $archive['posterCount'] ?> 件)を消しますか？元に戻せません。">
+                                  <?= km_csrf_field() ?>
+                                  <input type="hidden" name="form_action" value="poster_archive_delete">
+                                  <input type="hidden" name="id" value="<?= (int) $archive['id'] ?>">
+                                  <button type="submit" class="btn btn-outline-danger btn-sm">消す</button>
+                                </form>
+                              <?php endif; ?>
+                            </td>
+                          </tr>
+                        <?php endforeach; ?>
+                      </tbody>
+                    </table>
+                  </div>
+                <?php endif; ?>
+              </div>
+            </div>
+
+            <?php /* HTML 展開サイト(2026-11-05、lib/html-host.php)。中身は開かない(本人だけが見られる約束) */ ?>
+            <div class="card mb-4" id="html-sites">
+              <div class="card-header">
+                <h3 class="card-title">HTML 展開サイト(サーバーに保存したもの)</h3>
+              </div>
+              <div class="card-body">
+                <p class="text-body-secondary fs-7 mb-2">
+                  利用者が <a href="/html.php" target="_blank" rel="noopener">HTML 展開</a>でサーバーに保存したもの(1 人 <?= KM_HTML_MAX_SITES_PER_OWNER ?> サイト・<?= km_e($size(KM_HTML_MAX_OWNER_BYTES)) ?> まで。各サイトは新しい版を <?= KM_HTML_MAX_VERSIONS ?> つ残します)。
+                  <strong>中身は本人だけが見られるので、ここからは開けません。</strong>規約に反するものと分かったときに消すための一覧です。
+                  <?php if ($htmlSummary !== null): ?>
+                    一時フォルダ(24 時間で消えるもの)はいま <?= (int) $htmlSummary['tempCount'] ?> 件・<?= km_e($size($htmlSummary['tempBytes'])) ?>。
+                  <?php endif; ?>
+                </p>
+                <?php if ($htmlSummary === null || $htmlSummary['sites'] === []): ?>
+                  <p class="mb-0">まだありません。</p>
+                <?php else: ?>
+                  <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                      <thead><tr><th>持ち主</th><th>サイト</th><th>版</th><th>大きさ</th><th>最後に保存</th><th></th></tr></thead>
+                      <tbody>
+                        <?php foreach ($htmlSummary['sites'] as $site): ?>
+                          <tr>
+                            <?php // 持ち主の名前もサイトの名前も利用者が入れた自由文。data-i18n は付けない ?>
+                            <td><?= km_e($site['ownerName'] !== '' ? $site['ownerName'] : '(名前なし)') ?></td>
+                            <td><?= km_e($site['name']) ?></td>
+                            <td><?= max(0, (int) $site['nextVersion'] - 1) ?></td>
+                            <td><?= km_e($size($site['bytes'])) ?></td>
+                            <td><?= km_e($site['updatedAt']) ?></td>
+                            <td class="text-nowrap">
+                              <?php if ($KM_ADMIN_CAN_WRITE): ?>
+                                <form method="post" class="d-inline" data-km-confirm="「<?= km_e($site['name']) ?>」を版ごと消しますか？元に戻せません。">
+                                  <?= km_csrf_field() ?>
+                                  <input type="hidden" name="form_action" value="html_site_delete">
+                                  <input type="hidden" name="site" value="<?= km_e($site['id']) ?>">
+                                  <button type="submit" class="btn btn-outline-danger btn-sm">消す</button>
+                                </form>
                               <?php endif; ?>
                             </td>
                           </tr>

@@ -154,6 +154,17 @@ try {
 }
 if ($signingOutUser) {
     km_admin_log_record('auth', 'logout');
+    /*
+     * HTML 展開サイトの「見るための印」も取り消す(2026-11-05。lib/html-host.php)。印は見せる側(html.<ドメイン>)の Cookie なので、
+     * ここでは消せない —— DB の側を消して、残った Cookie を効かなくする。残すと、共用の端末でサインアウトしたあとも、
+     * 次の人が履歴から本人のサイトを開けてしまう。この人の**どのブラウザの印も**消える(開き直せばまた作られる)
+     */
+    try {
+        require_once __DIR__ . '/lib/html-host.php';
+        km_html_viewers_revoke_owner(km_db(), (string) ($KM_USER['sub'] ?? ''));
+    } catch (Throwable $exception) {
+        error_log('sign-out.php: HTML 展開の印を取り消せませんでした: ' . $exception->getMessage());
+    }
 }
 
 /*
