@@ -1454,6 +1454,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         Object.keys(mapStyle.COLORS).forEach(function (type) {
             groups[type] = L.layerGroup();
         });
+        /*
+         * イベント中は、イベントの地点を種類ごとの別の束(`event:<種類>`)に入れる(2026-11-07、利用者の指示「イベント中のみ出しましょう」)。
+         * 出し入れは renderGlobalLabels が mapStyle.eventVisible で決める(いちばん引いた倍率でも出す)。
+         * イベント中でなければ束は作らない(今までと同じ顔ぶれ)
+         */
+        const eventMode = !window.isAdmin && !!graphData.event;
+        const eventGroup = function (type) {
+            const k = 'event:' + type;
+            if (!groups[k]) groups[k] = L.layerGroup();
+            return groups[k];
+        };
 
         for (const [id, node] of nodesByFloor.get(key) || []) {
             const type = String(node.type || '');
@@ -1466,7 +1477,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             const marker = createNodeMarker(id, node);
             markersById.set(id, marker);
-            groups[type].addLayer(marker);
+            const isEventNode = eventMode && eventNodeRole(node, postersByNode.has(id)) === 'event';
+            (isEventNode ? eventGroup(type) : groups[type]).addLayer(marker);
         }
 
         /*
@@ -1481,7 +1493,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (!groups[type]) return;
                 const marker = createPoiMarker(poi, type);
                 poiMarkers.set(Number(poi.id), marker);
-                groups[type].addLayer(marker);
+                // 一時地点はイベントの地点(createPoiMarker で 'event')。イベント中は引いた倍率でも出す
+                (eventMode ? eventGroup(type) : groups[type]).addLayer(marker);
             });
         }
 
@@ -3024,10 +3037,13 @@ document.addEventListener('DOMContentLoaded', async () => {
          */
         const floor = String(window.currentFloor);
         const wanted = [];
-        Object.keys(groups).forEach(function (type) {
-            if (window.isAdmin || mapStyle.isVisible(tuning, type, zoom, floor)) {
-                wanted.push(groups[type]);
-            }
+        Object.keys(groups).forEach(function (key) {
+            // `event:<種類>` はイベント中のイベントの地点(buildFloorMarkers)。表示を始める倍率を無視して出す
+            const isEvent = key.startsWith('event:');
+            const type = isEvent ? key.slice(6) : key;
+            const show = window.isAdmin
+                || (isEvent ? mapStyle.eventVisible(tuning, type, zoom, floor) : mapStyle.isVisible(tuning, type, zoom, floor));
+            if (show) wanted.push(groups[key]);
         });
 
         /*

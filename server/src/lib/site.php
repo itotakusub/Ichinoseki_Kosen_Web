@@ -75,7 +75,7 @@ const KM_SITE_ADMIN_SERVICES = ['mailpit'];
  * **Logto Console の開き方**(2026-11-02、利用者の指示「Logto も SSH から」)。
  *
  * Console はインターネットに出さず、ホストの 127.0.0.1:3002 にだけ出す(compose.yaml の logto)。
- * 手元で SOCKS のトンネル(`ssh -i ~/.ssh/km_vps -N -D 127.0.0.1:10800 km@<ホスト>`)を張り、
+ * 手元で SOCKS のトンネル(`ssh -t -i ~/.ssh/km_vps -D 127.0.0.1:10800 km@<ホスト> "while touch .kosenmap-pma-wanted; do sleep 20; done"`)を張り、
  * そのトンネルを通す Chrome でこの URL を開く(2026-11-03。**kmops の鍵は転送が禁止**(no-port-forwarding)で通らない)。
  * phpMyAdmin(KM_SITE_PHPMYADMIN_URL)も同じトンネルの先。
  * Logto の ADMIN_ENDPOINT も同じ値(Console の戻り先は Logto がそこから作る)。
@@ -88,10 +88,20 @@ const KM_SITE_PHPMYADMIN_URL = 'http://localhost:8281';
 /** トンネルの SOCKS の待ち受け(手元の PC) */
 const KM_SITE_TUNNEL_SOCKS_PORT = 10800;
 
-/** Console と phpMyAdmin へトンネルを張るコマンド(画面に出す)。鍵と利用者は運用の決まり(docs/05-containers の §5-2)に合わせる */
+/**
+ * トンネルが開いている合図に、km の家で触る目印(scripts/host-pma-window.sh の WANT_NAME と同じ)。
+ * phpMyAdmin はふだん止まっていて、これが 60 秒以内に触られていれば 1 分以内に起きる(2026-11-07、利用者の指示)
+ */
+const KM_SITE_PMA_WANT_FILE = '.kosenmap-pma-wanted';
+
+/**
+ * Console と phpMyAdmin へトンネルを張るコマンド(画面に出す)。鍵と利用者は運用の決まり(docs/05-containers の §5-2)に合わせる。
+ * -N の代わりに目印を 20 秒ごとに触る。-t で端末を付けるので、切れると(SIGHUP)触るのも止まる
+ */
 function km_site_logto_console_tunnel(): string
 {
-    return 'ssh -i ~/.ssh/km_vps -N -D 127.0.0.1:' . KM_SITE_TUNNEL_SOCKS_PORT . ' km@' . km_site_host();
+    return 'ssh -t -i ~/.ssh/km_vps -D 127.0.0.1:' . KM_SITE_TUNNEL_SOCKS_PORT . ' km@' . km_site_host()
+        . ' "while touch ' . KM_SITE_PMA_WANT_FILE . '; do sleep 20; done"';
 }
 
 /** そのトンネルを通す Chrome の起動(ふだんの Chrome とプロフィールを分ける。localhost もトンネルへ通す) */

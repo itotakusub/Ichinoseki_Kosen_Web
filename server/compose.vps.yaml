@@ -292,7 +292,8 @@ services:
     # (そのための healthcheck が下にある —— 残り14日を切ったら unhealthy)。
     #
     # 上げるときは scripts/check-updates.sh --pins が出す行で置き換える
-    image: certbot/certbot@sha256:34ee91d2f43008eb78a007d22f23ed4b2eaa9a454cb27ca2c042b49527a695b4
+    # タグ latest(2026-11-06 に付けた。それまでは v5.7.0 の digest だけで、update-containers.ps1 が上げられなかった)
+    image: certbot/certbot:latest@sha256:bc93cb710b413e6b456d622f9b0133b3e109c0a78c2ed9976af43d209b0a1805
     container_name: km-certbot
     restart: unless-stopped
     # 上限の考え方は compose.yaml の services: の注記(2026-09-14)
@@ -370,7 +371,9 @@ services:
   # DKIM の署名まで含めて Postfix + OpenDKIM を手で組むと、確認すべき箇所が増える
   # わりに得るものが少ない。鍵も設定もこちらのもので、**「自前」であることは変わらない。**
   mailserver:
-    # **digest で固定する(2026-09-07 時点の boky/postfix:latest)。**
+    # **digest で固定する。** タグは latest-debian(2026-11-06 に 5.1.0 → 5.2.1。大きな版で固定するタグは無い)。
+    # 5.1.0 は 2026-01-01 の像のままで、初回の Trivy で CRITICAL 38・HIGH 409 が出ていた。
+    # **5.2 から DKIM の署名の既定が OpenDKIM → rspamd になった**ので、下の DKIM_BACKEND で OpenDKIM のままにしてある。
     #
     # ここが入れ替わって壊れると、**送信側からは成功に見えたまま届かなくなる。**
     # DKIM の鍵は mail_dkim ボリュームにあるので像が変わっても残るが、
@@ -379,7 +382,7 @@ services:
     #
     # 上げるときは scripts/check-updates.sh --pins が出す行で置き換える。
     # **上げたら必ず1通送って、実際に届くところまで見ること。**
-    image: boky/postfix@sha256:aafc772384232497bed875e1eb66b4d3e54ba1ebc86e2e185a6dc1dbc48182ef
+    image: boky/postfix:latest-debian@sha256:0632783c64183446c4edeae9092a2e015fdc0c4e8a3976bdf8878a7fc2146361
     container_name: km-mailserver
     restart: unless-stopped
     # **no-new-privileges は付けない。** postfix の postdrop が setgid で動くので、付けると送信が止まる。
@@ -431,6 +434,10 @@ services:
       # **ドメインを移すときは、旧ドメインの鍵を新しい名前で複製してから up する**(host-domain.sh apply が行う)。
       # 作らせると新しい鍵になり、DNS に登録済みの公開鍵(旧と同じ値)と合わなくなる。
       DKIM_AUTOGENERATE: "1"
+      # **OpenDKIM のままにする**(2026-11-06)。5.2 から既定は rspamd(鍵は /etc/opendkim/keys から写して使うと公式は書いている)。
+      # ただ下の healthcheck(イメージ同梱)が OpenDKIM のソケットも見ており、mem_limit 192m で rspamd が収まるかも測っていない。
+      # OpenDKIM は「いずれ外す」と予告されているので、rspamd へは別に計画して移す(1 通送って署名を確かめてから)
+      DKIM_BACKEND: opendkim
       # 明示しておく。DNS 側のレコード名が mail._domainkey.<ドメイン> に決まる
       DKIM_SELECTOR: mail
       # 既定は 10.0.0.0/8 と 192.168.0.0/16 も含むが、**ここでは使わない範囲**なので外す。
