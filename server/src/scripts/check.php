@@ -5174,6 +5174,22 @@ function km_check_hardening(): void
     $tasksLib = $file('src/lib/tasks.php');
     check_bool('サービス監視(monitor.php)はタスクマネージャーのサービスのタブへ転送するだけ', str_contains($file('src/admin/monitor.php'), "header('Location: ./taskmgr.php?tab=services', true, 301);")
         && !str_contains($file('src/admin/monitor.php'), 'km_tasks_by_topic') && !str_contains($file('src/admin/assets/i18n/ja.js'), '"page.monitor.'));
+    // 並び(2026-11-07、利用者「プロジェクト状況を番号順にソートできるように」)
+    require_once dirname(__DIR__) . '/lib/tasks.php';
+    $sortRows = [
+        ['id' => 104, 'planRef' => '段6'], ['id' => 99, 'planRef' => '保留'], ['id' => 111, 'planRef' => '段7-1'],
+        ['id' => 120, 'planRef' => '段10'], ['id' => 103, 'planRef' => '段5'], ['id' => 112, 'planRef' => '段7'],
+    ];
+    check('並び: 番号順・番号の大きい順・段の番号順(段10 は段7-1 の後・保留は後ろ)・知らない値はそのまま', [
+        [99, 103, 104, 111, 112, 120], [120, 112, 111, 104, 103, 99], [103, 104, 112, 111, 120, 99], [104, 99, 111, 120, 103, 112],
+    ], [
+        array_column(km_tasks_sort($sortRows, 'id'), 'id'), array_column(km_tasks_sort($sortRows, 'idDesc'), 'id'),
+        array_column(km_tasks_sort($sortRows, 'plan'), 'id'), array_column(km_tasks_sort($sortRows, 'x'), 'id'),
+    ]);
+    $projectsPage = $file('src/admin/projects.php');
+    check_bool('画面: 番号の列・並びの選択・保存のあとも分類と並びのまま戻る', str_contains($projectsPage, '$rows = km_tasks_sort($rows, $sort);')
+        && str_contains($projectsPage, "<?= (int) \$row['id'] ?></td>") && substr_count($projectsPage, 'name="back_sort"') === 2
+        && str_contains($projectsPage, "header('Location: ./projects.php?deleted=1' . \$backSuffix, true, 302);"));
     check_bool('分類は決めた値だけ(作る・直すの両方で確かめる)', substr_count($tasksLib, 'km_tasks_validate_topic($topic);') === 2
         && str_contains($tasksLib, "if (!array_key_exists(\$topic, KM_TASK_TOPICS))"));
     check_bool('分類の列は古い表にも足し、3 行は列を足したときだけ入れる(消したら戻さない)', str_contains($tasksLib, "ADD COLUMN IF NOT EXISTS topic VARCHAR(32) NOT NULL DEFAULT ''")

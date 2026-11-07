@@ -43,7 +43,7 @@
 | 6 | ストリートビュー(360°)を Website へ: **11-07 に作った・配備待ち**(WebGL・撮りそろうまで管理者だけ)。残りは利用者が撮る(本番の写真は 0 枚) |
 | 7〜 | **管理画面「プロジェクト状況」に置く**(11-07、利用者の指示。分類つき。plan.md には段の見出しと設計だけ書く) |
 
-**配備待ち**(手元で済み): 段 6 ストリートビューを Website へ(`Main/panorama-viewer.js`・`lib/panorama.php`・`lib/map-data.php`・`Main/app.js`・`Main/i18n.js`・`Main/styles.css`・`index.php`・`admin/map-editor.php`・`admin/assets/js/map-editor.js`・`admin/map-settings.php`・`lib/admin-log.php`)・建物の「中へ」が 2 度出る(萩友会館など)・建物の階の呼び名・案内のカードの階(`Main/app.js`・`Main/user-history.js`・`lib/guide-chat.php`)・寮食堂に萩友会館の階が出る(`lib/building-floors.php`。アプリは版 57 で公開済み)。「教室」からトイレを外す(段 7-2)・案内の例のボタンの崩れ(段 4-2)は 11-07 夜に配備済み(本番の app.js・styles.css で確認)。それより前のものは 11-07 にすべて配備済み(イベントの地点の倍率・置き去り 16 個の退避・読み・別名の CSV・`api/area-paint.php`・階段の向きを下の階から埋める・色分けの画面の 404・国の拒否で Google を 443 だけ通す(`google.allowed: true`)・プロジェクト状況の口と鍵・Logto のテンプレートの台本)。
+**配備待ち**(手元で済み): プロジェクト状況の番号の列と並び(`admin/projects.php`・`lib/tasks.php`)・段 6 ストリートビューを Website へ(`Main/panorama-viewer.js`・`lib/panorama.php`・`lib/map-data.php`・`Main/app.js`・`Main/i18n.js`・`Main/styles.css`・`index.php`・`admin/map-editor.php`・`admin/assets/js/map-editor.js`・`admin/map-settings.php`・`lib/admin-log.php`)・建物の「中へ」が 2 度出る(萩友会館など)・建物の階の呼び名・案内のカードの階(`Main/app.js`・`Main/user-history.js`・`lib/guide-chat.php`)・寮食堂に萩友会館の階が出る(`lib/building-floors.php`。アプリは版 57 で公開済み)。「教室」からトイレを外す(段 7-2)・案内の例のボタンの崩れ(段 4-2)は 11-07 夜に配備済み(本番の app.js・styles.css で確認)。それより前のものは 11-07 にすべて配備済み(イベントの地点の倍率・置き去り 16 個の退避・読み・別名の CSV・`api/area-paint.php`・階段の向きを下の階から埋める・色分けの画面の 404・国の拒否で Google を 443 だけ通す(`google.allowed: true`)・プロジェクト状況の口と鍵・Logto のテンプレートの台本)。
 **進み具合はプロジェクト状況が正**(`scripts/proj-tasks.ps1 list`)。
 
 **保留**(利用者、11-07):
@@ -59,6 +59,13 @@
 ---
 
 ## 記録 2026 年 11 月(新しい順)
+
+### 2026-11-07 — プロジェクト状況を番号順に・完了したら消す・#108 を読んだ(利用者の指示。Web は配備待ち)
+
+- 管理画面「プロジェクト状況」に **# の列**と**並び**(並べた順 / 番号順 / 番号の大きい順 / 段の番号順)。選ぶとすぐ読み直し、保存・削除のあとも分類と並びのまま戻る。
+  並べ替えは `lib/tasks.php` の `km_tasks_sort`(純粋関数。段の番号は数として比べる = 段10 は段7-1 の後・「保留」は後ろ)。`proj-tasks.ps1 list -Sort id|idDesc|plan` も同じ。check.php に 2 つ
+- **これからは、終わった項目は「完了」にせず消す**(利用者「今後、完了したらプロジェクト項目から削除」)。終わった中身はこの記録に書く
+- #108「DB に保存されている教職員名を暗号化するか」を読んだ(本番: 氏名の入った地点 67・氏名のモードは「常に隠す」・地図はパスワード)。見立ては会話で返した(地図のパスワードを鍵にする案は合わない。やるならサーバーの鍵で氏名だけ・新しい表に)
 
 ### 2026-11-07 — 段 6 ストリートビュー(360°)を Website へ・寮食堂(利用者の答え「見せ方は B: WebGL」「撮りそろうまで管理者だけ」「撮るのは後日」「寮食堂は別の建物」。Web は配備待ち・アプリ 版 57 は apk-push 済み)
 

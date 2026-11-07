@@ -35,6 +35,12 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && !km_csrf_verify()) {
     $planRef = (string) ($_POST['plan_ref'] ?? '');
     $note = (string) ($_POST['note'] ?? '');
     $id = (int) ($_POST['id'] ?? 0);
+    // 保存・削除のあとも、選んでいた分類と並びのまま戻す(2026-11-07)
+    $back = http_build_query(array_filter([
+        'topic' => array_key_exists((string) ($_POST['back_topic'] ?? ''), KM_TASK_TOPICS) ? (string) $_POST['back_topic'] : '',
+        'sort' => array_key_exists((string) ($_POST['back_sort'] ?? ''), KM_TASK_SORTS) ? (string) $_POST['back_sort'] : '',
+    ], static fn (string $v): bool => $v !== ''));
+    $backSuffix = $back === '' ? '' : '&' . $back;
 
     try {
         $pdo = km_db();
@@ -45,7 +51,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && !km_csrf_verify()) {
             $newId = km_tasks_create($pdo, $title, $status, $progress, $topic);
             km_task_details_set($pdo, $newId, $planRef, $note);
             km_admin_log_record('content', 'task.create', $title);
-            header('Location: ./projects.php?created=1', true, 302);
+            header('Location: ./projects.php?created=1' . $backSuffix, true, 302);
             exit;
         }
         if ($action === 'update') {
@@ -53,13 +59,13 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && !km_csrf_verify()) {
             km_tasks_update($pdo, $id, $title, $status, $progress, $topic);
             km_task_details_set($pdo, $id, $planRef, $note);
             km_admin_log_record('content', 'task.update', $title);
-            header('Location: ./projects.php?updated=1', true, 302);
+            header('Location: ./projects.php?updated=1' . $backSuffix, true, 302);
             exit;
         }
         if ($action === 'delete') {
             km_tasks_delete($pdo, $id);
             km_admin_log_record('content', 'task.delete', "#{$id}");
-            header('Location: ./projects.php?deleted=1', true, 302);
+            header('Location: ./projects.php?deleted=1' . $backSuffix, true, 302);
             exit;
         }
     } catch (Throwable $exception) {
@@ -81,6 +87,12 @@ if ($topicFilter !== '' && !array_key_exists($topicFilter, KM_TASK_TOPICS)) {
     $topicFilter = '';
 }
 
+// 並び(2026-11-07、利用者「番号順にソートできるように」。lib/tasks.php の km_tasks_sort)。知らない値は並べた順
+$sort = (string) ($_GET['sort'] ?? '');
+if (!array_key_exists($sort, KM_TASK_SORTS)) {
+    $sort = '';
+}
+
 $rows = [];
 $dbError = null;
 try {
@@ -88,6 +100,7 @@ try {
     if ($topicFilter !== '') {
         $rows = array_values(array_filter($rows, static fn (array $row): bool => (string) $row['topic'] === $topicFilter));
     }
+    $rows = km_tasks_sort($rows, $sort);
 } catch (Throwable $exception) {
     error_log('projects.php list failed: ' . $exception->getMessage());
     $dbError = $exception->getMessage();
@@ -149,6 +162,12 @@ require __DIR__ . '/_inc/partials/page-header.php';
                       <option value="<?= km_e($value) ?>"<?= $topicFilter === $value ? ' selected' : '' ?> data-i18n="page.projects.topic.<?= km_e($value) ?>"><?= km_e($label) ?></option>
                     <?php endforeach; ?>
                   </select>
+                  <label class="fs-7 text-body-secondary ms-2" for="km-task-sort">並び</label>
+                  <select class="form-select form-select-sm w-auto" id="km-task-sort" name="sort">
+                    <?php foreach (KM_TASK_SORTS as $value => $label): ?>
+                      <option value="<?= km_e($value) ?>"<?= $sort === $value ? ' selected' : '' ?>><?= km_e($label) ?></option>
+                    <?php endforeach; ?>
+                  </select>
                   <button type="submit" class="btn btn-sm btn-outline-secondary" data-i18n="page.projects.filter">絞り込む</button>
                 </form>
                 <div class="card-tools ms-auto">
@@ -164,6 +183,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
                   <table class="table table-hover align-middle mb-0">
                     <thead>
                       <tr>
+                        <th scope="col" class="text-end">#</th>
                         <th scope="col" data-i18n="page.projects.colTask">タスク</th>
                         <th scope="col" data-i18n="page.projects.colStatus">状態</th>
                         <th scope="col" data-i18n="page.projects.fieldTopic">分類</th>
@@ -174,7 +194,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
                     <tbody>
                       <?php if ($rows === [] && $dbError === null): ?>
                         <tr>
-                          <td colspan="5" class="text-center text-body-secondary py-5" data-i18n="page.projects.empty">
+                          <td colspan="6" class="text-center text-body-secondary py-5" data-i18n="page.projects.empty">
                             タスクがありません。「タスクを追加」から登録してください。
                           </td>
                         </tr>
@@ -183,6 +203,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
                         <tr>
                           <?php // 利用者が入れた自由文なので data-i18n は付けず、そのまま出す
                                 // (翻訳するのは状態ラベルだけ。timeline.php と同じ方針) ?>
+                          <td class="text-end font-monospace text-body-secondary"><?= (int) $row['id'] ?></td>
                           <td>
                             <?php if ((string) $row['planRef'] !== ''): ?>
                               <span class="badge text-bg-light border font-monospace me-1"><?= km_e((string) $row['planRef']) ?></span>
@@ -223,6 +244,8 @@ require __DIR__ . '/_inc/partials/page-header.php';
                             <form method="post" class="d-inline km-task-delete-form">
                               <?= km_csrf_field() ?>
                               <input type="hidden" name="action" value="delete" />
+                              <input type="hidden" name="back_topic" value="<?= km_e($topicFilter) ?>" />
+                              <input type="hidden" name="back_sort" value="<?= km_e($sort) ?>" />
                               <input type="hidden" name="id" value="<?= (int) $row['id'] ?>" />
                               <button type="submit" class="btn btn-sm btn-outline-danger">
                                 <i class="bi bi-trash" aria-hidden="true"></i>
@@ -247,7 +270,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
           // 追加と編集でほぼ同じフォームなので、1つの無名関数から2回出す。
           // 分類で絞っているときは、追加の既定もその分類にする
           $defaultTopic = $topicFilter;
-          $taskForm = static function (string $id, string $action, string $titleKey, string $titleText) use ($statusLabel, $defaultTopic) {
+          $taskForm = static function (string $id, string $action, string $titleKey, string $titleText) use ($statusLabel, $defaultTopic, $topicFilter, $sort) {
               ?>
               <div class="modal fade" id="<?= km_e($id) ?>" tabindex="-1" aria-hidden="true">
                 <div class="modal-dialog modal-dialog-centered">
@@ -255,6 +278,8 @@ require __DIR__ . '/_inc/partials/page-header.php';
                     <form method="post">
                       <?= km_csrf_field() ?>
                       <input type="hidden" name="action" value="<?= km_e($action) ?>" />
+                      <input type="hidden" name="back_topic" value="<?= km_e($topicFilter) ?>" />
+                      <input type="hidden" name="back_sort" value="<?= km_e($sort) ?>" />
                       <?php if ($action === 'update'): ?>
                         <input type="hidden" name="id" id="km-task-edit-id" value="" />
                       <?php endif; ?>
@@ -325,6 +350,9 @@ require __DIR__ . '/_inc/partials/page-header.php';
                 }
               });
             });
+
+            // 並びを選んだらすぐ読み直す(分類はこれまでどおり「絞り込む」でも)
+            document.getElementById('km-task-sort')?.addEventListener('change', (event) => event.target.form.submit());
 
             const editModal = document.getElementById('km-task-edit');
             editModal?.addEventListener('show.bs.modal', (event) => {

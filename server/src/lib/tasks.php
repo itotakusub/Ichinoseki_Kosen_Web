@@ -237,6 +237,50 @@ function km_tasks_all(PDO $pdo): array
 }
 
 /**
+ * 一覧の並べ方(2026-11-07、利用者「プロジェクト状況を番号順にソートできるように」)。画面の「並び」の選択肢
+ *   ''     … 並べた順(sort_order。カンバンで動かした順)
+ *   'id'   … 番号順(# の小さい順。proj-tasks.ps1 の Id と同じ)
+ *   'idDesc' … 番号の大きい順(新しく足したものが上)
+ *   'plan' … 段の番号順(段1 → 段1-2 → 段2 … → 段10。数は数として比べる。段の無いもの・「保留」は後ろ)
+ */
+const KM_TASK_SORTS = ['' => '並べた順', 'id' => '番号順', 'idDesc' => '番号の大きい順', 'plan' => '段の番号順'];
+
+/**
+ * 並べ替える。**純粋関数**。知らない並べ方は並べた順のまま。同じ値どうしは番号の小さい順
+ *
+ * @param array<int, array<string, mixed>> $rows km_tasks_all の行
+ * @return array<int, array<string, mixed>>
+ */
+function km_tasks_sort(array $rows, string $sort): array
+{
+    $byId = static fn (array $a, array $b): int => (int) $a['id'] <=> (int) $b['id'];
+    if ($sort === 'id') {
+        usort($rows, $byId);
+    } elseif ($sort === 'idDesc') {
+        usort($rows, static fn (array $a, array $b): int => $byId($b, $a));
+    } elseif ($sort === 'plan') {
+        // 「段7-1」→ [7, 1]。数字の無いもの(保留など)は後ろ
+        $key = static function (array $row): array {
+            preg_match_all('/\d+/', (string) ($row['planRef'] ?? ''), $m);
+            return $m[0] === [] ? [PHP_INT_MAX] : array_map('intval', $m[0]);
+        };
+        // 前から 1 つずつ比べる(PHP の配列の <=> は長さを先に比べるので、段10 が段7-1 より前になってしまう)
+        usort($rows, static function (array $a, array $b) use ($key, $byId): int {
+            [$ka, $kb] = [$key($a), $key($b)];
+            for ($i = 0, $n = min(count($ka), count($kb)); $i < $n; $i++) {
+                if ($ka[$i] !== $kb[$i]) {
+                    return $ka[$i] <=> $kb[$i];
+                }
+            }
+            $order = count($ka) <=> count($kb);
+            return $order !== 0 ? $order : $byId($a, $b);
+        });
+    }
+
+    return array_values($rows);
+}
+
+/**
  * 1 件(API の読み直し)。無ければ null。
  *
  * @return array{id:int, title:string, status:string, progress:int, topic:string,
