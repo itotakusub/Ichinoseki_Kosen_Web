@@ -839,7 +839,14 @@ $retiredPaths = @(
     'src/lib/soketi.php', 'src/lib/chat.php', 'src/lib/table-api.php', 'src/api/table.php',
     'src/admin/chat.php',
     'src/admin/api/chat-auth.php', 'src/admin/api/chat-send.php', 'src/admin/api/chat-read.php', 'src/admin/api/chat-history.php',
-    'src/admin/vendor/pusher-js'
+    'src/admin/vendor/pusher-js',
+    # 2026-11-07: 手元と本番を突き合わせて見つけた置き去り(手元では前に外した。管理画面の 3 つはサインインが要るので害は無かった)。
+    # AdminLTE の見本ページ・使い終えた移行・check.php にまとめる前の 4 本・どこからも読まない旧ロゴ
+    'src/admin/invoice.php', 'src/admin/pricing.php', 'src/admin/maintenance.php',
+    'src/logo_dark.png', 'src/logo_light.png',
+    'src/scripts/check-app-map.php', 'src/scripts/check-app-ranking.php', 'src/scripts/check-recaptcha.php', 'src/scripts/check-user-stats.php',
+    'src/scripts/map-data-seed.json', 'src/scripts/migrate-map-data.php', 'src/scripts/migrate-map-events.php',
+    'src/scripts/migrate-map-floor-bounds.php', 'src/scripts/migrate-timezone-to-jst.php', 'src/scripts/publish-events.php'
 )
 foreach ($retired in $retiredPaths) {
     if ($retired -notmatch '^(src|docker)/[A-Za-z0-9/._-]+$' -or $retired.Contains('..')) {

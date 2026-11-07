@@ -378,6 +378,21 @@
         },
 
         /**
+         * イベント中の**イベントの地点**(企画・臨時の名前・ポスター・一時地点)を出すか(2026-11-07、利用者の指示「イベント中のみ出しましょう」)。
+         * いちばん引いた倍率(-1)では部屋の点を出さないので、イベントの地点も消えていた。**表示を始める倍率だけを無視**し、
+         * 種類を外す・部屋名を消す(層の設定)と、建物名が拡大で消える倍率は今までどおり効かせる。イベント中でなければ呼ばない
+         */
+        eventVisible: function (tuning, type, zoom, floor) {
+            if (this.isVisible(tuning, type, zoom, floor)) return true;
+            const setting = this.typeSetting(tuning, type);
+            if (!setting.visible) return false;
+            if ((type === 'facility' || type === 'room') && !tuning.roomNames) return false;
+            // 通路の点・ルーターはイベントの地点にならない(層の設定どおり)
+            if (type === 'road' || type === 'wifi_router') return false;
+            return scaleForZoom(zoom) < hideScale(type);
+        },
+
+        /**
          * 軽い表示を入れるか。env は { deviceMemory, cores, saveData }(navigator から。無い値は undefined)。
          * auto のときは**分かっている値だけ**で決める(deviceMemory は Chrome だけ。分からなければ入れない)
          */

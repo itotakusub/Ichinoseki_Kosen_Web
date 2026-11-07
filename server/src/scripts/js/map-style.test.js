@@ -168,6 +168,14 @@ check('「そのまま」なら薄くしない', false, style.facilityFaded(show
 const noNames = Object.assign({}, tuning, { roomNames: false });
 check('建物名を消していれば出さない', false, style.isVisible(noNames, 'facility', 1, 'outside'));
 
+heading('イベントの地点は引いた倍率でも出す(2026-11-07)');
+check('イベントの部屋はいちばん引いても出る', true, style.eventVisible(tuning, 'room', -1, '1'));
+check('ふだんの部屋はいちばん引くと出ない(比べ)', false, style.isVisible(tuning, 'room', -1, '1'));
+check('部屋名を消していればイベントでも出さない', false, style.eventVisible(noNames, 'room', -1, '1'));
+check('外した種類はイベントでも出さない', false, style.eventVisible(hidden, 'stairs', -1, '1'));
+check('屋内の建物名は拡大で消える(イベントでも)', false, style.eventVisible(tuning, 'facility', 1, '1'));
+check('通路の点はイベントでも出さない', false, style.eventVisible(tuning, 'road', -1, '1'));
+
 heading('軽い表示(2026-10-30、振り返りのフェーズ 2)');
 check('既定は自動', 'auto', style.DEFAULTS.liteMode);
 check('自動: メモリ 2GB は軽くする', true, style.liteActive({ liteMode: 'auto' }, { deviceMemory: 2, cores: 8 }));
