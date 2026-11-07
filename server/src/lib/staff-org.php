@@ -319,7 +319,7 @@ function km_staff_requests_pending_count(PDO $pdo): int
  * 知らせの失敗で本人の申請を失わせない。管理画面の一覧には必ず出る。
  *
  * 本文に入れるのは、承認の判断に要るもの(名前・メール・ひとこと)と管理画面への道だけ。
- * **Teams への送信は後の段**(docs/15 段 F)。
+ * Teams への送信(docs/15 段 F)は **2026-11-07 に抹消**(利用者)。知らせはこのメールと管理画面の一覧だけ。
  */
 function km_staff_request_notify(int $id, ?string $name, ?string $email, string $note): void
 {

@@ -47,6 +47,8 @@ function km_area_paint_records(PDO $pdo): array
             }
             $records[substr((string) $row['name'], strlen(KM_AREA_PAINT_SETTING_PREFIX))] = [
                 'file' => $value['file'], 'source' => $value['source'], 'at' => (string) ($value['at'] ?? ''),
+                // どこで塗ったか(2026-11-07)。web = この管理画面・app = 管理アプリが塗った絵を送った(api/area-paint.php)
+                'origin' => ($value['origin'] ?? '') === 'app' ? 'app' : 'web',
             ];
         }
         return $records;
@@ -86,7 +88,7 @@ function km_area_paint_file(string $name): ?string
  *
  * @return array{file:string, source:string, at:string}
  */
-function km_area_paint_save(PDO $pdo, string $floorId, string $source, string $png, ?int $now = null): array
+function km_area_paint_save(PDO $pdo, string $floorId, string $source, string $png, ?int $now = null, string $origin = 'web'): array
 {
     require_once __DIR__ . '/map-data.php';
     $statement = $pdo->prepare('SELECT svg_path FROM km_map_floors WHERE id = ?');
@@ -111,12 +113,59 @@ function km_area_paint_save(PDO $pdo, string $floorId, string $source, string $p
         throw new RuntimeException('保存できませんでした。');
     }
     $previous = km_area_paint_records($pdo)[$floorId] ?? null;
-    $record = ['file' => $name, 'source' => $source, 'at' => date('Y-m-d H:i:s', $now ?? time())];
+    $record = ['file' => $name, 'source' => $source, 'at' => date('Y-m-d H:i:s', $now ?? time()), 'origin' => $origin === 'app' ? 'app' : 'web'];
     km_setting_set($pdo, KM_AREA_PAINT_SETTING_PREFIX . $floorId, (string) json_encode($record, JSON_UNESCAPED_SLASHES));
     if ($previous !== null && $previous['file'] !== $name && ($old = km_area_paint_file($previous['file'])) !== null) {
         @unlink($old);
     }
     return $record;
+}
+
+/**
+ * 管理アプリが塗った絵を受け取る(2026-11-07、利用者の指示「場所の色分けの絵は Android アプリのものを持ってくる」。口は api/area-paint.php)。
+ *
+ * アプリは自分の下絵(res/drawable)を AreaSegmentation.kt で塗る。Website の組み込みの床の画像(Main/Picture)は**アプリの下絵と同じファイル**
+ * (check.php が突き合わせる)なので、塗った絵をそのまま重ねられる。受け取るのは次のときだけ:
+ *
+ * - 階がアプリの階の表記(1F・OUTSIDE・BLDG_…)で、Website に在る
+ * - その階の床の画像が**組み込みのまま**(管理画面で差し替えた階 = upload: は、アプリの下絵と違うので断る)
+ * - PNG の幅と高さが、Website の床の画像と同じ
+ *
+ * @return array{floor:string, file:string, source:string, at:string, origin:string}
+ */
+function km_area_paint_save_from_app(PDO $pdo, string $appFloor, string $png, ?int $now = null): array
+{
+    require_once __DIR__ . '/app-map-convert.php';
+    require_once __DIR__ . '/map-floors.php';
+    require_once __DIR__ . '/map-data.php';
+    $floorId = KM_APP_MAP_FLOOR_MAP[strtoupper(trim($appFloor))] ?? null;
+    if ($floorId === null) {
+        throw new InvalidArgumentException('知らない階です(' . mb_substr($appFloor, 0, 20) . ')。');
+    }
+    $statement = $pdo->prepare('SELECT svg_path FROM km_map_floors WHERE id = ?');
+    $statement->execute([$floorId]);
+    $svgPath = $statement->fetchColumn();
+    if (!is_string($svgPath) || $svgPath === '') {
+        throw new InvalidArgumentException('その階は Website にありません。');
+    }
+    if (km_map_floor_is_upload($svgPath)) {
+        throw new InvalidArgumentException('この階(' . $floorId . ')は Website で床の画像を差し替えてあり、アプリの下絵と違うので受け取りません。Website の「地図の色分け」で作ってください。');
+    }
+    $file = km_map_floor_image_file($svgPath);
+    $size = $file !== null ? @getimagesize($file) : false;
+    if ($size === false) {
+        throw new RuntimeException('Website の床の画像を読めませんでした。');
+    }
+    $checked = km_raster_image_check($png, KM_AREA_PAINT_MAX_BYTES, KM_AREA_PAINT_MAX_DIMENSION);
+    if ($checked['ext'] !== 'png') {
+        throw new InvalidArgumentException('PNG ではありません。');
+    }
+    if ((int) $checked['width'] !== (int) $size[0] || (int) $checked['height'] !== (int) $size[1]) {
+        throw new InvalidArgumentException("絵の大きさ({$checked['width']}×{$checked['height']})が Website の床の画像({$size[0]}×{$size[1]})と違います。アプリの版が古い可能性があります。");
+    }
+    $record = km_area_paint_save($pdo, $floorId, km_map_floor_image_endpoint($floorId, $svgPath), $png, $now, 'app');
+
+    return ['floor' => $floorId] + $record;
 }
 
 /** 塗りを外す(公開の地図はその階を塗らない床に戻す) */
@@ -167,7 +216,7 @@ function km_area_paint_inputs(array $data, array $area, array $records): array
             'outdoor' => $id === 'outside',
             'seeds' => [],
             'walls' => [],
-            'painted' => isset($records[$id]) ? ['at' => $records[$id]['at'], 'current' => $records[$id]['source'] === (string) $floor['svgPath']] : null,
+            'painted' => isset($records[$id]) ? ['at' => $records[$id]['at'], 'current' => $records[$id]['source'] === (string) $floor['svgPath'], 'origin' => $records[$id]['origin'] ?? 'web'] : null,
         ];
     }
     foreach ($data['nodes'] as $id => $node) {

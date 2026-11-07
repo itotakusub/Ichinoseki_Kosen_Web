@@ -10,7 +10,16 @@
 
   const root = document.getElementById('km-map-areas');
   const area = window.KM_AREA_SEGMENTATION;
-  if (!root || !area) return;
+  if (!root) return;
+  if (!area) {
+    // 計算の部品(Main/area-segmentation.js)が読めないときは「読み込み中…」のまま止めず、理由を出す(2026-11-07)
+    const status = document.getElementById('km-map-areas-status');
+    if (status) {
+      status.textContent = '色分けの計算の部品を読めませんでした。ページを読み込み直してください(直らなければ管理者へ)。';
+      status.className = 'text-danger fs-7';
+    }
+    return;
+  }
 
   const rowsBody = document.getElementById('km-map-areas-rows');
   const statusEl = document.getElementById('km-map-areas-status');
@@ -101,7 +110,9 @@
 
   function statusText(floor) {
     if (!floor.painted) return 'まだ塗っていない';
-    return floor.painted.current ? `塗ってある(${floor.painted.at})` : '床の画像を差し替えたので古い(出していない)';
+    // どこで塗ったか(2026-11-07)。管理アプリが送った絵(api/area-paint.php)は「アプリの絵」
+    const origin = floor.painted.origin === 'app' ? 'アプリの絵' : 'この画面で塗った';
+    return floor.painted.current ? `塗ってある(${origin}・${floor.painted.at})` : '床の画像を差し替えたので古い(出していない)';
   }
 
   function render() {

@@ -107,6 +107,12 @@ const KM_CHECK_PURE = [
     'image-scan',
     // ベンチマーク(2026-11-06)
     'bench',
+    // プロジェクト状況の口(鍵 KM_PROJ_PASSKEY)・Logto のメールのテンプレート(2026-11-07)
+    'proj-api',
+    // 読み・別名と英語の名前を CSV でまとめて(2026-11-07、plan.md 段 2-1)
+    'alias-csv',
+    // 管理アプリが塗った色分けの絵を受け取る(2026-11-07、plan.md 段 2-3)
+    'area-paint-app',
 ];
 
 /** 名前を明示したときだけ走る検査。置かれている設定を読む。 */
@@ -4249,7 +4255,7 @@ function km_check_security_review(): void
 
     km_check_heading('security-review 3・7: 解除の試行は錠ごとに、DB が落ちても数える');
     require_once __DIR__ . '/../lib/map-rate-limit.php';
-    check('錠は web と app と guest(お試しの閲覧の再入場コード)と html-share(共有リンクのパスワード)', ['web', 'app', 'guest', 'html-share'], array_keys(KM_MAP_UNLOCK_SCOPES));
+    check('錠は web と app と guest(お試しの閲覧の再入場コード)と html-share(共有リンクのパスワード)と proj-api(手元の道具の鍵。2026-11-07)', ['web', 'app', 'guest', 'html-share', 'proj-api'], array_keys(KM_MAP_UNLOCK_SCOPES));
     check_bool('表は別々', KM_MAP_UNLOCK_SCOPES['web'] !== KM_MAP_UNLOCK_SCOPES['app']);
     $unlockApi = $code($read('api/map-unlock.php'));
     $appMapApi = $code($read('api/app-map.php'));
@@ -6058,6 +6064,24 @@ function km_check_hardening(): void
     check_bool('国の拒否: 反転は見本・BAN の集計・訪問者の地図にも通る', str_contains($file('geoblock.local.conf.example'), "\nDENY_INVERT=no\n")
         && str_contains($file('scripts/host-stats.sh'), '"invert":%s') && str_contains($file('src/admin/assets/js/visitors-world.js'), 'denyInvert'));
     check_bool('国の拒否: 取り直しに失敗したら前の一覧を使う・管理用の国の一覧が空なら当てない', str_contains($geoblock, '前の一覧を使います') && str_contains($geoblock, '誰も入れなくなるので当てません'));
+// Google を 443 だけ通す(2026-11-07。日本だけ通すと App Links の確認が Google から届かず、共有のリンクがアプリで開かなかった)
+check_bool('国の拒否: ALLOW_GOOGLE は既定で切・値は yes か no・通すポートの既定は 443', str_contains($geoblock, "ALLOW_GOOGLE=\"\"\nGOOGLE_PORTS=\"443\"")
+    && str_contains($geoblock, '      ALLOW_GOOGLE) ALLOW_GOOGLE="$value" ;;') && str_contains($geoblock, 'ALLOW_GOOGLE の値が不正です')
+    && str_contains($geoblock, 'for port in $ADMIN_PORTS $EXEMPT_PORTS $GOOGLE_PORTS; do'));
+check_bool('国の拒否: Google の一覧は Google の公開の場所からだけ取る', str_contains($geoblock, 'GOOGLE_ALL_URL="https://www.gstatic.com/ipranges/goog.json"')
+    && str_contains($geoblock, 'GOOGLE_CLOUD_URL="https://www.gstatic.com/ipranges/cloud.json"')
+    && substr_count($geoblock, 'https://developers.google.com/static/crawling/ipranges/') === 4
+    && str_contains($geoblock, '--max-filesize 2000000'));
+$gbRules = substr($geoblock, (int) strpos($geoblock, 'build_ruleset() {'));
+check_bool('国の拒否: Google 全体は Cloud の利用者を除けるときだけ通す・通すのは GOOGLE_PORTS だけ・国で落とすより前', str_contains($gbRules, 'ip saddr @gall4 ip saddr != @gcloud4 counter accept')
+    && str_contains($gbRules, 'if [ -n "$gall4" ] && [ -n "$gcloud4" ]; then printf')
+    && preg_match_all('/tcp dport \{ %s \} ip6? saddr @g/', $gbRules) === 4
+    && strpos($gbRules, 'ip saddr @gfetch4 counter accept') < strpos($gbRules, 'ip saddr != @deny4 counter drop')
+    && strpos($gbRules, 'ip saddr @gfetch4 counter accept') < strpos($gbRules, 'ip saddr @deny4 counter drop')
+    && strpos($gbRules, 'ct state established,related accept') < strpos($gbRules, 'ip saddr @gfetch4'));
+check_bool('国の拒否: Google を通した数は落とした数に混ぜない(BAN の集計)', str_contains($file('scripts/host-stats.sh'), 'if ($0 ~ / accept/) { gp += p } else if ($0 ~ /!= @admin/)')
+    && str_contains($file('scripts/host-stats.sh'), '"google":{"allowed":%s,"packets":%s}'));
+check_bool('国の拒否: 見本に ALLOW_GOOGLE がある(既定 no)', str_contains($file('geoblock.local.conf.example'), "\nALLOW_GOOGLE=no\n"));
     check_bool('国の拒否: 設定はリポジトリに置かない(見本だけ)・スクリプトと見本は配備に載る', !is_file(km_check_repo_root() . '/geoblock.local.conf') && is_file(km_check_repo_root() . '/geoblock.local.conf.example')
         && str_contains($deploy, "'./scripts/host-geoblock.sh'") && str_contains($deploy, "'./geoblock.local.conf.example'"));
     check_bool('cron の証明書は host-cert.sh を指す', str_contains($setup, 'CERT_SCRIPT="$PATH_ROOT/scripts/host-cert.sh"'));
@@ -9927,6 +9951,17 @@ function km_check_layout(): void
     check_bool('地図データに階段の向き(uuid は出さない)', str_contains((string) file_get_contents(__DIR__ . '/../lib/map-data.php'), "\$node['stairUpHeading'] = \$heading['up'];")
         && str_contains((string) file_get_contents(__DIR__ . '/../lib/map-data.php'), "unset(\$node['uuid']);"));
     check_bool('矢印の向きは CSSOM で入れる(style 属性は CSP で効かない)', str_contains($appJs, "arrow.style.setProperty('--km-heading', heading + 'deg');"));
+    // 向きは 1 階だけ入れればよい(2026-11-07、利用者)。上り口は下の階と同じ・下り口は下の階の上り口の逆。Web とアプリで同じ決まり(中身の試験は node と StairGuideTest)
+    check_bool('階段の向き: 入っていない階は下の階から埋める(経路の札も、拡大したときの札も)', substr_count($appJs, 'stairHeadingOf(') === 3
+        && str_contains($appJs, 'view.filledStairHeadings(stairs, Dijkstra.stairKey, Dijkstra.isElevator)')
+        && !str_contains($appJs, 'node.stairUpHeading') && !str_contains($appJs, 'stair.stairUpHeading')
+        && str_contains($routeViewJs, 'm.own.down = norm(belowUp + 180);'));
+    $stairGuideKt = 'C:/Users/itota/Documents/Test/app/src/main/java/com/ito/kosenmap/StairGuide.kt';
+    if (is_file($stairGuideKt)) {
+        $stairGuide = (string) file_get_contents($stairGuideKt);
+        check_bool('階段の向き: アプリも同じ決まり(手で入れた向きが優先・逆は +180°)', str_contains($stairGuide, 'StairHeadings(own.up ?: belowUp, own.down ?: ((belowUp!! + 180f) % 360f))')
+            && !str_contains($stairGuide, 'node.stairUpHeading') && str_contains($stairGuide, 'headings: Map<String, StairHeadings> = filledStairHeadings(stairsByKey)'));
+    }
     check_bool('案内中は関係ない地点を薄く(Leaflet の opacity に勝つ)', preg_match('/body\.km-route-active \.leaflet-tooltip-pane \.km-label:not\(\.km-on-route\) \{[^}]*opacity: 0\.35 !important;/s', $chromeCss) === 1);
     check_bool('札の文字は escapeHtml を通す', str_contains($appJs, '${escapeHtml(turn.phrase)}</span></span>`') && str_contains($appJs, '${escapeHtml(mark.text)}</span>`'));
 
@@ -9954,6 +9989,16 @@ function km_check_layout(): void
         && str_contains($appJs, 'const byName = !otherKind && genre.pattern'));
     check_bool('トイレのジャンルは臨時のトイレも拾う・当てはまらないチップは隠す', str_contains($appJs, "WC: { poi: ['toilet'],") && str_contains($appJs, 'chip.hidden = genreResults(key).length === 0;')
         && str_contains((string) file_get_contents(__DIR__ . '/../Main/entry.js'), 'if (chip.hidden) return;'));
+    // 2026-11-07、利用者の答え「#110 はトイレを外して」。トイレの地点も種類は room なので「教室」に並んでいた
+    if (preg_match('/^\s+room: \{[^\n]*exclude: (\/[^\n]+?\/i) \}/m', $appJs, $roomExclude) === 1) {
+        $roomExcludeRe = $roomExclude[1];
+        check_bool('「教室」のジャンルはトイレを外す(男子トイレ・WC・お手洗い は外し、情報処理室 は残す。アプリの EntryGenres.kt と同じ)',
+            preg_match($roomExcludeRe, '1F 男子トイレ') === 1 && preg_match($roomExcludeRe, '多目的WC') === 1 && preg_match($roomExcludeRe, 'お手洗い') === 1
+            && preg_match($roomExcludeRe, '情報処理室') === 0
+            && str_contains($appJs, 'if (!byProject && genre.exclude && [node.name, shownName, node.type2].some(v => genre.exclude.test(v || \'\'))) continue;'));
+    } else {
+        check_bool('「教室」のジャンルはトイレを外す(exclude がある)', false);
+    }
 
     km_check_heading('map: 階の列の上でホイール・縦のスワイプ(2026-10-30、振り返りのフェーズ 3 の 4)');
     check_bool('ホイールの上 = 上の階・地図の拡大へ渡さない・1 段ずつ', str_contains($appJs, "stepFloor(e.deltaY < 0 ? 1 : -1);") && str_contains($appJs, "}, { passive: false });")
@@ -10199,7 +10244,8 @@ function km_check_admin_log(): void
          * (拾えていなかったせいで、この2つだけ文言の突き合わせから漏れていた)
          */
         if (preg_match_all(
-            "/km_admin_log_record\(\s*'([a-z]+)'\s*,\s*(?:[^,;()]*\?\s*)?'([a-zA-Z0-9._]+)'(?:\s*:\s*'([a-zA-Z0-9._]+)')?/",
+            // 操作名のハイフン(search-aliases.save)も拾う。拾えず、文言が無いまま 10-30 から記録していた(2026-11-07 に気づいた)
+            "/km_admin_log_record\(\s*'([a-z]+)'\s*,\s*(?:[^,;()]*\?\s*)?'([a-zA-Z0-9._-]+)'(?:\s*:\s*'([a-zA-Z0-9._-]+)')?/",
             $source,
             $matches,
             PREG_SET_ORDER
@@ -10998,6 +11044,267 @@ function km_check_image_scan(): void
  * 利用者の指示「サーバーでベンチマーク」「簡単な処理だと比較が難しいので考慮」「性能とスコアを保存」)。
  * 重い段そのものはここでは回さない(本番で測って基準を固定した。lib の KM_BENCH_REFERENCE)。
  */
+/**
+ * プロジェクト状況の口(api/project-tasks.php)と鍵 KM_PROJ_PASSKEY(lib/proj-passkey.php)、
+ * Logto のメールのテンプレートを合わせる台本(scripts/logto-email-templates.php)。2026-11-07。
+ *
+ * **鍵の値は読まない・出さない。** 見るのは「鍵が無ければ断る」「URL で受けない」「手元の鍵が配備・控えに載らない」書き方。
+ */
+function km_check_proj_api(): void
+{
+    km_check_heading('proj-api: プロジェクト状況の口は鍵が無いと通さない・メールのテンプレートは書く前に比べる');
+    require_once __DIR__ . '/../lib/proj-passkey.php';
+    require_once __DIR__ . '/../lib/tasks.php';
+    require_once __DIR__ . '/../lib/admin-log.php';
+    $root = dirname(__DIR__, 2);
+    $file = static fn (string $path): string => (string) @file_get_contents($root . '/' . $path);
+
+    // 鍵(純粋な関数)
+    $good = str_repeat('Ab3(-)', 6);
+    check_bool('鍵: 無い・空・短い・空白入りは「置かれていない」(誰も通さない)', km_proj_passkey_configured('') === null && km_proj_passkey_configured('short') === null
+        && km_proj_passkey_configured(str_repeat('a', 31)) === null && km_proj_passkey_configured(str_repeat('a', 20) . ' ' . str_repeat('b', 20)) === null
+        && km_proj_passkey_configured($good) === $good);
+    check_bool('鍵: 空の入力は、空の鍵とも一致しない', km_proj_passkey_matches('', null) === false && km_proj_passkey_matches('', '') === false && km_proj_passkey_matches('x', null) === false);
+    check_bool('鍵: 同じなら一致・1 字違えば外れ', km_proj_passkey_matches($good, $good) && !km_proj_passkey_matches($good . 'x', $good) && !km_proj_passkey_matches(substr($good, 1), $good));
+    check_bool('鍵: ヘッダー X-KM-Proj-Passkey を先に、無ければ Authorization: Bearer', km_proj_passkey_from_request(['HTTP_X_KM_PROJ_PASSKEY' => ' k1 ', 'HTTP_AUTHORIZATION' => 'Bearer k2']) === 'k1'
+        && km_proj_passkey_from_request(['HTTP_AUTHORIZATION' => 'Bearer k2']) === 'k2' && km_proj_passkey_from_request(['HTTP_AUTHORIZATION' => 'Basic k2']) === ''
+        && km_proj_passkey_from_request([]) === '');
+    check_bool('鍵: URL に載せたら断る(名前で見る。大文字も)', km_proj_passkey_in_query(['passkey' => 'x']) && km_proj_passkey_in_query(['KEY' => 'x']) && km_proj_passkey_in_query(['access_token' => 'x'])
+        && !km_proj_passkey_in_query(['id' => '3', 'topic' => 'web']));
+
+    $lib = $file('src/lib/proj-passkey.php');
+    $guard = preg_match('/function km_proj_passkey_guard\(.*?\n\}/s', $lib, $m) === 1 ? $m[0] : '';
+    check_bool('鍵: 置かれていなければ 503、URL の鍵は照合の前に 400', $guard !== '' && strpos($guard, '503') < strpos($guard, 'km_proj_passkey_in_query($_GET)')
+        && strpos($guard, 'km_proj_passkey_in_query($_GET)') < strpos($guard, 'km_proj_passkey_matches('));
+    check_bool('鍵: sha256 どうしを hash_equals で比べる', str_contains($lib, "hash_equals(hash('sha256', 'km-proj|' . \$expected), hash('sha256', 'km-proj|' . \$given))"));
+    check_bool('鍵: 外れだけ数える(錠 proj-api)・当たりは数えない・外れは待たせる', str_contains($guard, "km_map_unlock_attempt(km_db(), 'proj-api')")
+        && strpos($guard, 'KM_PROJ_PASSKEY_ACTOR') < strpos($guard, 'km_map_unlock_attempt(') && str_contains($guard, 'usleep(random_int('));
+    check_bool('鍵: 通ったら管理の記録の実行者は「プロジェクトの鍵(API)」', str_contains($guard, '$GLOBALS[\'KM_USER\'] = KM_PROJ_PASSKEY_ACTOR;') && KM_PROJ_PASSKEY_ACTOR['name'] === 'プロジェクトの鍵(API)');
+    check_bool('鍵: 環境変数から読む(コードにもリポジトリにも値を置かない)', str_contains($lib, "const KM_PROJ_PASSKEY_ENV = 'KM_PROJ_PASSKEY';") && str_contains($lib, 'getenv(KM_PROJ_PASSKEY_ENV)'));
+
+    // 口
+    $api = $file('src/api/project-tasks.php');
+    check_bool('口: 何よりも先に鍵を確かめる(DB に触る前)', strpos($api, 'km_proj_passkey_guard();') !== false && strpos($api, 'km_proj_passkey_guard();') < strpos($api, '$pdo = km_db();'));
+    check_bool('口: 使えるのは GET・POST・PATCH・PUT・DELETE', str_contains($api, "['GET', 'POST', 'PATCH', 'PUT', 'DELETE']"));
+    check_bool('口: 本文は api_bootstrap の上限で読む・知らない項目は断る', str_contains($api, '$input = km_api_json_body();') && str_contains($api, '知らない項目です'));
+    check_bool('口: まとめて足すのは 50 件まで・先に全部確かめ、1 つのトランザクションで', str_contains($api, 'const KM_PROJ_TASKS_BATCH_MAX = 50;') && strpos($api, 'km_task_details_validate(') < strpos($api, '$pdo->beginTransaction();')
+        && str_contains($api, '$pdo->rollBack();') && strpos($api, 'km_tasks_ensure_table($pdo);') < strpos($api, '$pdo->beginTransaction();'));
+    check_bool('口: 書いたら管理の記録(task.create・task.update・task.delete)', str_contains($api, "km_admin_log_record('content', 'task.create'") && str_contains($api, "km_admin_log_record('content', 'task.update'")
+        && str_contains($api, "km_admin_log_record('content', 'task.delete'") && isset(KM_ADMIN_LOG_ACTION_LABELS['task.create'], KM_ADMIN_LOG_ACTION_LABELS['task.update'], KM_ADMIN_LOG_ACTION_LABELS['task.delete']));
+    check_bool('口: 例外の文面は出さない(入力の誤りだけ 400 で出す)', str_contains($api, "respond(['success' => false, 'message' => '現在利用できません。'], 503);") && str_contains($api, 'catch (InvalidArgumentException $exception)'));
+
+    // 表
+    $tasks = $file('src/lib/tasks.php');
+    check_bool('表: 補足は新しい表 km_task_details(km_tasks に列を足さない)', str_contains($tasks, 'CREATE TABLE IF NOT EXISTS km_task_details (') && !preg_match('/ALTER TABLE km_tasks ADD COLUMN IF NOT EXISTS (plan_ref|note)/', $tasks)
+        && str_contains($tasks, "km_db_table_exists(\$pdo, 'km_task_details')"));
+    check_bool('表: タスクを消したら補足も消す', str_contains($tasks, 'DELETE FROM km_task_details WHERE task_id = ?'));
+    check_bool('表: 足したら id を返す', str_contains($tasks, 'return (int) $pdo->lastInsertId();'));
+    try {
+        km_task_details_validate('段7-1', "1 行目\n2 行目");
+        $okDetails = true;
+    } catch (InvalidArgumentException) {
+        $okDetails = false;
+    }
+    $badDetails = 0;
+    foreach ([["段7\n1", ''], [str_repeat('あ', KM_TASK_PLAN_REF_MAX + 1), ''], ['', str_repeat('x', KM_TASK_NOTE_MAX + 1)], ['', "a\x07b"]] as [$ref, $note]) {
+        try {
+            km_task_details_validate($ref, $note);
+        } catch (InvalidArgumentException) {
+            $badDetails++;
+        }
+    }
+    check_bool('表: 段の番号は 1 行・32 字まで、メモは 2000 字まで(改行は可・制御文字は不可)', $okDetails && $badDetails === 4);
+    $wantTopics = ['', 'server', 'security', 'web', 'app', 'mapdata', 'devenv', 'monitor'];
+    check('分類: サーバー・セキュリティ・Website・アプリ・地図のデータ・検証環境・サービス監視', $wantTopics, array_keys(KM_TASK_TOPICS));
+    $ja = $file('src/admin/assets/i18n/ja.js');
+    $en = $file('src/admin/assets/i18n/en.js');
+    $missing = [];
+    foreach (array_merge(array_filter($wantTopics, static fn (string $t): bool => $t !== ''), ['none']) as $t) {
+        foreach (['ja' => $ja, 'en' => $en] as $lang => $dict) {
+            if (!str_contains($dict, '"page.projects.topic.' . $t . '"')) {
+                $missing[] = "{$lang}:{$t}";
+            }
+        }
+    }
+    foreach (['fieldPlanRef', 'fieldNote'] as $k) {
+        foreach (['ja' => $ja, 'en' => $en] as $lang => $dict) {
+            if (!str_contains($dict, '"page.projects.' . $k . '"')) {
+                $missing[] = "{$lang}:{$k}";
+            }
+        }
+    }
+    check('分類と欄の訳が日英の辞書にある', [], $missing);
+    $page = $file('src/admin/projects.php');
+    check_bool('画面: 段の番号とメモを出し、直せる(style 属性を使わない)', str_contains($page, 'km_task_details_set($pdo, $newId, $planRef, $note);') && str_contains($page, 'name="plan_ref"')
+        && str_contains($page, 'name="note"') && str_contains($page, "getElementById('km-task-edit-note')") && preg_match('/<[a-z][^>]*\sstyle=/i', $page) !== 1);
+
+    // 入口・環境・手元の鍵
+    $nginx = $file('nginx/default.conf.template');
+    check_bool('nginx: クエリをログに残さず、本文 64KB・回数は km_api', str_contains($nginx, "location = /api/project-tasks.php {\n        access_log /var/log/nginx/access.log km_no_query;\n        client_max_body_size 64k;\n        limit_req zone=km_api"));
+    check_bool('compose: web に KM_PROJ_PASSKEY を渡す(空の既定)', str_contains($file('compose.yaml'), 'KM_PROJ_PASSKEY: ${KM_PROJ_PASSKEY:-}') && str_contains($file('.env.example'), "\nKM_PROJ_PASSKEY=\n"));
+    $deploy = $file('scripts/deploy-to-host.ps1');
+    check_bool('手元の鍵(docs/.env)は配備に載らない(docs を送らない)', preg_match('/\$include\s*=\s*@\(([^)]*)\)/', $deploy, $inc) === 1 && !str_contains($inc[1], 'docs'));
+    $sync = 'F:/Pull/Ichinoseki_Kosen_Web/tools/sync-from-website.ps1';
+    if (is_file($sync)) {
+        check_bool('手元の鍵は GitHub の控えに載らない(写しの台本が .env を除く)', preg_match("/'\\.env'/", (string) file_get_contents($sync)) === 1);
+    } else {
+        check_skip('手元の鍵は GitHub の控えに載らない', 'GitHub の控えの写しの台本が無い(この PC 以外)');
+    }
+    $syncPs = $file('scripts/proj-passkey-sync.ps1');
+    check_bool('写す台本: 鍵は標準入力(引用付きのヒアドキュメント)で渡し、引数に載せない・前の .env を残す', str_contains($syncPs, "IFS= read -r NEWKEY <<'KM_PROJ_EOF'") && str_contains($syncPs, "| & ssh @sshArgs 'sh -s'")
+        && str_contains($syncPs, '.env.before-proj-passkey-') && !preg_match('/Write-Host[^\n]*\$passkey(?!\.Length)\b/', $syncPs));
+    check_bool('写す台本: 突き合わせは sha256 だけ・compose で崩れる記号を断る', str_contains($syncPs, 'sha256sum') && str_contains($syncPs, '[$\'\'"\\\\`#]'));
+    $client = $file('scripts/proj-tasks.ps1');
+    check_bool('手元の道具: 鍵はヘッダーで送り、URL に載せない・https だけ(localhost は除く)', str_contains($client, "'X-KM-Proj-Passkey' = \$found[0].Groups[1].Value") && !preg_match('/[?&](passkey|key|token)=/i', $client)
+        && str_contains($client, "'^https://[A-Za-z0-9.-]+(:\\d+)?\$'"));
+
+    // Logto のメールのテンプレート
+    $tpl = $file('src/scripts/logto-email-templates.php');
+    check_bool('テンプレート: 既定は比べるだけ・書くのは --apply のときだけ', str_contains($tpl, "\$apply = in_array('--apply', \$args, true);") && strpos($tpl, 'if (!$apply) {') < strpos($tpl, 'km_logto_management_patch('));
+    check_bool('テンプレート: 書くのは templates だけ(ほかの設定は読んだまま返す)', str_contains($tpl, "\$config['templates'] = \$templates;") && str_contains($tpl, "km_logto_management_patch('connectors/' . \$connectorId, ['config' => \$config]);")
+        && preg_match_all('/\$config\[[^\]]+\]\s*=(?!=)/', $tpl) === 1);
+    check_bool('テンプレート: 書いたら読み直して確かめる', strpos($tpl, '[, $after] = km_email_templates_connector();') > strpos($tpl, 'km_logto_management_patch('));
+    check_bool('テンプレート: 設定(送信サーバー・パスワード)を出さない', !preg_match('/(print_r|var_dump|var_export|json_encode)\(\s*\$(config|after|found)/', $tpl));
+    check_bool('テンプレート: 本文に {{code}} が無いもの・種類の重なりを断る', str_contains($tpl, "str_contains(\$content, '{{code}}')") && str_contains($tpl, '2 回あります'));
+    $canon = json_decode($file('docs/logto-email-templates.json'), true);
+    if (is_array($canon)) {
+        $types = array_map(static fn ($t): string => is_array($t) ? (string) ($t['usageType'] ?? '') : '', $canon);
+        check_bool('テンプレートの正本: 9 種類・重ならない・どれも {{code}} を持つ', count($types) === 9 && count(array_unique($types)) === 9
+            && array_filter($canon, static fn ($t): bool => !is_array($t) || !str_contains((string) ($t['content'] ?? ''), '{{code}}')) === []);
+    } else {
+        check_skip('テンプレートの正本', 'docs/logto-email-templates.json が無い(配備先)');
+    }
+}
+
+/**
+ * 管理アプリが塗った色分けの絵を受け取る(api/area-paint.php・lib/area-paint.php・アプリの AreaPaintUpload.kt。2026-11-07)。
+ * アプリの絵をそのまま重ねるので、**Website の組み込みの床の画像とアプリの下絵が同じファイル**であることを突き合わせる(アプリの原本が在るときだけ)。
+ */
+function km_check_area_paint_app(): void
+{
+    km_check_heading('area-paint-app: 管理アプリの色分けの絵');
+    require_once __DIR__ . '/../lib/area-paint.php';
+    require_once __DIR__ . '/../lib/app-map-convert.php';
+    require_once __DIR__ . '/../lib/building-floors.php';
+    require_once __DIR__ . '/../lib/admin-log.php';
+    $api = (string) file_get_contents(__DIR__ . '/../api/area-paint.php');
+    $lib = (string) file_get_contents(__DIR__ . '/../lib/area-paint.php');
+    $repo = km_check_repo_root();
+    check_bool('口: POST だけ・管理者のトークンだけ(違えば 403)', str_contains($api, "require_method('POST');")
+        && str_contains($api, '$principal = logto_require_principal();')
+        && str_contains($api, "if ((\$principal['is_admin'] ?? 0) !== 1) {")
+        && strpos($api, 'km_api_json_body(') > strpos($api, "if ((\$principal['is_admin'] ?? 0) !== 1) {"));
+    check_bool('口: 本文は 12MB まで・base64 は厳しく読む・置いたら記録', str_contains($api, 'km_api_json_body(12 * 1024 * 1024)')
+        && str_contains($api, "base64_decode(is_string(\$input['png'] ?? null) ? \$input['png'] : '', true)")
+        && str_contains($api, "km_admin_log_record('content', 'map.area_paint_app', \$record['floor']);"));
+    check_bool('監査ログ: アプリの絵に文言がある', isset(KM_ADMIN_LOG_ACTION_LABELS['map.area_paint_app']));
+    if ($repo === null) {
+        check_skip('nginx: この口だけ 12MB まで受ける', 'リポジトリの外(nginx の原本が無い)');
+    } else {
+        check_bool('nginx: この口だけ 12MB まで受ける(回数は km_api)', (bool) preg_match('~location = /api/area-paint\.php \{\s*client_max_body_size 12m;\s*limit_req zone=km_api~', (string) file_get_contents($repo . '/nginx/default.conf.template')));
+    }
+    check_bool('受け取り: アプリの階の表記だけ・差し替えた床は断る・大きさが違えば断る・印は app', str_contains($lib, "KM_APP_MAP_FLOOR_MAP[strtoupper(trim(\$appFloor))] ?? null")
+        && strpos($lib, 'if (km_map_floor_is_upload($svgPath)) {') < strpos($lib, '$record = km_area_paint_save($pdo, $floorId, km_map_floor_image_endpoint($floorId, $svgPath), $png, $now, \'app\');')
+        && str_contains($lib, "if ((int) \$checked['width'] !== (int) \$size[0] || (int) \$checked['height'] !== (int) \$size[1]) {")
+        && str_contains($lib, "'origin' => \$origin === 'app' ? 'app' : 'web'"));
+    // 知らない階は DB を見る前に断る(PDO は SQLite の空のもので足りる)
+    $error = '';
+    try {
+        km_area_paint_save_from_app(new PDO('sqlite::memory:'), 'B1F', "\x89PNG");
+    } catch (InvalidArgumentException $exception) {
+        $error = $exception->getMessage();
+    }
+    check_bool('受け取り: 知らない階(B1F)は断る', str_contains($error, '知らない階'));
+    // 管理画面から公開側の部品を読むときは / から(相対の km_public_asset は /admin/Main/… になり 404。11-07 に本番で踏んだ)
+    $relativePublic = [];
+    foreach (glob(__DIR__ . '/../admin/*.php') ?: [] as $adminPage) {
+        if (preg_match('/src="<\?= km_e\(km_public_asset\(/', (string) file_get_contents($adminPage))) {
+            $relativePublic[] = basename($adminPage);
+        }
+    }
+    check('管理画面: 公開側の部品(km_public_asset)は / から読む', [], $relativePublic);
+    check_bool('管理画面: 色分けの計算の部品が読めなければ理由を出す(読み込み中のまま止めない)', str_contains((string) file_get_contents(__DIR__ . '/../admin/map-areas.php'), "km_e('/' . km_public_asset('Main/area-segmentation.js'))")
+        && str_contains((string) file_get_contents(__DIR__ . '/../admin/assets/js/map-areas.js'), '色分けの計算の部品を読めませんでした'));
+    check_bool('管理画面: どこで塗ったかを出す', str_contains((string) file_get_contents(__DIR__ . '/../admin/assets/js/map-areas.js'), "floor.painted.origin === 'app' ? 'アプリの絵' : 'この画面で塗った'")
+        && str_contains($lib, "'origin' => (\$value['origin'] ?? '') === 'app' ? 'app' : 'web'"));
+
+    /*
+     * アプリの原本(別のリポジトリ)と突き合わせ。在るときだけ(本番のホストには置いていない)。
+     * 第二体育館だけは組み込みの画像の中身が違う(大きさは同じ)。本番は Website で差し替えてある(upload:)ので、アプリの絵は断られる
+     */
+    $appRoot = 'C:/Users/itota/Documents/Test/app/src';
+    if (!is_dir($appRoot)) {
+        return;
+    }
+    $drawable = $appRoot . '/main/res/drawable/';
+    $pairs = [
+        '1F' => ['Main/Picture/１階.png', 'f1_r.png'], '2F' => ['Main/Picture/２階.png', 'f2_r.png'], '3F' => ['Main/Picture/３階.png', 'f3_r.png'],
+        '4F' => ['Main/Picture/４階.png', 'f4_r.png'], '5F' => ['Main/Picture/５階.png', 'f5_r.png'], 'OUTSIDE' => ['Main/Picture/外全体図.png', 'outside_r.png'],
+    ];
+    foreach (KM_BUILDING_FLOORS as $floor) {
+        $pairs[$floor['appFloor']] = ['Main/' . $floor['image'], basename($floor['image'])];
+    }
+    $same = [];
+    $sized = [];
+    foreach ($pairs as $appFloor => [$web, $app]) {
+        $webFile = __DIR__ . '/../' . $web;
+        $appFile = $drawable . $app;
+        $sameBytes = is_file($webFile) && is_file($appFile) && hash_file('sha256', $webFile) === hash_file('sha256', $appFile);
+        $webSize = is_file($webFile) ? @getimagesize($webFile) : false;
+        $appSize = is_file($appFile) ? @getimagesize($appFile) : false;
+        $sized[$appFloor] = $webSize !== false && $appSize !== false && $webSize[0] === $appSize[0] && $webSize[1] === $appSize[1];
+        if (!$sameBytes) {
+            $same[] = $appFloor;
+        }
+    }
+    check('アプリの下絵: どの階も Website の組み込みの床の画像と同じ大きさ', array_fill_keys(array_keys($pairs), true), $sized);
+    check('アプリの下絵: 中身まで同じ(違うのは第二体育館だけ。本番は差し替えてあるので受け取らない)', ['BLDG_GYM2'], $same);
+    check('アプリが送る階 = Website が受ける階', array_keys(KM_APP_MAP_FLOOR_MAP), array_keys($pairs));
+    $upload = (string) @file_get_contents($appRoot . '/main/java/com/ito/kosenmap/AreaPaintUpload.kt');
+    check_bool('アプリ: 口の URL・本文の形・上限が Website と同じ', str_contains($upload, '"/api/area-paint.php"') && str_contains($upload, 'addProperty("floor", floor)')
+        && str_contains($upload, 'addProperty("png", ') && str_contains($upload, 'AREA_PAINT_MAX_BYTES = 8 * 1024 * 1024') && KM_AREA_PAINT_MAX_BYTES === 8 * 1024 * 1024
+        && str_contains($upload, 'debug = false'));
+    $settings = (string) @file_get_contents($appRoot . '/main/java/com/ito/kosenmap/SettingFragment.kt');
+    check_bool('アプリ: 送る項目は管理ビルドだけ', str_contains($settings, 'const val AREA_PAINT_UPLOAD_KEY = "area_paint_upload"')
+        && (bool) preg_match('/ADMIN_REQUIRED_PREFERENCES = setOf\((?:(?!\n    \)).)*AREA_PAINT_UPLOAD_KEY,/s', $settings));
+}
+
+/** 読み・別名と英語の名前を CSV でまとめて書き出す・取り込む(lib/search-alias-csv.php・admin/search-aliases.php。2026-11-07) */
+function km_check_alias_csv(): void
+{
+    km_check_heading('alias-csv: 読み・別名と英語の名前の CSV は、見せてから書く・空は変えない');
+    require_once __DIR__ . '/../lib/search-alias-csv.php';
+    require_once __DIR__ . '/../lib/admin-log.php';
+    $root = dirname(__DIR__, 2);
+    $a = str_repeat('a', 32);
+    $b = str_repeat('b', 32);
+    $c = str_repeat('c', 32);
+    $targets = [$a => '出入り口', $b => '教員室', $c => 'A階段'];
+    $csv = "\xEF\xBB\xBFkind,id,name,readings,english\nnode,{$a},x,でいりぐち,Entrance\nnode,{$b},x,きょういんしつ,\nnode,{$c},x,,-\npoi,5,x,y,z\nnode," . str_repeat('f', 32) . ",x,y,z\nnode,zz,x,y,z\nnode,{$a},x,y,z\n";
+    $plan = km_alias_csv_plan($csv, 'node', $targets, [$b => ['きょういんしつ']], [$c => 'Stairs A']);
+    $byId = array_column($plan['changes'], null, 'id');
+    check_bool('取り込み: 変わる行だけ・空のセルは変えない・「-」で消す', count($plan['changes']) === 2 && $byId[$a]['newReadings'] === 'でいりぐち' && $byId[$a]['newEnglish'] === 'Entrance'
+        && $byId[$c]['newReadings'] === null && $byId[$c]['newEnglish'] === '' && $plan['unchanged'] === 1);
+    check_bool('取り込み: ほかの種類の行は読まず、地図に無い id・形の違う id・重なりは断る', count($plan['errors']) === 3 && $plan['rows'] === 7);
+    check_bool('取り込み: 見出しに id と readings か english が要る(日本語の見出しも可)', km_alias_csv_plan("name,foo\n", 'node', $targets, [], [])['errors'] !== []
+        && (km_alias_csv_plan("id,英語の名前\n{$a},Gate\n", 'node', $targets, [], [])['changes'][0]['newEnglish'] ?? null) === 'Gate');
+    check_bool('取り込み: UTF-8 でなければ Shift_JIS(Excel)として読む', (km_alias_csv_plan((string) mb_convert_encoding("id,english\n{$a},正門\n", 'SJIS-win', 'UTF-8'), 'node', $targets, [], [])['changes'][0]['newEnglish'] ?? null) === '正門');
+    $export = km_alias_csv_export('node', [['id' => $b, 'name' => '=教員室', 'where' => '1F']], [$b => ['きょういんしつ']], []);
+    check_bool('書き出し: BOM 付き・式に読まれる名前には \' を付ける・取り込むと「同じ」', str_starts_with($export, "\xEF\xBB\xBFkind,id,name,where,readings,english\n") && str_contains($export, "'=教員室")
+        && km_alias_csv_plan($export, 'node', $targets, [$b => ['きょういんしつ']], [])['unchanged'] === 1);
+    check_bool('取り込み: 大きさと行の上限', KM_ALIAS_CSV_MAX_BYTES === 1048576 && km_alias_csv_plan(str_repeat('x', KM_ALIAS_CSV_MAX_BYTES + 1), 'node', $targets, [], [])['errors'] !== []);
+
+    $page = (string) file_get_contents($root . '/src/admin/search-aliases.php');
+    check_bool('画面: 上げただけでは書かない(計画をセッションに置いて見せる)', str_contains($page, "\$_SESSION[KM_ALIAS_IMPORT_SESSION_KEY] = ['kind' => \$kind, 'token' => bin2hex(random_bytes(16))")
+        && preg_match('/import_preview.*?km_search_alias_save/s', $page) === 1 && strpos($page, "if (\$importAction === 'import_preview')") < strpos($page, "if (\$importAction === 'import_apply')"));
+    check_bool('画面: 取り込むは CSRF(上の分岐)と印(hash_equals)と期限を確かめる', str_contains($page, "hash_equals((string) (\$stash['token'] ?? ''), \$token)") && str_contains($page, 'KM_ALIAS_CSV_PLAN_TTL')
+        && strpos($page, 'km_csrf_verify()') < strpos($page, "\$importAction = \$formAction;"));
+    check_bool('画面: 見せたあとに直された行は上書きしない・1 つのトランザクション', str_contains($page, '$conflicts++;') && str_contains($page, '$pdo->beginTransaction();') && str_contains($page, '$pdo->rollBack();'));
+    check_bool('画面: 書き出しは HTML を出す前・取り込みの記録に文言がある(save の抜けも直した)', strpos($page, "echo km_alias_csv_export(") < strpos($page, "require __DIR__ . '/_inc/partials/head.php';")
+        && isset(KM_ADMIN_LOG_ACTION_LABELS['search-aliases.import'], KM_ADMIN_LOG_ACTION_LABELS['search-aliases.save']));
+    check_bool('画面: style 属性・インラインのハンドラを使わない', preg_match('/<[a-z][^>]*\s(style|on[a-z]+)=/i', $page) !== 1);
+}
+
 function km_check_bench(): void
 {
     require_once __DIR__ . '/../lib/bench.php';
@@ -11625,6 +11932,15 @@ foreach ($selected as $name) {
             break;
         case 'bench':
             km_check_bench();
+            break;
+        case 'proj-api':
+            km_check_proj_api();
+            break;
+        case 'alias-csv':
+            km_check_alias_csv();
+            break;
+        case 'area-paint-app':
+            km_check_area_paint_app();
             break;
         case 'recaptcha':
             // 環境依存。数えず、終了コードだけを持ち帰る。

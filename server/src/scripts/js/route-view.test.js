@@ -104,5 +104,28 @@ check('経路の札: 着いた階は「1F から到着」', [{ id: 'a2', text: '
 check('経路の札: 下りる', '▼ 1F へ下りる', view.routeStairMarks(routeNodes.slice().reverse(), '2', label, isEv)[0].text);
 check('経路の札: エレベーター', 'エレベーターで 3F へ', view.routeStairMarks([stairs[4], stairs[5]], '1', label, isEv)[0].text);
 
+// 向きは 1 階だけ入れればよい(2026-11-07、利用者)。上り口は下の階と同じ・下り口は下の階の上り口の逆。手で入れた向きが優先
+const flights = [
+    { id: 's1', type: 'stairs', floor: '1', group: 'S', stairUpHeading: 90 },
+    { id: 's2', type: 'stairs', floor: '2', group: 'S' },
+    { id: 's3', type: 'stairs', floor: '3', group: 'S', stairUpHeading: 0 },
+    { id: 's4', type: 'stairs', floor: '4', group: 'S', stairDownHeading: 45 },
+    { id: 's5', type: 'stairs', floor: '5', group: 'S' },
+    { id: 'e1', type: 'stairs', floor: '1', group: 'E', name: 'エレベーター', stairUpHeading: 10 },
+    { id: 'e2', type: 'stairs', floor: '2', group: 'E', name: 'エレベーター' },
+    { id: 't2', type: 'stairs', floor: '2', group: 'T' },
+    { id: 't3', type: 'stairs', floor: '3', group: 'T' },
+    { id: 'o', type: 'stairs', floor: 'outside', group: 'S' },
+];
+const filled = view.filledStairHeadings(flights, key, isEv);
+check('向き: 1F は入れたまま', { up: 90, down: null }, filled.get('s1'));
+check('向き: 2F は上りが 1F と同じ・下りが 1F の上りの逆', { up: 90, down: 270 }, filled.get('s2'));
+check('向き: 3F は上りを手で入れた・下りは 2F の上りの逆', { up: 0, down: 270 }, filled.get('s3'));
+check('向き: 4F は上りが 3F と同じ・下りは手で入れたまま', { up: 0, down: 45 }, filled.get('s4'));
+check('向き: 5F は 4F の上りから', { up: 0, down: 180 }, filled.get('s5'));
+check('向き: エレベーターは埋めない', [{ up: 10, down: null }, { up: null, down: null }], [filled.get('e1'), filled.get('e2')]);
+check('向き: どこにも無い階段・外の階は埋めない', [{ up: null, down: null }, { up: null, down: null }, { up: null, down: null }], [filled.get('t2'), filled.get('t3'), filled.get('o')]);
+check('向き: 元の地点は書き換えない', undefined, flights[1].stairUpHeading);
+
 console.log(`\n${count - failures} / ${count} 件通過`);
 if (failures > 0) process.exit(1);

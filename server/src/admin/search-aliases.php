@@ -8,6 +8,8 @@ require_once dirname(__DIR__) . '/lib/db.php';
 require_once dirname(__DIR__) . '/lib/admin-log.php';
 require_once dirname(__DIR__) . '/lib/search-aliases.php';
 require_once dirname(__DIR__) . '/lib/english-names.php';
+// CSV でまとめて書き出す・取り込む(2026-11-07、plan.md 段 2-1)
+require_once dirname(__DIR__) . '/lib/search-alias-csv.php';
 // 地点の URL(km_node_link_*)。2026-11-02 にポスターの画面から移した
 require_once dirname(__DIR__) . '/lib/posters.php';
 
@@ -21,6 +23,9 @@ require_once dirname(__DIR__) . '/lib/posters.php';
  *
  * **地点の URL もここ**(2026-11-02、利用者の指示「無理やり配置した項目を的確な場所へ」)。地点の詳細に出すリンクで、
  * 以前はポスターの画面にあった(ポスターの出し方とは関係なく出る)。ページの名前は「地点の読み・別名・URL」。
+ *
+ * **CSV でまとめて**(2026-11-07、plan.md 段 2-1): 書き出し(?export=csv)と取り込み(上げる → 変わる行だけ見せる → 取り込む)。
+ * 決まりは lib/search-alias-csv.php(空のセルは変えない・消すのは「-」・見せたあとに変わった行は上書きしない)。
  */
 
 $KM_PAGE = [
@@ -36,6 +41,8 @@ $KM_PAGE = [
 ];
 
 const KM_SEARCH_ALIAS_PAGE_ROWS = 150;
+/** 取り込みの計画(見せてから「取り込む」まで)をセッションに置く鍵 */
+const KM_ALIAS_IMPORT_SESSION_KEY = 'km_alias_import';
 
 $kindLabels = ['node' => '地点', 'poi' => '一時地点', 'poster' => 'ポスター'];
 $kind = (string) ($_GET['kind'] ?? $_POST['kind'] ?? 'node');
@@ -52,6 +59,8 @@ $englishNames = ['node' => [], 'poi' => [], 'poster' => []];
 $floorLabels = [];
 $links = [];
 $nodeOptions = [];
+$importAction = null;
+$importPlan = null;
 $linkNotice = ['link' => '地点の URL を保存しました。', 'link_removed' => '地点の URL を外しました。'][(string) ($_GET['saved'] ?? '')] ?? null;
 
 try {
@@ -82,6 +91,9 @@ try {
             km_admin_log_record('content', 'map.node_link', '外した ' . $nodeId);
             header('Location: ./search-aliases.php?saved=link_removed#node-links', true, 303);
             exit;
+        } elseif (in_array($formAction, ['import_preview', 'import_apply', 'import_cancel'], true)) {
+            // CSV の取り込みは、並べる行(取り込める id)を読んだあとで扱う(下)
+            $importAction = $formAction;
         } else {
             $saved = 0;
             $new = is_array($_POST['a'] ?? null) ? $_POST['a'] : [];
@@ -147,6 +159,73 @@ try {
             // ポスターの表がまだ無い
         }
     }
+
+    // ---- CSV の取り込み(2026-11-07)。取り込めるのは、いまの種類で画面に並ぶもの全部(絞り込みに関係なく)
+    $targets = [];
+    foreach ($rows as $row) {
+        $targets[$row['id']] = $row['name'];
+    }
+    $backTo = './search-aliases.php?' . http_build_query(['kind' => $kind]);
+    if ($importAction === 'import_cancel') {
+        unset($_SESSION[KM_ALIAS_IMPORT_SESSION_KEY]);
+        header('Location: ' . $backTo, true, 303);
+        exit;
+    }
+    if ($importAction === 'import_preview') {
+        $file = $_FILES['csv'] ?? null;
+        if (!is_array($file) || (int) ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK || !is_uploaded_file((string) $file['tmp_name'])) {
+            $errors[] = 'CSV のファイルを選んでください。';
+        } elseif ((int) $file['size'] > KM_ALIAS_CSV_MAX_BYTES) {
+            $errors[] = 'CSV が大きすぎます(1MB まで)。';
+        } else {
+            $plan = km_alias_csv_plan((string) file_get_contents((string) $file['tmp_name']), $kind, $targets, $aliases[$kind], $englishNames[$kind]);
+            $_SESSION[KM_ALIAS_IMPORT_SESSION_KEY] = ['kind' => $kind, 'token' => bin2hex(random_bytes(16)), 'at' => time(), 'plan' => $plan];
+            header('Location: ' . $backTo . '#km-alias-import', true, 303);
+            exit;
+        }
+    }
+    if ($importAction === 'import_apply') {
+        $stash = $_SESSION[KM_ALIAS_IMPORT_SESSION_KEY] ?? null;
+        $token = (string) ($_POST['token'] ?? '');
+        if (!is_array($stash) || ($stash['kind'] ?? '') !== $kind || !hash_equals((string) ($stash['token'] ?? ''), $token)
+            || time() - (int) ($stash['at'] ?? 0) > KM_ALIAS_CSV_PLAN_TTL) {
+            $errors[] = '取り込みの確かめが古くなりました。CSV をもう一度上げてください。';
+        } else {
+            $applied = 0;
+            $conflicts = 0;
+            $pdo->beginTransaction();
+            try {
+                foreach ((array) ($stash['plan']['changes'] ?? []) as $change) {
+                    $id = (string) $change['id'];
+                    // 見せたときの値から変わっていたら書かない(開いている間にほかの人が直した)
+                    if (km_search_alias_text($aliases[$kind][$id] ?? []) !== (string) $change['oldReadings']
+                        || (string) ($englishNames[$kind][$id] ?? '') !== (string) $change['oldEnglish']) {
+                        $conflicts++;
+                        continue;
+                    }
+                    if ($change['newReadings'] !== null) {
+                        km_search_alias_save($pdo, $kind, $id, (string) $change['newReadings']);
+                    }
+                    if ($change['newEnglish'] !== null) {
+                        km_english_name_save($pdo, $kind, $id, (string) $change['newEnglish']);
+                    }
+                    $applied++;
+                }
+                $pdo->commit();
+            } catch (Throwable $exception) {
+                $pdo->rollBack();
+                throw $exception;
+            }
+            unset($_SESSION[KM_ALIAS_IMPORT_SESSION_KEY]);
+            km_admin_log_record('content', 'search-aliases.import', "{$kind} {$applied} 件" . ($conflicts > 0 ? "・食い違い {$conflicts} 件" : ''));
+            header('Location: ' . $backTo . '&' . http_build_query(['imported' => $applied, 'conflicts' => $conflicts]), true, 303);
+            exit;
+        }
+    }
+    $stash = $_SESSION[KM_ALIAS_IMPORT_SESSION_KEY] ?? null;
+    if (is_array($stash) && ($stash['kind'] ?? '') === $kind && time() - (int) ($stash['at'] ?? 0) <= KM_ALIAS_CSV_PLAN_TTL) {
+        $importPlan = $stash;
+    }
 } catch (Throwable $exception) {
     error_log('admin/search-aliases.php: ' . $exception->getMessage());
     $errors[] = km_admin_error_message($exception, 'データベースに接続できません。');
@@ -162,9 +241,19 @@ $rows = array_values(array_filter($rows, static function (array $row) use ($need
     return $needle === '' || str_contains(mb_strtolower($row['name'] . ' ' . $current), $needle);
 }));
 usort($rows, static fn (array $a, array $b): int => [$a['sort'], $a['name']] <=> [$b['sort'], $b['name']]);
+// CSV で書き出す(絞り込みはそのまま効く・150 件で切らない)。取り込みと同じ見出し
+if (($_GET['export'] ?? '') === 'csv' && $errors === []) {
+    header('Content-Type: text/csv; charset=UTF-8');
+    header('Content-Disposition: attachment; filename="km-aliases-' . $kind . '-' . date('Ymd') . '.csv"');
+    header('Cache-Control: no-store');
+    echo km_alias_csv_export($kind, $rows, $aliases[$kind], $englishNames[$kind]);
+    exit;
+}
 $total = count($rows);
 $rows = array_slice($rows, 0, KM_SEARCH_ALIAS_PAGE_ROWS);
 $done = isset($_GET['done']) ? (int) $_GET['done'] : null;
+$imported = isset($_GET['imported']) ? (int) $_GET['imported'] : null;
+$importConflicts = (int) ($_GET['conflicts'] ?? 0);
 
 $nodeNames = [];
 foreach ($nodeOptions as $option) {
@@ -194,6 +283,12 @@ require __DIR__ . '/_inc/partials/page-header.php';
             <?php if ($done !== null): ?>
               <div class="alert alert-success" role="alert"><?= $done > 0 ? km_e($done . ' 件を保存しました。') : '変えた行はありませんでした。' ?></div>
             <?php endif; ?>
+            <?php if ($imported !== null): ?>
+              <div class="alert <?= $importConflicts > 0 ? 'alert-warning' : 'alert-success' ?>" role="alert">
+                <?= km_e('CSV から ' . $imported . ' 件を取り込みました。') ?>
+                <?php if ($importConflicts > 0): ?><?= km_e('見せたあとに画面で直された ' . $importConflicts . ' 件は取り込んでいません(もう一度上げると並びます)。') ?><?php endif; ?>
+              </div>
+            <?php endif; ?>
             <div class="alert alert-info d-flex align-items-start" role="alert">
               <i class="bi bi-alphabet me-2 mt-1" aria-hidden="true"></i>
               <div>
@@ -219,6 +314,70 @@ require __DIR__ . '/_inc/partials/page-header.php';
               <button type="submit" class="btn btn-secondary">絞る</button>
               <span class="text-body-secondary fs-7"><?= km_e($total . ' 件' . ($total > KM_SEARCH_ALIAS_PAGE_ROWS ? '(先頭の ' . KM_SEARCH_ALIAS_PAGE_ROWS . ' 件を出しています。絞ってください)' : '')) ?></span>
             </form>
+            <div class="card mb-3" id="km-alias-import">
+              <div class="card-header"><h3 class="card-title">CSV でまとめて(<?= km_e($kindLabels[$kind]) ?>)</h3></div>
+              <div class="card-body">
+                <p class="fs-7 text-body-secondary mb-2">
+                  書き出した CSV の <code>readings</code>(読み・別名)・<code>english</code>(英語の名前)を表計算ソフトで埋めて上げます。
+                  <strong>空のセルは変えません。</strong>消すときは <code>-</code> だけを書きます。上げるとまず変わる行だけを並べ、「取り込む」を押すまで書きません。
+                </p>
+                <div class="d-flex flex-wrap align-items-center gap-2">
+                  <a class="btn btn-outline-secondary" href="./search-aliases.php?<?= km_e(http_build_query(['kind' => $kind, 'q' => $query !== '' ? $query : null, 'filled' => $onlyFilled ? '1' : null, 'export' => 'csv'])) ?>"><i class="bi bi-download me-1" aria-hidden="true"></i>CSV を書き出す</a>
+                  <form method="post" action="./search-aliases.php?<?= km_e(http_build_query(['kind' => $kind])) ?>" enctype="multipart/form-data" class="d-flex flex-wrap align-items-center gap-2 m-0">
+                    <?= km_csrf_field() ?>
+                    <input type="hidden" name="kind" value="<?= km_e($kind) ?>">
+                    <input type="hidden" name="form_action" value="import_preview">
+                    <input class="form-control w-auto" type="file" name="csv" accept=".csv,text/csv" required aria-label="取り込む CSV">
+                    <button type="submit" class="btn btn-outline-primary"><i class="bi bi-upload me-1" aria-hidden="true"></i>上げて確かめる</button>
+                  </form>
+                </div>
+                <?php if ($importPlan !== null): ?>
+                  <?php $plan = $importPlan['plan']; ?>
+                  <hr>
+                  <p class="mb-2">
+                    <?= km_e('CSV の ' . (int) $plan['rows'] . ' 行のうち、変わるのは ' . count($plan['changes']) . ' 件(同じ ' . (int) $plan['unchanged'] . ' 件・読めない ' . count($plan['errors']) . ' 件)。まだ書いていません。') ?>
+                  </p>
+                  <?php if ($plan['errors'] !== []): ?>
+                    <details class="mb-2"><summary class="text-warning-emphasis"><?= km_e('読めなかった行(' . count($plan['errors']) . ')') ?></summary>
+                      <ul class="fs-7 mb-0"><?php foreach (array_slice($plan['errors'], 0, 50) as $message): ?><li><?= km_e($message) ?></li><?php endforeach; ?></ul>
+                    </details>
+                  <?php endif; ?>
+                  <?php if ($plan['changes'] !== []): ?>
+                    <div class="table-responsive mb-2">
+                      <table class="table table-sm align-middle mb-0">
+                        <thead><tr><th scope="col">名前</th><th scope="col">読み・別名(前 → 後)</th><th scope="col">英語の名前(前 → 後)</th></tr></thead>
+                        <tbody>
+                          <?php foreach ($plan['changes'] as $change): ?>
+                            <tr>
+                              <td><?= km_e($change['name']) ?></td>
+                              <td class="fs-7"><?php if ($change['newReadings'] === null): ?><span class="text-body-secondary">変えない</span><?php else: ?><span class="text-body-secondary"><?= km_e($change['oldReadings'] !== '' ? $change['oldReadings'] : '(なし)') ?></span> → <strong><?= km_e($change['newReadings'] !== '' ? $change['newReadings'] : '(消す)') ?></strong><?php endif; ?></td>
+                              <td class="fs-7" lang="en"><?php if ($change['newEnglish'] === null): ?><span class="text-body-secondary">変えない</span><?php else: ?><span class="text-body-secondary"><?= km_e($change['oldEnglish'] !== '' ? $change['oldEnglish'] : '(なし)') ?></span> → <strong><?= km_e($change['newEnglish'] !== '' ? $change['newEnglish'] : '(消す)') ?></strong><?php endif; ?></td>
+                            </tr>
+                          <?php endforeach; ?>
+                        </tbody>
+                      </table>
+                    </div>
+                  <?php endif; ?>
+                  <div class="d-flex gap-2">
+                    <?php if ($plan['changes'] !== []): ?>
+                      <form method="post" action="./search-aliases.php?<?= km_e(http_build_query(['kind' => $kind])) ?>" class="m-0">
+                        <?= km_csrf_field() ?>
+                        <input type="hidden" name="kind" value="<?= km_e($kind) ?>">
+                        <input type="hidden" name="form_action" value="import_apply">
+                        <input type="hidden" name="token" value="<?= km_e((string) $importPlan['token']) ?>">
+                        <button type="submit" class="btn btn-primary"><?= km_e(count($plan['changes']) . ' 件を取り込む') ?></button>
+                      </form>
+                    <?php endif; ?>
+                    <form method="post" action="./search-aliases.php?<?= km_e(http_build_query(['kind' => $kind])) ?>" class="m-0">
+                      <?= km_csrf_field() ?>
+                      <input type="hidden" name="kind" value="<?= km_e($kind) ?>">
+                      <input type="hidden" name="form_action" value="import_cancel">
+                      <button type="submit" class="btn btn-outline-secondary">やめる</button>
+                    </form>
+                  </div>
+                <?php endif; ?>
+              </div>
+            </div>
             <form method="post" action="./search-aliases.php?<?= km_e(http_build_query(['kind' => $kind, 'filled' => $onlyFilled ? '1' : null])) ?>">
               <?= km_csrf_field() ?>
               <input type="hidden" name="kind" value="<?= km_e($kind) ?>">

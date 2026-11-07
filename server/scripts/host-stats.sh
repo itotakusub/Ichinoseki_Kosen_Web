@@ -103,7 +103,7 @@ trap - EXIT INT TERM
 #
 # run/hoststats/bans.json に、次を**数と IP と国のコードだけ**書く(どれも形を確かめてから)。
 #   geoblock … 国の拒否(host-geoblock.sh の nftables の表 inet km_geoblock)。拒否する国・当てているか・落とした数・
-#              反転しているか(invert。true なら deny は「通す国」)
+#              反転しているか(invert。true なら deny は「通す国」)・Google を通しているかと通した数(google。2026-11-07)
 #   fail2ban … 牢ごとの、いま BAN している IP・BAN した数・失敗の数
 #   iptables … kosenmap-ssh-kick が fail2ban なしで足した 22 番の DROP と、落とした数
 # 取れないものは false・空・0。**stats.json を書いたあとに書く**(こちらが落ちてもタスクマネージャーは止めない)。
@@ -131,20 +131,29 @@ if [ -f "$GB_CONF" ]; then
   esac
 fi
 GB_ACTIVE=false
-GB_COUNTS="0 0 0 0"
+GB_COUNTS="0 0 0 0 0"
 if command -v nft >/dev/null 2>&1 && nft list table inet km_geoblock >/dev/null 2>&1; then
   GB_ACTIVE=true
-  # counter packets N bytes M。管理用ポートの行は「!= @admin」、ほかは拒否する国
+  # counter packets N bytes M。管理用ポートの行は「!= @admin」、ほかは拒否する国。
+  # **accept の行(ALLOW_GOOGLE で Google を通した数。2026-11-07)は落とした数に混ぜない**
   GB_COUNTS="$(nft list chain inet km_geoblock pre 2>/dev/null | awk '/counter packets/ {
       p = 0; b = 0
       for (i = 1; i < NF; i++) { if ($i == "packets") p = $(i + 1); if ($i == "bytes") b = $(i + 1) }
-      if ($0 ~ /!= @admin/) { ap += p; ab += b } else { dp += p; db += b }
-    } END { printf "%.0f %.0f %.0f %.0f", dp, db, ap, ab }')"
+      if ($0 ~ / accept/) { gp += p } else if ($0 ~ /!= @admin/) { ap += p; ab += b } else { dp += p; db += b }
+    } END { printf "%.0f %.0f %.0f %.0f %.0f", dp, db, ap, ab, gp }')"
 fi
 GB_DENY_PKTS="$(echo "$GB_COUNTS" | cut -d' ' -f1)"
 GB_DENY_BYTES="$(echo "$GB_COUNTS" | cut -d' ' -f2)"
 GB_ADMIN_PKTS="$(echo "$GB_COUNTS" | cut -d' ' -f3)"
 GB_ADMIN_BYTES="$(echo "$GB_COUNTS" | cut -d' ' -f4)"
+GB_GOOGLE_PKTS="$(echo "$GB_COUNTS" | cut -d' ' -f5)"
+# Google を通しているか(ALLOW_GOOGLE=yes。host-geoblock.sh と同じ読み方)
+GB_GOOGLE=false
+if [ -f "$GB_CONF" ]; then
+  case "$(sed -n 's/^ALLOW_GOOGLE=//p' "$GB_CONF" | tail -n 1 | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9')" in
+    yes|1|true|on) GB_GOOGLE=true ;;
+  esac
+fi
 
 F2B_RUNNING=false
 F2B_JAILS=""
@@ -180,8 +189,8 @@ trap 'rm -f "$BANS_TMP"' EXIT INT TERM
   printf '{"generatedAt":%s,' "$(date +%s)"
   printf '"geoblock":{"configured":%s,"active":%s,"invert":%s,"deny":[%s],"admin":[%s],' \
     "$GB_CONFIGURED" "$GB_ACTIVE" "$GB_INVERT" "$(gb_countries DENY_COUNTRIES)" "$(gb_countries ADMIN_COUNTRIES)"
-  printf '"dropped":{"packets":%s,"bytes":%s},"adminDropped":{"packets":%s,"bytes":%s}},' \
-    "${GB_DENY_PKTS:-0}" "${GB_DENY_BYTES:-0}" "${GB_ADMIN_PKTS:-0}" "${GB_ADMIN_BYTES:-0}"
+  printf '"dropped":{"packets":%s,"bytes":%s},"adminDropped":{"packets":%s,"bytes":%s},"google":{"allowed":%s,"packets":%s}},' \
+    "${GB_DENY_PKTS:-0}" "${GB_DENY_BYTES:-0}" "${GB_ADMIN_PKTS:-0}" "${GB_ADMIN_BYTES:-0}" "$GB_GOOGLE" "${GB_GOOGLE_PKTS:-0}"
   printf '"fail2ban":{"running":%s,"jails":[%s]},' "$F2B_RUNNING" "$F2B_JAILS"
   printf '"iptables":[%s]}\n' "$IPT_RULES"
 } > "$BANS_TMP"

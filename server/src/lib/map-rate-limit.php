@@ -65,6 +65,8 @@ const KM_MAP_UNLOCK_SCOPES = [
     'guest' => 'km_guest_unlock_attempts',
     // HTML 展開の共有リンクのパスワード(html-view.php。2026-11-05)。上限は 'web' と同じ 15 分 8 回(共有をまたいで数える)
     'html-share' => 'km_html_share_unlock_attempts',
+    // 手元の道具の鍵 KM_PROJ_PASSKEY(lib/proj-passkey.php。2026-11-07)。上限は 'web' と同じ 15 分 8 回。**外れだけ数える**
+    'proj-api' => 'km_proj_api_unlock_attempts',
 ];
 
 /**

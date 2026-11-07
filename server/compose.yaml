@@ -429,6 +429,9 @@ services:
       KM_GUIDE_LLM_URL: ${KM_GUIDE_LLM_URL:-}
       KM_GUIDE_LLM_KEY: ${KM_GUIDE_LLM_KEY:-}
       KM_GUIDE_LLM_MODEL: ${KM_GUIDE_LLM_MODEL:-}
+      # 手元の道具の鍵(2026-11-07。lib/proj-passkey.php。api/project-tasks.php が使う)。**秘密**。正本は手元の server/docs/.env で、
+      # 本番の .env へは scripts/proj-passkey-sync.ps1 が写す。**空か 32 字より短ければ、鍵の要る口はすべて 503**
+      KM_PROJ_PASSKEY: ${KM_PROJ_PASSKEY:-}
       # 公開の問い合わせフォーム(src/contact.php)の reCAPTCHA(チェックボックス型)。
       # **クラシック版と Enterprise 版で必要な値が違う**(lib/recaptcha.php が置かれた値で判断する):
       #   Enterprise … SITE_KEY + PROJECT_ID + API_KEY   (assessments API)

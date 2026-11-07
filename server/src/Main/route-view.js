@@ -269,6 +269,50 @@
         };
     }
 
+    /**
+     * 入っていない上り口・下り口の向きを埋める(2026-11-07、利用者「階段の向きは 1 階のみ指定すれば良い。2F の下りは 1F の上りの反対」)。
+     * アプリの StairGuide.kt の filledStairHeadings と同じ決まり。同じ階段(keyOf)ごとに、下の階から順に:
+     *   - 上り口: 入っていなければ、すぐ下の階の上り口と同じ向き
+     *   - 下り口: 入っていなければ、すぐ下の階の上り口の逆(+180°)
+     * **手で入れた向きが優先**(違う造りの階段だけ入れれば直せる)。エレベーター・外・建物の階は埋めない。
+     * @param stairs [{id, type, floor, stairUpHeading?, stairDownHeading?}]
+     * @return Map(id → {up, down})。どちらも数か null
+     */
+    function filledStairHeadings(stairs, keyOf, isElevator) {
+        const out = new Map();
+        const groups = new Map();
+        (Array.isArray(stairs) ? stairs : []).forEach(function (node) {
+            if (!node || node.type !== 'stairs') return;
+            const own = { up: typeof node.stairUpHeading === 'number' ? node.stairUpHeading : null, down: typeof node.stairDownHeading === 'number' ? node.stairDownHeading : null };
+            out.set(node.id, own);
+            const floor = floorNumber(node.floor);
+            const key = keyOf(node);
+            if (floor === null || !key || (isElevator && isElevator(node))) return;
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push({ floor: floor, own: own });
+        });
+        const norm = function (deg) { return ((Math.round(deg) % 360) + 360) % 360; };
+        groups.forEach(function (members) {
+            const floors = members.map(function (m) { return m.floor; })
+                .filter(function (f, i, arr) { return arr.indexOf(f) === i; })
+                .sort(function (a, b) { return a - b; });
+            let belowUp = null; // すぐ下の階の上り口(埋めたものも)
+            floors.forEach(function (f) {
+                const here = members.filter(function (m) { return m.floor === f; });
+                if (belowUp !== null) {
+                    here.forEach(function (m) {
+                        if (m.own.up === null) m.own.up = belowUp;
+                        if (m.own.down === null) m.own.down = norm(belowUp + 180);
+                    });
+                }
+                // 同じ階に同じ階段が 2 つあれば、並びの先の方
+                const first = here.find(function (m) { return m.own.up !== null; });
+                belowUp = first ? first.own.up : null;
+            });
+        });
+        return out;
+    }
+
     /** 階段の札の行。エレベーターは「⇅ 1〜5F」の 1 行(今の階も入れる) */
     function stairReachLines(reach, hereFloor) {
         if (!reach) return [];
@@ -326,6 +370,7 @@
         stairReach: stairReach,
         stairReachLines: stairReachLines,
         routeStairMarks: routeStairMarks,
+        filledStairHeadings: filledStairHeadings,
     };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     root.KmRouteView = api;

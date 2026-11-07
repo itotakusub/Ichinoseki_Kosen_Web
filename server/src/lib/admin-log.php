@@ -257,6 +257,9 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     'bench.delete' => 'がベンチマークの履歴を消しました',
     // テーブル管理の外部接続(table.api_*)は 2026-11-02 に口ごと外した(本番のキーは 0 件だった)
     'poster.tutorial_end' => 'がチュートリアルの終わりの知らせを変更しました',
+    // 地点の読み・別名・英語の名前(admin/search-aliases.php)。save は 2026-10-30 からあったのに文言が抜けていた(11-07 に足した)。import は CSV でまとめて(11-07)
+    'search-aliases.save' => 'が読み・別名・英語の名前を保存しました',
+    'search-aliases.import' => 'が読み・別名・英語の名前を CSV で取り込みました',
     'map.node_link' => 'が地点の URL を変更しました',
     // 階と平面図(2026-10-21、admin/map-floors.php)
     'map.floor_image' => 'が階の画像を差し替えました',
@@ -267,6 +270,8 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     // 場所ごとの色分け(2026-10-30、admin/map-areas.php)
     'map.area_paint' => 'が階の色分けを作り直しました',
     'map.area_clear' => 'が階の色分けを外しました',
+    // 管理アプリが塗った絵を送った(2026-11-07、api/area-paint.php)
+    'map.area_paint_app' => 'が管理アプリの色分けの絵を Website に置きました',
     'map.event_cleanup_mode' => 'が期限切れイベントの掃除方法を変更しました',
     'map.event_cleanup' => 'が期限切れのイベントを削除しました',
     /*

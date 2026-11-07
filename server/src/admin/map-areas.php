@@ -41,7 +41,9 @@ require __DIR__ . '/_inc/partials/page-header.php';
                 床の線で閉じた区画を、中の地点の種類で塗ります(部屋・廊下・階段・建物・道。色はアプリと同じで、色覚の違いでも見分けられる色)。
                 計算はこのブラウザで行い、塗った画像を公開の地図に出します。<br>
                 <strong>作り直すとき:</strong> 地点や壁の線、管理アプリで決めた区画の色を変えたあと。床の画像を差し替えると、その階の古い塗りは出なくなります。<br>
-                塗りが廊下などへ漏れているときは、管理アプリで壁の線を足してから作り直してください(「漏れ」の数が 0 になれば直っています)。
+                塗りが廊下などへ漏れているときは、管理アプリで壁の線を足してから作り直してください(「漏れ」の数が 0 になれば直っています)。<br>
+                <strong>管理アプリの絵をそのまま使う</strong>(2026-11-07): アプリの「設定 → 地図の色分けを Website へ送る」で、アプリが塗った各階の絵が届きます(「アプリの絵」と出ます)。
+                床の画像をこの Website で差し替えた階は、アプリの下絵と違うので届きません(この画面で作ってください)。
               </div>
             </div>
             <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
@@ -70,6 +72,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
           </div>
         </div>
         <!--end::App Content-->
-        <script src="<?= km_e(km_public_asset('Main/area-segmentation.js')) ?>"></script>
+        <?php // 公開側の部品は / から(相対だと /admin/Main/… を探して 404。11-07 に本番で踏んだ。管理のオリジンも /Main/ を返す) ?>
+        <script src="<?= km_e('/' . km_public_asset('Main/area-segmentation.js')) ?>"></script>
         <script src="<?= km_e(km_asset('./assets/js/map-areas.js')) ?>"></script>
 <?php require __DIR__ . '/_inc/partials/footer.php'; ?>

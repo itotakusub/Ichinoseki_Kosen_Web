@@ -3602,6 +3602,23 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     window.kmReapplyRouteMarks = () => { if (routeMarkedIds.size > 0) markRouteNodes(new Set(routeMarkedIds)); };
 
+    /*
+     * 階段の上り口・下り口の向き。入っていない階は、同じ階段のすぐ下の階の上り口から埋める(2026-11-07、利用者「1 階のみ指定すれば良い」。
+     * Main/route-view.js の filledStairHeadings)。地図データは変わらないので、初めて使うときに 1 回だけ作る
+     */
+    let stairHeadings = null;
+    function stairHeadingOf(id, kind) {
+        if (kind !== 'up' && kind !== 'down') return null;
+        if (!stairHeadings) {
+            const view = window.KmRouteView;
+            const stairs = Object.entries(graphData.nodes).filter(([, n]) => n.type === 'stairs').map(([nodeId, n]) => Object.assign({ id: nodeId }, n));
+            stairHeadings = view && view.filledStairHeadings ? view.filledStairHeadings(stairs, Dijkstra.stairKey, Dijkstra.isElevator) : new Map();
+        }
+        const heading = stairHeadings.get(id);
+        const value = heading ? heading[kind] : null;
+        return typeof value === 'number' ? value : null;
+    }
+
     /** 地図の上の札(divIcon)。向き(度)があれば ↑ の矢印をその向きへ回す(style 属性は CSP で効かないので CSSOM で入れる) */
     function guideMarker(latlng, className, html, heading) {
         const marker = L.marker(latlng, {
@@ -3641,7 +3658,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             view.routeStairMarks(pathNodes, floor, floorLabelFor, Dijkstra.isElevator).forEach((mark) => {
                 const node = graphData.nodes[mark.id];
                 if (!node) return;
-                const heading = mark.arriving ? null : (mark.goingUp === true ? node.stairUpHeading : mark.goingUp === false ? node.stairDownHeading : null);
+                const heading = mark.arriving ? null : stairHeadingOf(mark.id, mark.goingUp === true ? 'up' : mark.goingUp === false ? 'down' : null);
                 const tone = mark.arriving ? 'is-arriving' : mark.goingUp === true ? 'is-up' : mark.goingUp === false ? 'is-down' : '';
                 currentMarkers.push(guideMarker([node.y, node.x], 'km-stair-pin ' + tone,
                     `<span class="km-guide-chip km-stair-mark"><span class="km-guide-arrow" aria-hidden="true">↑</span>${escapeHtml(mark.text)}</span>`,
@@ -3672,7 +3689,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             const here = view.floorNumber(stair.floor);
             if (!reach || here === null) return;
             view.stairReachLines(reach, here).forEach((line, index) => {
-                const heading = line.kind === 'up' ? stair.stairUpHeading : line.kind === 'down' ? stair.stairDownHeading : null;
+                const heading = stairHeadingOf(stair.id, line.kind);
                 const marker = guideMarker([stair.y, stair.x], 'km-reach-pin is-' + line.kind + ' is-line-' + index,
                     `<span class="km-guide-chip km-reach"><span class="km-guide-arrow" aria-hidden="true">↑</span>${escapeHtml(line.text)}</span>`,
                     typeof heading === 'number' ? heading : null);
@@ -4814,7 +4831,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         help: { poi: ['reception', 'firstaid'], pattern: /受付|保健|救護|案内所/, label: '受付・保健室' },
         stage: { poi: ['stage'], pattern: /ステージ/, label: 'ステージ' },
         stairs: { types: ['stairs'], pattern: /階段|エレベーター|EV/i },
-        room: { types: ['room'], pattern: /室|教室|実験|講義|ラボ/i },
+        // トイレは「教室」に入れない(2026-11-07、利用者の答え。トイレの地点も種類は room。アプリの EntryGenres.kt と同じ)
+        room: { types: ['room'], pattern: /室|教室|実験|講義|ラボ/i, exclude: /WC|トイレ|便所|お手洗い|restroom|toilet/i },
         facility: { types: ['facility'], pattern: /棟|館|ホール|センター/i },
         event: { allPoi: true, projects: true },
     };
@@ -4844,6 +4862,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             const otherKind = (genre.types || []).length > 0 && Object.prototype.hasOwnProperty.call(KM_GENRE_KIND_TYPES, node.type) && !genre.types.includes(String(node.type));
             const byName = !otherKind && genre.pattern && (genre.pattern.test(node.name || '') || genre.pattern.test(shownName || '') || genre.pattern.test(node.type2 || ''));
             if (!byProject && !byType && !byName) continue;
+            if (!byProject && genre.exclude && [node.name, shownName, node.type2].some(v => genre.exclude.test(v || ''))) continue;
             if (seen.has(id)) continue;
             seen.add(id);
             const project = isProject ? projectDisplayFor(id, node) : null;
