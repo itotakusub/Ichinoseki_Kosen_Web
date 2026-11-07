@@ -1352,6 +1352,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                         data-km-node="${escapeHtml(link.nodeId)}">${escapeHtml(link.label || link.floor)}</button>`).join('')}
                </div>`;
 
+        // ストリートビュー(2026-11-07、段 6)。地図のデータに写真が付いているときだけ(公開の地図は管理画面の設定が ON のときだけ付く)。
+        // 写真は押してから取る(Main/panorama-viewer.js)
+        const panoCount = Array.isArray(node.panoramas) ? node.panoramas.length : 0;
+        const pano = panoCount > 0 && window.KmPanorama
+            ? `<button type="button" class="popup-btn secondary km-detail-pano" data-km-pano="${escapeHtml(id)}">🔭 360° 写真</button>`
+            : '';
+
         // ブックマーク(2026-10-23。Main/user-history.js が押したときと開いたときの状態を受け持つ)
         const bookmark = window.KmUserHistory && window.KmUserHistory.enabled
             ? `<button type="button" class="popup-btn secondary km-bookmark-btn" data-km-bookmark="${escapeHtml(id)}" aria-pressed="false">☆ ブックマーク</button>`
@@ -1370,6 +1377,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 ${posters}
                 ${enter}
                 ${actions}
+                ${pano}
                 ${bookmark}
             </div>
         `;
@@ -3835,6 +3843,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         const likeButton = event.target.closest('[data-km-poster-like]');
         if (likeButton) {
             togglePosterLike(likeButton);
+            return;
+        }
+        // ストリートビュー(2026-11-07、段 6。Main/panorama-viewer.js)
+        const panoButton = event.target.closest('[data-km-pano]');
+        if (panoButton) {
+            const panoNode = graphData.nodes[panoButton.dataset.kmPano];
+            if (panoNode && window.KmPanorama) {
+                window.KmPanorama.open({ title: displayNameFor(panoNode), photos: panoNode.panoramas || [], returnFocus: panoButton });
+            }
             return;
         }
         // 共有(場所)

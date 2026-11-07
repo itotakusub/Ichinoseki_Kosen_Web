@@ -245,6 +245,15 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
      */
     require_once __DIR__ . '/map-node-stairs.php';
     $stairHeadings = km_map_node_stairs_all($pdo);
+    /*
+     * ストリートビューの写真(2026-11-07、段 6。lib/panorama.php)。地図編集にはいつも・公開の地図は設定が ON のときだけ。
+     * uuid で引き、出している地点にだけ付ける(下の uuid の所)。読めなければ付けない(地図は止めない)
+     */
+    $panoramaIndex = [];
+    if (in_array('uuid', $available, true)) {
+        require_once __DIR__ . '/panorama.php';
+        $panoramaIndex = km_panorama_map_index($pdo, $forAdmin);
+    }
     $nodesById = [];
     $nodeTypes = [];
     foreach ($nodeStmt->fetchAll() as $node) {
@@ -288,6 +297,10 @@ function km_map_data(PDO $pdo, ?int $previewEventId = null, bool $forAdmin = fal
             }
             if ($heading !== null && $heading['down'] !== null) {
                 $node['stairDownHeading'] = $heading['down'];
+            }
+            $panoramas = $panoramaIndex[strtolower((string) $node['uuid'])] ?? [];
+            if ($panoramas !== []) {
+                $node['panoramas'] = $panoramas;
             }
             unset($node['uuid']);
         }

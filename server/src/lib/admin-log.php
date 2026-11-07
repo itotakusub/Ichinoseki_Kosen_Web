@@ -101,6 +101,8 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     // ストリートビューの写真(2026-10-06、lib/panorama.php)
     'map.panorama_add' => 'が地点にストリートビューの写真を足しました',
     'map.panorama_delete' => 'が地点のストリートビューの写真を外しました',
+    // 公開の地図にも出すか(2026-11-07、段 6。admin/map-settings.php)
+    'map.panorama_public' => 'がストリートビューを来場者に出すかを切り替えました',
     // ランキングの「調べられた語」を外した(2026-09-25、W-45)。**語そのものは記録しない**(詳細は年だけ)
     'ranking.query_hidden' => 'がランキングの調べられた語を一覧から外しました',
     // アプリの測位のパラメータ(2026-10-06、lib/positioning-params.php)。詳細は「既定と違う項目の数」だけ

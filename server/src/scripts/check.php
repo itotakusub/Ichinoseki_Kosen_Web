@@ -2705,6 +2705,10 @@ function km_check_building_floors(): void
         array_column(km_building_floors_for_facility('メディアセンター（図書館）'), 'id'));
     check('萩友会館(食堂)から 2 つ', ['bldg_hagitomo_1f', 'bldg_hagitomo_2f'],
         array_column(km_building_floors_for_facility('萩友会館（食堂・保健室）'), 'id'));
+    // 2026-11-07、利用者「寮食堂は別の建物」: 手がかりの「食堂」を外した。アプリの BuildingFloorCatalog.kt も同じ
+    check('寮食堂は萩友会館に結び付かない', [], km_building_floors_for_facility('寮食堂'));
+    check_bool('アプリの手がかりも「萩友会館」だけ', str_contains((string) @file_get_contents($root . '/../../Test/app/src/main/java/com/ito/kosenmap/BuildingFloorCatalog.kt'), 'R.drawable.bldg_hagitomo_1f, listOf("萩友会館"), ')
+        || !is_dir($root . '/../../Test'));
     check('関わりの無い建物は結び付かない', [], km_building_floors_for_facility('プール'));
     check('空の名前では何も返さない', [], km_building_floors_for_facility(''));
 
@@ -5589,6 +5593,44 @@ function km_check_hardening(): void
     check_bool('地点の uuid は英数字・ハイフン・下線だけ', km_panorama_valid_node_uuid('3f2a-b_9') && !km_panorama_valid_node_uuid('../x') && !km_panorama_valid_node_uuid(''));
     $panoMap = json_decode('{"version":8,"nodes":[{"uuid":"n1"},{"uuid":"n2"}],"lines":[]}');
     check_bool('配る地図の地点だけを拾う', km_panorama_uuids_of_map($panoMap) === ['n1' => true, 'n2' => true]);
+
+    /*
+     * Website の地図に出す(2026-11-07、段 6。利用者の答え「見せ方は B: WebGL」「撮りそろうまで管理者だけ」「撮るのは後日」)
+     */
+    km_check_heading('panorama: Website の地図(段 6)');
+    check('出すか: 地図編集はいつも・公開は設定が ON のときだけ', [true, true, false, true],
+        [km_panorama_show(true, false), km_panorama_show(true, true), km_panorama_show(false, false), km_panorama_show(false, true)]);
+    $panoIndex = km_panorama_for_map([
+        'ABC-1' => [['id' => 1, 'sha256' => str_repeat('b', 64), 'bytes' => 1, 'width' => 512, 'height' => 256, 'heading' => 90.0],
+            ['id' => 2, 'sha256' => '../etc', 'bytes' => 1, 'width' => 512, 'height' => 256, 'heading' => null]],
+    ]);
+    check('地図に付ける形: uuid は小文字・ハッシュと向きだけ(大きさ・番号は出さない)・形の違うハッシュは落とす',
+        ['abc-1' => [['sha256' => str_repeat('b', 64), 'heading' => 90.0]]], $panoIndex);
+    $mapDataSrcPano = (string) file_get_contents(__DIR__ . '/../lib/map-data.php');
+    check_bool('地図のデータ: 出している地点にだけ uuid で付ける・uuid は出さない', str_contains($mapDataSrcPano, '$panoramaIndex = km_panorama_map_index($pdo, $forAdmin);')
+        && str_contains($mapDataSrcPano, "\$panoramas = \$panoramaIndex[strtolower((string) \$node['uuid'])] ?? [];")
+        && strpos($mapDataSrcPano, "\$node['panoramas'] = \$panoramas;") < strpos($mapDataSrcPano, "unset(\$node['uuid']);")
+        && strpos($mapDataSrcPano, "if (!\$visibility['show']) {") < strpos($mapDataSrcPano, "\$node['panoramas'] = \$panoramas;"));
+    $panoViewer = (string) file_get_contents(__DIR__ . '/../Main/panorama-viewer.js');
+    check_bool('見る画面: WebGL・使えなければ 2D に落とす・外の部品なし・取り先は自分の配信だけ',
+        str_contains($panoViewer, "canvas.getContext('webgl'") && str_contains($panoViewer, 'renderer = createFlatRenderer(canvas);')
+        && str_contains($panoViewer, "'/api/panorama.php?h=' + hash") && !preg_match('#https?://#', $panoViewer)
+        && !str_contains($panoViewer, 'innerHTML') && !str_contains($panoViewer, "setAttribute('style'"));
+    $indexPano = (string) file_get_contents(__DIR__ . '/../index.php');
+    $editorPano = (string) file_get_contents(__DIR__ . '/../admin/map-editor.php');
+    check_bool('読み込み: 公開の地図と地図編集で app.js より先に',
+        strpos($indexPano, "<script defer src=\"<?= km_home_e(km_public_asset('Main/panorama-viewer.js')) ?>\"></script>") !== false
+        && strpos($indexPano, "km_public_asset('Main/panorama-viewer.js')") < strpos($indexPano, "<script defer src=\"<?= km_home_e(km_public_asset('Main/app.js')) ?>\"></script>")
+        && strpos($editorPano, '/Main/panorama-viewer.js') !== false && strpos($editorPano, '/Main/panorama-viewer.js') < strpos($editorPano, '/Main/app.js'));
+    $appPano = (string) file_get_contents(__DIR__ . '/../Main/app.js');
+    check_bool('地点の詳細: 写真があるときだけ「360°」・押してから開く',
+        str_contains($appPano, 'const pano = panoCount > 0 && window.KmPanorama') && str_contains($appPano, "event.target.closest('[data-km-pano]')"));
+    $settingsPano = (string) file_get_contents(__DIR__ . '/../admin/map-settings.php');
+    check_bool('管理画面: 来場者にも出すかは別のフォーム・CSRF の後・記録の文言がある',
+        str_contains($settingsPano, "km_setting_set(km_db(), KM_PANORAMA_PUBLIC_SETTING, \$panoramaOn ? '1' : '0');")
+        && strpos($settingsPano, '!km_csrf_verify()') < strpos($settingsPano, 'KM_PANORAMA_PUBLIC_SETTING')
+        && str_contains((string) file_get_contents(__DIR__ . '/../lib/admin-log.php'), "'map.panorama_public' =>"));
+    check_bool('英語: 見る画面の文が辞書にある', str_contains((string) file_get_contents(__DIR__ . '/../Main/i18n.js'), "'ドラッグで見回す・ピンチやホイールで拡大': "));
     $panoBody = km_app_map_build_package($panoMap, 'kosen-main', 3, '2026-10-06T00:00:00+09:00', '2026-11-06T00:00:00+09:00', null, true, null, 'visitor', null, ['123' => [['id' => 1, 'sha256' => str_repeat('a', 64), 'bytes' => 10, 'width' => 512, 'height' => 256, 'heading' => null]]]);
     $panoDecoded = json_decode((string) $panoBody, true);
     $panoMapJson = json_encode($panoMap, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);

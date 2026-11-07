@@ -35,6 +35,38 @@
   let selectedForAlign = [];
   let nodeModal = null;
 
+  /*
+   * ストリートビュー(2026-11-07、段 6)。地点の窓に「360° 写真を見る(n 枚)」を出す(写真がある地点だけ)。
+   * 押したら窓を閉じて見る画面を開き、閉じたら窓を開き直す —— Bootstrap の窓は外へ出たフォーカスを引き戻すので、重ねて開かない
+   */
+  let panoNodeId = null;
+  const showPanoramaButton = (id, node) => {
+    const box = document.getElementById('km-node-pano-box');
+    if (!box) return;
+    const photos = Array.isArray(node.panoramas) ? node.panoramas : [];
+    panoNodeId = photos.length > 0 && window.KmPanorama ? id : null;
+    box.hidden = panoNodeId === null;
+    const countEl = document.getElementById('km-node-pano-count');
+    if (countEl) countEl.textContent = String(photos.length);
+  };
+  document.getElementById('km-node-pano-open')?.addEventListener('click', () => {
+    const node = panoNodeId !== null ? window.graphData.nodes[panoNodeId] : null;
+    if (!node || !window.KmPanorama) return;
+    const modalEl = document.getElementById('km-node-modal');
+    const reopen = () => nodeModal?.show();
+    const start = () => window.KmPanorama.open({
+      title: node.title ?? node.name ?? '',
+      photos: node.panoramas || [],
+      onClose: reopen,
+    });
+    if (nodeModal && modalEl?.classList.contains('show')) {
+      modalEl.addEventListener('hidden.bs.modal', start, { once: true });
+      nodeModal.hide();
+    } else {
+      start();
+    }
+  });
+
   const setStatus = (message, isError = false) => {
     if (!statusEl) return;
     statusEl.textContent = message;
@@ -377,6 +409,7 @@
         document.getElementById('km-node-subtitle').value = node.subtitle ?? '';
         document.getElementById('km-node-type').value = node.type ?? 'room';
         document.getElementById('km-node-occupant').value = node.occupantName ?? '';
+        showPanoramaButton(id, node);
         nodeModal ??= new bootstrap.Modal(document.getElementById('km-node-modal'));
         nodeModal.show();
         return;

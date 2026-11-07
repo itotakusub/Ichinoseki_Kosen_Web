@@ -54,14 +54,15 @@ const KM_BUILDING_FLOORS = [
         'label' => '萩友会館 1F',
         'image' => 'Picture/bldg/bldg_hagitomo_1f.png',
         'appFloor' => 'BLDG_HAGITOMO_1F',
-        'keywords' => ['萩友会館', '食堂'],
+        // 「食堂」は外した(2026-11-07、利用者「寮食堂は別の建物」。「寮食堂」を押すと萩友会館の階が出ていた)
+        'keywords' => ['萩友会館'],
     ],
     [
         'id' => 'bldg_hagitomo_2f',
         'label' => '萩友会館 2F',
         'image' => 'Picture/bldg/bldg_hagitomo_2f.png',
         'appFloor' => 'BLDG_HAGITOMO_2F',
-        'keywords' => ['萩友会館', '食堂'],
+        'keywords' => ['萩友会館'],
     ],
     [
         'id' => 'bldg_techno_1f',

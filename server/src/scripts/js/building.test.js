@@ -119,8 +119,8 @@ check('画像が無ければ出さない', [], sandbox.facilityFloorLinks(sandbo
  * 建物名が入っていて、建物の階がキャンパスの階としても数えられていた(「bldg_hagitomo_1fF」)
  */
 sandbox.graphData.buildingFloors.push(
-    { id: 'bldg_hagitomo_1f', label: '萩友会館 1F', keywords: ['萩友会館', '食堂'] },
-    { id: 'bldg_hagitomo_2f', label: '萩友会館 2F', keywords: ['萩友会館', '食堂'] },
+    { id: 'bldg_hagitomo_1f', label: '萩友会館 1F', keywords: ['萩友会館'] },
+    { id: 'bldg_hagitomo_2f', label: '萩友会館 2F', keywords: ['萩友会館'] },
 );
 sandbox.floorImages = { 'outside': 'e.png', 'bldg_hagitomo_1f': 'h1.png', 'bldg_hagitomo_2f': 'h2.png' };
 sandbox.graphData.nodes.hallGate1 = { floor: 'bldg_hagitomo_1f', type: 'entrance', transferGroupId: '萩友会館（食堂・保健室） 出入り口' };
@@ -129,6 +129,9 @@ sandbox.graphData.nodes.hallStair2 = { floor: 'bldg_hagitomo_2f', type: 'stairs'
 const hallLinks = sandbox.facilityFloorLinks(sandbox.graphData.nodes.hall);
 check('建物の階は 1 度だけ(萩友会館は 2 つ)', ['bldg_hagitomo_1f', 'bldg_hagitomo_2f'], hallLinks.map((l) => l.floor));
 check('建物の階の押す文字は名前', ['萩友会館 1F', '萩友会館 2F'], hallLinks.map((l) => l.label));
+// 2026-11-07、利用者「寮食堂は別の建物」。手がかりの「食堂」を外した
+sandbox.graphData.nodes.dormHall = { floor: 'outside', type: 'facility', name: '寮食堂' };
+check('寮食堂に萩友会館の階は出さない', [], sandbox.facilityFloorLinks(sandbox.graphData.nodes.dormHall));
 check('階の呼び名: 外・数字・建物の階', ['外', '3F', '萩友会館 2F'], ['outside', '3', 'bldg_hagitomo_2f'].map(sandbox.plainFloorLabel));
 heading('building: ラベルの重なり');
 /*

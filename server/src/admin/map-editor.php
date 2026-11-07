@@ -320,6 +320,13 @@ require __DIR__ . '/_inc/partials/page-header.php';
                   <input type="text" class="form-control form-control-sm font-monospace" id="km-node-uid" readonly />
                   <div class="form-text" data-i18n="page.mapEditor.nodeIdHint">「教職員の地点」で割り当てるときに貼ります。</div>
                 </div>
+                <?php // ストリートビュー(2026-11-07、段 6。Main/panorama-viewer.js)。写真がある地点だけ出す。上げるのはアプリの管理版から ?>
+                <div class="mb-3" id="km-node-pano-box" hidden>
+                  <button type="button" class="btn btn-outline-secondary btn-sm" id="km-node-pano-open">
+                    🔭 360° 写真を見る(<span id="km-node-pano-count">0</span> 枚)
+                  </button>
+                  <div class="form-text">写真を足す・外すのはアプリの管理版から。公開の地図に出すかは「地図データ公開設定」で決めます。</div>
+                </div>
                 <?php
                 /*
                  * **名前を2つに分ける。** アプリと同じ持ち方(`title` / `subtitle`)。
@@ -405,6 +412,8 @@ require __DIR__ . '/_inc/partials/page-header.php';
         <script src="/Main/dijkstra.js"></script>
         <?php /* app.js が起動時に読む。**app.js より先に置く** */ ?>
         <script src="/Main/map-style.js"></script>
+        <?php /* ストリートビューを見る(2026-11-07、段 6)。地点の窓の「360° 写真を見る」から開く */ ?>
+        <script src="/Main/panorama-viewer.js"></script>
         <script src="/Main/app.js"></script>
         <script src="<?= km_e(km_asset('./assets/js/map-editor.js')) ?>"></script>
 <?php require __DIR__ . '/_inc/partials/footer.php'; ?>

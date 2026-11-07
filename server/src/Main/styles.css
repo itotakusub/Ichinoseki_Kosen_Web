@@ -4380,3 +4380,114 @@ body.km-route-active .leaflet-tooltip-pane .km-label:not(.km-on-route) {
 }
 .km-entry-start-quick { margin-bottom: 0.75rem; }
 .km-entry-steps { margin: 0.5rem 0 0.75rem; padding-left: 1.4rem; line-height: 1.7; font-size: 1.05rem; }
+
+/*
+ * ======== ストリートビュー(360°)の写真(2026-11-07、段 6。Main/panorama-viewer.js)========
+ * 画面いっぱいの黒地に写真。上に名前と前・次・閉じる、左下に「地図の上」の針、下に操作の一言。
+ * 地図編集(Bootstrap の窓は z-index 1055)の上にも出るように 3000
+ */
+body.km-pano-open { overflow: hidden; }
+.km-pano {
+    position: fixed;
+    inset: 0;
+    z-index: 3000;
+    background: #000000;
+    color: #ffffff;
+}
+.km-pano-canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    touch-action: none;
+    cursor: grab;
+    outline: none;
+}
+.km-pano-canvas.is-dragging { cursor: grabbing; }
+.km-pano-canvas:focus-visible { box-shadow: inset 0 0 0 3px var(--primary); }
+.km-pano-bar {
+    position: absolute;
+    top: max(8px, env(safe-area-inset-top));
+    left: 8px;
+    right: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 6px 6px 14px;
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.72);
+}
+.km-pano-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 700;
+}
+.km-pano-count { flex: 0 0 auto; font-size: 0.85rem; opacity: 0.85; }
+.km-pano-count:empty { display: none; }
+.km-pano-btn {
+    flex: 0 0 auto;
+    min-width: var(--km-touch);
+    min-height: var(--km-touch);
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.12);
+    color: #ffffff;
+    font-size: 1.25rem;
+    line-height: 1;
+    cursor: pointer;
+}
+.km-pano-btn:hover,
+.km-pano-btn:focus-visible { background: rgba(255, 255, 255, 0.28); }
+.km-pano-btn[hidden] { display: none; }
+.km-pano-compass {
+    position: absolute;
+    left: 12px;
+    bottom: max(12px, env(safe-area-inset-bottom));
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 6px 10px;
+    border-radius: 12px;
+    background: rgba(15, 23, 42, 0.72);
+    font-size: 0.72rem;
+}
+.km-pano-compass[hidden] { display: none; }
+.km-pano-needle { display: inline-block; font-size: 1.4rem; line-height: 1; color: #fbbf24; }
+.km-pano-hint {
+    position: absolute;
+    left: 50%;
+    bottom: max(12px, env(safe-area-inset-bottom));
+    transform: translateX(-50%);
+    max-width: calc(100% - 180px);
+    margin: 0;
+    padding: 4px 12px;
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.6);
+    font-size: 0.8rem;
+    text-align: center;
+    pointer-events: none;
+}
+.km-pano-status {
+    position: absolute;
+    top: 50%;
+    left: 16px;
+    right: 16px;
+    transform: translateY(-50%);
+    width: fit-content;
+    max-width: 32rem;
+    margin: 0 auto;
+    padding: 10px 16px;
+    border-radius: 12px;
+    background: rgba(15, 23, 42, 0.8);
+    text-align: center;
+    pointer-events: none;
+}
+.km-pano-status:empty { display: none; }
+@media (max-width: 480px) {
+    .km-pano-hint { left: auto; right: 12px; transform: none; max-width: calc(100% - 110px); text-align: right; }
+}
+/* 地点の詳細の「360°」(公開の地図は設定で出したときだけ。lib/panorama.php の km_panorama_show) */
+.km-detail-pano { margin-top: 6px; }

@@ -179,6 +179,78 @@ function km_panorama_any(PDO $pdo): bool
     return (bool) $pdo->query('SELECT 1 FROM km_node_panoramas LIMIT 1')->fetchColumn();
 }
 
+/*
+ * ---- Website の地図に出す(2026-11-07、段 6。利用者の答え「見せ方は WebGL」「撮りそろうまで管理者だけ」)----
+ *
+ * 地図のデータ(lib/map-data.php の km_map_data)の地点に `panoramas: [{sha256, heading}]` を付ける。
+ * - 地図編集(管理者)には**いつも**付ける
+ * - 公開の地図には、管理画面「地図データ公開設定」の「ストリートビューを来場者にも出す」が ON のときだけ(既定は OFF)
+ * - 付けるのは**出している地点の分だけ**(教員室・研究室など、出さない地点の写真のハッシュは載せない)
+ * - 写真そのものは押してから api/panorama.php?h= で取る(Main/panorama-viewer.js)
+ */
+const KM_PANORAMA_PUBLIC_SETTING = 'panorama_public';
+
+/** 公開の地図にも出すか(管理画面の設定。既定は出さない) */
+function km_panorama_public_enabled(PDO $pdo): bool
+{
+    require_once __DIR__ . '/settings.php';
+    return km_setting_get($pdo, KM_PANORAMA_PUBLIC_SETTING, '0') === '1';
+}
+
+/** 地図のデータに付けるか。**純粋関数**(管理者の地図編集はいつも・公開の地図は設定が ON のときだけ) */
+function km_panorama_show(bool $forAdmin, bool $publicEnabled): bool
+{
+    return $forAdmin || $publicEnabled;
+}
+
+/**
+ * 一覧(km_panorama_manifest)を、地図のデータに付ける形にする。**純粋関数**。
+ * 鍵は uuid を小文字にしたもの(地点の表とアプリの uuid は同じ書き方だが、大文字小文字の違いは同じ地点とみなす)。
+ *
+ * @param array<string, list<array>> $manifest
+ * @return array<string, list<array{sha256:string, heading:?float}>>
+ */
+function km_panorama_for_map(array $manifest): array
+{
+    $byUuid = [];
+    foreach ($manifest as $uuid => $rows) {
+        foreach ($rows as $row) {
+            $sha = strtolower((string) ($row['sha256'] ?? ''));
+            if (preg_match('/\A[0-9a-f]{64}\z/', $sha) !== 1) {
+                continue;
+            }
+            $byUuid[strtolower((string) $uuid)][] = ['sha256' => $sha, 'heading' => $row['heading'] ?? null];
+        }
+    }
+    return $byUuid;
+}
+
+/**
+ * 地図のデータに付ける一覧を引く。出さないとき・写真が無いとき・表が読めないときは空(地図は止めない)。
+ *
+ * @return array<string, list<array{sha256:string, heading:?float}>>
+ */
+function km_panorama_map_index(PDO $pdo, bool $forAdmin): array
+{
+    try {
+        if (!km_panorama_show($forAdmin, $forAdmin ? false : km_panorama_public_enabled($pdo)) || !km_panorama_any($pdo)) {
+            return [];
+        }
+        return km_panorama_for_map(km_panorama_manifest($pdo, null));
+    } catch (Throwable $exception) {
+        error_log('km_panorama_map_index: ' . $exception->getMessage());
+        return [];
+    }
+}
+
+/** 写真の枚数と地点の数(管理画面に出す) */
+function km_panorama_counts(PDO $pdo): array
+{
+    km_panorama_ensure_table($pdo);
+    $row = $pdo->query('SELECT COUNT(*) AS photos, COUNT(DISTINCT node_uuid) AS nodes FROM km_node_panoramas')->fetch();
+    return ['photos' => (int) ($row['photos'] ?? 0), 'nodes' => (int) ($row['nodes'] ?? 0)];
+}
+
 /** 配る地図(stdClass。nodes の配列)に入っている地点の uuid。 */
 function km_panorama_uuids_of_map(stdClass $map): array
 {
