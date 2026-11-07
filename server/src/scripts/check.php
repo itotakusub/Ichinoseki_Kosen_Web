@@ -2170,6 +2170,17 @@ function km_check_guide_chat(): void
     check_bool('自宅 PC: Unsloth は alongside なし・外しきれていなければ読まない・文字起こしの模型は一覧に出さない',
         str_contains($serverPy, '{"model_path": model_id, "alongside": False}') && str_contains($serverPy, 'raise BadRequest(503, "another model is still loaded")')
         && str_contains($serverPy, 'if item.get("task"):'));
+    // 2026-11-07、利用者「模型を 2 つ以上読み込ませない」: 読み込み中の模型も数えて外す・一覧を読めない頼み先があれば読まない
+    check_bool('自宅 PC: 読み込み中の模型も数える・一覧を読めない頼み先があれば読まない',
+        str_contains($serverPy, 'busy = loaded or item["id"] == active or state not in ("", "unloaded")')
+        && str_contains($serverPy, 'if not entry.get("busy", entry["loaded"]) or key == except_key:')
+        && str_contains($serverPy, 'raise BadRequest(503, "backend unreachable: "'));
+    // 2026-11-07、利用者「案内チャットの構造がめっちゃ崩れている」: 地図の札(10-30)が同じ class 名 km-guide-chip で
+    // position: absolute を足し、例のボタンが画面の左上に重なっていた。地図の札は km-pin-chip
+    $chipCss = (string) file_get_contents(__DIR__ . '/../Main/styles.css');
+    check_bool('画面: 案内の例のボタン(km-guide-chip)と地図の札(km-pin-chip)は別の class・例のボタンを絶対位置にしない',
+        preg_match_all('/^\.km-guide-chip \{/m', $chipCss) === 1 && preg_match('/^\.km-guide-chip \{[^}]*position\s*:/m', $chipCss) !== 1
+        && str_contains($chipCss, '.km-turn-pin .km-pin-chip {') && !str_contains((string) file_get_contents(__DIR__ . '/../Main/app.js'), 'km-guide-chip'));
     // Bionic は chat_template_kwargs を聞かない。reasoning_effort で考えを止めないと Qwen3.5 の本文が空になる(2026-10-25 のベンチで 20 件中 19 件)
     check_bool('自宅 PC: 考えは reasoning_effort で止める・空の答えは 1 度 low で頼み直し、それでも空なら 502', str_contains($serverPy, 'body["reasoning_effort"] = effort')
         && str_contains($serverPy, 'if not text and effort in ("", "none"):') && str_contains($serverPy, 'raise BadRequest(502, "upstream empty")'));

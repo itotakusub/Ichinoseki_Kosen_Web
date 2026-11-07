@@ -4308,7 +4308,7 @@ body.km-topbar-auto:not(.km-topbar-peek) .km-account {
  * 矢印(↑)は上り口・下り口の向き(--km-heading。地図の画像の上 = 0°・時計回り)へ回す。向きが無ければ矢印を外す
  */
 .km-guide-pin { width: 0 !important; height: 0 !important; border: none; background: none; }
-.km-guide-chip {
+.km-pin-chip {
     position: absolute;
     left: 0;
     top: 0;
@@ -4325,30 +4325,30 @@ body.km-topbar-auto:not(.km-topbar-peek) .km-account {
     box-shadow: var(--shadow-sm);
     pointer-events: none;
 }
-.km-turn-pin .km-guide-chip {
+.km-turn-pin .km-pin-chip {
     transform: translate(-50%, calc(-100% - 14px));
     background: #1d4ed8;
     color: #ffffff;
 }
-.km-turn-pin .km-guide-chip b { font-size: 1.25em; line-height: 1; }
-.km-stair-pin .km-guide-chip {
+.km-turn-pin .km-pin-chip b { font-size: 1.25em; line-height: 1; }
+.km-stair-pin .km-pin-chip {
     transform: translate(-50%, calc(-100% - 44px));
     background: #1d4ed8;
     color: #ffffff;
 }
-.km-stair-pin.is-up .km-guide-chip { background: #d55e00; }
-.km-stair-pin.is-down .km-guide-chip { background: #0072b2; }
-.km-stair-pin.is-arriving .km-guide-chip { background: #475569; }
-.km-reach-pin .km-guide-chip {
+.km-stair-pin.is-up .km-pin-chip { background: #d55e00; }
+.km-stair-pin.is-down .km-pin-chip { background: #0072b2; }
+.km-stair-pin.is-arriving .km-pin-chip { background: #475569; }
+.km-reach-pin .km-pin-chip {
     transform: translate(-50%, 16px);
     font-size: calc(11px * var(--km-label-scale, 1));
     padding: 1px 7px;
     color: #ffffff;
     background: #6d28d9;
 }
-.km-reach-pin.is-line-1 .km-guide-chip { transform: translate(-50%, 40px); }
-.km-reach-pin.is-up .km-guide-chip { background: #d55e00; }
-.km-reach-pin.is-down .km-guide-chip { background: #0072b2; }
+.km-reach-pin.is-line-1 .km-pin-chip { transform: translate(-50%, 40px); }
+.km-reach-pin.is-up .km-pin-chip { background: #d55e00; }
+.km-reach-pin.is-down .km-pin-chip { background: #0072b2; }
 .km-guide-arrow {
     display: inline-block;
     font-size: 1.15em;
@@ -4363,9 +4363,9 @@ body.km-route-active .leaflet-tooltip-pane .km-label:not(.km-on-route) {
     opacity: 0.35 !important;
 }/* 引いて見ているとき(app.js の km-guides-compact)は、曲がる所の札を矢印だけに */
 .km-guides-compact .km-turn-pin .km-guide-text { display: none; }
-.km-guides-compact .km-turn-pin .km-guide-chip { padding: 2px 7px; }
+.km-guides-compact .km-turn-pin .km-pin-chip { padding: 2px 7px; }
 /* 今いる場所(現在地の QR。2026-10-30。Main/app.js の renderHereMarker・Main/entry.js) */
-.km-here-pin .km-guide-chip {
+.km-here-pin .km-pin-chip {
     transform: translate(-50%, calc(-100% - 14px));
     background: #059669;
     color: #ffffff;

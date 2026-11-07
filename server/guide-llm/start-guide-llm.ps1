@@ -97,6 +97,10 @@ if ($port -in @($backends.Values | ForEach-Object { if ($_.url -match ':(\d+)$')
 }
 if (-not $Bench -and -not $NoNgrok) {
     if (-not $domain) { throw 'guide-llm.env の NGROK_DOMAIN(ngrok の固定のドメイン)を入れてください。' }
+    # 入れた直後は、開いていた窓の PATH に ngrok が無い。利用者・機械の PATH を読み直す(2026-11-07、C:\Users\itota\Documents\ngrok)
+    if (-not (Get-Command ngrok -ErrorAction SilentlyContinue)) {
+        $env:Path = (@([Environment]::GetEnvironmentVariable('Path', 'Machine'), [Environment]::GetEnvironmentVariable('Path', 'User')) | Where-Object { $_ }) -join ';'
+    }
     if (-not (Get-Command ngrok -ErrorAction SilentlyContinue)) { throw 'ngrok が見つかりません(winget install ngrok.ngrok → ngrok config add-authtoken …)。' }
 }
 # 本物の python を探す。「python」は Microsoft Store の案内(WindowsApps)に当たることがあるので、動かして確かめる

@@ -3651,7 +3651,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             const node = graphData.nodes[turn.id];
             if (turn.landmarkId) onRoute.add(turn.landmarkId);
             currentMarkers.push(guideMarker([node.y, node.x], 'km-turn-pin',
-                `<span class="km-guide-chip km-turn" title="${escapeHtml(turn.phrase)}"><b aria-hidden="true">${escapeHtml(turn.arrow)}</b><span class="km-guide-text">${escapeHtml(turn.phrase)}</span></span>`));
+                `<span class="km-pin-chip km-turn" title="${escapeHtml(turn.phrase)}"><b aria-hidden="true">${escapeHtml(turn.arrow)}</b><span class="km-guide-text">${escapeHtml(turn.phrase)}</span></span>`));
         });
         if (view && view.routeStairMarks) {
             const pathNodes = pathNodeIds.map((id) => Object.assign({ id: id }, graphData.nodes[id]));
@@ -3661,7 +3661,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const heading = mark.arriving ? null : stairHeadingOf(mark.id, mark.goingUp === true ? 'up' : mark.goingUp === false ? 'down' : null);
                 const tone = mark.arriving ? 'is-arriving' : mark.goingUp === true ? 'is-up' : mark.goingUp === false ? 'is-down' : '';
                 currentMarkers.push(guideMarker([node.y, node.x], 'km-stair-pin ' + tone,
-                    `<span class="km-guide-chip km-stair-mark"><span class="km-guide-arrow" aria-hidden="true">↑</span>${escapeHtml(mark.text)}</span>`,
+                    `<span class="km-pin-chip km-stair-mark"><span class="km-guide-arrow" aria-hidden="true">↑</span>${escapeHtml(mark.text)}</span>`,
                     typeof heading === 'number' ? heading : null));
             });
         }
@@ -3691,7 +3691,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             view.stairReachLines(reach, here).forEach((line, index) => {
                 const heading = stairHeadingOf(stair.id, line.kind);
                 const marker = guideMarker([stair.y, stair.x], 'km-reach-pin is-' + line.kind + ' is-line-' + index,
-                    `<span class="km-guide-chip km-reach"><span class="km-guide-arrow" aria-hidden="true">↑</span>${escapeHtml(line.text)}</span>`,
+                    `<span class="km-pin-chip km-reach"><span class="km-guide-arrow" aria-hidden="true">↑</span>${escapeHtml(line.text)}</span>`,
                     typeof heading === 'number' ? heading : null);
                 stairGuideMarkers.push(marker);
             });
@@ -3953,7 +3953,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const node = id ? graphData.nodes[id] : null;
         // 経路が今いる場所から始まるなら、出発のピンがその印になる(重ねない)
         if (!node || String(node.floor) !== String(window.currentFloor) || (currentRoutePath && currentRoutePath[0] === id)) return;
-        hereMarker = guideMarker([node.y, node.x], 'km-here-pin', '<span class="km-guide-chip km-here">📍 今いる場所</span>');
+        hereMarker = guideMarker([node.y, node.x], 'km-here-pin', '<span class="km-pin-chip km-here">📍 今いる場所</span>');
     }
 
     /** `/?here=` で開いたとき: 今いる場所にして、その階を開いて寄せる。出さない地点なら知らせる */

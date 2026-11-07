@@ -73,6 +73,7 @@ LOAD_LOCK = threading.Lock()       # 読み込み・外すのも同時に 1 つ
 CATALOG_LOCK = threading.Lock()
 CATALOG: dict[str, dict[str, Any]] = {}
 CATALOG_AT = 0.0
+UNREACHABLE: set[str] = set()     # 一覧を読めなかった頼み先(そこで何を読んでいるか分からない)
 # 読み込み中・失敗した模型(鍵 → "loading" / "failed")
 LOAD_STATE: dict[str, str] = {}
 
@@ -203,17 +204,21 @@ def catalog_unsloth(backend: Backend) -> list[dict[str, Any]]:
         seen.add(item["id"])
         # 本物の一覧は模型ごとに loaded を持つ。無ければ /v1/status のいま読んでいる模型で決める
         loaded = item["loaded"] if isinstance(item.get("loaded"), bool) else bool(active) and item["id"] == active
+        state = str((item.get("status") or {}).get("value") or "") if isinstance(item.get("status"), dict) else ""
+        # 読み込み中・読み込み済み(Unsloth の画面から読んだものも)は「GPU を使っている」。外す・数えるのはこちら
+        # (2026-11-07、利用者「模型を 2 つ以上読み込ませない」。読み込み中の模型は loaded が false のまま)
+        busy = loaded or item["id"] == active or state not in ("", "unloaded")
         quant = str(item.get("quant") or "")
         # 読み込み済みの模型は display_name を持たないことがある(本物で見た)ので、id の後ろを使う
         name = str(item.get("name") or item.get("display_name") or item["id"].rsplit("/", 1)[-1])
         entries.append({
             "id": item["id"], "name": f"{name} ({quant})" if quant else name, "quant": quant,
-            "loaded": loaded, "instances": [],
+            "loaded": loaded, "busy": busy, "instances": [],
             # いま読んでいる模型だけ、考えを止められるかが分かる(reasoning_always_on)
             "offOk": ("no" if status.get("reasoning_always_on") else "yes") if loaded else "",
         })
     if active and active not in seen:
-        entries.append({"id": active, "name": str(status.get("display_name") or active), "loaded": True, "instances": [],
+        entries.append({"id": active, "name": str(status.get("display_name") or active), "loaded": True, "busy": True, "instances": [],
                         "offOk": "no" if status.get("reasoning_always_on") else "yes"})
     return entries
 
@@ -225,15 +230,20 @@ def refresh_catalog(force: bool = False) -> dict[str, dict[str, Any]]:
         if not force and CATALOG and time.time() - CATALOG_AT < CATALOG_TTL:
             return CATALOG
         merged: dict[str, dict[str, Any]] = {}
+        unreachable: set[str] = set()
         for name, backend in BACKENDS.items():
             try:
                 entries = catalog_unsloth(backend) if name == "unsloth" else catalog_bionic(backend)
             except (urllib.error.URLError, OSError, ValueError, BadRequest) as error:
                 LOG.warning("%s API unreachable for model list: %s", name, type(error).__name__)
+                unreachable.add(name)
                 continue
             for entry in entries:
+                entry.setdefault("busy", entry["loaded"])
                 merged[model_key(name, entry["id"])] = {"backend": name, **entry}
         CATALOG = merged
+        UNREACHABLE.clear()
+        UNREACHABLE.update(unreachable)
         CATALOG_AT = time.time()
         return CATALOG
 
@@ -264,7 +274,7 @@ def resolve_model(requested: Any) -> str:
 def unload_everything(except_key: str | None = None) -> None:
     """読み込まれている模型を外す(読み込む模型そのものは except_key で残せる)"""
     for key, entry in list(refresh_catalog(force=True).items()):
-        if not entry["loaded"] or key == except_key:
+        if not entry.get("busy", entry["loaded"]) or key == except_key:
             continue
         backend = BACKENDS[entry["backend"]]
         try:
@@ -298,16 +308,20 @@ def load_model(key: str, reload: bool = False) -> None:
         LOAD_STATE[key] = "loading"
         try:
             entry = refresh_catalog(force=True).get(key, {})
+            # 一覧を読めない頼み先があれば読まない(そこで模型を読んでいるかもしれない。利用者 2026-11-07
+            # 「模型を 2 つ以上読み込ませない」)
+            if UNREACHABLE:
+                raise BadRequest(503, "backend unreachable: " + ",".join(sorted(UNREACHABLE)))
             if entry.get("loaded") and not reload:
                 unload_everything(except_key=key)
                 LOAD_STATE.pop(key, None)
                 return
             unload_everything()
             # 外しきれていなければ読まない(2 つ読むと PC が固まりかねない。利用者 2026-10-29)。
-            # Bionic の古い一覧(/v1/models だけ)は読み込み済みか分からないので数えない
+            # 読み込み中の模型も数える(2026-11-07)。Bionic の古い一覧(/v1/models だけ)は読み込み済みか分からないので数えない
             still = [k for k, v in refresh_catalog(force=True).items()
-                     if v["loaded"] and (v["backend"] == "unsloth" or v["instances"])]
-            if still:
+                     if v.get("busy", v["loaded"]) and (v["backend"] == "unsloth" or v["instances"])]
+            if still or UNREACHABLE:
                 raise BadRequest(503, "another model is still loaded")
             started = time.time()
             if backend_name == "bionic":
