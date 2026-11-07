@@ -224,7 +224,13 @@
 
     const nodes = () => (window.graphData && window.graphData.nodes) || {};
     const nodeName = (id) => { const n = nodes()[id]; return n ? (n.alias || n.name || '') : ''; };
-    const floorName = (id) => { const n = nodes()[id]; return !n ? '' : (String(n.floor) === 'outside' ? '外' : n.floor + 'F'); };
+    // 建物の階は名前で(app.js の kmPlainFloorLabel。2026-11-07、「bldg_hagitomo_2fF」と出ていた)
+    const floorName = (id) => {
+        const n = nodes()[id];
+        if (!n) return '';
+        if (typeof window.kmPlainFloorLabel === 'function') return window.kmPlainFloorLabel(n.floor);
+        return String(n.floor) === 'outside' ? '外' : n.floor + 'F';
+    };
 
     function el(tag, className, text) {
         const node = document.createElement(tag);

@@ -2177,6 +2177,10 @@ function km_check_guide_chat(): void
         && str_contains($serverPy, 'raise BadRequest(503, "backend unreachable: "'));
     // 2026-11-07、利用者「案内チャットの構造がめっちゃ崩れている」: 地図の札(10-30)が同じ class 名 km-guide-chip で
     // position: absolute を足し、例のボタンが画面の左上に重なっていた。地図の札は km-pin-chip
+    // 2026-11-07、利用者「萩友会館の中の階層が 2 つのはずが 4 つ」: キャンパスの階を数えるときに建物の階を外す(試験は scripts/js/building.test.js)
+    check_bool('画面: 建物の「中へ」で建物の階を 2 度出さない・階の呼び名は plainFloorLabel',
+        str_contains((string) file_get_contents(__DIR__ . '/../Main/app.js'), "if (String(node.floor) === 'outside' || buildingIds.has(String(node.floor))) continue;")
+        && !preg_match('/===\s*["\']outside["\']\s*\?\s*["\']外["\']\s*:\s*`\$\{\w+\.floor\}F`/', (string) file_get_contents(__DIR__ . '/../Main/app.js')));
     $chipCss = (string) file_get_contents(__DIR__ . '/../Main/styles.css');
     check_bool('画面: 案内の例のボタン(km-guide-chip)と地図の札(km-pin-chip)は別の class・例のボタンを絶対位置にしない',
         preg_match_all('/^\.km-guide-chip \{/m', $chipCss) === 1 && preg_match('/^\.km-guide-chip \{[^}]*position\s*:/m', $chipCss) !== 1
@@ -2760,7 +2764,7 @@ function km_check_map_vertical(): void
 
     km_check_heading('map: 施設から中の階へ');
     check_bool('建物の階は接続IDから求める', str_contains($app, 'function facilityFloorLinks(facilityNode)'));
-    check_bool('屋外は出さない', str_contains($app, "if (String(node.floor) === 'outside') continue;"));
+    check_bool('屋外は出さない', str_contains($app, "if (String(node.floor) === 'outside' || buildingIds.has(String(node.floor))) continue;"));
     check_bool('中の地点が無ければボタンを出さない', str_contains($app, 'links.length === 0'));
     check_bool('入口まで寄せてから開く', str_contains($app, 'window.kmEnterBuilding = function (floor, nodeId)'));
     // 値は node 側の検査で確かめる。ここでは**検査そのものが在るか**を見る
@@ -9656,6 +9660,13 @@ function km_check_layout(): void
         [$aliasApp->nodes[0]->searchAliases, isset($aliasApp->nodes[1]->searchAliases), $aliasApp->events[0]->places[0]->searchAliases, isset($aliasApp->events[0]->places[1]->searchAliases)]);
     $aliasCatalog = km_guide_catalog(['nodes' => ['n1' => ['type' => 'room', 'name' => "Let's play Densan!", 'floor' => '1', 'readings' => ['れっつぷれいでんさん', '電算部']]], 'eventPois' => [], 'posters' => []]);
     check('案内チャットの一覧にも読み(「電算部」で Let\'s play Densan! が当たる)', ["Let's play Densan!"], array_column(km_guide_search($aliasCatalog['places'], ['電算部'], null, 3, false), 'name'));
+    // 2026-11-07、本番の案内のカードに「保健室 萩友会館（食堂・保健室）(bldg_hagitomo_2f)」と出ていた。建物の階は階の表の名前で
+    $floorCatalog = km_guide_catalog(['nodes' => [
+        'h' => ['type' => 'room', 'name' => '保健室', 'floor' => 'bldg_hagitomo_2f'],
+        'r' => ['type' => 'room', 'name' => '第二実習室', 'floor' => '2'],
+        'o' => ['type' => 'facility', 'name' => 'プール', 'floor' => 'outside'],
+    ], 'floors' => [['id' => 'bldg_hagitomo_2f', 'label' => '萩友会館 2F'], ['id' => '2', 'label' => '2F']], 'eventPois' => [], 'posters' => []]);
+    check('案内のカードの階: 建物の階は名前・数字は nF・外は「外」', ['萩友会館 2F', '2F', '外'], array_column($floorCatalog['places'], 'floor'));
     $mapDataSrc = (string) file_get_contents(__DIR__ . '/../lib/map-data.php');
     check_bool('公開の地図データ・アプリへの配信で読みを付ける', str_contains($mapDataSrc, 'return km_english_names_apply(km_search_aliases_apply([') && str_contains($mapDataSrc, '], km_search_aliases_all($pdo))')
         && substr_count((string) file_get_contents(__DIR__ . '/../lib/app-map-publish.php'), 'km_search_aliases_apply_app($map, km_search_aliases_all($pdo));') === 2);

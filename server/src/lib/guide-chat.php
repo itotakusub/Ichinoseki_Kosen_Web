@@ -550,7 +550,14 @@ function km_guide_catalog(array $mapData): array
         return $item;
     };
 
-    $floorLabel = static fn (string $floor): string => $floor === 'outside' ? '外' : (ctype_digit($floor) ? $floor . 'F' : $floor);
+    // 建物の階は階の表の名前で(2026-11-07、カードに「bldg_hagitomo_2f」と出ていた。地図のデータの floors に名前がある)
+    $floorNames = [];
+    foreach (is_array($mapData['floors'] ?? null) ? $mapData['floors'] : [] as $floorRow) {
+        if (is_array($floorRow) && isset($floorRow['id'], $floorRow['label']) && trim((string) $floorRow['label']) !== '') {
+            $floorNames[(string) $floorRow['id']] = trim((string) $floorRow['label']);
+        }
+    }
+    $floorLabel = static fn (string $floor): string => $floor === 'outside' ? '外' : (ctype_digit($floor) ? $floor . 'F' : ($floorNames[$floor] ?? $floor));
 
     $shops = [];
     $places = [];

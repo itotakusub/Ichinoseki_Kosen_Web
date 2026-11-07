@@ -1204,6 +1204,23 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     /**
+     * 階の呼び名(画面の状態に左右されない。検索の候補の文字はこれで作るので、作るときと引くときで同じになる)。
+     * 外 → 「外」・数字 → 「nF」・建物の階 → 「萩友会館 2F」など・ほかは階の表の名前。
+     * 2026-11-07: 建物の階で「bldg_hagitomo_2fF」と出ていた(`${floor}F` のまま)
+     */
+    function plainFloorLabel(floor) {
+        const key = String(floor);
+        if (key === 'outside') return '外';
+        if (/^\d+$/.test(key)) return key + 'F';
+        const building = (graphData.buildingFloors || []).find(f => String(f.id) === key);
+        if (building && building.label) return building.label;
+        const known = (graphData.floors || []).find(f => String(f.id) === key);
+        if (known && known.label) return known.label;
+        return key + 'F';
+    }
+    window.kmPlainFloorLabel = plainFloorLabel;
+
+    /**
      * 建物の階(2026-09-24)。**平面図 1 枚が 1 つの階。**
      * 中にまだ地点が無くても出したいので、地点ではなく名前の手がかりで結ぶ
      * (手がかりはサーバーから届く。`lib/building-floors.php` が正本)。
@@ -1233,9 +1250,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         const key = normalizeBuildingText(facilityNode && facilityNode.name);
         if (key.length < 2) return [];   // 1文字の建物名では他と当たりすぎる
 
+        // 建物の階(萩友会館 1F など)は下の buildingFloorLinksFor が出す。ここで数えると同じ階が 2 度出る
+        // (2026-11-07、利用者「萩友会館の中の階層が 2 つのはずが 4 つ」。中の階段・出入口の接続 ID にも建物名が入っている。
+        // アプリの BuildingFloors.kt は isBuildingFloor で外していた)
+        const buildingIds = new Set((graphData.buildingFloors || []).map(function (f) { return String(f.id); }));
         const byFloor = new Map();
         for (const [id, node] of Object.entries(graphData.nodes)) {
-            if (String(node.floor) === 'outside') continue;
+            if (String(node.floor) === 'outside' || buildingIds.has(String(node.floor))) continue;
             if (normalizeBuildingText(node.transferGroupId).indexOf(key) < 0) continue;
             const floor = String(node.floor);
             const current = byFloor.get(floor);
@@ -1245,7 +1266,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         const campus = Array.from(byFloor.entries())
-            .map(function (entry) { return { floor: entry[0], nodeId: entry[1].id, label: entry[0] + 'F' }; })
+            .map(function (entry) { return { floor: entry[0], nodeId: entry[1].id, label: plainFloorLabel(entry[0]) }; })
             .sort(function (a, b) { return Number(a.floor) - Number(b.floor); });
 
         // キャンパスの階(1F〜5F)が先、その建物だけの平面図が後
@@ -1255,7 +1276,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     window.kmFacilityFloorLinks = facilityFloorLinks;
 
     function nodeDetailHtml(id, node, type) {
-        const floorLabel = String(node.floor) === 'outside' ? '外' : `${node.floor}F`;
+        const floorLabel = plainFloorLabel(node.floor);
         const typeLabel = mapStyle.LABELS[type] || type;
         // イベント中の名前は**置き換える**(2026-10-14、利用者の判断)。普段の名前は下に小さく残す
         // 企画の地点はイベント中、ポスターの見出しを名前に・説明を備考に(一時地点の吹き出しと同じ。2026-10-23)
@@ -2948,7 +2969,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     function getLabelForNode(id, node) {
-        const floorLabel = String(node.floor) === "outside" ? "外" : `${node.floor}F`;
+        const floorLabel = plainFloorLabel(node.floor);
         // 臨時名称があるときは、その名前で引く(2026-10-14 から置き換え。displayNameFor と同じ)
         const name = node.alias || node.name;
         // 企画の地点はポスターの見出しでも探せる(部屋の名前も残す。2026-10-23)
@@ -2979,7 +3000,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         const poi = (graphData.eventPois || []).find(p => {
             if (!p.anchorNodeId) return false;
-            const floorLabel = String(p.floor) === "outside" ? "外" : `${p.floor}F`;
+            const floorLabel = plainFloorLabel(p.floor);
             // 名前が番号の一時地点はポスターの見出しで探せる(2026-10-23。poiDisplay)
             return `[${floorLabel}] ${poiDisplay(p).name}` === text;
         });
@@ -3006,7 +3027,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (!poi.anchorNodeId) return;
             const anchor = graphData.nodes[poi.anchorNodeId];
             if (!anchor) return;
-            const floorLabel = String(poi.floor) === "outside" ? "外" : `${poi.floor}F`;
+            const floorLabel = plainFloorLabel(poi.floor);
             labels.push(`[${floorLabel}] ${poiDisplay(poi).name}`);
         });
 
@@ -3119,7 +3140,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     /** 臨時の地点の吹き出し。部屋の詳細(nodeDetailHtml)と同じ形(種類は部屋・外は建物。模擬店などは「分類」に出す) */
     function poiDetailHtml(poi, shown) {
-        const floorLabel = String(poi.floor) === 'outside' ? '外' : `${poi.floor}F`;
+        const floorLabel = plainFloorLabel(poi.floor);
         const type = poiNodeType(poi);
         let rows = `<div class="km-detail-row"><span>分類</span><b>${escapeHtml(KM_POI_LABELS[poi.category] || KM_POI_LABELS.other)}</b></div>`;
         if (shown.number) {
@@ -4004,7 +4025,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     /** 臨時の地点の札(検索の候補・経路の欄と同じ)。名前が番号ならポスターの見出し */
     function poiSearchLabel(poi) {
-        const floorLabel = String(poi.floor) === 'outside' ? '外' : `${poi.floor}F`;
+        const floorLabel = plainFloorLabel(poi.floor);
         return `[${floorLabel}] ${poiDisplay(poi).name}`;
     }
 
@@ -4015,11 +4036,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const key = String(floor);
         const btn = document.querySelector(`.floor-nav .floor-btn[data-floor="${key}"]`);
         if (btn) return btn.textContent.trim();
-        const building = (graphData.buildingFloors || []).find(f => String(f.id) === key);
-        if (building && building.label) return building.label;
-        const known = (graphData.floors || []).find(f => String(f.id) === key);
-        if (known && known.label) return known.label;
-        return key === 'outside' ? '外' : `${key}F`;
+        return plainFloorLabel(key);
     }
 
     /** 目的地の呼び名。一時地点を選んだときは、つなぎ先(道)ではなく一時地点の名前(2026-10-23) */

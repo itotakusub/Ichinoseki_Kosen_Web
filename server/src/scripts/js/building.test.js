@@ -29,7 +29,7 @@ function extract(name) {
 const sandbox = { graphData: { nodes: {} }, floorImages: {} };
 vm.createContext(sandbox);
 vm.runInContext(
-    extract('normalizeBuildingText') + '\n' + extract('buildingFloorLinksFor')
+    extract('normalizeBuildingText') + '\n' + extract('plainFloorLabel') + '\n' + extract('buildingFloorLinksFor')
         + '\n' + extract('facilityFloorLinks') + '\n;0;',
     sandbox,
     { filename: 'app.js (building)' }
@@ -114,6 +114,22 @@ check('関わりの無い建物は混ざらない', ['bldg_gym1'], sandbox.facil
 sandbox.floorImages = { 'outside': 'e.png' };
 check('画像が無ければ出さない', [], sandbox.facilityFloorLinks(sandbox.graphData.nodes.library));
 
+/*
+ * 2026-11-07、利用者「萩友会館の中の階層を見ようとすると、2 つのはずが 4 つ」。中の階段・出入口の接続 ID にも
+ * 建物名が入っていて、建物の階がキャンパスの階としても数えられていた(「bldg_hagitomo_1fF」)
+ */
+sandbox.graphData.buildingFloors.push(
+    { id: 'bldg_hagitomo_1f', label: '萩友会館 1F', keywords: ['萩友会館', '食堂'] },
+    { id: 'bldg_hagitomo_2f', label: '萩友会館 2F', keywords: ['萩友会館', '食堂'] },
+);
+sandbox.floorImages = { 'outside': 'e.png', 'bldg_hagitomo_1f': 'h1.png', 'bldg_hagitomo_2f': 'h2.png' };
+sandbox.graphData.nodes.hallGate1 = { floor: 'bldg_hagitomo_1f', type: 'entrance', transferGroupId: '萩友会館（食堂・保健室） 出入り口' };
+sandbox.graphData.nodes.hallStair1 = { floor: 'bldg_hagitomo_1f', type: 'stairs', transferGroupId: '萩友会館（食堂・保健室） 階段' };
+sandbox.graphData.nodes.hallStair2 = { floor: 'bldg_hagitomo_2f', type: 'stairs', transferGroupId: '萩友会館（食堂・保健室） 階段' };
+const hallLinks = sandbox.facilityFloorLinks(sandbox.graphData.nodes.hall);
+check('建物の階は 1 度だけ(萩友会館は 2 つ)', ['bldg_hagitomo_1f', 'bldg_hagitomo_2f'], hallLinks.map((l) => l.floor));
+check('建物の階の押す文字は名前', ['萩友会館 1F', '萩友会館 2F'], hallLinks.map((l) => l.label));
+check('階の呼び名: 外・数字・建物の階', ['外', '3F', '萩友会館 2F'], ['outside', '3', 'bldg_hagitomo_2f'].map(sandbox.plainFloorLabel));
 heading('building: ラベルの重なり');
 /*
  * ずらす・隠すの判定。**2px の余白**を持たせてある —— ちょうど接している程度は
