@@ -6064,6 +6064,24 @@ function km_check_hardening(): void
     check_bool('国の拒否: 反転は見本・BAN の集計・訪問者の地図にも通る', str_contains($file('geoblock.local.conf.example'), "\nDENY_INVERT=no\n")
         && str_contains($file('scripts/host-stats.sh'), '"invert":%s') && str_contains($file('src/admin/assets/js/visitors-world.js'), 'denyInvert'));
     check_bool('国の拒否: 取り直しに失敗したら前の一覧を使う・管理用の国の一覧が空なら当てない', str_contains($geoblock, '前の一覧を使います') && str_contains($geoblock, '誰も入れなくなるので当てません'));
+// Google を 443 だけ通す(2026-11-07。日本だけ通すと App Links の確認が Google から届かず、共有のリンクがアプリで開かなかった)
+check_bool('国の拒否: ALLOW_GOOGLE は既定で切・値は yes か no・通すポートの既定は 443', str_contains($geoblock, "ALLOW_GOOGLE=\"\"\nGOOGLE_PORTS=\"443\"")
+    && str_contains($geoblock, '      ALLOW_GOOGLE) ALLOW_GOOGLE="$value" ;;') && str_contains($geoblock, 'ALLOW_GOOGLE の値が不正です')
+    && str_contains($geoblock, 'for port in $ADMIN_PORTS $EXEMPT_PORTS $GOOGLE_PORTS; do'));
+check_bool('国の拒否: Google の一覧は Google の公開の場所からだけ取る', str_contains($geoblock, 'GOOGLE_ALL_URL="https://www.gstatic.com/ipranges/goog.json"')
+    && str_contains($geoblock, 'GOOGLE_CLOUD_URL="https://www.gstatic.com/ipranges/cloud.json"')
+    && substr_count($geoblock, 'https://developers.google.com/static/crawling/ipranges/') === 4
+    && str_contains($geoblock, '--max-filesize 2000000'));
+$gbRules = substr($geoblock, (int) strpos($geoblock, 'build_ruleset() {'));
+check_bool('国の拒否: Google 全体は Cloud の利用者を除けるときだけ通す・通すのは GOOGLE_PORTS だけ・国で落とすより前', str_contains($gbRules, 'ip saddr @gall4 ip saddr != @gcloud4 counter accept')
+    && str_contains($gbRules, 'if [ -n "$gall4" ] && [ -n "$gcloud4" ]; then printf')
+    && preg_match_all('/tcp dport \{ %s \} ip6? saddr @g/', $gbRules) === 4
+    && strpos($gbRules, 'ip saddr @gfetch4 counter accept') < strpos($gbRules, 'ip saddr != @deny4 counter drop')
+    && strpos($gbRules, 'ip saddr @gfetch4 counter accept') < strpos($gbRules, 'ip saddr @deny4 counter drop')
+    && strpos($gbRules, 'ct state established,related accept') < strpos($gbRules, 'ip saddr @gfetch4'));
+check_bool('国の拒否: Google を通した数は落とした数に混ぜない(BAN の集計)', str_contains($file('scripts/host-stats.sh'), 'if ($0 ~ / accept/) { gp += p } else if ($0 ~ /!= @admin/)')
+    && str_contains($file('scripts/host-stats.sh'), '"google":{"allowed":%s,"packets":%s}'));
+check_bool('国の拒否: 見本に ALLOW_GOOGLE がある(既定 no)', str_contains($file('geoblock.local.conf.example'), "\nALLOW_GOOGLE=no\n"));
     check_bool('国の拒否: 設定はリポジトリに置かない(見本だけ)・スクリプトと見本は配備に載る', !is_file(km_check_repo_root() . '/geoblock.local.conf') && is_file(km_check_repo_root() . '/geoblock.local.conf.example')
         && str_contains($deploy, "'./scripts/host-geoblock.sh'") && str_contains($deploy, "'./geoblock.local.conf.example'"));
     check_bool('cron の証明書は host-cert.sh を指す', str_contains($setup, 'CERT_SCRIPT="$PATH_ROOT/scripts/host-cert.sh"'));

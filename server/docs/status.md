@@ -43,7 +43,8 @@
 | 7〜 | **管理画面「プロジェクト状況」に置く**(11-07、利用者の指示。分類つき。plan.md には段の見出しと設計だけ書く) |
 
 **配備待ち**(手元で済み): イベントの地点をイベント中だけ引いた倍率でも出す(Web。アプリは版 50 で公開済み)・本番の置き去り 16 個の退避(`deploy-to-host.ps1` の一覧)・
-読み・別名の CSV の書き出し・取り込み(段 2-1)・管理アプリの色分けの絵の口 `api/area-paint.php`(段 2-3。**nginx を変えたので `-Action up`**)。プロジェクト状況の口と鍵・Logto のテンプレートの台本は 11-07 に配備済み。
+読み・別名の CSV の書き出し・取り込み(段 2-1)・管理アプリの色分けの絵の口 `api/area-paint.php`(段 2-3。**nginx を変えたので `-Action up`**)・
+階段の向きを下の階から埋める(段 2-2)・色分けの画面の 404(段 2-3)・**国の拒否で Google を 443 だけ通す(段 3-2。配備のあと sudo で `ALLOW_GOOGLE=yes` → update → apply)**。プロジェクト状況の口と鍵・Logto のテンプレートの台本は 11-07 に配備済み。
 **進み具合はプロジェクト状況が正**(`scripts/proj-tasks.ps1 list`)。
 
 **保留**(利用者、11-07):
@@ -58,6 +59,22 @@
 ---
 
 ## 記録 2026 年 11 月(新しい順)
+
+### 2026-11-07 — 共有のリンクがアプリで開かなかった: 国の拒否が Google の確認を落としていた(段 3-2。利用者の答え「Google だけ 443 を通す」。手元で済み・配備と当て直しは利用者)
+
+- **実機**(Pixel 7a・Android 17・版 52): `pm get-app-links com.ito.kosenmap` が `ito4.jp: 1024`(確認の失敗)で、`?room=`・`?from=&to=`・`rain=1` 付きのどれも Chrome で開いた
+- **assetlinks・署名(D7:1F:BF:0A…)・アプリの受け口(一般向けだけ・path="/")・共有のリンクの引数の読み取りは、どれも合っていた**
+- **原因**: 国の拒否が「日本だけ通す」(`bans.json`: `invert: true, deny: ["jp"]`)。App Links を確かめるのは端末ではなく Google のサーバーで、海外から 443 番の assetlinks.json を取りに来る。
+  Digital Asset Links の API が `UNREACHABLE_CONNECT_TIMEOUT`(接続の時間切れ)を返していた
+- **直したこと**(`scripts/host-geoblock.sh`): `ALLOW_GOOGLE=yes` で、国で落とす前に `GOOGLE_PORTS`(既定 443)だけ次を通す
+  - Google の巡回と取得の一覧(common-crawlers・special-crawlers・user-triggered-fetchers・user-triggered-fetchers-google)
+  - Google 全体(goog.json)から Google Cloud の利用者の分(cloud.json)を除いたもの。cloud.json が無ければ当てない
+  - 一覧は国と同じく update で取り、失敗したら前の一覧を使う。既定は no
+- `host-stats.sh`: 通した数を `google.packets` に分け、落とした数に混ぜない。見本 `geoblock.local.conf.example`・取扱説明書 [04](04-host-jobs-and-mail.ipynb) §9-1
+- **試した**: 本番のホストの使い捨てのコンテナ(自分の網の中だけ。本番の防火壁には触れない)で update・`apply --dry-run`(`nft -c` 通過)・apply。
+  Googlebot の IP は通し、Google でない海外の IP は落とし、日本の IP は今までどおり通した。check.php 5 件(全 2963 件通過)
+- 実機の台本 `Test/scripts/device-check.ps1`(状態・入れる・リンク・写真・アプリの言語・クラッシュ)。写真は `Test/captures/`(GitHub に出ない)
+- 階段の向き(段 2-2): 本番の `km_map_node_stairs` に 11 個の上り口が全部入っていた(11-07 に読むだけで確認)。矢印は Web の配備のあとに確かめる
 
 ### 2026-11-07 — 階段の向きは一番下の階だけ入れればよい(利用者の指示「1 階のみ指定すれば良い。2F の降りるは 1F 登るの反対」。色分けの絵は利用者が確認 OK。Web は配備待ち・アプリは版 52 で公開)
 
