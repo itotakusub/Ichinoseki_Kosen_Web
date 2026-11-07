@@ -111,6 +111,8 @@ const KM_CHECK_PURE = [
     'proj-api',
     // 読み・別名と英語の名前を CSV でまとめて(2026-11-07、plan.md 段 2-1)
     'alias-csv',
+    // 管理アプリが塗った色分けの絵を受け取る(2026-11-07、plan.md 段 2-3)
+    'area-paint-app',
 ];
 
 /** 名前を明示したときだけ走る検査。置かれている設定を読む。 */
@@ -11135,6 +11137,89 @@ function km_check_proj_api(): void
     }
 }
 
+/**
+ * 管理アプリが塗った色分けの絵を受け取る(api/area-paint.php・lib/area-paint.php・アプリの AreaPaintUpload.kt。2026-11-07)。
+ * アプリの絵をそのまま重ねるので、**Website の組み込みの床の画像とアプリの下絵が同じファイル**であることを突き合わせる(アプリの原本が在るときだけ)。
+ */
+function km_check_area_paint_app(): void
+{
+    km_check_heading('area-paint-app: 管理アプリの色分けの絵');
+    require_once __DIR__ . '/../lib/area-paint.php';
+    require_once __DIR__ . '/../lib/app-map-convert.php';
+    require_once __DIR__ . '/../lib/building-floors.php';
+    require_once __DIR__ . '/../lib/admin-log.php';
+    $api = (string) file_get_contents(__DIR__ . '/../api/area-paint.php');
+    $lib = (string) file_get_contents(__DIR__ . '/../lib/area-paint.php');
+    $repo = km_check_repo_root();
+    check_bool('口: POST だけ・管理者のトークンだけ(違えば 403)', str_contains($api, "require_method('POST');")
+        && str_contains($api, '$principal = logto_require_principal();')
+        && str_contains($api, "if ((\$principal['is_admin'] ?? 0) !== 1) {")
+        && strpos($api, 'km_api_json_body(') > strpos($api, "if ((\$principal['is_admin'] ?? 0) !== 1) {"));
+    check_bool('口: 本文は 12MB まで・base64 は厳しく読む・置いたら記録', str_contains($api, 'km_api_json_body(12 * 1024 * 1024)')
+        && str_contains($api, "base64_decode(is_string(\$input['png'] ?? null) ? \$input['png'] : '', true)")
+        && str_contains($api, "km_admin_log_record('content', 'map.area_paint_app', \$record['floor']);"));
+    check_bool('監査ログ: アプリの絵に文言がある', isset(KM_ADMIN_LOG_ACTION_LABELS['map.area_paint_app']));
+    if ($repo === null) {
+        check_skip('nginx: この口だけ 12MB まで受ける', 'リポジトリの外(nginx の原本が無い)');
+    } else {
+        check_bool('nginx: この口だけ 12MB まで受ける(回数は km_api)', (bool) preg_match('~location = /api/area-paint\.php \{\s*client_max_body_size 12m;\s*limit_req zone=km_api~', (string) file_get_contents($repo . '/nginx/default.conf.template')));
+    }
+    check_bool('受け取り: アプリの階の表記だけ・差し替えた床は断る・大きさが違えば断る・印は app', str_contains($lib, "KM_APP_MAP_FLOOR_MAP[strtoupper(trim(\$appFloor))] ?? null")
+        && strpos($lib, 'if (km_map_floor_is_upload($svgPath)) {') < strpos($lib, '$record = km_area_paint_save($pdo, $floorId, km_map_floor_image_endpoint($floorId, $svgPath), $png, $now, \'app\');')
+        && str_contains($lib, "if ((int) \$checked['width'] !== (int) \$size[0] || (int) \$checked['height'] !== (int) \$size[1]) {")
+        && str_contains($lib, "'origin' => \$origin === 'app' ? 'app' : 'web'"));
+    // 知らない階は DB を見る前に断る(PDO は SQLite の空のもので足りる)
+    $error = '';
+    try {
+        km_area_paint_save_from_app(new PDO('sqlite::memory:'), 'B1F', "\x89PNG");
+    } catch (InvalidArgumentException $exception) {
+        $error = $exception->getMessage();
+    }
+    check_bool('受け取り: 知らない階(B1F)は断る', str_contains($error, '知らない階'));
+    check_bool('管理画面: どこで塗ったかを出す', str_contains((string) file_get_contents(__DIR__ . '/../admin/assets/js/map-areas.js'), "floor.painted.origin === 'app' ? 'アプリの絵' : 'この画面で塗った'")
+        && str_contains($lib, "'origin' => (\$value['origin'] ?? '') === 'app' ? 'app' : 'web'"));
+
+    /*
+     * アプリの原本(別のリポジトリ)と突き合わせ。在るときだけ(本番のホストには置いていない)。
+     * 第二体育館だけは組み込みの画像の中身が違う(大きさは同じ)。本番は Website で差し替えてある(upload:)ので、アプリの絵は断られる
+     */
+    $appRoot = 'C:/Users/itota/Documents/Test/app/src';
+    if (!is_dir($appRoot)) {
+        return;
+    }
+    $drawable = $appRoot . '/main/res/drawable/';
+    $pairs = [
+        '1F' => ['Main/Picture/１階.png', 'f1_r.png'], '2F' => ['Main/Picture/２階.png', 'f2_r.png'], '3F' => ['Main/Picture/３階.png', 'f3_r.png'],
+        '4F' => ['Main/Picture/４階.png', 'f4_r.png'], '5F' => ['Main/Picture/５階.png', 'f5_r.png'], 'OUTSIDE' => ['Main/Picture/外全体図.png', 'outside_r.png'],
+    ];
+    foreach (KM_BUILDING_FLOORS as $floor) {
+        $pairs[$floor['appFloor']] = ['Main/' . $floor['image'], basename($floor['image'])];
+    }
+    $same = [];
+    $sized = [];
+    foreach ($pairs as $appFloor => [$web, $app]) {
+        $webFile = __DIR__ . '/../' . $web;
+        $appFile = $drawable . $app;
+        $sameBytes = is_file($webFile) && is_file($appFile) && hash_file('sha256', $webFile) === hash_file('sha256', $appFile);
+        $webSize = is_file($webFile) ? @getimagesize($webFile) : false;
+        $appSize = is_file($appFile) ? @getimagesize($appFile) : false;
+        $sized[$appFloor] = $webSize !== false && $appSize !== false && $webSize[0] === $appSize[0] && $webSize[1] === $appSize[1];
+        if (!$sameBytes) {
+            $same[] = $appFloor;
+        }
+    }
+    check('アプリの下絵: どの階も Website の組み込みの床の画像と同じ大きさ', array_fill_keys(array_keys($pairs), true), $sized);
+    check('アプリの下絵: 中身まで同じ(違うのは第二体育館だけ。本番は差し替えてあるので受け取らない)', ['BLDG_GYM2'], $same);
+    check('アプリが送る階 = Website が受ける階', array_keys(KM_APP_MAP_FLOOR_MAP), array_keys($pairs));
+    $upload = (string) @file_get_contents($appRoot . '/main/java/com/ito/kosenmap/AreaPaintUpload.kt');
+    check_bool('アプリ: 口の URL・本文の形・上限が Website と同じ', str_contains($upload, '"/api/area-paint.php"') && str_contains($upload, 'addProperty("floor", floor)')
+        && str_contains($upload, 'addProperty("png", ') && str_contains($upload, 'AREA_PAINT_MAX_BYTES = 8 * 1024 * 1024') && KM_AREA_PAINT_MAX_BYTES === 8 * 1024 * 1024
+        && str_contains($upload, 'debug = false'));
+    $settings = (string) @file_get_contents($appRoot . '/main/java/com/ito/kosenmap/SettingFragment.kt');
+    check_bool('アプリ: 送る項目は管理ビルドだけ', str_contains($settings, 'const val AREA_PAINT_UPLOAD_KEY = "area_paint_upload"')
+        && (bool) preg_match('/ADMIN_REQUIRED_PREFERENCES = setOf\((?:(?!\n    \)).)*AREA_PAINT_UPLOAD_KEY,/s', $settings));
+}
+
 /** 読み・別名と英語の名前を CSV でまとめて書き出す・取り込む(lib/search-alias-csv.php・admin/search-aliases.php。2026-11-07) */
 function km_check_alias_csv(): void
 {
@@ -11804,6 +11889,9 @@ foreach ($selected as $name) {
             break;
         case 'alias-csv':
             km_check_alias_csv();
+            break;
+        case 'area-paint-app':
+            km_check_area_paint_app();
             break;
         case 'recaptcha':
             // 環境依存。数えず、終了コードだけを持ち帰る。

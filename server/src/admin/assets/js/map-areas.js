@@ -101,7 +101,9 @@
 
   function statusText(floor) {
     if (!floor.painted) return 'まだ塗っていない';
-    return floor.painted.current ? `塗ってある(${floor.painted.at})` : '床の画像を差し替えたので古い(出していない)';
+    // どこで塗ったか(2026-11-07)。管理アプリが送った絵(api/area-paint.php)は「アプリの絵」
+    const origin = floor.painted.origin === 'app' ? 'アプリの絵' : 'この画面で塗った';
+    return floor.painted.current ? `塗ってある(${origin}・${floor.painted.at})` : '床の画像を差し替えたので古い(出していない)';
   }
 
   function render() {
