@@ -1,22 +1,25 @@
 #!/bin/sh
 #
-# phpMyAdmin を決まった時間(既定 18:00〜20:59、日本時間)だけ動かす(2026-11-06、利用者の指示「18〜21 時の間しか使えないように」)。
+# phpMyAdmin は**ふだん止めておき、トンネル(デスクトップの「トンネル開通SSH.cmd」)が開いている間だけ**動かす
+# (2026-11-07、利用者の指示「常時 OFF・起動はトンネル開通SSH.cmd・OFF にする条件は Chrome を終了したとき」。11-06 の 18〜21 時の形は外した)。
 #
-#   sudo sh ./host-pma-window.sh --path /opt/kosenmap          時間の中なら起こし、外なら止める(cron が 5 分ごと)
-#   sudo sh ./host-pma-window.sh --path /opt/kosenmap --status 今どうなっているかを出すだけ
-#   sudo sh ./host-pma-window.sh --path /opt/kosenmap --open 60  時間の外でも、今から 60 分だけ使う(手で起こす。最大 180 分)
-#   sudo sh ./host-pma-window.sh --path /opt/kosenmap --close    手で起こした分を取り消して、時間の外なら止める
+#   sudo sh ./host-pma-window.sh --path /opt/kosenmap            合図を見て、起こすか止める(cron が 1 分ごと)
+#   sudo sh ./host-pma-window.sh --path /opt/kosenmap --status   今どうなっているかを出すだけ
+#   sudo sh ./host-pma-window.sh --path /opt/kosenmap --open 60  トンネルなしで、今から 60 分だけ使う(最大 180 分)
+#   sudo sh ./host-pma-window.sh --path /opt/kosenmap --close    手で起こした分を取り消して止める
+#
+# ## 合図
+#
+# トンネルの SSH(km の鍵)は -N の代わりに、**km の家の WANT_NAME を 20 秒ごとに触る**だけの命令を走らせる(sudo は要らない)。
+# この見張りは、そのファイルが FRESH_SECONDS 秒より新しければ起こし、古いか無ければ止める。
+# Chrome を閉じるとバッチがトンネルを切る → 触られなくなる → **2 分以内に止まる**。PC が落ちても回線が切れても同じ。
+# 読むのは**時刻と持ち主だけ**(中身は読まない・リンクはたどらない)。
 #
 # ## なぜ
 #
-# 初回の Trivy(2026-11-06)で phpMyAdmin は CRITICAL 8・HIGH 153(同梱の twig など)。入口は 127.0.0.1:8281 だけで、
-# km の鍵の SSH トンネルからしか届かないが、**動いていない時間は攻めようがない。** 使うのは夕方だけなので、それ以外は止める。
-#
-# 配備や update-containers.ps1 の `up -d` は時間の外でも起こすが、次の見張り(5 分以内)で止まる。
-# 止まっていても、更新の確認(check-updates.sh)と片付け(host-docker-prune.sh)はその像を数える(消さない)。
-# 使用率の警告(host-resource-alert.sh)はメモリ不足での停止だけを見るので、ここで止めても知らせは来ない。
-#
-# 変えたいときは FROM_HOUR・UNTIL_HOUR(UNTIL_HOUR の 0 分で止まる)。
+# 初回の Trivy(2026-11-06)で phpMyAdmin は CRITICAL 8・HIGH 153。入口は 127.0.0.1:8281 だけで km の鍵のトンネルからしか
+# 届かないが、**動いていない間は攻めようがない。** 配備の `up -d` は起こすが、次の見張り(1 分以内)で止まる。
+# 止まっていても、更新の確認(check-updates.sh)・検査(host-image-scan.sh)・片付け(host-docker-prune.sh)はその像を数える(消さない)。
 #
 # POSIX sh。`[ … ] && cmd` を単独で書かない(set -e の下で落ちる)。
 
@@ -27,8 +30,11 @@ STATUS_ONLY=0
 OPEN_MINUTES=""
 CLOSE=0
 SERVICE="phpmyadmin"
-FROM_HOUR=18
-UNTIL_HOUR=21
+# トンネルを張る人と、触る目印(トンネル開通SSH.cmd と同じ名前にすること)
+WANT_USER="km"
+WANT_NAME=".kosenmap-pma-wanted"
+# 触るのは 20 秒ごと。3 回ぶん触られなければ止める
+FRESH_SECONDS=60
 MAX_OPEN_MINUTES=180
 # 手で起こしたときの「いつまで」(エポック秒)。root だけが書ける場所
 STATE_DIR="/var/lib/kosenmap/pma-window"
@@ -40,7 +46,7 @@ while [ $# -gt 0 ]; do
     --status) STATUS_ONLY=1; shift ;;
     --open) OPEN_MINUTES="${2:-}"; shift 2 ;;
     --close) CLOSE=1; shift ;;
-    -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
     *) echo "知らない引数: $1" >&2; exit 2 ;;
   esac
 done
@@ -85,18 +91,29 @@ if [ -f "$OPEN_FILE" ]; then
   fi
 fi
 
-# ホストの時計の設定によらず日本時間で決める(先頭の 0 は 8 進と読まれないよう外す)
-HOUR="$(TZ=Asia/Tokyo date +%H | sed 's/^0//')"
-HOUR="${HOUR:-0}"
-if [ "$HOUR" -ge "$FROM_HOUR" ] && [ "$HOUR" -lt "$UNTIL_HOUR" ]; then
+# トンネルの合図: km の家の目印が、km の持ち物の普通のファイルで、FRESH_SECONDS 秒より新しいか
+WANT_AGE=""
+WANT_HOME="$(getent passwd "$WANT_USER" | cut -d: -f6 || true)"
+WANT_FILE="${WANT_HOME:-/nonexistent}/$WANT_NAME"
+if [ -n "$WANT_HOME" ] && [ -f "$WANT_FILE" ] && [ ! -L "$WANT_FILE" ] \
+    && [ "$(stat -c %U -- "$WANT_FILE" 2>/dev/null || true)" = "$WANT_USER" ]; then
+  _mtime="$(stat -c %Y -- "$WANT_FILE" 2>/dev/null || echo 0)"
+  WANT_AGE=$((NOW - _mtime))
+fi
+
+if [ -n "$WANT_AGE" ] && [ "$WANT_AGE" -le "$FRESH_SECONDS" ]; then
   WANT="running"
-  WHY="時間の中"
+  WHY="トンネルが開いている(${WANT_AGE} 秒前に合図)"
 elif [ "$OPEN_UNTIL" -gt "$NOW" ]; then
   WANT="running"
   WHY="手で起こした($(TZ=Asia/Tokyo date -d "@$OPEN_UNTIL" '+%H:%M' 2>/dev/null || echo '?') まで)"
 else
   WANT="stopped"
-  WHY="時間の外"
+  if [ -n "$WANT_AGE" ]; then
+    WHY="トンネルが閉じた(最後の合図は ${WANT_AGE} 秒前)"
+  else
+    WHY="トンネルの合図がない"
+  fi
 fi
 
 # compose の phpmyadmin のコンテナ(無ければ空)
@@ -107,18 +124,18 @@ if [ -n "$CID" ]; then
 fi
 
 if [ "$STATUS_ONLY" -eq 1 ]; then
-  echo "いま $(TZ=Asia/Tokyo date '+%H:%M')(日本時間)・使える時間 ${FROM_HOUR}:00〜$((UNTIL_HOUR - 1)):59・phpMyAdmin は ${STATE}(あるべき姿: ${WANT}・${WHY})"
+  echo "phpMyAdmin は ${STATE}(あるべき姿: ${WANT}・${WHY})"
   exit 0
 fi
 
-STAMP="$(TZ=Asia/Tokyo date '+%Y-%m-%d %H:%M')"
+STAMP="$(TZ=Asia/Tokyo date '+%Y-%m-%d %H:%M:%S')"
 if [ "$WANT" = "running" ] && [ "$STATE" != "running" ]; then
   # 1 つだけ起こす。DB(mariadb)は動いている前提(止まっていれば compose が先に起こす)
   docker compose up -d "$SERVICE"
-  echo "$STAMP ${WHY}なので phpMyAdmin を起こしました(${STATE} → running)"
+  echo "$STAMP ${WHY}ので phpMyAdmin を起こしました(${STATE} → running)"
 elif [ "$WANT" = "stopped" ] && [ "$STATE" = "running" ]; then
   docker compose stop "$SERVICE"
-  echo "$STAMP ${WHY}なので phpMyAdmin を止めました"
+  echo "$STAMP ${WHY}ので phpMyAdmin を止めました"
 fi
-# 変わらなければ何も書かない(5 分ごとの記録を増やさない)
+# 変わらなければ何も書かない(1 分ごとの記録を増やさない)
 exit 0

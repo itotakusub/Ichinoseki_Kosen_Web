@@ -66,7 +66,7 @@ services:
   postgres:
     # 2026-09-15 に動いていた中身。**タグも残す**(`名前:タグ@digest`)—— 動くのは digest で、
     # タグは scripts/check-updates.sh が「固定した digest より新しい修正版が出たか」を読むため
-    image: postgres:17-alpine@sha256:5d9ee39acd134b44f52fc49ca3b88fc651f0560b0db93292fcd37ff150c71d3a
+    image: postgres:17-alpine@sha256:3540c0362c809df084ffac0ae69fe794515f9de92692f02178bcdce0ef0302ac
     container_name: km-postgres
     restart: unless-stopped
     security_opt:
@@ -127,7 +127,7 @@ services:
     # (digest だけにすると hex を版番号として読み、毎日「新しい版があります」と言い続ける)。
     # 1.44.0 に上げた(2026-10-06、利用者の決定)。移行は 2 つ: 利用者 ID の列を 128 字に広げる(**戻せない** ——
     # 長い ID ができた後は巻き戻しが失敗する)・SAML の列を足す。先に検証機で上げて確かめた(docs/19)
-    image: ghcr.io/logto-io/logto:1.45.0@sha256:097cd47689546461edb4637fb6eee60b9ab6d3d4c08ebb20bc44a1b1809b82c0
+    image: ghcr.io/logto-io/logto:1.46.0@sha256:d5e208ce705cbcf7c79ddba421216eb65413d0b0531aa658fb22a4ba659be983
     container_name: km-logto
     restart: unless-stopped
     security_opt:
@@ -278,7 +278,8 @@ services:
   # 11-02 に外した(DB に外から触れる入口を 0 にする)が、外に出さなければ使ってよい、という決め直し。
   # 以前は nginx の 8281 番でインターネットに出していた(送信元の制限と管理画面のサインインの 2 枚つき)。
   # いまは **ホストの 127.0.0.1:8281 にだけ出す**(下の ports:)。nginx は通さない。
-  # 開き方は Console と同じ SOCKS のトンネル(km の鍵で `ssh -N -D`)→ その Chrome で http://localhost:8281
+  # 開き方は Console と同じ SOCKS のトンネル(km の鍵で `ssh -D`)→ その Chrome で http://localhost:8281
+  # **ふだんは止まっている**(2026-11-07)。トンネルの SSH が出す合図を scripts/host-pma-window.sh(cron が 1 分ごと)が見て起こし、切れたら止める
   # (docs/05-containers の §5-2。デスクトップの「トンネル開通SSH.cmd」がこれを行う)
   phpmyadmin:
     # 2026-09-15 に動いていた中身(タグを残す理由は postgres と同じ)
@@ -591,7 +592,7 @@ services:
     # **タグだけに戻さないこと**(digest は必ず付ける)。
     # タグ 1-alpine(1 系の Alpine。2026-11-06 に付けた)。タグが無いと update-containers.ps1 が上げられない(どれが新しいか分からない)。
     # それまでの固定は 1.31.6-alpine の digest だけで、初回の Trivy で CRITICAL 1・HIGH 10(brotli・expat・pcre2)が出た
-    image: nginx:1-alpine@sha256:9a5daf7abdc9d051d81c92e5a2553fec2747f59d1b72f75513192bdd29d3d9d7
+    image: nginx:1-alpine@sha256:713fc2ebfd92e8217db451477182ee91944b123d2b1ee9fd5a8c6e91ca6c3a11
     container_name: km-nginx-proxy
     restart: unless-stopped
     security_opt:

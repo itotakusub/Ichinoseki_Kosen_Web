@@ -43,7 +43,7 @@ done
 APT_CONF="/etc/apt/apt.conf.d/52kosenmap-unattended"
 CRON_FILE="/etc/cron.d/kosenmap-updates"
 # **並びを変えたら上げること。** 古いホストの cron を書き直す合図になる
-CRON_VERSION=12
+CRON_VERSION=13
 LOG_DIR="/var/log/kosenmap"
 CHECK_SCRIPT="$PATH_ROOT/scripts/check-updates.sh"
 SECURITY_SCRIPT="$PATH_ROOT/scripts/host-security-check.sh"
@@ -63,7 +63,7 @@ APK_INBOX_SCRIPT="$PATH_ROOT/scripts/host-apk-inbox.sh"
 IMAGE_SCAN_SCRIPT="$PATH_ROOT/scripts/host-image-scan.sh"
 # 使っていないイメージと古いビルドのキャッシュの片付け(版 11。2026-11-06)
 DOCKER_PRUNE_SCRIPT="$PATH_ROOT/scripts/host-docker-prune.sh"
-# phpMyAdmin を 18〜21 時だけ動かす(版 12。2026-11-06)
+# phpMyAdmin はトンネルが開いている間だけ動かす(版 12 で 18〜21 時、版 13 でトンネルの合図に。2026-11-07)
 PMA_WINDOW_SCRIPT="$PATH_ROOT/scripts/host-pma-window.sh"
 
 PROBLEMS=0
@@ -275,11 +275,11 @@ else
 # 1 つ前の版は残す・ボリュームには触らない)。ビルドのキャッシュは 14 日より古いものだけ。検査(4:47)が終わるまで待つ。
 # **失敗したときだけ**送る。
 #
-# ## phpMyAdmin を決まった時間だけ動かす(版 12 で足した。2026-11-06)
+# ## phpMyAdmin はトンネルが開いている間だけ動かす(版 12 で足し、版 13 で今の形に。2026-11-07)
 #
-# host-pma-window.sh が **5 分ごと**に、18:00〜20:59(日本時間)なら phpMyAdmin を起こし、外なら止める。
-# 時間の外に使うときは km で「sudo sh $PATH_ROOT/scripts/host-pma-window.sh --path $PATH_ROOT --open 60」。
-# 5 分ごとなので send-log.sh は通さない(失敗は pma-window.log に残る)。
+# host-pma-window.sh が **1 分ごと**に、km の家の目印(トンネル開通SSH.cmd の SSH が 20 秒ごとに触る)を見て、
+# 60 秒より新しければ phpMyAdmin を起こし、古いか無ければ止める。**ふだんは止まっている。** Chrome を閉じるとトンネルが切れ、2 分以内に止まる。
+# 1 分ごとなので send-log.sh は通さない(失敗は pma-window.log に残る)。
 SHELL=/bin/sh
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
@@ -302,7 +302,7 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 */5 * * * *  root  $SEND_LOG_SCRIPT --path $PATH_ROOT --label アプリの受け箱 --only-failure --run "$APK_INBOX_SCRIPT --path $PATH_ROOT" >>$LOG_DIR/apk-inbox.log 2>&1
 47 4 * * 0  root  $SEND_LOG_SCRIPT --path $PATH_ROOT --label イメージの検査 --only-failure --run "$IMAGE_SCAN_SCRIPT --path $PATH_ROOT --notify" >>$LOG_DIR/image-scan.log 2>&1
 47 5 * * 0  root  $SEND_LOG_SCRIPT --path $PATH_ROOT --label イメージの片付け --only-failure --run "$DOCKER_PRUNE_SCRIPT --path $PATH_ROOT --apply" >>$LOG_DIR/docker-prune.log 2>&1
-*/5 * * * *  root  $PMA_WINDOW_SCRIPT --path $PATH_ROOT >>$LOG_DIR/pma-window.log 2>&1
+* * * * *    root  $PMA_WINDOW_SCRIPT --path $PATH_ROOT >>$LOG_DIR/pma-window.log 2>&1
 CONF
     chmod 644 "$CRON_FILE"
     chown root:root "$CRON_FILE"

@@ -864,6 +864,11 @@ check.php 1449 件・JS・Android 627 件×2 すべて通過。**本番はまだ
       残りの多くは Logto 1.45.0 の npm(60)・MariaDB/Postgres の gosu(28・26)・glances(24)・phpMyAdmin(11)・certbot(5)で、上流の作り直しか Logto 1.46.0 待ち。
       postfix 5.2.1 は opendkim で `DKIM-Signature … (s=mail, d=ito4.jp)` を付けている(ログで確認)。phpMyAdmin は時間の外で止まっている(7:55 に Exited)。
       手で回した検査は知らせ済みにならないので、11-08 4:47 のメールは 156 件ぶん
+  - **phpMyAdmin は常時 OFF・トンネル開通SSH.cmd で起こす(11-07、利用者の指示「OFF にする条件は Chrome を終了したとき」。手元で済み・配備待ち)**: 18〜21 時の形は外した。
+    トンネルの SSH を `-N` から `-t … "while touch .kosenmap-pma-wanted; do sleep 20; done"` に変えた(km の家の目印を 20 秒ごとに触る。sudo は要らない)。
+    `host-pma-window.sh` は cron 版 13 で **1 分ごと**に、目印が km の持ち物の普通のファイルで 60 秒以内に触られていれば起こし、そうでなければ止める(時刻と持ち主だけ見る・リンクはたどらない)。
+    バッチは phpMyAdmin が SOCKS 越しに答えるまで(最長 2 分)待ってから Chrome を開き、Chrome を閉じると合図を出しているトンネルを切る → 2 分以内に止まる。
+    トンネルなしで使うときは km で `--open 60`。管理画面の設定に出す手張りのコマンド(`km_site_logto_console_tunnel()`)も同じ形にした。前のバッチは `server/Old/desktop/`
 - **試しのイベントを本番で見た(2026-11-01 22 時、利用者がイベント「Test」(id 9)を始めた)**: 公開の地図データは錠なし・予定 34 件(21:00〜11-02 21:00)・
   企画の番号付きの地点 33(1F 8・2F 9・3F 9・4F 4・外 3)。ポスター・一時地点・屋台は 0。
   - Website(内蔵のブラウザ・幅 1149): 🎪 イベントと 📅 予定のチップが出る。拡大すると 1F の企画の地点 8 か所が赤い縁(`km-node-event`)、ほか 38 か所が薄い(`km-node-unrelated`)。
