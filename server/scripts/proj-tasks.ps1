@@ -87,15 +87,19 @@ $endpoint = "$BaseUrl/api/project-tasks.php"
 
 function Invoke-KmProj {
     param([string]$Method, [string]$Query = '', $Body = $null)
-    $req = @{ Uri = $endpoint + $Query; Method = $Method; Headers = $headers; SkipHttpErrorCheck = $true; StatusCodeVariable = 'code'; TimeoutSec = 30 }
+    $req = @{ Uri = $endpoint + $Query; Method = $Method; Headers = $headers; SkipHttpErrorCheck = $true; TimeoutSec = 30 }
     if ($null -ne $Body) {
         $text = if ($Body -is [string]) { $Body } else { ConvertTo-Json -InputObject $Body -Depth 6 -Compress }
         $req.Body = [Text.Encoding]::UTF8.GetBytes($text)
         $req.ContentType = 'application/json; charset=utf-8'
     }
-    $res = Invoke-RestMethod @req
-    if ($code -ge 400 -or -not $res.success) {
-        $msg = if ($res -and $res.message) { $res.message } else { "$res" }
+    # 応答はハッシュ表として読む。分類の「なし」の鍵が空文字 "" で、既定の読み方(PSCustomObject)はそれを受け付けず、文字列のまま返す(11-07)
+    $web = Invoke-WebRequest @req
+    $code = [int]$web.StatusCode
+    $res = $null
+    try { $res = $web.Content | ConvertFrom-Json -AsHashtable } catch { $res = $null }
+    if ($code -ge 400 -or $null -eq $res -or -not $res.success) {
+        $msg = if ($res -and $res.message) { $res.message } else { "$($web.Content)" }
         throw "失敗しました(HTTP $code): $msg"
     }
     return $res
@@ -144,13 +148,13 @@ switch ($Command) {
         if ($Id -le 0) { throw '-Id が要ります。' }
         $res = Invoke-KmProj -Method GET -Query "?id=$Id"
         if ($Json) { $res.task | ConvertTo-Json -Depth 4; break }
-        $res.task | Format-List id, planRef, title, status, progress, topic, note, updatedAt
+        [pscustomobject]$res.task | Format-List id, planRef, title, status, progress, topic, note, updatedAt
     }
     'topics' {
         $res = Invoke-KmProj -Method GET -Query '?topic=__none__'
         if ($Json) { [ordered]@{ topics = $res.topics; statuses = $res.statuses } | ConvertTo-Json -Depth 4; break }
         Write-Host '分類:'
-        $res.topics.PSObject.Properties | ForEach-Object { "  {0,-10} {1}" -f $(if ($_.Name -eq '') { '(空)' } else { $_.Name }), $_.Value }
+        $res.topics.GetEnumerator() | ForEach-Object { "  {0,-10} {1}" -f $(if ($_.Key -eq '') { '(空)' } else { $_.Key }), $_.Value }
         Write-Host "状態: $($res.statuses -join ' / ')"
     }
     'add' {

@@ -109,6 +109,8 @@ const KM_CHECK_PURE = [
     'bench',
     // プロジェクト状況の口(鍵 KM_PROJ_PASSKEY)・Logto のメールのテンプレート(2026-11-07)
     'proj-api',
+    // 読み・別名と英語の名前を CSV でまとめて(2026-11-07、plan.md 段 2-1)
+    'alias-csv',
 ];
 
 /** 名前を明示したときだけ走る検査。置かれている設定を読む。 */
@@ -10201,7 +10203,8 @@ function km_check_admin_log(): void
          * (拾えていなかったせいで、この2つだけ文言の突き合わせから漏れていた)
          */
         if (preg_match_all(
-            "/km_admin_log_record\(\s*'([a-z]+)'\s*,\s*(?:[^,;()]*\?\s*)?'([a-zA-Z0-9._]+)'(?:\s*:\s*'([a-zA-Z0-9._]+)')?/",
+            // 操作名のハイフン(search-aliases.save)も拾う。拾えず、文言が無いまま 10-30 から記録していた(2026-11-07 に気づいた)
+            "/km_admin_log_record\(\s*'([a-z]+)'\s*,\s*(?:[^,;()]*\?\s*)?'([a-zA-Z0-9._-]+)'(?:\s*:\s*'([a-zA-Z0-9._-]+)')?/",
             $source,
             $matches,
             PREG_SET_ORDER
@@ -11132,6 +11135,42 @@ function km_check_proj_api(): void
     }
 }
 
+/** 読み・別名と英語の名前を CSV でまとめて書き出す・取り込む(lib/search-alias-csv.php・admin/search-aliases.php。2026-11-07) */
+function km_check_alias_csv(): void
+{
+    km_check_heading('alias-csv: 読み・別名と英語の名前の CSV は、見せてから書く・空は変えない');
+    require_once __DIR__ . '/../lib/search-alias-csv.php';
+    require_once __DIR__ . '/../lib/admin-log.php';
+    $root = dirname(__DIR__, 2);
+    $a = str_repeat('a', 32);
+    $b = str_repeat('b', 32);
+    $c = str_repeat('c', 32);
+    $targets = [$a => '出入り口', $b => '教員室', $c => 'A階段'];
+    $csv = "\xEF\xBB\xBFkind,id,name,readings,english\nnode,{$a},x,でいりぐち,Entrance\nnode,{$b},x,きょういんしつ,\nnode,{$c},x,,-\npoi,5,x,y,z\nnode," . str_repeat('f', 32) . ",x,y,z\nnode,zz,x,y,z\nnode,{$a},x,y,z\n";
+    $plan = km_alias_csv_plan($csv, 'node', $targets, [$b => ['きょういんしつ']], [$c => 'Stairs A']);
+    $byId = array_column($plan['changes'], null, 'id');
+    check_bool('取り込み: 変わる行だけ・空のセルは変えない・「-」で消す', count($plan['changes']) === 2 && $byId[$a]['newReadings'] === 'でいりぐち' && $byId[$a]['newEnglish'] === 'Entrance'
+        && $byId[$c]['newReadings'] === null && $byId[$c]['newEnglish'] === '' && $plan['unchanged'] === 1);
+    check_bool('取り込み: ほかの種類の行は読まず、地図に無い id・形の違う id・重なりは断る', count($plan['errors']) === 3 && $plan['rows'] === 7);
+    check_bool('取り込み: 見出しに id と readings か english が要る(日本語の見出しも可)', km_alias_csv_plan("name,foo\n", 'node', $targets, [], [])['errors'] !== []
+        && (km_alias_csv_plan("id,英語の名前\n{$a},Gate\n", 'node', $targets, [], [])['changes'][0]['newEnglish'] ?? null) === 'Gate');
+    check_bool('取り込み: UTF-8 でなければ Shift_JIS(Excel)として読む', (km_alias_csv_plan((string) mb_convert_encoding("id,english\n{$a},正門\n", 'SJIS-win', 'UTF-8'), 'node', $targets, [], [])['changes'][0]['newEnglish'] ?? null) === '正門');
+    $export = km_alias_csv_export('node', [['id' => $b, 'name' => '=教員室', 'where' => '1F']], [$b => ['きょういんしつ']], []);
+    check_bool('書き出し: BOM 付き・式に読まれる名前には \' を付ける・取り込むと「同じ」', str_starts_with($export, "\xEF\xBB\xBFkind,id,name,where,readings,english\n") && str_contains($export, "'=教員室")
+        && km_alias_csv_plan($export, 'node', $targets, [$b => ['きょういんしつ']], [])['unchanged'] === 1);
+    check_bool('取り込み: 大きさと行の上限', KM_ALIAS_CSV_MAX_BYTES === 1048576 && km_alias_csv_plan(str_repeat('x', KM_ALIAS_CSV_MAX_BYTES + 1), 'node', $targets, [], [])['errors'] !== []);
+
+    $page = (string) file_get_contents($root . '/src/admin/search-aliases.php');
+    check_bool('画面: 上げただけでは書かない(計画をセッションに置いて見せる)', str_contains($page, "\$_SESSION[KM_ALIAS_IMPORT_SESSION_KEY] = ['kind' => \$kind, 'token' => bin2hex(random_bytes(16))")
+        && preg_match('/import_preview.*?km_search_alias_save/s', $page) === 1 && strpos($page, "if (\$importAction === 'import_preview')") < strpos($page, "if (\$importAction === 'import_apply')"));
+    check_bool('画面: 取り込むは CSRF(上の分岐)と印(hash_equals)と期限を確かめる', str_contains($page, "hash_equals((string) (\$stash['token'] ?? ''), \$token)") && str_contains($page, 'KM_ALIAS_CSV_PLAN_TTL')
+        && strpos($page, 'km_csrf_verify()') < strpos($page, "\$importAction = \$formAction;"));
+    check_bool('画面: 見せたあとに直された行は上書きしない・1 つのトランザクション', str_contains($page, '$conflicts++;') && str_contains($page, '$pdo->beginTransaction();') && str_contains($page, '$pdo->rollBack();'));
+    check_bool('画面: 書き出しは HTML を出す前・取り込みの記録に文言がある(save の抜けも直した)', strpos($page, "echo km_alias_csv_export(") < strpos($page, "require __DIR__ . '/_inc/partials/head.php';")
+        && isset(KM_ADMIN_LOG_ACTION_LABELS['search-aliases.import'], KM_ADMIN_LOG_ACTION_LABELS['search-aliases.save']));
+    check_bool('画面: style 属性・インラインのハンドラを使わない', preg_match('/<[a-z][^>]*\s(style|on[a-z]+)=/i', $page) !== 1);
+}
+
 function km_check_bench(): void
 {
     require_once __DIR__ . '/../lib/bench.php';
@@ -11762,6 +11801,9 @@ foreach ($selected as $name) {
             break;
         case 'proj-api':
             km_check_proj_api();
+            break;
+        case 'alias-csv':
+            km_check_alias_csv();
             break;
         case 'recaptcha':
             // 環境依存。数えず、終了コードだけを持ち帰る。
