@@ -9989,6 +9989,16 @@ function km_check_layout(): void
         && str_contains($appJs, 'const byName = !otherKind && genre.pattern'));
     check_bool('トイレのジャンルは臨時のトイレも拾う・当てはまらないチップは隠す', str_contains($appJs, "WC: { poi: ['toilet'],") && str_contains($appJs, 'chip.hidden = genreResults(key).length === 0;')
         && str_contains((string) file_get_contents(__DIR__ . '/../Main/entry.js'), 'if (chip.hidden) return;'));
+    // 2026-11-07、利用者の答え「#110 はトイレを外して」。トイレの地点も種類は room なので「教室」に並んでいた
+    if (preg_match('/^\s+room: \{[^\n]*exclude: (\/[^\n]+?\/i) \}/m', $appJs, $roomExclude) === 1) {
+        $roomExcludeRe = $roomExclude[1];
+        check_bool('「教室」のジャンルはトイレを外す(男子トイレ・WC・お手洗い は外し、情報処理室 は残す。アプリの EntryGenres.kt と同じ)',
+            preg_match($roomExcludeRe, '1F 男子トイレ') === 1 && preg_match($roomExcludeRe, '多目的WC') === 1 && preg_match($roomExcludeRe, 'お手洗い') === 1
+            && preg_match($roomExcludeRe, '情報処理室') === 0
+            && str_contains($appJs, 'if (!byProject && genre.exclude && [node.name, shownName, node.type2].some(v => genre.exclude.test(v || \'\'))) continue;'));
+    } else {
+        check_bool('「教室」のジャンルはトイレを外す(exclude がある)', false);
+    }
 
     km_check_heading('map: 階の列の上でホイール・縦のスワイプ(2026-10-30、振り返りのフェーズ 3 の 4)');
     check_bool('ホイールの上 = 上の階・地図の拡大へ渡さない・1 段ずつ', str_contains($appJs, "stepFloor(e.deltaY < 0 ? 1 : -1);") && str_contains($appJs, "}, { passive: false });")

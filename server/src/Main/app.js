@@ -4831,7 +4831,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         help: { poi: ['reception', 'firstaid'], pattern: /受付|保健|救護|案内所/, label: '受付・保健室' },
         stage: { poi: ['stage'], pattern: /ステージ/, label: 'ステージ' },
         stairs: { types: ['stairs'], pattern: /階段|エレベーター|EV/i },
-        room: { types: ['room'], pattern: /室|教室|実験|講義|ラボ/i },
+        // トイレは「教室」に入れない(2026-11-07、利用者の答え。トイレの地点も種類は room。アプリの EntryGenres.kt と同じ)
+        room: { types: ['room'], pattern: /室|教室|実験|講義|ラボ/i, exclude: /WC|トイレ|便所|お手洗い|restroom|toilet/i },
         facility: { types: ['facility'], pattern: /棟|館|ホール|センター/i },
         event: { allPoi: true, projects: true },
     };
@@ -4861,6 +4862,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             const otherKind = (genre.types || []).length > 0 && Object.prototype.hasOwnProperty.call(KM_GENRE_KIND_TYPES, node.type) && !genre.types.includes(String(node.type));
             const byName = !otherKind && genre.pattern && (genre.pattern.test(node.name || '') || genre.pattern.test(shownName || '') || genre.pattern.test(node.type2 || ''));
             if (!byProject && !byType && !byName) continue;
+            if (!byProject && genre.exclude && [node.name, shownName, node.type2].some(v => genre.exclude.test(v || ''))) continue;
             if (seen.has(id)) continue;
             seen.add(id);
             const project = isProject ? projectDisplayFor(id, node) : null;
