@@ -72,6 +72,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
           </div>
         </div>
         <!--end::App Content-->
-        <script src="<?= km_e(km_public_asset('Main/area-segmentation.js')) ?>"></script>
+        <?php // 公開側の部品は / から(相対だと /admin/Main/… を探して 404。11-07 に本番で踏んだ。管理のオリジンも /Main/ を返す) ?>
+        <script src="<?= km_e('/' . km_public_asset('Main/area-segmentation.js')) ?>"></script>
         <script src="<?= km_e(km_asset('./assets/js/map-areas.js')) ?>"></script>
 <?php require __DIR__ . '/_inc/partials/footer.php'; ?>

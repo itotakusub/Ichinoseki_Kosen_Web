@@ -11176,6 +11176,16 @@ function km_check_area_paint_app(): void
         $error = $exception->getMessage();
     }
     check_bool('受け取り: 知らない階(B1F)は断る', str_contains($error, '知らない階'));
+    // 管理画面から公開側の部品を読むときは / から(相対の km_public_asset は /admin/Main/… になり 404。11-07 に本番で踏んだ)
+    $relativePublic = [];
+    foreach (glob(__DIR__ . '/../admin/*.php') ?: [] as $adminPage) {
+        if (preg_match('/src="<\?= km_e\(km_public_asset\(/', (string) file_get_contents($adminPage))) {
+            $relativePublic[] = basename($adminPage);
+        }
+    }
+    check('管理画面: 公開側の部品(km_public_asset)は / から読む', [], $relativePublic);
+    check_bool('管理画面: 色分けの計算の部品が読めなければ理由を出す(読み込み中のまま止めない)', str_contains((string) file_get_contents(__DIR__ . '/../admin/map-areas.php'), "km_e('/' . km_public_asset('Main/area-segmentation.js'))")
+        && str_contains((string) file_get_contents(__DIR__ . '/../admin/assets/js/map-areas.js'), '色分けの計算の部品を読めませんでした'));
     check_bool('管理画面: どこで塗ったかを出す', str_contains((string) file_get_contents(__DIR__ . '/../admin/assets/js/map-areas.js'), "floor.painted.origin === 'app' ? 'アプリの絵' : 'この画面で塗った'")
         && str_contains($lib, "'origin' => (\$value['origin'] ?? '') === 'app' ? 'app' : 'web'"));
 
