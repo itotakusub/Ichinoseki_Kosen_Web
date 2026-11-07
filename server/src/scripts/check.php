@@ -9933,6 +9933,17 @@ function km_check_layout(): void
     check_bool('地図データに階段の向き(uuid は出さない)', str_contains((string) file_get_contents(__DIR__ . '/../lib/map-data.php'), "\$node['stairUpHeading'] = \$heading['up'];")
         && str_contains((string) file_get_contents(__DIR__ . '/../lib/map-data.php'), "unset(\$node['uuid']);"));
     check_bool('矢印の向きは CSSOM で入れる(style 属性は CSP で効かない)', str_contains($appJs, "arrow.style.setProperty('--km-heading', heading + 'deg');"));
+    // 向きは 1 階だけ入れればよい(2026-11-07、利用者)。上り口は下の階と同じ・下り口は下の階の上り口の逆。Web とアプリで同じ決まり(中身の試験は node と StairGuideTest)
+    check_bool('階段の向き: 入っていない階は下の階から埋める(経路の札も、拡大したときの札も)', substr_count($appJs, 'stairHeadingOf(') === 3
+        && str_contains($appJs, 'view.filledStairHeadings(stairs, Dijkstra.stairKey, Dijkstra.isElevator)')
+        && !str_contains($appJs, 'node.stairUpHeading') && !str_contains($appJs, 'stair.stairUpHeading')
+        && str_contains($routeViewJs, 'm.own.down = norm(belowUp + 180);'));
+    $stairGuideKt = 'C:/Users/itota/Documents/Test/app/src/main/java/com/ito/kosenmap/StairGuide.kt';
+    if (is_file($stairGuideKt)) {
+        $stairGuide = (string) file_get_contents($stairGuideKt);
+        check_bool('階段の向き: アプリも同じ決まり(手で入れた向きが優先・逆は +180°)', str_contains($stairGuide, 'StairHeadings(own.up ?: belowUp, own.down ?: ((belowUp!! + 180f) % 360f))')
+            && !str_contains($stairGuide, 'node.stairUpHeading') && str_contains($stairGuide, 'headings: Map<String, StairHeadings> = filledStairHeadings(stairsByKey)'));
+    }
     check_bool('案内中は関係ない地点を薄く(Leaflet の opacity に勝つ)', preg_match('/body\.km-route-active \.leaflet-tooltip-pane \.km-label:not\(\.km-on-route\) \{[^}]*opacity: 0\.35 !important;/s', $chromeCss) === 1);
     check_bool('札の文字は escapeHtml を通す', str_contains($appJs, '${escapeHtml(turn.phrase)}</span></span>`') && str_contains($appJs, '${escapeHtml(mark.text)}</span>`'));
 
