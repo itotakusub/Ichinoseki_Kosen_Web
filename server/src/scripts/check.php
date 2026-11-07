@@ -107,6 +107,8 @@ const KM_CHECK_PURE = [
     'image-scan',
     // ベンチマーク(2026-11-06)
     'bench',
+    // プロジェクト状況の口(鍵 KM_PROJ_PASSKEY)・Logto のメールのテンプレート(2026-11-07)
+    'proj-api',
 ];
 
 /** 名前を明示したときだけ走る検査。置かれている設定を読む。 */
@@ -4249,7 +4251,7 @@ function km_check_security_review(): void
 
     km_check_heading('security-review 3・7: 解除の試行は錠ごとに、DB が落ちても数える');
     require_once __DIR__ . '/../lib/map-rate-limit.php';
-    check('錠は web と app と guest(お試しの閲覧の再入場コード)と html-share(共有リンクのパスワード)', ['web', 'app', 'guest', 'html-share'], array_keys(KM_MAP_UNLOCK_SCOPES));
+    check('錠は web と app と guest(お試しの閲覧の再入場コード)と html-share(共有リンクのパスワード)と proj-api(手元の道具の鍵。2026-11-07)', ['web', 'app', 'guest', 'html-share', 'proj-api'], array_keys(KM_MAP_UNLOCK_SCOPES));
     check_bool('表は別々', KM_MAP_UNLOCK_SCOPES['web'] !== KM_MAP_UNLOCK_SCOPES['app']);
     $unlockApi = $code($read('api/map-unlock.php'));
     $appMapApi = $code($read('api/app-map.php'));
@@ -10998,6 +11000,138 @@ function km_check_image_scan(): void
  * 利用者の指示「サーバーでベンチマーク」「簡単な処理だと比較が難しいので考慮」「性能とスコアを保存」)。
  * 重い段そのものはここでは回さない(本番で測って基準を固定した。lib の KM_BENCH_REFERENCE)。
  */
+/**
+ * プロジェクト状況の口(api/project-tasks.php)と鍵 KM_PROJ_PASSKEY(lib/proj-passkey.php)、
+ * Logto のメールのテンプレートを合わせる台本(scripts/logto-email-templates.php)。2026-11-07。
+ *
+ * **鍵の値は読まない・出さない。** 見るのは「鍵が無ければ断る」「URL で受けない」「手元の鍵が配備・控えに載らない」書き方。
+ */
+function km_check_proj_api(): void
+{
+    km_check_heading('proj-api: プロジェクト状況の口は鍵が無いと通さない・メールのテンプレートは書く前に比べる');
+    require_once __DIR__ . '/../lib/proj-passkey.php';
+    require_once __DIR__ . '/../lib/tasks.php';
+    require_once __DIR__ . '/../lib/admin-log.php';
+    $root = dirname(__DIR__, 2);
+    $file = static fn (string $path): string => (string) @file_get_contents($root . '/' . $path);
+
+    // 鍵(純粋な関数)
+    $good = str_repeat('Ab3(-)', 6);
+    check_bool('鍵: 無い・空・短い・空白入りは「置かれていない」(誰も通さない)', km_proj_passkey_configured('') === null && km_proj_passkey_configured('short') === null
+        && km_proj_passkey_configured(str_repeat('a', 31)) === null && km_proj_passkey_configured(str_repeat('a', 20) . ' ' . str_repeat('b', 20)) === null
+        && km_proj_passkey_configured($good) === $good);
+    check_bool('鍵: 空の入力は、空の鍵とも一致しない', km_proj_passkey_matches('', null) === false && km_proj_passkey_matches('', '') === false && km_proj_passkey_matches('x', null) === false);
+    check_bool('鍵: 同じなら一致・1 字違えば外れ', km_proj_passkey_matches($good, $good) && !km_proj_passkey_matches($good . 'x', $good) && !km_proj_passkey_matches(substr($good, 1), $good));
+    check_bool('鍵: ヘッダー X-KM-Proj-Passkey を先に、無ければ Authorization: Bearer', km_proj_passkey_from_request(['HTTP_X_KM_PROJ_PASSKEY' => ' k1 ', 'HTTP_AUTHORIZATION' => 'Bearer k2']) === 'k1'
+        && km_proj_passkey_from_request(['HTTP_AUTHORIZATION' => 'Bearer k2']) === 'k2' && km_proj_passkey_from_request(['HTTP_AUTHORIZATION' => 'Basic k2']) === ''
+        && km_proj_passkey_from_request([]) === '');
+    check_bool('鍵: URL に載せたら断る(名前で見る。大文字も)', km_proj_passkey_in_query(['passkey' => 'x']) && km_proj_passkey_in_query(['KEY' => 'x']) && km_proj_passkey_in_query(['access_token' => 'x'])
+        && !km_proj_passkey_in_query(['id' => '3', 'topic' => 'web']));
+
+    $lib = $file('src/lib/proj-passkey.php');
+    $guard = preg_match('/function km_proj_passkey_guard\(.*?\n\}/s', $lib, $m) === 1 ? $m[0] : '';
+    check_bool('鍵: 置かれていなければ 503、URL の鍵は照合の前に 400', $guard !== '' && strpos($guard, '503') < strpos($guard, 'km_proj_passkey_in_query($_GET)')
+        && strpos($guard, 'km_proj_passkey_in_query($_GET)') < strpos($guard, 'km_proj_passkey_matches('));
+    check_bool('鍵: sha256 どうしを hash_equals で比べる', str_contains($lib, "hash_equals(hash('sha256', 'km-proj|' . \$expected), hash('sha256', 'km-proj|' . \$given))"));
+    check_bool('鍵: 外れだけ数える(錠 proj-api)・当たりは数えない・外れは待たせる', str_contains($guard, "km_map_unlock_attempt(km_db(), 'proj-api')")
+        && strpos($guard, 'KM_PROJ_PASSKEY_ACTOR') < strpos($guard, 'km_map_unlock_attempt(') && str_contains($guard, 'usleep(random_int('));
+    check_bool('鍵: 通ったら管理の記録の実行者は「プロジェクトの鍵(API)」', str_contains($guard, '$GLOBALS[\'KM_USER\'] = KM_PROJ_PASSKEY_ACTOR;') && KM_PROJ_PASSKEY_ACTOR['name'] === 'プロジェクトの鍵(API)');
+    check_bool('鍵: 環境変数から読む(コードにもリポジトリにも値を置かない)', str_contains($lib, "const KM_PROJ_PASSKEY_ENV = 'KM_PROJ_PASSKEY';") && str_contains($lib, 'getenv(KM_PROJ_PASSKEY_ENV)'));
+
+    // 口
+    $api = $file('src/api/project-tasks.php');
+    check_bool('口: 何よりも先に鍵を確かめる(DB に触る前)', strpos($api, 'km_proj_passkey_guard();') !== false && strpos($api, 'km_proj_passkey_guard();') < strpos($api, '$pdo = km_db();'));
+    check_bool('口: 使えるのは GET・POST・PATCH・PUT・DELETE', str_contains($api, "['GET', 'POST', 'PATCH', 'PUT', 'DELETE']"));
+    check_bool('口: 本文は api_bootstrap の上限で読む・知らない項目は断る', str_contains($api, '$input = km_api_json_body();') && str_contains($api, '知らない項目です'));
+    check_bool('口: まとめて足すのは 50 件まで・先に全部確かめ、1 つのトランザクションで', str_contains($api, 'const KM_PROJ_TASKS_BATCH_MAX = 50;') && strpos($api, 'km_task_details_validate(') < strpos($api, '$pdo->beginTransaction();')
+        && str_contains($api, '$pdo->rollBack();') && strpos($api, 'km_tasks_ensure_table($pdo);') < strpos($api, '$pdo->beginTransaction();'));
+    check_bool('口: 書いたら管理の記録(task.create・task.update・task.delete)', str_contains($api, "km_admin_log_record('content', 'task.create'") && str_contains($api, "km_admin_log_record('content', 'task.update'")
+        && str_contains($api, "km_admin_log_record('content', 'task.delete'") && isset(KM_ADMIN_LOG_ACTION_LABELS['task.create'], KM_ADMIN_LOG_ACTION_LABELS['task.update'], KM_ADMIN_LOG_ACTION_LABELS['task.delete']));
+    check_bool('口: 例外の文面は出さない(入力の誤りだけ 400 で出す)', str_contains($api, "respond(['success' => false, 'message' => '現在利用できません。'], 503);") && str_contains($api, 'catch (InvalidArgumentException $exception)'));
+
+    // 表
+    $tasks = $file('src/lib/tasks.php');
+    check_bool('表: 補足は新しい表 km_task_details(km_tasks に列を足さない)', str_contains($tasks, 'CREATE TABLE IF NOT EXISTS km_task_details (') && !preg_match('/ALTER TABLE km_tasks ADD COLUMN IF NOT EXISTS (plan_ref|note)/', $tasks)
+        && str_contains($tasks, "km_db_table_exists(\$pdo, 'km_task_details')"));
+    check_bool('表: タスクを消したら補足も消す', str_contains($tasks, 'DELETE FROM km_task_details WHERE task_id = ?'));
+    check_bool('表: 足したら id を返す', str_contains($tasks, 'return (int) $pdo->lastInsertId();'));
+    try {
+        km_task_details_validate('段7-1', "1 行目\n2 行目");
+        $okDetails = true;
+    } catch (InvalidArgumentException) {
+        $okDetails = false;
+    }
+    $badDetails = 0;
+    foreach ([["段7\n1", ''], [str_repeat('あ', KM_TASK_PLAN_REF_MAX + 1), ''], ['', str_repeat('x', KM_TASK_NOTE_MAX + 1)], ['', "a\x07b"]] as [$ref, $note]) {
+        try {
+            km_task_details_validate($ref, $note);
+        } catch (InvalidArgumentException) {
+            $badDetails++;
+        }
+    }
+    check_bool('表: 段の番号は 1 行・32 字まで、メモは 2000 字まで(改行は可・制御文字は不可)', $okDetails && $badDetails === 4);
+    $wantTopics = ['', 'server', 'security', 'web', 'app', 'mapdata', 'devenv', 'monitor'];
+    check('分類: サーバー・セキュリティ・Website・アプリ・地図のデータ・検証環境・サービス監視', $wantTopics, array_keys(KM_TASK_TOPICS));
+    $ja = $file('src/admin/assets/i18n/ja.js');
+    $en = $file('src/admin/assets/i18n/en.js');
+    $missing = [];
+    foreach (array_merge(array_filter($wantTopics, static fn (string $t): bool => $t !== ''), ['none']) as $t) {
+        foreach (['ja' => $ja, 'en' => $en] as $lang => $dict) {
+            if (!str_contains($dict, '"page.projects.topic.' . $t . '"')) {
+                $missing[] = "{$lang}:{$t}";
+            }
+        }
+    }
+    foreach (['fieldPlanRef', 'fieldNote'] as $k) {
+        foreach (['ja' => $ja, 'en' => $en] as $lang => $dict) {
+            if (!str_contains($dict, '"page.projects.' . $k . '"')) {
+                $missing[] = "{$lang}:{$k}";
+            }
+        }
+    }
+    check('分類と欄の訳が日英の辞書にある', [], $missing);
+    $page = $file('src/admin/projects.php');
+    check_bool('画面: 段の番号とメモを出し、直せる(style 属性を使わない)', str_contains($page, 'km_task_details_set($pdo, $newId, $planRef, $note);') && str_contains($page, 'name="plan_ref"')
+        && str_contains($page, 'name="note"') && str_contains($page, "getElementById('km-task-edit-note')") && preg_match('/<[a-z][^>]*\sstyle=/i', $page) !== 1);
+
+    // 入口・環境・手元の鍵
+    $nginx = $file('nginx/default.conf.template');
+    check_bool('nginx: クエリをログに残さず、本文 64KB・回数は km_api', str_contains($nginx, "location = /api/project-tasks.php {\n        access_log /var/log/nginx/access.log km_no_query;\n        client_max_body_size 64k;\n        limit_req zone=km_api"));
+    check_bool('compose: web に KM_PROJ_PASSKEY を渡す(空の既定)', str_contains($file('compose.yaml'), 'KM_PROJ_PASSKEY: ${KM_PROJ_PASSKEY:-}') && str_contains($file('.env.example'), "\nKM_PROJ_PASSKEY=\n"));
+    $deploy = $file('scripts/deploy-to-host.ps1');
+    check_bool('手元の鍵(docs/.env)は配備に載らない(docs を送らない)', preg_match('/\$include\s*=\s*@\(([^)]*)\)/', $deploy, $inc) === 1 && !str_contains($inc[1], 'docs'));
+    $sync = 'F:/Pull/Ichinoseki_Kosen_Web/tools/sync-from-website.ps1';
+    if (is_file($sync)) {
+        check_bool('手元の鍵は GitHub の控えに載らない(写しの台本が .env を除く)', preg_match("/'\\.env'/", (string) file_get_contents($sync)) === 1);
+    } else {
+        check_skip('手元の鍵は GitHub の控えに載らない', 'GitHub の控えの写しの台本が無い(この PC 以外)');
+    }
+    $syncPs = $file('scripts/proj-passkey-sync.ps1');
+    check_bool('写す台本: 鍵は標準入力(引用付きのヒアドキュメント)で渡し、引数に載せない・前の .env を残す', str_contains($syncPs, "IFS= read -r NEWKEY <<'KM_PROJ_EOF'") && str_contains($syncPs, "| & ssh @sshArgs 'sh -s'")
+        && str_contains($syncPs, '.env.before-proj-passkey-') && !preg_match('/Write-Host[^\n]*\$passkey(?!\.Length)\b/', $syncPs));
+    check_bool('写す台本: 突き合わせは sha256 だけ・compose で崩れる記号を断る', str_contains($syncPs, 'sha256sum') && str_contains($syncPs, '[$\'\'"\\\\`#]'));
+    $client = $file('scripts/proj-tasks.ps1');
+    check_bool('手元の道具: 鍵はヘッダーで送り、URL に載せない・https だけ(localhost は除く)', str_contains($client, "'X-KM-Proj-Passkey' = \$found[0].Groups[1].Value") && !preg_match('/[?&](passkey|key|token)=/i', $client)
+        && str_contains($client, "'^https://[A-Za-z0-9.-]+(:\\d+)?\$'"));
+
+    // Logto のメールのテンプレート
+    $tpl = $file('src/scripts/logto-email-templates.php');
+    check_bool('テンプレート: 既定は比べるだけ・書くのは --apply のときだけ', str_contains($tpl, "\$apply = in_array('--apply', \$args, true);") && strpos($tpl, 'if (!$apply) {') < strpos($tpl, 'km_logto_management_patch('));
+    check_bool('テンプレート: 書くのは templates だけ(ほかの設定は読んだまま返す)', str_contains($tpl, "\$config['templates'] = \$templates;") && str_contains($tpl, "km_logto_management_patch('connectors/' . \$connectorId, ['config' => \$config]);")
+        && preg_match_all('/\$config\[[^\]]+\]\s*=(?!=)/', $tpl) === 1);
+    check_bool('テンプレート: 書いたら読み直して確かめる', strpos($tpl, '[, $after] = km_email_templates_connector();') > strpos($tpl, 'km_logto_management_patch('));
+    check_bool('テンプレート: 設定(送信サーバー・パスワード)を出さない', !preg_match('/(print_r|var_dump|var_export|json_encode)\(\s*\$(config|after|found)/', $tpl));
+    check_bool('テンプレート: 本文に {{code}} が無いもの・種類の重なりを断る', str_contains($tpl, "str_contains(\$content, '{{code}}')") && str_contains($tpl, '2 回あります'));
+    $canon = json_decode($file('docs/logto-email-templates.json'), true);
+    if (is_array($canon)) {
+        $types = array_map(static fn ($t): string => is_array($t) ? (string) ($t['usageType'] ?? '') : '', $canon);
+        check_bool('テンプレートの正本: 9 種類・重ならない・どれも {{code}} を持つ', count($types) === 9 && count(array_unique($types)) === 9
+            && array_filter($canon, static fn ($t): bool => !is_array($t) || !str_contains((string) ($t['content'] ?? ''), '{{code}}')) === []);
+    } else {
+        check_skip('テンプレートの正本', 'docs/logto-email-templates.json が無い(配備先)');
+    }
+}
+
 function km_check_bench(): void
 {
     require_once __DIR__ . '/../lib/bench.php';
@@ -11625,6 +11759,9 @@ foreach ($selected as $name) {
             break;
         case 'bench':
             km_check_bench();
+            break;
+        case 'proj-api':
+            km_check_proj_api();
             break;
         case 'recaptcha':
             // 環境依存。数えず、終了コードだけを持ち帰る。

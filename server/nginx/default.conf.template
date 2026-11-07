@@ -721,6 +721,16 @@ server {
         proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
     }
 
+    # プロジェクト状況の口(2026-11-07。api/project-tasks.php・lib/proj-passkey.php)。鍵 KM_PROJ_PASSKEY はヘッダーで受ける。
+    # 本文は 64KB まで(PHP も同じ)。回数は km_api(外れの回数は PHP 側で 15 分 8 回)。**クエリをログに残さない**(鍵を載せてしまったとき用)
+    location = /api/project-tasks.php {
+        access_log /var/log/nginx/access.log km_no_query;
+        client_max_body_size 64k;
+        limit_req zone=km_api burst=60 nodelay;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+
     # 案内チャット(2026-10-24。lib/guide-chat.php)。本文は質問 1 つと直前の会話 2 往復(2026-10-30。PHP でも 8KB で切る)。
     # LLM を待つので、返事の待ち時間は既定より長く取る(PHP の curl は 30 秒 × 2 回で切る)
     location = /api/guide-chat.php {

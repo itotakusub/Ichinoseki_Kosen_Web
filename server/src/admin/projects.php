@@ -32,19 +32,26 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && !km_csrf_verify()) {
     $status = (string) ($_POST['status'] ?? '');
     $progress = (int) ($_POST['progress'] ?? 0);
     $topic = (string) ($_POST['topic'] ?? '');
+    $planRef = (string) ($_POST['plan_ref'] ?? '');
+    $note = (string) ($_POST['note'] ?? '');
     $id = (int) ($_POST['id'] ?? 0);
 
     try {
         $pdo = km_db();
 
         if ($action === 'create') {
-            km_tasks_create($pdo, $title, $status, $progress, $topic);
+            // 補足(段の番号・メモ)を先に確かめる(タスクだけ入って補足が断られる、を起こさない)
+            km_task_details_validate(trim($planRef), trim($note));
+            $newId = km_tasks_create($pdo, $title, $status, $progress, $topic);
+            km_task_details_set($pdo, $newId, $planRef, $note);
             km_admin_log_record('content', 'task.create', $title);
             header('Location: ./projects.php?created=1', true, 302);
             exit;
         }
         if ($action === 'update') {
+            km_task_details_validate(trim($planRef), trim($note));
             km_tasks_update($pdo, $id, $title, $status, $progress, $topic);
+            km_task_details_set($pdo, $id, $planRef, $note);
             km_admin_log_record('content', 'task.update', $title);
             header('Location: ./projects.php?updated=1', true, 302);
             exit;
@@ -125,7 +132,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
             <div class="alert alert-info d-flex align-items-start" role="alert">
               <i class="bi bi-info-circle-fill me-2 mt-1" aria-hidden="true"></i>
               <div data-i18n="page.projects.notice">
-                この管理画面プロジェクト自体の進捗です。カンバン画面と同じデータを見ています。
+                KosenMap 全体の進捗です(plan.md の段 7 からはここに置きます)。カンバン画面と同じデータで、手元の道具(proj-tasks.ps1)からも読み書きできます。
               </div>
             </div>
 
@@ -176,7 +183,15 @@ require __DIR__ . '/_inc/partials/page-header.php';
                         <tr>
                           <?php // 利用者が入れた自由文なので data-i18n は付けず、そのまま出す
                                 // (翻訳するのは状態ラベルだけ。timeline.php と同じ方針) ?>
-                          <td><?= km_e((string) $row['title']) ?></td>
+                          <td>
+                            <?php if ((string) $row['planRef'] !== ''): ?>
+                              <span class="badge text-bg-light border font-monospace me-1"><?= km_e((string) $row['planRef']) ?></span>
+                            <?php endif; ?>
+                            <?= km_e((string) $row['title']) ?>
+                            <?php if ((string) $row['note'] !== ''): ?>
+                              <div class="fs-7 text-body-secondary km-task-note"><?= nl2br(km_e((string) $row['note'])) ?></div>
+                            <?php endif; ?>
+                          </td>
                           <td>
                             <span
                               class="badge <?= km_e($statusBadge[$row['status']] ?? 'text-bg-secondary') ?>"
@@ -268,9 +283,17 @@ require __DIR__ . '/_inc/partials/page-header.php';
                             <?php endforeach; ?>
                           </select>
                         </div>
-                        <div class="mb-0">
+                        <div class="mb-3">
                           <label class="form-label" for="<?= km_e($id) ?>-progress" data-i18n="page.projects.fieldProgress">進捗 (0〜100)</label>
                           <input type="number" class="form-control" id="<?= km_e($id) ?>-progress" name="progress" min="0" max="100" value="0" />
+                        </div>
+                        <div class="mb-3">
+                          <label class="form-label" for="<?= km_e($id) ?>-plan-ref" data-i18n="page.projects.fieldPlanRef">段の番号(plan.md。例: 段7-1)</label>
+                          <input type="text" class="form-control" id="<?= km_e($id) ?>-plan-ref" name="plan_ref" maxlength="<?= KM_TASK_PLAN_REF_MAX ?>" />
+                        </div>
+                        <div class="mb-0">
+                          <label class="form-label" for="<?= km_e($id) ?>-note" data-i18n="page.projects.fieldNote">メモ(どうするか・誰が)</label>
+                          <textarea class="form-control" id="<?= km_e($id) ?>-note" name="note" rows="3" maxlength="<?= KM_TASK_NOTE_MAX ?>"></textarea>
                         </div>
                       </div>
                       <div class="modal-footer">
@@ -316,6 +339,8 @@ require __DIR__ . '/_inc/partials/page-header.php';
               document.getElementById('km-task-edit-status').value = task.status ?? 'todo';
               document.getElementById('km-task-edit-progress').value = task.progress ?? 0;
               document.getElementById('km-task-edit-topic').value = task.topic ?? '';
+              document.getElementById('km-task-edit-plan-ref').value = task.planRef ?? '';
+              document.getElementById('km-task-edit-note').value = task.note ?? '';
             });
           })();
         </script>

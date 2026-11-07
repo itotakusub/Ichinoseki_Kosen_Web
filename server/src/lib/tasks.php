@@ -28,8 +28,22 @@ const KM_TASK_LANES = ['todo', 'progress', 'done'];
  */
 const KM_TASK_TOPICS = [
     '' => 'なし',
+    // 2026-11-07(利用者の指示「段 7 から、プロジェクト状況に追加(分類も)」)。plan.md の段の中身をこの分け方で並べる
+    'server' => 'サーバー・運用',
+    'security' => 'セキュリティ',
+    'web' => 'Website',
+    'app' => 'アプリ',
+    'mapdata' => '地図のデータ',
+    'devenv' => '検証環境',
     'monitor' => 'サービス監視',
 ];
+
+/**
+ * タスクの補足(2026-11-07)。plan.md の段の番号(「段7-1」など)と、どうするかのメモ。
+ * **km_tasks には列を足さない**(既存の表は変えない決まり)。別の表に task_id で 1 行ずつ置く。
+ */
+const KM_TASK_PLAN_REF_MAX = 32;
+const KM_TASK_NOTE_MAX = 2000;
 
 /**
  * サービス監視の「今後の拡張」に、以前 monitor.php へ直接書いていた 3 行。
@@ -50,6 +64,7 @@ function km_tasks_ensure_table(PDO $pdo): void
     }
     if (km_db_table_exists($pdo, 'km_tasks')) {
         km_tasks_ensure_topic_column($pdo);
+        km_task_details_ensure_table($pdo);
         $ready = true;
         return;
     }
@@ -72,7 +87,60 @@ function km_tasks_ensure_table(PDO $pdo): void
 
     km_tasks_seed_once($pdo);
     km_tasks_seed_monitor($pdo);
+    km_task_details_ensure_table($pdo);
     $ready = true;
+}
+
+/**
+ * 補足の表(2026-11-07)。**新しい表だけ**(CREATE TABLE IF NOT EXISTS)。km_tasks には触れない。
+ * 外部キーは張らない(km_tasks の作り方に依らずに作れるように)。タスクを消すときに一緒に消す(km_tasks_delete)。
+ */
+function km_task_details_ensure_table(PDO $pdo): void
+{
+    if (km_db_table_exists($pdo, 'km_task_details')) {
+        return;
+    }
+    $pdo->exec(<<<'SQL'
+        CREATE TABLE IF NOT EXISTS km_task_details (
+            task_id INT NOT NULL PRIMARY KEY,
+            plan_ref VARCHAR(32) NOT NULL DEFAULT '',
+            note TEXT NULL,
+            updated_at DATETIME NOT NULL,
+            INDEX (plan_ref)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        SQL);
+}
+
+/** 段の番号とメモを確かめる。段の番号は 1 行(改行・制御文字なし)、メモは改行まで。 */
+function km_task_details_validate(string $planRef, string $note): void
+{
+    if (mb_strlen($planRef) > KM_TASK_PLAN_REF_MAX || preg_match('/[\x00-\x1F\x7F]/u', $planRef) === 1) {
+        throw new InvalidArgumentException('段の番号は改行なしの ' . KM_TASK_PLAN_REF_MAX . ' 文字以内にしてください。');
+    }
+    if (mb_strlen($note) > KM_TASK_NOTE_MAX || preg_match('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', $note) === 1) {
+        throw new InvalidArgumentException('メモは ' . KM_TASK_NOTE_MAX . ' 文字以内にしてください(制御文字は使えません)。');
+    }
+    if (preg_match('//u', $planRef . $note) !== 1) {
+        throw new InvalidArgumentException('段の番号かメモの文字コードが UTF-8 ではありません。');
+    }
+}
+
+/** 補足を置く。**両方とも空なら行を消す**(空の行を残さない)。 */
+function km_task_details_set(PDO $pdo, int $taskId, string $planRef, string $note): void
+{
+    km_tasks_ensure_table($pdo);
+    $planRef = trim($planRef);
+    $note = trim(str_replace("\r\n", "\n", $note));
+    km_task_details_validate($planRef, $note);
+
+    if ($planRef === '' && $note === '') {
+        $pdo->prepare('DELETE FROM km_task_details WHERE task_id = ?')->execute([$taskId]);
+        return;
+    }
+    $pdo->prepare(
+        'INSERT INTO km_task_details (task_id, plan_ref, note, updated_at) VALUES (?, ?, ?, NOW())
+         ON DUPLICATE KEY UPDATE plan_ref = VALUES(plan_ref), note = VALUES(note), updated_at = NOW()'
+    )->execute([$taskId, $planRef, $note === '' ? null : $note]);
 }
 
 /**
@@ -150,18 +218,45 @@ function km_tasks_seed_once(PDO $pdo): void
  * 時刻は UNIX_TIMESTAMP() の epoch で返す(フェーズ5・9・13の教訓。DB と PHP は
  * Asia/Tokyo に揃えたが、epoch なら設定が食い違っても表示がずれない)。
  *
+ * 段の番号(planRef)とメモ(note)は補足の表から。無ければ空文字。
+ *
  * @return array<int, array{id:int, title:string, status:string, progress:int, topic:string,
- *                          sortOrder:int, updatedAtEpoch:int}>
+ *                          sortOrder:int, updatedAtEpoch:int, planRef:string, note:string}>
  */
 function km_tasks_all(PDO $pdo): array
 {
     km_tasks_ensure_table($pdo);
 
     return $pdo->query(
-        'SELECT id, title, status, progress, topic, sort_order AS sortOrder,
-                UNIX_TIMESTAMP(updated_at) AS updatedAtEpoch
-         FROM km_tasks ORDER BY sort_order, id'
+        'SELECT t.id, t.title, t.status, t.progress, t.topic, t.sort_order AS sortOrder,
+                UNIX_TIMESTAMP(GREATEST(t.updated_at, COALESCE(d.updated_at, t.updated_at))) AS updatedAtEpoch,
+                COALESCE(d.plan_ref, \'\') AS planRef, COALESCE(d.note, \'\') AS note
+         FROM km_tasks t LEFT JOIN km_task_details d ON d.task_id = t.id
+         ORDER BY t.sort_order, t.id'
     )->fetchAll();
+}
+
+/**
+ * 1 件(API の読み直し)。無ければ null。
+ *
+ * @return array{id:int, title:string, status:string, progress:int, topic:string,
+ *               sortOrder:int, updatedAtEpoch:int, planRef:string, note:string}|null
+ */
+function km_tasks_find(PDO $pdo, int $id): ?array
+{
+    km_tasks_ensure_table($pdo);
+
+    $stmt = $pdo->prepare(
+        'SELECT t.id, t.title, t.status, t.progress, t.topic, t.sort_order AS sortOrder,
+                UNIX_TIMESTAMP(GREATEST(t.updated_at, COALESCE(d.updated_at, t.updated_at))) AS updatedAtEpoch,
+                COALESCE(d.plan_ref, \'\') AS planRef, COALESCE(d.note, \'\') AS note
+         FROM km_tasks t LEFT JOIN km_task_details d ON d.task_id = t.id
+         WHERE t.id = ?'
+    );
+    $stmt->execute([$id]);
+    $row = $stmt->fetch();
+
+    return is_array($row) ? $row : null;
 }
 
 /**
@@ -203,7 +298,8 @@ function km_tasks_validate(string $title, string $status, int $progress): void
     }
 }
 
-function km_tasks_create(PDO $pdo, string $title, string $status, int $progress, string $topic = ''): void
+/** 足したタスクの id を返す(API が読み直して返すため。2026-11-07)。 */
+function km_tasks_create(PDO $pdo, string $title, string $status, int $progress, string $topic = ''): int
 {
     km_tasks_ensure_table($pdo);
     km_tasks_validate($title, $status, $progress);
@@ -217,6 +313,8 @@ function km_tasks_create(PDO $pdo, string $title, string $status, int $progress,
          VALUES (?, ?, ?, ?, ?, NOW(), NOW())'
     );
     $stmt->execute([trim($title), $status, $progress, $topic, $next]);
+
+    return (int) $pdo->lastInsertId();
 }
 
 function km_tasks_update(PDO $pdo, int $id, string $title, string $status, int $progress, string $topic = ''): void
@@ -235,6 +333,8 @@ function km_tasks_delete(PDO $pdo, int $id): void
 {
     km_tasks_ensure_table($pdo);
     $pdo->prepare('DELETE FROM km_tasks WHERE id = ?')->execute([$id]);
+    // 補足も消す(外部キーを張っていないので、ここで消さないと残る)
+    $pdo->prepare('DELETE FROM km_task_details WHERE task_id = ?')->execute([$id]);
 }
 
 /**

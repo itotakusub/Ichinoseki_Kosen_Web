@@ -24,7 +24,8 @@
 | ホストに入る利用者 | **`kmops`**(配備・`%%host`・控え。docker あり・sudo なし・鍵 `km_ops`・転送は禁止)と **`km`**(sudo のみ・docker なし・鍵 `km_vps`・SOCKS のトンネル)。クラウド既定の `ubuntu` は退役([12](12-hardening-2026-09-15.ipynb) §7-4 B) |
 | 週次の控え | この PC のタスクが `kmops` へ門番付きの鍵(`km_backup`)で入って取る(同 §7-4 A) |
 | DB | `Main`・`Ito` とも `Kosen_map` だけ・TLS 必須・`172.30.2.%` から。`root@%` は無し。Logto は `logto_app`(SUPERUSER でない)(09-18 の値) |
-| 認証 | MFA は admin・default とも **Mandatory**、パスワード方針は 12 文字以上・流出パスワード拒否(09-18 の値。Console は見ていない) |
+| 認証 | MFA は admin(Totp・WebAuthn)・default(Totp・WebAuthn・BackupCode・EmailVerificationCode)とも **Mandatory**。パスワード方針は両方とも 12 文字以上・流出パスワード拒否・利用者の情報と繰り返し・連番を拒否(11-07 に Logto の DB を読むだけで確認)。メールのテンプレートは 9 種類のうち **正本どおりは SignIn だけ**(残り 8 つは `scripts/logto-email-templates.php --apply` 待ち) |
+| プロジェクト状況 | `km_tasks` は **0 件**(以前ぜんぶ消した)。11-07 から plan.md の**段 7 以降はここに置く**(分類つき)。手元から `scripts/proj-tasks.ps1`(鍵 `KM_PROJ_PASSKEY`)で読み書きする —— **配備待ち** |
 
 ## 残っていること(2026-11-07 に利用者と見直した)
 
@@ -32,14 +33,16 @@
 
 | 段 | 何 |
 |---|---|
-| 1 | 旧ドメインの DKIM 鍵を退避・Logto の設定の見直し(MFA・パスワード方針・メールのテンプレート)・メールの見え方(Safari・Apple の「メール」・Gmail) |
+| 1 | 旧ドメインの DKIM 鍵を退避(**コマンドを渡した・利用者**)・Logto の設定の見直し(**MFA・パスワード方針は確認済み**。テンプレートは配備のあと `--apply`)・メールの見え方(Safari・Apple の「メール」・Gmail。`--apply` のあと) |
 | 2 | 地図のデータ: 英語の名前・読み / 階段の向き / 場所の色分けの絵(areaPath) |
 | 3 | アプリを実機で: 試験だけで見ていない画面・共有のリンクをアプリで開く・Wi-Fi 測位の比べ・AR の実測 |
 | 4 | 本番の Web 地図の速さの測り直し・案内チャットの確かめ |
 | 5 | 検証環境を作り直す(107 は 10-06 から応答なし。**作り方から見直す**) |
 | 6 | ストリートビュー(360°)を Website へ(見せ方などを決めてから) |
+| 7〜 | **管理画面「プロジェクト状況」に置く**(11-07、利用者の指示。分類つき。plan.md には段の見出しと設計だけ書く) |
 
-**配備待ち**(手元で済み): イベントの地点をイベント中だけ引いた倍率でも出す(Web。アプリは版 50 で公開済み)・本番の置き去り 16 個の退避(`deploy-to-host.ps1` の一覧)。
+**配備待ち**(手元で済み): イベントの地点をイベント中だけ引いた倍率でも出す(Web。アプリは版 50 で公開済み)・本番の置き去り 16 個の退避(`deploy-to-host.ps1` の一覧)・
+プロジェクト状況の口と鍵(**`-Action up` が要る**。compose の環境と nginx が変わった)・Logto のテンプレートの台本。
 
 **保留**(利用者、11-07):
 - カーネルの直った版 —— CVE-2026-98432 を Ubuntu が直した版を出したら上げて再起動する。それまでつなぎ(km-ipopt・MPTCP 0)を続ける
@@ -53,6 +56,26 @@
 ---
 
 ## 記録 2026 年 11 月(新しい順)
+
+### 2026-11-07 — 段 1 とプロジェクト状況の口(利用者の指示「段 1 から進めて。段 7 からはプロジェクト状況に追加(分類も)。編集できる API を。docs の .env の KM_PROJ_PASSKEY を使わないとアクセスできないように」。手元で済み・配備待ち)
+
+- **1-1 旧ドメインの DKIM 鍵**: 本番で読むだけで確かめた —— KeyTable・SigningTable は `ito4.jp` だけ、`ito8795.com.private` は `ito4.jp.private` と**同じ中身の写し**(09-17 の切り替えで複製した元)。
+  使われていないので、鍵の置き場の中の `retired-2026-11-07/` へ移すコマンドを利用者に渡した(消さない)
+- **1-2 Logto の設定**(Logto の DB を読むだけ): MFA・パスワード方針は「いま」の表のとおりで直すものはない。
+  メールのテンプレートは 9 種類のうち SignIn だけが正本どおりで、8 つは件名の `(Verification Code)` が無い古い形だった(10-12 に Console へ貼ったのが残っていない)。
+  `src/scripts/logto-email-templates.php` を作った —— 既定は比べるだけ・`--apply` で SMTP のコネクタの `templates` だけを入れ替え(送信サーバーなどの設定は読んだまま返す・画面に出さない)・書いたら読み直して確かめる。
+  正本は手元の `docs/logto-email-templates.json`(配備しない)を標準入力で渡す。本番で比べるだけを流して「8 つが違う」を確かめた
+- **1-3 メールの見え方**: `--apply` のあと利用者が端末で見る(手順は利用者に渡した)
+- **プロジェクト状況の口** `api/project-tasks.php`(GET 一覧・1 件 / POST 足す・まとめて 50 件まで / PATCH・PUT 直す / DELETE 消す)。
+  鍵は `lib/proj-passkey.php` にまとめた(**今後ほかの口もこれを使う**): 環境変数 `KM_PROJ_PASSKEY` が無い・32 字未満なら 503、鍵は**ヘッダーだけ**(`X-KM-Proj-Passkey` か `Authorization: Bearer`)、
+  URL に載せたら 400、sha256 どうしを hash_equals、**外れだけ**数えて 15 分 8 回で 429(錠 `proj-api`。当たりはロック中でも通す)、外れは 0.3〜0.6 秒待たせる。
+  書いた操作はタイムラインに「プロジェクトの鍵(API) がタスクを…」と残る。nginx はこの口のクエリをログに残さない・本文 64KB・回数は km_api
+- **分類**を足した: サーバー・運用 / セキュリティ / Website / アプリ / 地図のデータ / 検証環境(+ サービス監視)。**段の番号とメモ**は新しい表 `km_task_details`(km_tasks に列は足さない)。画面「プロジェクト状況」で出して直せる
+- **鍵の置き場**: 正本は手元の `server/docs/.env`(配備は docs を送らない・GitHub の控えは .env を除く)。本番の `/opt/kosenmap/.env` へは `scripts/proj-passkey-sync.ps1` が写す
+  (鍵は引数に載せず標準入力・前の .env は `.env.before-proj-passkey-<日時>` に残す・突き合わせは sha256 だけ)。手元の道具は `scripts/proj-tasks.ps1`(list・get・add・update・remove・topics)
+- **確かめたこと**: check.php の組 `proj-api` 36 件。手元で口を呼び、鍵なし 503・URL の鍵 400・メソッド違い 405・外れ 401・8 回目から 429・当たりはロック中でも通ることを見た。
+  SQL は本番の MariaDB で**一時表だけ**(km_tasks も一時表で影にした)で流し、結合・上書き・lastInsertId を確かめた(本物の km_tasks は 0 件のまま)
+- **組み直す前の status.md** は `server/Old/docs/status.before-restructure-2026-11-07.md`
 
 ### 2026-11-07 — phpMyAdmin は常時 OFF・トンネル開通SSH.cmd で起こす(11-07、利用者の指示「OFF にする条件は Chrome を終了したとき」。11-07 昼に本番で確認: 12:00:02 に起き、Chrome を閉じたあと 12:02:03 に止まった)
 
