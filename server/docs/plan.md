@@ -194,6 +194,44 @@ status.md の「残っていること」を利用者と見直して決めた(202
 | 8-4 | DNS の取り込み・ネームサーバー・Cloudflare の画面(Full (strict)・Always Use HTTPS 切・Bot Fight Mode 切・WAF の国) | docs/17 §2-4・§3 | 利用者 |
 | 8-5 | `ito4.jp` を橙 → 確かめ → `auth`・`share`・HTML 展開を 1 つずつ | docs/17 §3 の 7・8(admin・ssh・mail は灰のまま) | 利用者・確かめはこちら(読むだけ) |
 | 8-6 | **完了(11-08)** Cloudflare の分析を訪問者の画面に(11-08 追加。WAF で止めた記録・時間ごとの通信量・訪問者の位置を DB に・消さない) | `scripts/host-cloudflare-import.sh`(cron 版 14・毎時)・`lib/cloudflare-analytics.php`・`lib/visitor-geo.php`・docs/17 §6 | トークンと配備は利用者・確かめはこちら |
+
+### 段 9 —— Web Code Editor(`https://ito4.jp/editor/`。名前は web-code-editor。**2026-11-08 完了**)
+
+利用者(11-08)が渡した開発計画書 1.1(`Downloads\writing-block.md`)の**優先度 1〜3**(基本・保存と操作性・補完とエラーとテンプレートとダウンロード)。優先度 4(複数ファイル・ZIP など)は次のプラン。
+利用者の答え:「ito4.jp で公開」「補完は HTML・CSS・JS すべて日本語で(`<a` で `href="URLを入力"` の候補と用法)」「画面は日英」「処理はできるだけクライアントで」。
+
+**形**: サーバーは殻と静的ファイルを配るだけ(DB・API・サインインなし)。編集・プレビューの組み立て・補完・保存(localStorage)・ダウンロード(Blob)はすべてブラウザ。
+
+| 部分 | 場所 | 考え |
+|---|---|---|
+| 作る元 | `server/editor-src/`(Vite 8.3.5 + Monaco 0.57.0。版は固定・lock あり。**配備しない**・node_modules は GitHub にも出さない) | `npm run build` が `src/editor/` を作り直す。殻 `index.php` も `public/` から写す(**`src/editor/` を直接直さない**) |
+| 殻 | `src/editor/index.php` | CSP `'editor'`: **style だけ `'unsafe-inline'`**(Monaco が `style="…"` を innerHTML で組む。nonce と一緒に書くと無視されるので style-src から nonce を外す)・script は nonce のまま・`worker-src 'self'`・`frame-src` は html. だけ。入口は `.vite/manifest.json` から |
+| プレビュー | `https://html.<ドメイン>/editor-run.html`(`html-view.php`) | **srcdoc は親の CSP を受け継ぐ**ので別のオリジンで動かす。本体 →(sandbox="allow-scripts"・オリジンなし)走らせる側 →(さらに sandbox の srcdoc)利用者の文書。frame-ancestors は本体だけ。知らせは `event.source` と形と長さで確かめる |
+| 補完 | `editor-src/src/data/`(html・css・js。**文はすべて自分で書いた**) | Monaco の標準データ(英語)を土台に日本語の説明と例を重ね、標準に無いもの(search・popover など)は足す。HTML の雛形(`<a` → `href="URLを入力"`)・JS は日本語の候補とホバーを足す(TypeScript の補完はそのまま) |
+
+| # | 何 | 誰が | いま |
+|---|---|---|---|
+| 9-1 | 基本・操作性・補完・テンプレート 5 つ・ダウンロード・日英・暗い見た目 | こちら | 11-08 に作り、検証機と Chrome で確かめた(補完・プレビューの守り・エラーの行番号・設定の丸め・英語) |
+| 9-2 | 試験 | こちら | `src/scripts/js/editor.test.js`(110 件)・check.php の組 `editor`(32 件) |
+| 9-3 | 本番へ配備(nginx を変えたので reverse-proxy を起こし直す) | 利用者 | **11-08 に配備済み**(応答と CSP を読むだけで確かめた) |
+| 9-4 | 入口: 管理画面「QR のリンク集」に `https://ito4.jp/editor/` を足す | 利用者 | **11-08 済み** |
+| 9-5 | スマホの幅(760px 未満は「編集 / プレビュー」の切り替え)を実機で | 利用者 | **11-08 確認 OK** |
+
+### 段 10 —— Web Code Editor 優先度 4(複数ファイル・プロジェクト・ZIP・インポート・ショートカット。11-08〜。進み具合はプロジェクト状況 #117〜#121)
+
+利用者(11-08)「続けてください」。決めたこと: **保存はサインインしてサーバーにも**・ショートカットは**付け直せる**・HTML 展開へ直接の公開は付けない・配色テーマとタブの追加削除も入れる。
+
+**形**: 作業の正本はブラウザ(IndexedDB `km-editor`)。サインインしていれば裏でサーバーへ同期する(サインインしなくても今までどおり使える)。2 回に分けて配備する。
+
+| 部分 | 考え |
+|---|---|
+| 10-A 保存の形 | プロジェクト = 目録(パス → ハッシュ)+ ファイル(テキストは文字列・画像は Blob)。今の `km-editor-v1` は「はじめのプロジェクト」へ移す(`index.html` を `<link>`・`<script src>` 付きの完全な文書に。古い鍵は残す) |
+| 10-A 画面 | 左にファイルの木・開いたファイルのタブ(× で閉じる)・プロジェクトの一覧・配色 4 つ + 自動・ショートカットの付け直し(ブラウザのキーと重なりは断る) |
+| 10-A プレビュー | 入口の HTML から、プロジェクトの中を指す CSS・JS・画像・ES モジュールを中身(`data:`)に置き換えて組む。実行中の `fetch('相対パス')` は台本が答え、`<a href="about.html">` は入口を替える。走らせる側の上限は 32,000,000 字 |
+| 10-A ZIP | `Main/html-zip.js`(HTML 展開の部品)を使い回す。書き出し・読み込み(ZIP・フォルダ・ファイル・ドラッグ) |
+| 10-A の状況 | **11-08 に本番へ配備済み・完了**(スマホの幅も利用者が確認。status.md の 11-08 の記録) |
+| 10-B 同期 | `api/editor.php`(手本は `api/html-host.php`。CSRF・持ち主はセッションの sub だけ・止められた/テスト用のアカウントは断る)・`lib/editor-projects.php`(表 `km_editor_projects`・`uploads/editor/<id>/blobs`)。変わったファイルだけ送り、版のぶつかりは利用者に選ばせる。上限は 1 人 30 プロジェクト・200MB。規約に第8条の3(文面は利用者が確かめてから) |
+| 10-B の状況 | **11-08 に本番へ配備済み・完了**(検証機の Chrome で確認・規約の文面は利用者が確認。status.md の 11-08 の記録) |
 ---
 
 ## 優先順位の軸

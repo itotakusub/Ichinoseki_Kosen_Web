@@ -107,6 +107,8 @@ const KM_CHECK_PURE = [
     'image-scan',
     // ベンチマーク(2026-11-06)
     'bench',
+    // Web Code Editor(/editor/。2026-11-08)
+    'editor',
     // プロジェクト状況の口(鍵 KM_PROJ_PASSKEY)・Logto のメールのテンプレート(2026-11-07)
     'proj-api',
     // 読み・別名と英語の名前を CSV でまとめて(2026-11-07、plan.md 段 2-1)
@@ -11693,6 +11695,204 @@ function km_check_alias_csv(): void
     check_bool('画面: style 属性・インラインのハンドラを使わない', preg_match('/<[a-z][^>]*\s(style|on[a-z]+)=/i', $page) !== 1);
 }
 
+/**
+ * Web Code Editor(https://<ドメイン>/editor/。2026-11-08)。
+ *
+ * 中身はすべてブラウザで動く(Monaco・プレビュー・保存・補完)。ここで見るのは「守りの形」と「配る物が揃っていること」:
+ * CSP の 'editor'・プレビューの二重の sandbox と postMessage の確かめ・editor-run の frame-ancestors・
+ * 組み立てた出力(src/editor/)。元(editor-src/)と nginx・配備の一覧は手元の作業ツリーでだけ見る。
+ * 動きそのもの(組み立て・補完・保存)は node の src/scripts/js/editor.test.js。
+ */
+function km_check_editor(): void
+{
+    require_once __DIR__ . '/../lib/csp.php';
+    require_once __DIR__ . '/../lib/site.php';
+    $src = dirname(__DIR__);
+    $root = km_check_repo_root();
+    $read = static fn (string $path): string => (string) @file_get_contents($path);
+
+    km_check_heading('editor: CSP の \'editor\'');
+    $policy = km_csp_policy('editor');
+    $directive = static function (string $policy, string $name): string {
+        foreach (explode(';', $policy) as $part) {
+            $part = trim($part);
+            if (str_starts_with($part, $name . ' ')) {
+                return $part;
+            }
+        }
+        return '';
+    };
+    $style = $directive($policy, 'style-src');
+    $script = $directive($policy, 'script-src');
+    check_bool('style-src は \'unsafe-inline\' で、nonce を書かない(一緒に書くと unsafe-inline が無視される)', str_contains($style, "'unsafe-inline'") && !str_contains($style, "'nonce-"));
+    check_bool('script-src は nonce のまま(unsafe-inline も unsafe-eval も無い)', str_contains($script, "'nonce-") && !str_contains($script, 'unsafe'));
+    check('frame-src は見せる側(html.<ドメイン>)だけ', 'frame-src ' . km_site_html_origin(), $directive($policy, 'frame-src'));
+    check('worker-src は同じオリジンだけ(blob: は許さない)', "worker-src 'self'", $directive($policy, 'worker-src'));
+    check('connect-src は同じオリジンだけ', "connect-src 'self'", $directive($policy, 'connect-src'));
+    check_bool('ほかのページの style-src は unsafe-inline を持たないまま', !str_contains(km_csp_policy('public'), 'unsafe-inline')
+        && !str_contains(km_csp_policy('admin'), 'unsafe-inline') && !str_contains(km_csp_policy('html-host'), 'unsafe-inline'));
+    check_bool('ほかのページは worker-src を足さない', !str_contains(km_csp_policy('public'), 'worker-src'));
+
+    km_check_heading('editor: プレビュー(見せる側の editor-run)');
+    $view = $read($src . '/html-view.php');
+    check_bool('editor-run.html は frame-ancestors を本体のオリジンだけにする', (bool) preg_match('#\'/editor-run\.html\'\) \{[^}]*frame-ancestors " \. \$appOrigin\);#s', $view));
+    check_bool('editor-run.html は本体のオリジンを meta に入れる({{KM_PARENT}})', str_contains($read($src . '/html-host/editor-run.html'), '{{KM_PARENT}}') && str_contains($view, '{{KM_PARENT}}'));
+    $run = $read($src . '/html-host/editor-run.js');
+    check_bool('中の枠は sandbox="allow-scripts" だけ(allow-same-origin を付けない)', str_contains($run, "setAttribute('sandbox', 'allow-scripts')") && !str_contains($run, 'allow-same-origin'));
+    check_bool('受けるのは親の窓からだけ・形と 32,000,000 字を確かめる(段 10。画像を data: で中に入れる)', str_contains($run, 'event.source === window.parent') && str_contains($run, 'MAX_CHARS = 32000000')
+        && str_contains($run, "data.type !== 'km-editor-run'"));
+    check_bool('親へ送る宛先は本体のオリジン(* にしない)', str_contains($run, 'window.parent.postMessage(message, parentOrigin)') && !preg_match('#parent\.postMessage\([^)]*\'\*\'#', $run));
+    check_bool('中の枠からの知らせは、いまの枠・いまの回だけを回す', str_contains($run, 'event.source === frame.contentWindow') && str_contains($run, 'data.runId !== currentRun'));
+    check_bool('ページの移動(km-editor-nav)は、いまの回のものだけ・パスの長さを確かめて回す', str_contains($run, "data.type === 'km-editor-nav'") && str_contains($run, 'data.path.length <= 300')
+        && strpos($run, 'data.runId !== currentRun') < strpos($run, "data.type === 'km-editor-nav'"));
+
+    km_check_heading('editor: 殻(src/editor/index.php)と組み立てた出力');
+    $shell = $read($src . '/editor/index.php');
+    if ($shell === '') {
+        check_bool('src/editor/index.php がある(editor-src で npm run build)', false);
+        return;
+    }
+    check_bool('殻は CSP の \'editor\' を送る', str_contains($shell, "km_csp_send('editor')"));
+    // 先頭の PHP(注釈に <iframe … と書いてある)を除いた HTML の部分だけを見る
+    $shellHtml = (string) substr($shell, (int) strpos($shell, '<!DOCTYPE html>'));
+    preg_match_all('/<iframe\b[^\n]*/', $shellHtml, $iframes);
+    check('プレビューの枠は 1 つで、sandbox="allow-scripts" だけ(allow-same-origin を付けない)', [true], array_map(
+        static fn (string $tag): bool => str_contains($tag, 'sandbox="allow-scripts"') && !str_contains($tag, 'allow-'. 'same-origin') && !str_contains($tag, 'allow-top'),
+        $iframes[0]
+    ));
+    preg_match_all('/^.*<script\b.*$/m', $shell, $scriptLines);
+    check_bool('殻は style 属性も、nonce の無い <script> も書かない', !preg_match('/<[a-z][^>\n]*\sstyle="/i', $shell)
+        && $scriptLines[0] !== [] && array_filter($scriptLines[0], static fn (string $line): bool => !str_contains($line, 'km_csp_nonce_attr()')) === []);
+    check_bool('殻は DB を読まない・サインインは fail open で見る(段 10-B)', !str_contains($shell, 'db.php') && str_contains($shell, "require dirname(__DIR__) . '/logto-client.php';")
+        && str_contains($shell, '} catch (Throwable $exception) {') && str_contains($shell, 'km_session_start();'));
+    check_bool('殻は CSRF の札とサインインしているかを meta で渡す', str_contains($shell, '<meta name="km-csrf" content="<?= km_editor_e($csrf) ?>">')
+        && str_contains($shell, '<meta name="km-signed-in"'));
+    $manifest = json_decode($read($src . '/editor/.vite/manifest.json'), true);
+    $entry = is_array($manifest) ? ($manifest['src/main.js'] ?? null) : null;
+    $entryFile = is_array($entry) ? (string) ($entry['file'] ?? '') : '';
+    check_bool('manifest に入口(src/main.js)があり、そのファイルがある', $entryFile !== '' && is_file($src . '/editor/' . $entryFile), $entryFile);
+    $missing = [];
+    foreach ((array) ($entry['css'] ?? []) as $css) {
+        if (!is_file($src . '/editor/' . $css)) {
+            $missing[] = $css;
+        }
+    }
+    foreach ((array) ($entry['assets'] ?? []) as $asset) {
+        if (!is_file($src . '/editor/' . $asset)) {
+            $missing[] = $asset;
+        }
+    }
+    check('manifest が指す CSS・worker・フォントがすべてある', [], $missing);
+    $bundle = $entryFile !== '' ? $read($src . '/editor/' . $entryFile) : '';
+    preg_match_all('#/api/[A-Za-z0-9_-]+\.php#', $bundle, $apis);
+    check('本体の JS が呼ぶ口は /api/editor.php だけ(段 10-B)', ['/api/editor.php'], array_values(array_unique($apis[0])));
+    check_bool('本体の JS はプレビューへ * で送り、受けるときは event.source で確かめる', str_contains($bundle, 'km-editor-run') && str_contains($bundle, 'km-editor-ready'));
+
+    km_check_heading('editor: サーバーとの同期(段 10-B。lib/editor-projects.php・api/editor.php)');
+    require_once __DIR__ . '/../lib/editor-projects.php';
+    require_once __DIR__ . '/../lib/legal.php';
+    $h = str_repeat('a', 64);
+    $editorError = static function (callable $fn): string {
+        try {
+            $fn();
+        } catch (InvalidArgumentException $exception) {
+            return 'error';
+        }
+        return 'ok';
+    };
+    check('目録: パスの順に整える', ['a.html', 'css/b.css'], array_keys(km_editor_clean_manifest(['css/b.css' => ['h' => $h, 's' => 1], 'a.html' => ['h' => $h, 's' => 2]])));
+    check('目録: .. ・先頭の /・使えない拡張子・形の違い・大文字小文字だけ違う名前を断る', ['error', 'error', 'error', 'error', 'error', 'error'], [
+        $editorError(static fn () => km_editor_clean_manifest(['../x.html' => ['h' => $h, 's' => 1]])),
+        $editorError(static fn () => km_editor_clean_manifest(['/x.html' => ['h' => $h, 's' => 1]])),
+        $editorError(static fn () => km_editor_clean_manifest(['x.php' => ['h' => $h, 's' => 1]])),
+        $editorError(static fn () => km_editor_clean_manifest(['x.html' => ['h' => 'zz', 's' => 1]])),
+        $editorError(static fn () => km_editor_clean_manifest(['A.html' => ['h' => $h, 's' => 1], 'a.html' => ['h' => $h, 's' => 1]])),
+        $editorError(static fn () => km_editor_clean_manifest('x')),
+    ]);
+    check('目録: 1 プロジェクト 20MB・500 ファイルを超えたら断る', ['error', 'error'], [
+        $editorError(static fn () => km_editor_clean_manifest(['a.html' => ['h' => $h, 's' => KM_EDITOR_MAX_PROJECT_BYTES + 1]])),
+        $editorError(static fn () => km_editor_clean_manifest(array_fill_keys(array_map(static fn (int $i): string => 'f' . $i . '.txt', range(0, KM_EDITOR_MAX_FILES)), ['h' => $h, 's' => 0]))),
+    ]);
+    check('上限は 1 人 30・200MB、1 つ 20MB・500(画面の model.js と同じ)', [30, 200, 20, 500], [KM_EDITOR_MAX_PROJECTS, KM_EDITOR_MAX_OWNER_BYTES >> 20, KM_EDITOR_MAX_PROJECT_BYTES >> 20, KM_EDITOR_MAX_FILES]);
+    check('入口は目録の中の HTML だけ', ['a.html', '', ''], [km_editor_clean_entry('a.html', ['a.html' => []]), km_editor_clean_entry('b.html', ['a.html' => []]), km_editor_clean_entry('a.css', ['a.css' => []])]);
+    check('足りない中身(重ねない)', [$h], km_editor_missing(['a' => ['h' => $h, 's' => 1], 'b' => ['h' => $h, 's' => 1], 'c' => ['h' => str_repeat('b', 64), 's' => 1]], [str_repeat('b', 64) => true]));
+    check('使う量は同じ中身を 1 つと数える', 5, km_editor_unique_bytes(['a' => ['h' => $h, 's' => 5], 'b' => ['h' => $h, 's' => 5]]));
+    check('空のフォルダも同じパスの決まり', 'error', $editorError(static fn () => km_editor_clean_folders(['../up'])));
+    $editorLib = $read($src . '/lib/editor-projects.php');
+    check_bool('表は km_editor_projects だけ(新しい表・ALTER しない)', preg_match_all('/CREATE TABLE IF NOT EXISTS (\w+)/', $editorLib, $m) === 1 && $m[1] === ['km_editor_projects'] && !preg_match('/\bALTER\s+TABLE\b/i', $editorLib));
+    check_bool('持ち主はいつも owner_sub で絞る(他人のものは「見つかりません」)', str_contains($editorLib, "WHERE public_id = ? AND owner_sub = ?") && !preg_match('/FROM km_editor_projects WHERE public_id = \?(?! AND owner_sub)/', $editorLib));
+    check_bool('受けた中身は名前(ハッシュ)と sha256 が合い、目録が指すものだけ置く', str_contains($editorLib, "!hash_equals(\$name, hash('sha256', \$bytes))") && str_contains($editorLib, '!isset($wanted[$name])'));
+    check_bool('版を行の締めで確かめる(違えば 409 conflict)', str_contains($editorLib, "' FOR UPDATE'") && str_contains($editorLib, "['conflict' => true"));
+    $editorApi = $read($src . '/api/editor.php');
+    check_bool('口: CSRF を先に確かめる(GET の blob も)', strpos($editorApi, 'if (!km_csrf_verify())') !== false && strpos($editorApi, 'if (!km_csrf_verify())') < strpos($editorApi, "\$action = is_string"));
+    check_bool('口: 誰のものかはセッションの sub だけ(owner を受け取らない)', str_contains($editorApi, '$owner = trim((string) ($claims->sub ?? \'\')) ?: null;') && !preg_match('/\$(input|_POST|_GET)\[\'(owner|sub|user)/', $editorApi));
+    check_bool('口: 止められたアカウント・テスト用アカウントは保存させない', str_contains($editorApi, 'km_logto_user_is_suspended($owner)') && str_contains($editorApi, 'km_test_account_is_marked($pdo, $owner)'));
+    check_bool('口: 中身は attachment・octet-stream・sandbox で返す(本体のオリジンで開かせない)', str_contains($editorApi, "header('Content-Type: application/octet-stream');")
+        && str_contains($editorApi, "header('Content-Disposition: attachment; filename=\"blob\"');") && str_contains($editorApi, "Content-Security-Policy: sandbox; default-src 'none'"));
+    check_bool('口: GET は blob だけ・ほかは POST', str_contains($editorApi, "if ((\$method === 'GET') !== (\$action === 'blob')) {"));
+    check_bool('口: DB の文言は画面に出さない', str_contains($editorApi, '$userFacing = $exception instanceof RuntimeException && !$exception instanceof PDOException;'));
+    check_bool('アカウントを消すとプロジェクトも消す(lib/account-delete.php)', str_contains($read($src . '/lib/account-delete.php'), 'km_editor_projects_delete_owner($pdo, $userId)'));
+    $terms = array_column(km_legal_terms(), 'heading');
+    check_bool('規約に第8条の3(第8条の2 の次)・最終改定日 2026-11-08 以降', in_array('第8条の3(Web Code Editor のプロジェクトの保存)', $terms, true)
+        && array_search('第8条の3(Web Code Editor のプロジェクトの保存)', $terms, true) === array_search('第8条の2(HTML 展開サイト)', $terms, true) + 1 && KM_LEGAL_UPDATED >= '2026-11-08');
+    $privacyText = json_encode(km_legal_privacy(), JSON_UNESCAPED_UNICODE);
+    check_bool('プライバシーポリシーに Web Code Editor の保存とアカウント削除での削除', str_contains((string) $privacyText, 'Web Code Editor でサーバーに保存したプロジェクト(名前・中身(ファイル)・大きさ・日時と、利用者 ID)')
+        && str_contains((string) $privacyText, 'Web Code Editor でサーバーに保存したプロジェクトも削除されます'));
+    if ($root === null) {
+        check_skip('元(editor-src)・nginx・配備の一覧', '手元の作業ツリーで php scripts/check.php');
+        return;
+    }
+    km_check_heading('editor: 元(editor-src)・nginx・配備(手元だけ)');
+    check('殻は元(editor-src/public/index.php)と同じ(組み立て直し忘れ)', $read($root . '/editor-src/public/index.php'), $shell);
+    $preview = $read($root . '/editor-src/src/preview/preview.js');
+    check_bool('親はプレビューの知らせを event.source === frame.contentWindow で確かめる', str_contains($preview, 'event.source !== frame.contentWindow'));
+    $main = $read($root . '/editor-src/src/main.js');
+    check_bool('画面は innerHTML を使わない(文字は textContent)', $main !== '' && !str_contains($main, 'innerHTML'));
+    $sources = '';
+    foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root . '/editor-src/src', FilesystemIterator::SKIP_DOTS)) as $f) {
+        if ($f->isFile() && str_ends_with($f->getFilename(), '.js') && !str_contains($f->getPathname(), DIRECTORY_SEPARATOR . 'data' . DIRECTORY_SEPARATOR)
+            && $f->getFilename() !== 'projectBuilder.js' && $f->getFilename() !== 'sync.js') {
+            $sources .= $read($f->getPathname());
+        }
+    }
+    check_bool('元の JS はサーバーへ送らない(fetch・XMLHttpRequest・sendBeacon が無い。プレビューの台本 projectBuilder.js と同期の sync.js は除く)', $sources !== '' && !preg_match('/\bfetch\(|XMLHttpRequest|sendBeacon/', $sources));
+    $sync = $read($root . '/editor-src/src/project/sync.js');
+    preg_match_all("#['\"`](/api/[^'\"`?]*)#", $sync, $syncUrls);
+    check('同期(sync.js)が送る先は /api/editor.php だけ', ['/api/editor.php'], array_values(array_unique($syncUrls[1])));
+    check_bool('同期は CSRF を X-KM-CSRF で送り、Cookie は同じオリジンだけ', substr_count($sync, "headers: { 'X-KM-CSRF': csrf }") === 2 && substr_count($sync, "credentials: 'same-origin'") === 2);
+    check_bool('同期で読んだ中身はハッシュを計り直す', str_contains($sync, 'if (await sha256Hex(bytes) !== item.h)'));
+    $builder = $read($root . '/editor-src/src/preview/projectBuilder.js');
+    check_bool('プレビューの台本の fetch・XHR の差し替えは、プロジェクトのファイル(表 F)だけを data: で返す', str_contains($builder, 'if(p&&F[p])return of.call(window,F[p],init)')
+        && str_contains($builder, 'return of.apply(window,arguments)'));
+    check_bool('プレビューの台本の表は < と行区切りを逃がす(</script> で切れない)', str_contains($builder, ".replace(/</g, '\\\\u003c')") && str_contains($builder, ".replace(/\\u2028/g, '\\\\u2028')"));
+    $db = $read($root . '/editor-src/src/project/db.js');
+    $migrate = $read($root . '/editor-src/src/project/migrate.js');
+    check_bool('段 10: プロジェクトは IndexedDB km-editor(使えなければメモリ)', str_contains($db, "const DB_NAME = 'km-editor'") && str_contains($db, 'class MemoryStore'));
+    check_bool('段 10: 段 9 の書きかけ(km-editor-v1)は消さずに移す(印だけ付ける)', str_contains($migrate, "MIGRATED_KEY = 'km-editor-v1-migrated'") && !str_contains($migrate, 'removeItem') && !str_contains($migrate, 'clearSaved'));
+    $model = $read($root . '/editor-src/src/project/model.js');
+    check_bool('段 10: パスの決まり(.. ・先頭の / ・ドライブ名・制御文字を断る)と上限 20MB・500', str_contains($model, "throw new PathError('parent'") && str_contains($model, "throw new PathError('absolute'")
+        && str_contains($model, "throw new PathError('control'") && str_contains($model, 'PROJECT_MAX_BYTES = 20 * 1024 * 1024') && str_contains($model, 'PROJECT_MAX_FILES = 500'));
+    $keys = $read($root . '/editor-src/src/keybindings.js');
+    check_bool('段 10: ショートカットはブラウザのキー(Ctrl+W・T・N・Tab)と編集のキー(Ctrl+Z・C・V)を断る', str_contains($keys, "'Ctrl+W'") && str_contains($keys, "'Ctrl+T'") && str_contains($keys, "'Ctrl+N'")
+        && str_contains($keys, "'Ctrl+Tab'") && str_contains($keys, "'Ctrl+Z'") && str_contains($keys, "'Ctrl+V'"));
+    $import = $read($root . '/editor-src/src/project/import.js');
+    check_bool('段 10: ZIP は HTML 展開と同じ html-zip.js を使い回す(写しを作らない)', str_contains($import, "import '../../../src/Main/html-zip.js'") && !is_file($root . '/editor-src/src/project/html-zip.js'));
+    $settings = $read($root . '/editor-src/src/settings.js');
+    check_bool('デバウンスの既定の時計は関数で包む(Illegal invocation で落ちない)', str_contains($settings, 'set: (fn, ms) => globalThis.setTimeout(fn, ms)'));
+    $pkg = json_decode($read($root . '/editor-src/package.json'), true);
+    check_bool('部品の版は固定(^ や ~ を使わない)', is_array($pkg) && array_filter(array_merge($pkg['dependencies'] ?? [], $pkg['devDependencies'] ?? []), static fn ($v) => !preg_match('/^\d+\.\d+\.\d+$/', (string) $v)) === []);
+    check_bool('package-lock.json がある', is_file($root . '/editor-src/package-lock.json'));
+    $nginx = $read($root . '/nginx/default.conf.template');
+    check_bool('nginx: 静的の長いキャッシュに ttf(Monaco の codicon)', str_contains($nginx, 'location ~* \.(svg|css|js|png|woff2?|ttf)$ {'));
+    check_bool('nginx: /editor は https の /editor/ へ(Apache に任せると http:// へ転送する)', str_contains($nginx, "location = /editor {\n        return 308 \${KM_APP_URL}/editor/\$is_args\$args;"));
+    $deploy = $read($root . '/scripts/deploy-to-host.ps1');
+    check_bool('配備: 殻・manifest・editor-run を必ず入れ、editor-src は入れない', str_contains($deploy, "'./src/editor/index.php'") && str_contains($deploy, "'./src/editor/.vite/manifest.json'")
+        && str_contains($deploy, "'./src/html-host/editor-run.js'") && str_contains($deploy, "'./editor-src/'"));
+    check_bool('配備: 古い組み立ては retired/editor-assets/ へ(1 世代)', str_contains($deploy, 'retired/editor-assets'));
+    check_bool('nginx: /api/editor.php は 21m・km_editor(POST だけ数える)', (bool) preg_match('#location = /api/editor\.php \{\s+client_max_body_size 21m;\s+limit_req zone=km_editor burst=20 nodelay;#', $nginx)
+        && str_contains($nginx, 'limit_req_zone $km_write_key zone=km_editor:10m rate=30r/m;'));
+}
+
 function km_check_bench(): void
 {
     require_once __DIR__ . '/../lib/bench.php';
@@ -12320,6 +12520,9 @@ foreach ($selected as $name) {
             break;
         case 'bench':
             km_check_bench();
+            break;
+        case 'editor':
+            km_check_editor();
             break;
         case 'proj-api':
             km_check_proj_api();

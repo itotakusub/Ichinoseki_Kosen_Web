@@ -1,0 +1,21 @@
+{
+  "name": "web-code-editor",
+  "private": true,
+  "version": "1.0.0",
+  "description": "ito4.jp/editor/ の HTML・CSS・JavaScript エディタ(Monaco + 別オリジンのプレビュー)。build の出力は ../src/editor/",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "test": "node ../src/scripts/js/editor.test.js"
+  },
+  "devDependencies": {
+    "vite": "8.3.5"
+  },
+  "dependencies": {
+    "monaco-editor": "0.57.0"
+  },
+  "overrides": {
+    "dompurify": "3.4.17"
+  }
+}

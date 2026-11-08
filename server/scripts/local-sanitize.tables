@@ -125,5 +125,6 @@ km_html_share_grants         wipe
 km_html_temp                 wipe
 km_html_tickets              wipe
 km_html_viewers              wipe
+km_editor_projects           wipe   # Web Code Editor の同期(段 10-B。2026-11-08)。人の書いたもの。uploads/editor は写さない
 # ---- 使われていない
 kmt_database                 wipe   # コードのどこからも使われていない(2026-11-07 に確かめた)

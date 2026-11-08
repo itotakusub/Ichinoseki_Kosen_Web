@@ -41,6 +41,8 @@
 | 4 | **完了**(11-07): 本番の Web 地図の速さの測り直し・案内チャットの確かめ(AI の答えとカード・403・家の PC が止まったとき・無い店) |
 | 5 | **完了**(11-08): 検証機 192.168.3.31(Hyper-V の VM)を本番と同じ形にした(コード・イメージ・cron・DB と Logto の利用者・方針)。入れ直しはデスクトップの `検証機を本番と同じに.cmd`。プロジェクト状況 #103 は消した |
 | 6 | ストリートビュー(360°)を Website へ: **11-07 に作った・配備待ち**(WebGL・撮りそろうまで管理者だけ)。残りは利用者が撮る(本番の写真は 0 枚) |
+| 9 | **完了**(11-08): Web Code Editor(`/editor/`)を配備・QR のリンク集に入口・スマホの幅も利用者が確認。優先度 4 は段 10 |
+| 10 | **完了**(11-08): Web Code Editor 優先度 4。10-A(複数ファイル・プロジェクト・ZIP・読み込み・ショートカット・配色)と 10-B(サインインしてサーバーへ同期・規約 第8条の3)を本番へ配備 |
 | 7〜 | **管理画面「プロジェクト状況」に置く**(11-07、利用者の指示。分類つき。plan.md には段の見出しと設計だけ書く) |
 
 **配備待ち**(手元で済み): プロジェクト状況の番号の列と並び(`admin/projects.php`・`lib/tasks.php`)・段 6 ストリートビューを Website へ(`Main/panorama-viewer.js`・`lib/panorama.php`・`lib/map-data.php`・`Main/app.js`・`Main/i18n.js`・`Main/styles.css`・`index.php`・`admin/map-editor.php`・`admin/assets/js/map-editor.js`・`admin/map-settings.php`・`lib/admin-log.php`)・建物の「中へ」が 2 度出る(萩友会館など)・建物の階の呼び名・案内のカードの階(`Main/app.js`・`Main/user-history.js`・`lib/guide-chat.php`)・寮食堂に萩友会館の階が出る(`lib/building-floors.php`。アプリは版 57 で公開済み)。「教室」からトイレを外す(段 7-2)・案内の例のボタンの崩れ(段 4-2)は 11-07 夜に配備済み(本番の app.js・styles.css で確認)。それより前のものは 11-07 にすべて配備済み(イベントの地点の倍率・置き去り 16 個の退避・読み・別名の CSV・`api/area-paint.php`・階段の向きを下の階から埋める・色分けの画面の 404・国の拒否で Google を 443 だけ通す(`google.allowed: true`)・プロジェクト状況の口と鍵・Logto のテンプレートの台本)。
@@ -58,6 +60,39 @@
 ---
 
 ## 記録 2026 年 11 月(新しい順)
+
+### 2026-11-08 — 段 10-B Web Code Editor のプロジェクトをサーバーへ同期(サインインした人。**11-08 に本番へ配備済み・完了**。nginx は 21:50 に起こし直した)
+
+- **口**: `api/editor.php`(POST・GET は blob だけ。CSRF を先に見る・持ち主はセッションの sub だけ・止められた/テスト用のアカウントは断る)。サインインしていなければ `state` は 200 `{signedIn:false}`、ほかは 401
+- **置き場**: `lib/editor-projects.php`。表 `km_editor_projects`(新しい表。`local-sanitize.tables` は wipe)・`uploads/editor/<public_id>/blobs/<sha256>` と `manifest.json`。上限は 1 人 30 プロジェクト・200MB、1 プロジェクト 20MB・500 ファイル、1 回 20MB(nginx 21m・zone `km_editor` で POST を 1 分 30 回)。アカウントを消すと一緒に消える(`account-delete.php`)
+- **送り方**(`editor-src/src/project/sync.js`): 目録(パス → sha256・大きさ)と、サーバーに無い中身だけを zip(名前はハッシュ)で。版が違えば 409 → 「両方残す / サーバーのものを読む / この端末のもので上書き」を選ばせる。打ち止めて 3 秒・Ctrl+S・タブを隠したときに送る。開いたとき・戻ってきたときにサーバーの一覧と突き合わせる
+- **規約**: 第8条の3 とプライバシーポリシー(保存するもの・保存期間・アカウント削除)。文面は利用者が確認(11-08)。改定日 2026-11-08
+- **検証機の Chrome で確かめたこと**(利用者がサインイン): サインインで 2 つのプロジェクトが自動で上がる・1 ファイル変えると送るのは zip 255 バイト(中身 1 つ)だけ・ほかの端末の変更を開いたときに取り込む・ぶつかりの 3 つの選び方・一覧に使っている量・サーバーにだけあるものを読み込む・削除でサーバーからも消える・ほかで消されたものに「サーバーに送る」。CSRF なし 403(blob の GET も)・PUT 405・サインインなしの save 401。サインアウトしても手元は消えない(手元を消すのは「削除」だけ)
+- **検証機で見つけて直したもの**: 送ったときの 409 で知ったサーバーの版を覚えておらず、「この端末のもので上書き」が古い版で送ってまたぶつかっていた → 409 の版を覚える(`main.js` の `pushProject`)。サインインなしの 401 の本文が `success:true` だった → false に
+- **試験**: `editor.test.js` 236 件・check.php 全体 3139 件(組 `editor` 66 件)が通過
+- **本番(配備のあと、読むだけ)**: `/editor/` 200(meta `km-csrf`・帯 `wce-sync`・組み立ては `main-HRk6rWft.js`)・`/api/editor.php` を CSRF なしで 403・規約に第8条の3 と改定日・動いている nginx に zone `km_editor` と `location = /api/editor.php`。初めの配備では reverse-proxy を起こし直しておらず設定が入っていなかった → 起こし直してもらって確認。表 `km_editor_projects` は、サインインした人が初めて使うときに作られる(配備の時点ではまだ無い)
+
+### 2026-11-08 — 段 10-A Web Code Editor を複数ファイル・複数プロジェクトにした(計画書の優先度 4。**11-08 に本番へ配備済み・完了**。スマホの幅も利用者が確認)
+
+- **保存**: IndexedDB `km-editor`(`editor-src/src/project/db.js`。使えなければメモリだけで動き、帯に出す)。設定は localStorage `km-editor-settings-v2`。段 9 の書きかけ `km-editor-v1` は初めに「はじめのプロジェクト」(`index.html`・`style.css`・`script.js`)へ移す。**古い鍵は消さない**(印 `km-editor-v1-migrated` だけ)
+- **画面**: 左にファイルの木(新規・フォルダ・名前の変更・削除・追加・ドロップ)・× の付いたタブ・プロジェクトの一覧(新規・開く・名前の変更・複製・削除)・ファイルを探して開く・画像は見るだけ・配色に「くっきり(明・暗)」(Monaco の hc-light・hc-black)・JSON(worker 付き)・XML・Markdown の色分け
+- **ショートカット**: 設定で付け直せる(`keybindings.js`)。ブラウザのキー(Ctrl+W・T・N・Tab など)・編集のキー(Ctrl+Z・C・V など)・修飾なし・重なりは断る
+- **プレビュー**: `preview/projectBuilder.js` が入口の HTML から CSS(`@import`・`url()`)・JS・ES モジュール(`data:` URL へ)・画像を中に入れて組む。`fetch`・XHR は台本がプロジェクトのファイルを返す・`<a href="about.html">` は入口を替える・エラーは「ファイル:行」で押すと開く。`html-host/editor-run.js` の上限を 32,000,000 字にし、`km-editor-nav` を回す
+- **ZIP・読み込み**: `src/Main/html-zip.js` を使い回す(写しは作らない)。ZIP・ファイル・フォルダ・ドロップ。共通のフォルダを外す・隠しファイルと `__MACOSX` は除く・使えない拡張子は数えて知らせる。書き出しは ZIP と 1 つの HTML
+- **試験**: `editor.test.js` 209 件・check.php 全体 3113 件(組 `editor` 40 件)が通過。**検証機の Chrome で**: 移し替え(遅延 100ms も引き継ぎ)・ZIP の読み込み(.php を断り .DS_Store を除く)・CSS / 画像 / モジュール / `fetch('data.json')`・about.html への移動・エラーの行から開く・Ctrl+P / Alt+W / Alt+PageUp / Ctrl+B・Ctrl+W と Ctrl+S(重なり)を断る・Alt+R に付け直して再読み込み後も効く・くっきり(暗)・ファイルとフォルダの操作・プロジェクトの複製と削除・英語。スマホの幅は配備のあと利用者が実機で確認 OK。本番は応答 200・`editor-run.js` の上限 32,000,000 字と km-editor-nav を読むだけで確かめた
+- nginx は変えていない(配備は `-Action` なし)
+
+### 2026-11-08 — 段 9 Web Code Editor を作った(利用者が渡した計画書 1.1 の優先度 1〜3。「ito4.jp で公開」「補完は HTML・CSS・JS すべて日本語で」「処理はできるだけクライアントで」。**11-08 に本番へ配備済み・完了**。リンク集の入口とスマホの幅は利用者が確認)
+
+- **形**: `https://ito4.jp/editor/`。元は `server/editor-src/`(Vite 8.3.5・Monaco 0.57.0。`npm audit` 0 件。dompurify は overrides で 3.4.17)、`npm run build` の出力 `src/editor/` を配る。サーバーは殻と静的ファイルだけ(DB・API・サインインなし)。設計は plan.md 段 9
+- **CSP**: 新しい profile `'editor'`。Monaco が `style="…"` を innerHTML で組むので **style-src だけ `'unsafe-inline'`(nonce は外す)**。script は nonce のまま。ほかのページは変えていない(check.php で見張る)
+- **プレビュー**: srcdoc は親の CSP を受け継ぐので、`html.<ドメイン>/editor-run.html`(`html-view.php` に 3 つの道)で動かす。二重の sandbox(allow-scripts のみ)。Chrome で中の JS から `parent.document`・`top`・`localStorage`・`document.cookie`・`indexedDB` がすべて SecurityError、`location.origin` は `null` を確かめた
+- **補完**: 標準のデータ(英語)に自分で書いた日本語を重ねた(HTML のタグ 114・属性 111・グローバル属性 29・値 65・雛形 27 / CSS のプロパティ 167・値 114・疑似クラスと疑似要素 36 / JS の API 159・書き方の型 18)。`<a` → 「a リンク」→ `<a href="URLを入力">リンクの文字</a>`、`display` → 「箱の種類と並べ方」、`document.` → 日本語の候補が上に
+- **検証機で見つけて直したもの**: デバウンスの既定の時計 `{ set: setTimeout }` がブラウザで Illegal invocation になり、保存とプレビューの自動更新が止まっていた(node では落ちない)→ 関数で包み、node の試験に「this が window でないと落ちる setTimeout」を足した。`/editor`(末尾の / なし)を Apache が `http://` へ転送していた → nginx で https の `/editor/` へ 308
+- **内蔵ブラウザでは確かめられない**: sslip.io は公開サフィックスなので html. が別サイト扱いになり、内蔵ブラウザが枠を `ERR_BLOCKED_BY_CLIENT` で止める(HTML 展開の `/html.php` も同じ)。検証機の確かめは Chrome で(利用者の指示)
+- **配備**: `deploy-to-host.ps1` の mustContain に殻・manifest・editor-run、`editor-src/` は入れない。ハッシュ付きの古い組み立ては配備のたびに `retired/editor-assets/` へ(前の 1 世代だけ)。nginx の静的キャッシュに `ttf`
+- 試験: `src/scripts/js/editor.test.js` 110 件・check.php 3105 件(組 `editor` 32 件)
+- **本番(11-08 配備のあと、読むだけ)**: `/editor/` 200・CSP は `'editor'` のとおり(`frame-src https://html.ito4.jp`・`worker-src 'self'`)・`/editor?lang=en` → 308 `https://ito4.jp/editor/?lang=en`・本体の JS と CSS は 200 で 30 日のキャッシュ・`html.ito4.jp/editor-run.html` は 200 で `frame-ancestors https://ito4.jp`・`editor-run.js` は手元と同じ・本体のホストの `/editor-run.html` は 404
 
 ### 2026-11-08 — 検証機(192.168.3.31)を起こし、本番と並べた(利用者「docs/13 §0 の続きから。検証機が本番と変わりなくなるまで」)
 

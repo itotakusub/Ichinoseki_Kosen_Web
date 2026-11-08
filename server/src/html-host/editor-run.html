@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="ja">
+<!--
+  Web Code Editor のプレビューを走らせる側(2026-11-08。https://html.<ドメイン>/editor-run.html)。
+  ito4.jp/editor/ の <iframe sandbox="allow-scripts"> の中で開く(オリジンを持たない)。
+  html-view.php が {{KM_PARENT}} を本体のオリジンに置き換え、frame-ancestors も本体だけにする。
+  中身は editor-run.js。利用者の文書は、ここでさらにもう 1 枚の sandbox の枠(srcdoc)に入れる。
+-->
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="km-parent" content="{{KM_PARENT}}">
+    <title>Preview</title>
+    <link rel="stylesheet" href="/editor-run.css">
+</head>
+<body>
+    <script src="/editor-run.js"></script>
+</body>
+</html>

@@ -1,0 +1,1196 @@
+/*
+ * Web Code Editor の見た目(2026-11-08)。配色は html[data-theme](light・dark・hc-light・hc-dark。main.js が入れる)。
+ * 段 10: 左のファイルの欄(幅は --wce-sidebar)・× の付いたタブ・プロジェクトなどのダイアログを足した。
+ * 左右の幅は --wce-split(main.js が CSSOM で入れる)。760px より狭いと「編集 / プレビュー」の切り替えにする。
+ */
+:root {
+  --wce-bg: #f8fafc;
+  --wce-surface: #ffffff;
+  --wce-border: #d7dee8;
+  --wce-text: #1e293b;
+  --wce-muted: #64748b;
+  --wce-accent: #2563eb;
+  --wce-accent-text: #ffffff;
+  --wce-danger: #dc2626;
+  --wce-warn: #b45309;
+  --wce-info: #0369a1;
+  --wce-saved: #15803d;
+  --wce-console-bg: #f1f5f9;
+  --wce-focus: #f59e0b;
+  --wce-split: 50%;
+  color-scheme: light;
+}
+
+html[data-theme="dark"] {
+  --wce-bg: #0f172a;
+  --wce-surface: #1e1e1e;
+  --wce-border: #334155;
+  --wce-text: #e2e8f0;
+  --wce-muted: #94a3b8;
+  --wce-accent: #3b82f6;
+  --wce-danger: #f87171;
+  --wce-warn: #fbbf24;
+  --wce-info: #38bdf8;
+  --wce-saved: #4ade80;
+  --wce-console-bg: #111827;
+  color-scheme: dark;
+}
+
+/* ハイコントラスト(段 10)。Monaco の hc-light・hc-black に合わせて、枠と文字をはっきりさせる */
+html[data-theme="hc-light"] {
+  --wce-bg: #ffffff;
+  --wce-surface: #ffffff;
+  --wce-border: #000000;
+  --wce-text: #000000;
+  --wce-muted: #1f1f1f;
+  --wce-accent: #0f4a85;
+  --wce-danger: #b5200d;
+  --wce-warn: #7a3e00;
+  --wce-info: #0f4a85;
+  --wce-saved: #0b5a1f;
+  --wce-console-bg: #ffffff;
+  --wce-focus: #b5200d;
+  color-scheme: light;
+}
+
+html[data-theme="hc-dark"] {
+  --wce-bg: #000000;
+  --wce-surface: #000000;
+  --wce-border: #6fc3df;
+  --wce-text: #ffffff;
+  --wce-muted: #e0e0e0;
+  --wce-accent: #f38518;
+  --wce-accent-text: #000000;
+  --wce-danger: #f48771;
+  --wce-warn: #ffd36b;
+  --wce-info: #6fc3df;
+  --wce-saved: #89d185;
+  --wce-console-bg: #000000;
+  --wce-focus: #f38518;
+  color-scheme: dark;
+}
+
+html[data-theme^="hc-"] .wce-btn,
+html[data-theme^="hc-"] .wce-tab-wrap.is-active,
+html[data-theme^="hc-"] .wce-node.is-active {
+  border-width: 2px;
+}
+
+[hidden] {
+  display: none !important;
+}
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body.wce {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  background: var(--wce-bg);
+  color: var(--wce-text);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+  overflow: hidden;
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--wce-focus);
+  outline-offset: 2px;
+}
+
+/* ---- 上の帯 ---- */
+.wce-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--wce-border);
+  background: var(--wce-surface);
+}
+
+.wce-home {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  color: var(--wce-text);
+  text-decoration: none;
+  font-size: 18px;
+}
+
+.wce-home:hover {
+  background: var(--wce-bg);
+}
+
+.wce-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.wce-save {
+  font-size: 12px;
+  color: var(--wce-muted);
+  white-space: nowrap;
+}
+
+.wce-save[data-state="saved"] {
+  color: var(--wce-saved);
+}
+
+.wce-save[data-state="failed"] {
+  color: var(--wce-danger);
+  font-weight: 700;
+}
+
+.wce-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.wce-btn {
+  min-height: 32px;
+  padding: 4px 12px;
+  border: 1px solid var(--wce-border);
+  border-radius: 8px;
+  background: var(--wce-surface);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.wce-btn:hover {
+  border-color: var(--wce-accent);
+}
+
+.wce-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.wce-btn-primary {
+  border-color: var(--wce-accent);
+  background: var(--wce-accent);
+  color: var(--wce-accent-text);
+  font-weight: 700;
+}
+
+.wce-btn-danger {
+  border-color: var(--wce-danger);
+  background: var(--wce-danger);
+  color: #fff;
+}
+
+.wce-btn-small {
+  min-height: 26px;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+/* ---- スマホの切り替え(狭いときだけ) ---- */
+.wce-switch {
+  display: none;
+  gap: 4px;
+  padding: 6px 12px;
+  background: var(--wce-surface);
+  border-bottom: 1px solid var(--wce-border);
+}
+
+.wce-switch-btn {
+  flex: 1;
+  min-height: 34px;
+  border: 1px solid var(--wce-border);
+  border-radius: 8px;
+  background: var(--wce-bg);
+  cursor: pointer;
+}
+
+.wce-switch-btn[aria-pressed="true"] {
+  border-color: var(--wce-accent);
+  background: var(--wce-accent);
+  color: var(--wce-accent-text);
+  font-weight: 700;
+}
+
+/* ---- 左右 ---- */
+.wce-main {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.wce-main.is-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+/* ドラッグの間はプレビューが指の動きを取らないように */
+.wce-main.is-resizing .wce-frame {
+  pointer-events: none;
+}
+
+.wce-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.wce-pane-editor {
+  flex: 0 0 var(--wce-split);
+  background: var(--wce-surface);
+}
+
+.wce-pane-preview {
+  flex: 1 1 0;
+}
+
+.wce-resizer {
+  flex: 0 0 8px;
+  cursor: col-resize;
+  background: var(--wce-border);
+  touch-action: none;
+}
+
+.wce-resizer:hover,
+.wce-resizer:focus-visible {
+  background: var(--wce-accent);
+}
+
+/* ---- 編集の側: 左のファイルの欄 + タブとエディタ(段 10) ---- */
+.wce-pane-editor {
+  position: relative;
+  flex-direction: row;
+  --wce-sidebar: 220px;
+}
+
+.wce-files {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 var(--wce-sidebar);
+  min-width: 0;
+  border-right: 1px solid var(--wce-border);
+  background: var(--wce-bg);
+}
+
+.wce-files.is-drop,
+.wce-drop.is-drop {
+  outline: 2px dashed var(--wce-accent);
+  outline-offset: -4px;
+}
+
+.wce-files-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 6px 6px 10px;
+  border-bottom: 1px solid var(--wce-border);
+}
+
+.wce-files-title {
+  flex: 1;
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--wce-muted);
+}
+
+.wce-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.wce-icon-btn:hover {
+  border-color: var(--wce-border);
+  background: var(--wce-surface);
+}
+
+.wce-tree-box {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 0;
+}
+
+.wce-tree {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wce-tree .wce-tree {
+  padding-left: 12px;
+}
+
+.wce-tree-empty {
+  padding: 6px 10px;
+  color: var(--wce-muted);
+}
+
+.wce-node {
+  display: flex;
+  align-items: center;
+  border: 1px solid transparent;
+}
+
+.wce-node:hover {
+  background: var(--wce-surface);
+}
+
+.wce-node.is-active {
+  border-color: var(--wce-accent);
+  background: var(--wce-surface);
+}
+
+.wce-node-main {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 3px 4px 3px 8px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.wce-node-icon {
+  flex: 0 0 auto;
+  min-width: 16px;
+  color: var(--wce-muted);
+  font: 10px/1 ui-monospace, Consolas, monospace;
+  text-align: center;
+}
+
+.wce-node-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wce-node-entry {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  border: 1px solid var(--wce-accent);
+  border-radius: 4px;
+  color: var(--wce-accent);
+  font-size: 10px;
+}
+
+.wce-node-acts {
+  display: flex;
+  gap: 1px;
+  padding-right: 2px;
+  opacity: 0;
+}
+
+.wce-node:hover .wce-node-acts,
+.wce-node:focus-within .wce-node-acts {
+  opacity: 1;
+}
+
+.wce-node-act {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--wce-muted);
+  cursor: pointer;
+}
+
+.wce-node-act:hover {
+  background: var(--wce-bg);
+  color: var(--wce-text);
+}
+
+.wce-node-act-delete:hover {
+  color: var(--wce-danger);
+}
+
+.wce-files-hint {
+  margin: 0;
+  padding: 6px 10px;
+  border-top: 1px solid var(--wce-border);
+  color: var(--wce-muted);
+  font-size: 11px;
+}
+
+.wce-editor-col {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.wce-tabs-bar {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  padding: 4px 6px 0;
+  border-bottom: 1px solid var(--wce-border);
+}
+
+.wce-tabs-bar > .wce-icon-btn {
+  margin-bottom: 3px;
+}
+
+.wce-tabs {
+  display: flex;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.wce-tab-wrap {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+}
+
+.wce-tab-wrap.is-active {
+  border-color: var(--wce-border);
+  background: var(--wce-bg);
+}
+
+.wce-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 4px 5px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--wce-muted);
+  cursor: pointer;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.wce-tab[aria-selected="true"] {
+  color: var(--wce-text);
+}
+
+.wce-tab-dirty {
+  color: var(--wce-accent);
+  font-size: 10px;
+}
+
+.wce-tab-close {
+  width: 22px;
+  height: 22px;
+  margin-right: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--wce-muted);
+  cursor: pointer;
+}
+
+.wce-tab-close:hover {
+  background: var(--wce-border);
+  color: var(--wce-text);
+}
+
+.wce-panel {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.wce-monaco {
+  flex: 1;
+  min-height: 0;
+}
+
+.wce-viewer {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 16px;
+  overflow: auto;
+  background: var(--wce-bg);
+}
+
+.wce-viewer-img {
+  max-width: 100%;
+  max-height: 70%;
+  object-fit: contain;
+  background: repeating-conic-gradient(#e2e8f0 0% 25%, #ffffff 0% 50%) 50% / 16px 16px;
+  border: 1px solid var(--wce-border);
+}
+
+.wce-viewer-note {
+  margin: 0;
+  color: var(--wce-muted);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.wce-project-btn {
+  max-width: 240px;
+  min-height: 30px;
+  padding: 2px 10px;
+  overflow: hidden;
+  border: 1px solid var(--wce-border);
+  border-radius: 8px;
+  background: var(--wce-bg);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.wce-project-btn::after {
+  content: " ▾";
+  color: var(--wce-muted);
+}
+
+.wce-project-btn:hover {
+  border-color: var(--wce-accent);
+}
+
+.wce-entry {
+  max-width: 40%;
+  min-height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--wce-border);
+  border-radius: 6px;
+  background: var(--wce-bg);
+  font-size: 12px;
+}
+
+/* ---- プレビュー ---- */
+.wce-preview-bar,
+.wce-console-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--wce-border);
+  background: var(--wce-surface);
+}
+
+.wce-preview-label {
+  font-weight: 700;
+}
+
+.wce-preview-mode {
+  flex: 1;
+  font-size: 12px;
+  color: var(--wce-muted);
+}
+
+.wce-frame-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: #fff;
+}
+
+.wce-frame-wrap.is-loading::after {
+  content: "…";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #94a3b8;
+  font-size: 24px;
+}
+
+.wce-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+}
+
+/* ---- コンソール ---- */
+.wce-console {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  max-height: 40%;
+  border-top: 1px solid var(--wce-border);
+  background: var(--wce-console-bg);
+}
+
+.wce-console-bar {
+  justify-content: space-between;
+  border-top: 0;
+}
+
+.wce-console-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.wce-console-toggle::before {
+  content: "▾";
+  display: inline-block;
+  transition: transform 0.15s;
+}
+
+.wce-console.is-collapsed .wce-console-toggle::before {
+  transform: rotate(-90deg);
+}
+
+.wce-console.is-collapsed .wce-console-list {
+  display: none;
+}
+
+.wce-console-count {
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: var(--wce-border);
+  font-size: 12px;
+  text-align: center;
+}
+
+.wce-console-count:not([data-errors="0"]) {
+  background: var(--wce-danger);
+  color: #fff;
+}
+
+.wce-console-list {
+  flex: 1;
+  min-height: 72px;
+  max-height: 220px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+  font: 12.5px/1.5 ui-monospace, "Cascadia Code", Consolas, "Noto Sans Mono", monospace;
+}
+
+.wce-console-empty {
+  padding: 8px 10px;
+  color: var(--wce-muted);
+  font-family: system-ui, sans-serif;
+}
+
+.wce-console-item {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 3px 10px;
+  border-bottom: 1px solid var(--wce-border);
+}
+
+.wce-console-text {
+  flex: 1;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.wce-level-error {
+  color: var(--wce-danger);
+}
+
+.wce-level-warn {
+  color: var(--wce-warn);
+}
+
+.wce-level-info,
+.wce-level-debug {
+  color: var(--wce-info);
+}
+
+.wce-console-line {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  background: transparent;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+/* ---- ダイアログ ---- */
+.wce-dialog {
+  width: min(92vw, 460px);
+  padding: 0;
+  border: 1px solid var(--wce-border);
+  border-radius: 12px;
+  background: var(--wce-surface);
+  color: var(--wce-text);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+}
+
+.wce-dialog::backdrop {
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.wce-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 20px;
+}
+
+.wce-dialog-body h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.wce-dialog-body p {
+  margin: 0;
+}
+
+.wce-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.wce-help {
+  color: var(--wce-muted);
+  font-size: 13px;
+}
+
+.wce-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.wce-check input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--wce-accent);
+}
+
+.wce-field {
+  font-weight: 600;
+}
+
+.wce-delay {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wce-delay input[type="range"] {
+  flex: 1;
+  accent-color: var(--wce-accent);
+}
+
+.wce-delay-end {
+  font-size: 12px;
+  color: var(--wce-muted);
+}
+
+.wce-delay-number {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wce-delay-number input {
+  width: 100px;
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 1px solid var(--wce-border);
+  border-radius: 8px;
+  background: var(--wce-bg);
+}
+
+.wce-template-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wce-template-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--wce-border);
+  border-radius: 8px;
+  background: var(--wce-bg);
+  text-align: left;
+  cursor: pointer;
+}
+
+.wce-template-btn:hover {
+  border-color: var(--wce-accent);
+}
+
+.wce-template-btn span {
+  color: var(--wce-muted);
+  font-size: 12px;
+}
+
+.wce-download-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wce-download-choices .wce-btn {
+  white-space: normal;
+  text-align: left;
+  padding: 8px 12px;
+}
+
+/* ---- 同期(段 10-B) ---- */
+.wce-sync {
+  max-width: 280px;
+  padding: 2px 8px;
+  overflow: hidden;
+  border: 1px solid var(--wce-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--wce-muted);
+  font-size: 12px;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.wce-sync-signin {
+  border-color: var(--wce-accent);
+  color: var(--wce-accent);
+  font-weight: 600;
+}
+
+.wce-sync[data-state="synced"] {
+  color: var(--wce-saved);
+}
+
+.wce-sync[data-state="failed"],
+.wce-sync[data-state="conflict"],
+.wce-sync[data-state="blocked"] {
+  border-color: var(--wce-danger);
+  color: var(--wce-danger);
+  font-weight: 700;
+}
+
+.wce-sync[data-state="offline"],
+.wce-sync[data-state="gone"] {
+  color: var(--wce-warn);
+}
+
+.wce-badge {
+  flex: 0 0 auto;
+  padding: 0 8px;
+  border: 1px solid var(--wce-border);
+  border-radius: 999px;
+  color: var(--wce-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.wce-badge-synced {
+  border-color: var(--wce-saved);
+  color: var(--wce-saved);
+}
+
+.wce-badge-pending,
+.wce-badge-remote,
+.wce-badge-server {
+  border-color: var(--wce-info);
+  color: var(--wce-info);
+}
+
+.wce-badge-conflict,
+.wce-badge-gone {
+  border-color: var(--wce-danger);
+  color: var(--wce-danger);
+}
+
+.wce-project-row.is-server-only {
+  border-style: dashed;
+}
+/* ---- 段 10 のダイアログ ---- */
+.wce-dialog-wide {
+  width: min(94vw, 620px);
+}
+
+.wce-dialog {
+  max-height: 90dvh;
+}
+
+.wce-dialog-body h3 {
+  margin: 4px 0 0;
+  font-size: 14px;
+}
+
+.wce-pre {
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.wce-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.wce-input,
+.wce-select {
+  width: 100%;
+  min-height: 34px;
+  padding: 4px 8px;
+  border: 1px solid var(--wce-border);
+  border-radius: 8px;
+  background: var(--wce-bg);
+}
+
+.wce-select {
+  width: auto;
+  min-width: 200px;
+}
+
+.wce-error,
+.wce-keys-message {
+  min-height: 1.2em;
+  color: var(--wce-danger);
+  font-size: 13px;
+}
+
+.wce-fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--wce-border);
+  border-radius: 8px;
+}
+
+.wce-fieldset legend {
+  padding: 0 4px;
+  font-weight: 600;
+}
+
+.wce-check input[type="radio"] {
+  width: 16px;
+  height: 16px;
+}
+
+.wce-drop {
+  padding: 18px 12px;
+  border: 2px dashed var(--wce-border);
+  border-radius: 10px;
+  color: var(--wce-muted);
+  text-align: center;
+}
+
+.wce-hidden-input {
+  display: none;
+}
+
+.wce-btn-ghost-danger {
+  color: var(--wce-danger);
+}
+
+.wce-btn-ghost-danger:hover {
+  border-color: var(--wce-danger);
+}
+
+.wce-projects-list,
+.wce-quick-list,
+.wce-keys-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 50dvh;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.wce-project-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--wce-border);
+  border-radius: 8px;
+}
+
+.wce-project-row.is-current {
+  border-color: var(--wce-accent);
+}
+
+.wce-project-open {
+  display: flex;
+  flex: 1 1 200px;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.wce-project-open strong {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wce-project-open span {
+  color: var(--wce-muted);
+  font-size: 12px;
+}
+
+.wce-project-acts {
+  display: flex;
+  gap: 4px;
+}
+
+.wce-quick-item {
+  width: 100%;
+  padding: 5px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.wce-quick-item:hover,
+.wce-quick-item:focus-visible {
+  border-color: var(--wce-accent);
+  background: var(--wce-bg);
+}
+
+.wce-key-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.wce-key-btn {
+  min-width: 130px;
+  font-family: ui-monospace, Consolas, monospace;
+}
+
+.wce-key-btn.is-recording {
+  border-color: var(--wce-accent);
+  color: var(--wce-accent);
+}
+
+.wce-unavailable,.wce-noscript {
+  margin: 40px auto;
+  max-width: 560px;
+  padding: 0 16px;
+}
+
+/* ---- 狭い画面 ---- */
+@media (max-width: 760px) {
+  .wce-header {
+    padding: 6px 10px;
+  }
+
+  .wce-actions {
+    width: 100%;
+    margin-left: 0;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    padding-bottom: 2px;
+  }
+
+  .wce-switch {
+    display: flex;
+  }
+
+  .wce-resizer {
+    display: none;
+  }
+
+  .wce-pane-editor,
+  .wce-pane-preview {
+    flex: 1 1 100%;
+  }
+
+  .wce-main[data-view="edit"] .wce-pane-preview,
+  .wce-main[data-view="preview"] .wce-pane-editor {
+    display: none;
+  }
+
+  /* ファイルの欄は引き出し(エディタの上に重ねる) */
+  .wce-files {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 20;
+    width: min(80vw, 300px);
+    box-shadow: 4px 0 18px rgba(0, 0, 0, 0.25);
+  }
+
+  .wce-project-btn {
+    max-width: 50vw;
+  }
+
+  .wce-entry {
+    max-width: 45%;
+  }
+}

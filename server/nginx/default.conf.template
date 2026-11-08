@@ -258,6 +258,9 @@ limit_req_zone $binary_remote_addr zone=km_guide:10m rate=10r/m;
 # HTML 展開サイトの道具のページの口(/api/html-host.php。2026-11-05。lib/html-host.php)。書き込み(POST)だけ数える。
 # 1 回で最大 20MB を受けるので狭く取る。一覧の読み込みも POST なので、開くたびに 1 つ使う
 limit_req_zone $km_write_key zone=km_html:10m rate=20r/m;
+# Web Code Editor のプロジェクトの同期(/api/editor.php。2026-11-08。lib/editor-projects.php)。書き込み(POST)だけ数える。
+# 打つのを止めて 3 秒後に送るので km_html より広く取る。中身を取る GET(action=blob)は数えない
+limit_req_zone $km_write_key zone=km_editor:10m rate=30r/m;
 
 # 同時接続の上限(2026-09-14 の診断で追加)。1 つの送信元が同時に張れる本数。
 # **HTTP/2 では 1 本の中の同時リクエストが 1 つずつ数えられる**ので、443 は広めに取る(server ごとの値は各 server に)。
@@ -473,6 +476,12 @@ server {
         return 404;
     }
 
+    # Web Code Editor(2026-11-08)。末尾の / が無いと Apache(mod_dir)が **http://** の /editor/ へ転送する
+    # (プロキシの裏なので自分が https だと知らない)。ここで https の /editor/ へ送る(?lang= は残す)
+    location = /editor {
+        return 308 ${KM_APP_URL}/editor/$is_args$args;
+    }
+
     # Apache の状態(2026-10-05)。web の中の PHP が 127.0.0.1 で読むだけ。**外からは見せない**
     # (Apache 側も Require local。docker/php/apache-km.conf)
     location ^~ /server-status {
@@ -548,8 +557,9 @@ server {
     # 差し替えても反映されるよう、URL 側に版を付けてある:
     #   CSS/JS  … km_public_asset()(lib/assets.php)が ?v=<mtime> を付ける
     #   階の画像 … index.php が同じ関数を通した版付きURLを埋め込む
+    #   エディタ … /editor/assets/ はファイル名にハッシュが入る(Vite)。ttf は Monaco の codicon(2026-11-08)
     # ---------------------------------------------------------------------
-    location ~* \.(svg|css|js|png|woff2?)$ {
+    location ~* \.(svg|css|js|png|woff2?|ttf)$ {
         add_header X-Content-Type-Options nosniff always;
         add_header Referrer-Policy strict-origin-when-cross-origin always;
         add_header Permissions-Policy $km_permissions_policy always;
@@ -798,6 +808,15 @@ server {
     location = /api/html-host.php {
         client_max_body_size 21m;
         limit_req zone=km_html burst=20 nodelay;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+
+    # Web Code Editor の同期の口(2026-11-08。lib/editor-projects.php)。1 回の zip は 20MB まで(KM_EDITOR_MAX_UPLOAD_BYTES)。
+    # multipart の分の余裕を足す。回数は km_editor(POST だけ)で数える
+    location = /api/editor.php {
+        client_max_body_size 21m;
+        limit_req zone=km_editor burst=20 nodelay;
         include /etc/nginx/km/proxy-web.conf;
         proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
     }

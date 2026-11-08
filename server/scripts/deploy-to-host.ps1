@@ -587,6 +587,17 @@ $mustContain = @(
     # ランキング。
     './src/api/app-ranking.php'
     './src/lib/app-ranking.php'
+    <#
+      Web Code Editor(2026-11-08)。src/editor/ は editor-src で `npm run build` した出力(殻の index.php も
+      build が写す)。manifest が無いと殻は 503 を返す。プレビューは見せる側の editor-run.* と**対**
+    #>
+    './src/editor/index.php'
+    './src/editor/.vite/manifest.json'
+    './src/html-host/editor-run.html'
+    './src/html-host/editor-run.js'
+    # 段 10-B(2026-11-08): サインインした人のプロジェクトの同期(lib/editor-projects.php)
+    './src/api/editor.php'
+    './src/lib/editor-projects.php'
 )
 $mustNotContain = @(
     './src/config/db.local.php'
@@ -596,7 +607,8 @@ $mustNotContain = @(
     './src/config/recaptcha.local.php'
     './src/admin/_dev-session.php'
 )
-$mustNotStartWith = @('./src/vendor/', './src/uploads/')
+# editor-src/ はエディタの元と node_modules(配備しない。2026-11-08)
+$mustNotStartWith = @('./src/vendor/', './src/uploads/', './editor-src/')
 
 if ($WhatIfOnly) {
     Write-Host '=== 転送するもの ==='
@@ -896,6 +908,39 @@ for p in __KM_RETIRED__; do
 done
 '@ -replace '__KM_REMOTE_PATH__', $RemotePath -replace '__KM_RETIRED__', ($retiredPaths -join ' ')
     Invoke-KmSshStdin -Script $retireScript -TimeoutSec 60 | ForEach-Object { Write-Host $_ }
+}
+
+<#
+  **エディタの古い組み立てを退避する**(2026-11-08)。src/editor/assets/ の名前にはハッシュが入り、
+  組み立て直すたびに名前が変わる。tar は消さないので、放っておくと配備のたびに 15MB ずつ溜まる。
+  今回のアーカイブに無いものを retired/editor-assets/ へ移す。**前の 1 世代だけ残す**
+  (配備の直前に開いていたタブが、あとから古い部品を読みに来ても retired からは配らないが、
+  切り戻すときに mv で戻せる)。名前は Vite の形(英数 . _ -)だけを扱う。
+#>
+$editorAssets = @($entries | Where-Object { $_ -match '^\./src/editor/assets/[A-Za-z0-9._-]+$' } | ForEach-Object { $_.Substring('./src/editor/assets/'.Length) })
+if ((Get-RemoteShell) -eq 'sh' -and $editorAssets.Count -gt 0) {
+    $editorScript = @'
+set -u
+cd '__KM_REMOTE_PATH__' || exit 1
+[ -d src/editor/assets ] || exit 0
+keep=' __KM_KEEP__ '
+moved=0
+for f in src/editor/assets/*; do
+    [ -f "$f" ] || continue
+    name=${f##*/}
+    case "$keep" in *" $name "*) continue ;; esac
+    if [ "$moved" -eq 0 ]; then
+        rm -rf retired/editor-assets.new && mkdir -p retired/editor-assets.new || { echo "★ retired/editor-assets.new を作れませんでした" >&2; exit 1; }
+    fi
+    mv "$f" "retired/editor-assets.new/$name" || exit 1
+    moved=$((moved + 1))
+done
+if [ "$moved" -gt 0 ]; then
+    rm -rf retired/editor-assets && mv retired/editor-assets.new retired/editor-assets
+    echo "      エディタの古い組み立て: $moved 個を retired/editor-assets/ へ(前の 1 世代だけ残す)"
+fi
+'@ -replace '__KM_REMOTE_PATH__', $RemotePath -replace '__KM_KEEP__', ($editorAssets -join ' ')
+    Invoke-KmSshStdin -Script $editorScript -TimeoutSec 60 | ForEach-Object { Write-Host $_ }
 }
 
 <#

@@ -67,7 +67,7 @@ function km_csp_nonce_attr(): string
 /**
  * プロファイルごとのディレクティブを組む。
  *
- * @param string $profile 'admin' | 'admin-geo' | 'public' | 'contact' | 'html-host'
+ * @param string $profile 'admin' | 'admin-geo' | 'public' | 'contact' | 'html-host' | 'editor'
  */
 function km_csp_policy(string $profile): string
 {
@@ -132,12 +132,33 @@ function km_csp_policy(string $profile): string
         $frame[] = km_site_html_origin();
     }
 
+    $font = ["'self'"];
+    $worker = null;
+    if ($profile === 'editor') {
+        /*
+         * Web Code Editor(editor/index.php。2026-11-08)。
+         *
+         * - **style だけ 'unsafe-inline'(nonce を外す)。** Monaco は行・行番号・選択の帯を
+         *   `<div style="top:…">` の文字列で組んで innerHTML に入れる(viewLine.js・lineNumbers.js など 19 か所。
+         *   0.57.0 で確かめた)。style 属性は nonce では通せないので、属性ごと許すしかない。
+         *   **nonce と 'unsafe-inline' は一緒に書くと 'unsafe-inline' が無視される**ので、style-src から nonce を外す。
+         *   このページに他人の書いたものは出ない(書いた本人の端末の中だけ)。**台本は nonce のまま**(eval も無し)
+         * - worker は同じオリジンのファイル(Vite の ?worker)。blob: は許さない
+         * - プレビューは見せる側(html.<ドメイン>/editor-run.html)の枠だけ
+         * - フォントは Monaco の codicon(同じオリジン)
+         */
+        $style = ["'self'", "'unsafe-inline'"];
+        $frame = [km_site_html_origin()];
+        $font[] = 'data:';
+        $worker = ["'self'"];
+    }
+
     $directives = [
         "default-src 'self'",
         'script-src ' . implode(' ', $script),
         'style-src ' . implode(' ', $style),
         'img-src ' . implode(' ', $img),
-        "font-src 'self'",
+        'font-src ' . implode(' ', $font),
         'connect-src ' . implode(' ', $connect),
         'frame-src ' . implode(' ', $frame),
         "object-src 'none'",
@@ -145,6 +166,9 @@ function km_csp_policy(string $profile): string
         "form-action 'self'",
         "frame-ancestors 'self'",
     ];
+    if ($worker !== null) {
+        $directives[] = 'worker-src ' . implode(' ', $worker);
+    }
 
     return implode('; ', $directives);
 }
