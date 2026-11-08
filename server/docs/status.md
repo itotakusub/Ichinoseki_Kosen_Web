@@ -41,15 +41,13 @@
 | 4 | **完了**(11-07): 本番の Web 地図の速さの測り直し・案内チャットの確かめ(AI の答えとカード・403・家の PC が止まったとき・無い店) |
 | 5 | 検証環境を作り直す(107 は 10-06 から応答なし。**作り方から見直す**) |
 | 6 | ストリートビュー(360°)を Website へ: **11-07 に作った・配備待ち**(WebGL・撮りそろうまで管理者だけ)。残りは利用者が撮る(本番の写真は 0 枚) |
-| 8 | ito4.jp を Cloudflare に載せる(11-08): SSH・国の拒否・本当の送り元を**手元で用意・配備待ち**。DNS・ネームサーバー・Cloudflare の画面は利用者([17](17-cloudflare.ipynb) §3) |
 | 7〜 | **管理画面「プロジェクト状況」に置く**(11-07、利用者の指示。分類つき。plan.md には段の見出しと設計だけ書く) |
 
-**配備待ち**(手元で済み): 段 8 Cloudflare の用意(`nginx/km/cloudflare-real-ip.conf`・`nginx/default.conf.template`・`scripts/host-geoblock.sh`・`scripts/host-stats.sh`・`geoblock.local.conf.example`。灰のうちは何も変わらない)・プロジェクト状況の番号の列と並び(`admin/projects.php`・`lib/tasks.php`)・段 6 ストリートビューを Website へ(`Main/panorama-viewer.js`・`lib/panorama.php`・`lib/map-data.php`・`Main/app.js`・`Main/i18n.js`・`Main/styles.css`・`index.php`・`admin/map-editor.php`・`admin/assets/js/map-editor.js`・`admin/map-settings.php`・`lib/admin-log.php`)・建物の「中へ」が 2 度出る(萩友会館など)・建物の階の呼び名・案内のカードの階(`Main/app.js`・`Main/user-history.js`・`lib/guide-chat.php`)・寮食堂に萩友会館の階が出る(`lib/building-floors.php`。アプリは版 57 で公開済み)。「教室」からトイレを外す(段 7-2)・案内の例のボタンの崩れ(段 4-2)は 11-07 夜に配備済み(本番の app.js・styles.css で確認)。それより前のものは 11-07 にすべて配備済み(イベントの地点の倍率・置き去り 16 個の退避・読み・別名の CSV・`api/area-paint.php`・階段の向きを下の階から埋める・色分けの画面の 404・国の拒否で Google を 443 だけ通す(`google.allowed: true`)・プロジェクト状況の口と鍵・Logto のテンプレートの台本)。
+**配備待ち**(手元で済み): プロジェクト状況の番号の列と並び(`admin/projects.php`・`lib/tasks.php`)・段 6 ストリートビューを Website へ(`Main/panorama-viewer.js`・`lib/panorama.php`・`lib/map-data.php`・`Main/app.js`・`Main/i18n.js`・`Main/styles.css`・`index.php`・`admin/map-editor.php`・`admin/assets/js/map-editor.js`・`admin/map-settings.php`・`lib/admin-log.php`)・建物の「中へ」が 2 度出る(萩友会館など)・建物の階の呼び名・案内のカードの階(`Main/app.js`・`Main/user-history.js`・`lib/guide-chat.php`)・寮食堂に萩友会館の階が出る(`lib/building-floors.php`。アプリは版 57 で公開済み)。「教室」からトイレを外す(段 7-2)・案内の例のボタンの崩れ(段 4-2)は 11-07 夜に配備済み(本番の app.js・styles.css で確認)。それより前のものは 11-07 にすべて配備済み(イベントの地点の倍率・置き去り 16 個の退避・読み・別名の CSV・`api/area-paint.php`・階段の向きを下の階から埋める・色分けの画面の 404・国の拒否で Google を 443 だけ通す(`google.allowed: true`)・プロジェクト状況の口と鍵・Logto のテンプレートの台本)。
 **進み具合はプロジェクト状況が正**(`scripts/proj-tasks.ps1 list`)。
 
 **保留**(利用者、11-07):
 - カーネルの直った版 —— CVE-2026-98432 を Ubuntu が直した版を出したら上げて再起動する。それまでつなぎ(km-ipopt・MPTCP 0)を続ける
-- 日曜(11-08)の自動処理のあとの確かめ —— イメージの検査のメール(156 件ぶん)・片付け(約 10GB)
 - Web の画面での確かめ —— ログインしたまま配備してログインが残るか・色分けの塗り・英語の名前・札と QR のカメラ
 - Wi-Fi 測位の比べ(元は段 3-3)・AR の実測(元は段 3-4)—— 現地の作業で、今はできない(利用者、11-07。プロジェクト状況 #99・#100)
 
@@ -60,6 +58,41 @@
 ---
 
 ## 記録 2026 年 11 月(新しい順)
+
+### 2026-11-08 — Cloudflare の分析を訪問者の画面に・位置を DB に(利用者「GraphQL Analytics API は Free プラン OK。Logpush は Free プランダメ。作ってください(Website 側管理画面、訪問者に紐づけること)」「位置の保存は永久にしてください」。**11-08 完了**)
+
+- 答え: 訪問者の位置は**ブラウザの IndexedDB に 30 日**覚えるだけで、DB には残っていなかった → DB に残す形にした(利用者の選択: DB に保存・WAF と通信量・cron で毎時)
+- **位置**: `lib/visitor-geo.php`(`km_visitor_geo` = IP ごとの最新・`km_visitor_geo_history` = 中身が変わったときの前の結果)。**消さない。** 引くのは今までどおりブラウザで、引いた結果を `admin/api/visitor-geo.php` へ送る(CSRF・書ける管理者だけ・IP を URL に載せない)。開くたびにサーバーの位置を先に読むので、ほかの PC で引いた IP は引き直さない
+- **Cloudflare**: ホストの root の cron(版 14・毎時 13 分)が `scripts/host-cloudflare-import.sh` で GraphQL を取り、web の `scripts/cloudflare-import.php` が DB へ(`km_cf_waf_events`・`km_cf_traffic_hourly`・`km_cf_import_state`)。**トークンは web に渡さない**(root だけの `cloudflare.local.conf`)。
+  WAF・通信量とも「読み終えた所」を別に覚える(記録の無い時間で止まらない)。範囲は Cloudflare の settings(notOlderThan・maxDuration・maxPageSize)に合わせ、読めなければ控えめに。初回は最大 30 日さかのぼる。WAF の記録の国・ASN は、まだ位置の無い IP にだけ入れる
+- **画面**(訪問者): タイル「Cloudflare で止めた」・「Cloudflare 全体(日別)」(要求・キャッシュ・転送量・脅威・止めた数・サーバーに届いた訪問)・「止めた国」・「止めた接続」(同じ IP の訪問の数と判定。サーバーにも届いた IP は色付き)・止めた記録の CSV
+- check.php に組 `cloudflare`(35 件)。台帳(`local-sanitize.tables`)に 5 表を wipe で。全体 FAIL 0。描く JS は見本のデータで node で動かした。
+- 配備のあと利用者がトークン・`cloudflare.local.conf`・cron 版 14 を入れて手で流した(1 回目は HTTP 401 → 直して 2 回目で成功・問い合わせ 7 回)。本番の DB(読むだけ): WAF 29 件(11-08 10:53〜。WAF のルールを作ったのが当日)・
+  国は US 11・CH 7・SG 4・NL 3 ほか。firewallCustom 28・firewallManaged 1。通信量は 3 時間ぶん(ゾーンを載せたのが当日)。位置は Cloudflare から 19 件。
+  無料の版の範囲(settings): WAF は 31 日前まで・1 回 7 日・1 万件、`httpRequests1hGroups` は **約 3 日前まで**・1 回 3 日。画面へ渡す関数も本番で通った(29 件・3 時間・13KB)
+- 利用者が管理画面の訪問者で表示を確かめた(「大丈夫でした」)→ **完了**。プロジェクト状況 #113 は消した
+### 2026-11-08 — プロジェクト状況の # を直せるように・日曜の検査のメール(利用者「プロジェクト状況の # は編集できるようにしてください」「メールが来ていました」。**11-08 配備済み**)
+
+- **# は km_tasks.id そのもの**(proj-tasks.ps1 の -Id・「#112」と同じ)。編集の画面に「番号(#)」の欄を足した。1〜999999・使い済みの番号は断る・補足(km_task_details)も同じトランザクションで付け替える。
+  表の作りは変えない(行の id を UPDATE するだけ)。UPDATE では AUTO_INCREMENT が進まないことがあるので、足すときに番号が当たったら「いちばん大きい番号 + 1」で入れ直す。
+  口は PATCH の本文 `{"id":5}`、手元は `proj-tasks.ps1 update -Id 113 -NewId 8`。管理の記録は task.update に「#前 → #後」。check.php に「番号:」の 8 行(FAIL 0)。
+  配備のあと本番で: #107 → #106 は 400(使い済み)・#107 → #110 → #107 で題・状態・段の番号・メモがそのまま戻った(自動の番号より小さい番号で試したので、次に足す番号は変わらない)
+- 日曜 04:47 のイメージの検査のメール: 「新しく 141 件」は週 1 回の検査の初回の差分(前回の手動 156 件から減った)。check-updates の表示だけ(当てない)では、**新しい digest があるのは glances だけ**(4.5.9。11-07 公開)。
+  Logto 1.46.0 は最新・ほかはタグの最新のまま = 上流待ち。次回からは増えたときだけ届く
+- 日曜 05:47 の片付けのあとも、ビルドの控えが 10.66GB(最後に使ったのが 2 か月前のものも残る)。ディスクは 38%(空き 59G)で急がない。利用者が記録を貼った → 「ビルドのキャッシュ(14 日より古いもの) Total: 0B」。**原因は `docker builder prune` に `-a` が無いこと**(無いと dangling しか消さない)。`host-docker-prune.sh` に `-a` を足した(11-08 配備済み)。**手で流しても 93B しか消えなかった**(8 月 28 日に作った「消してよい」控えも残る。Docker 29.9.3)。1 回の作り直しで約 1GB 増える(最後に使った日ごとに足して実測)ので、日数に加えて**合計 3GB の上限**(`--max-used-space`)でも削るようにした。**11-08 配備・手で流して 10.66GB → 3.89GB**(ディスク 36G → 30G 使用・空き 64G)。プロジェクト状況 #106 は消した
+### 2026-11-08 — 段 8 Cloudflare: 配備・橙にした・完了(利用者「やりました」「一旦レコードを全て灰にしました。橙にするべきものを教えて下さい」)
+
+- 利用者が配備・`ssh.ito4.jp`(灰)・`ssh-host-alias.ps1 -Apply`・ネームサーバーを Cloudflare(elaine・carmelo)へ。SSH は `ssh.ito4.jp` 経由で通る
+- **取り込みで `html.ito4.jp` が抜けた** → 証明書の更新の下見が NXDOMAIN で失敗。利用者が灰で足した。MX は元から無い(SPF・DMARC は移った)
+- **配備だけでは realip が効かなかった**: テンプレートは 1 ファイルの mount なので、置き換えても動いている nginx は古い中身のまま(送り元が 172.71.x・104.22.x ばかり)。
+  コンテナの一時の場所で新しいテンプレートを `nginx -t`(OK・範囲 22)→ 利用者が `-Action restart -Services reverse-proxy`。docs/17 の手順 0 に restart を書き足した
+- 橙にするのは `ito4.jp`・`auth`・`share`・(あとで)`html`。`admin`・`ssh`・`mail` は灰。PTR は Cloudflare では効かない(逆引きは VPS の会社。いまは無し)
+- 確かめ(読むだけ): 印を付けた要求の記録の送り元が**この PC の IP**(Cloudflare ではない)。`/.well-known/acme-challenge/` は橙でも転送されず nginx に届く。`ito4.jp` の assetlinks は 200(`share` は元から無い)
+- 控えの push が「公開の IPv4」で止まった(Cloudflare の範囲)→ 両方の `push-github.ps1` に「`nginx/km/cloudflare-real-ip.conf` の `set_real_ip_from` だけの行」を除く例外を足して出した
+- 利用者が証明書の更新の下見(通った)→ `html` を橙に。`html` も記録の送り元が本当の IP・acme-challenge は nginx に届く(読むだけで確かめた)
+- 利用者が WAF の国のルールを作った。日本から 4 つの名前・assetlinks・acme-challenge が通る(loc=JP)。Google の Digital Asset Links も ito4.jp の文を読めている
+- **段 8 完了**: WAF のあとの証明書の更新の下見が通った(Let's Encrypt の海外からの確かめも除外で通る)。Cloudflare の Events に「日本以外を Block」で CH(スイス)からの GET / が止まった記録(利用者)。プロジェクト状況 #112 は消した
+- 確かめていないもの: 回数の制限が 1 人ずつ効くか(連打は自分の IP が BAN されうるので試していない。設定は IP ごと)
 
 ### 2026-11-08 — 段 8 ito4.jp を Cloudflare に載せる用意(利用者「ito4.jp を Cloudflare に移行します。確かポートはやめたはずですよね？」「1〜3 と docs/17 の書き直しを用意してください」。**手元で作った・未配備**)
 

@@ -181,7 +181,7 @@ status.md の「残っていること」を利用者と見直して決めた(202
 地点の詳細の「🔭 360° 写真」・地図編集の地点の窓の「360° 写真を見る」・管理画面「地図データ公開設定」の「来場者にも出す」(既定 OFF)。
 **残り**: 利用者が撮って上げる(本番の写真は 11-07 時点で 0 枚)→ 地図編集で見て確かめる → 撮りそろったら「来場者にも出す」を ON。向き(heading)を Web の管理画面で直す口は作っていない(アプリで上げるときに入れる)
 
-### 段 8 —— ito4.jp を Cloudflare に載せる(11-08。手順の正本は [17-cloudflare](17-cloudflare.ipynb)。進み具合はプロジェクト状況)
+### 段 8 —— ito4.jp を Cloudflare に載せる(**2026-11-08 完了**。ito4・auth・share・html は橙・admin・ssh・mail は灰。手順の正本は [17-cloudflare](17-cloudflare.ipynb)。進み具合はプロジェクト状況)
 
 利用者(11-08)「ito4.jp を Cloudflare に移行します」「1〜3 と docs/17 の書き直しを用意してください」。
 **ポートの壁はもう無い**(外は 22・80・443 だけ。11-08 実測)。橙(中継)にする前に止まるものが 3 つあり、**手元で用意した(未配備)**:
@@ -193,6 +193,7 @@ status.md の「残っていること」を利用者と見直して決めた(202
 | 8-3 | 本当の送り元(回数の制限・IP の許可・訪問者の記録) | `nginx/km/cloudflare-real-ip.conf`(Cloudflare の範囲だけ信じる `CF-Connecting-IP`)を http の段で include。PHP は直さない(`X-Real-IP` = `$remote_addr`) | 配備は利用者 |
 | 8-4 | DNS の取り込み・ネームサーバー・Cloudflare の画面(Full (strict)・Always Use HTTPS 切・Bot Fight Mode 切・WAF の国) | docs/17 §2-4・§3 | 利用者 |
 | 8-5 | `ito4.jp` を橙 → 確かめ → `auth`・`share`・HTML 展開を 1 つずつ | docs/17 §3 の 7・8(admin・ssh・mail は灰のまま) | 利用者・確かめはこちら(読むだけ) |
+| 8-6 | **完了(11-08)** Cloudflare の分析を訪問者の画面に(11-08 追加。WAF で止めた記録・時間ごとの通信量・訪問者の位置を DB に・消さない) | `scripts/host-cloudflare-import.sh`(cron 版 14・毎時)・`lib/cloudflare-analytics.php`・`lib/visitor-geo.php`・docs/17 §6 | トークンと配備は利用者・確かめはこちら |
 ---
 
 ## 優先順位の軸

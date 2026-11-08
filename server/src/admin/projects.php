@@ -56,9 +56,23 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && !km_csrf_verify()) {
         }
         if ($action === 'update') {
             km_task_details_validate(trim($planRef), trim($note));
+            // 番号(#)の付け替え(2026-11-08)。空なら変えない。ほかの項目を書く前に確かめる(半分だけ直る、を起こさない)
+            $newIdRaw = trim((string) ($_POST['new_id'] ?? ''));
+            $newId = $id;
+            if ($newIdRaw !== '') {
+                if (preg_match('/^\d{1,7}$/', $newIdRaw) !== 1) {
+                    throw new InvalidArgumentException('番号は 1〜' . KM_TASK_ID_MAX . ' の整数にしてください。');
+                }
+                $newId = (int) $newIdRaw;
+                km_tasks_validate_new_id($newId);
+                if ($newId !== $id && km_tasks_find($pdo, $newId) !== null) {
+                    throw new InvalidArgumentException("番号 {$newId} はほかのタスクが使っています。");
+                }
+            }
             km_tasks_update($pdo, $id, $title, $status, $progress, $topic);
             km_task_details_set($pdo, $id, $planRef, $note);
-            km_admin_log_record('content', 'task.update', $title);
+            km_tasks_renumber($pdo, $id, $newId);
+            km_admin_log_record('content', 'task.update', $newId !== $id ? "#{$id} → #{$newId} {$title}" : $title);
             header('Location: ./projects.php?updated=1' . $backSuffix, true, 302);
             exit;
         }
@@ -288,6 +302,14 @@ require __DIR__ . '/_inc/partials/page-header.php';
                         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="閉じる" data-i18n-attr="aria-label:common.close"></button>
                       </div>
                       <div class="modal-body">
+                        <?php if ($action === 'update'): ?>
+                          <?php // 番号(#)の付け替え(2026-11-08)。ほかのタスクが使っている番号は断る(lib/tasks.php の km_tasks_renumber) ?>
+                          <div class="mb-3">
+                            <label class="form-label" for="km-task-edit-new-id" data-i18n="page.projects.fieldNumber">番号(#)</label>
+                            <input type="number" class="form-control font-monospace" id="km-task-edit-new-id" name="new_id" min="1" max="<?= KM_TASK_ID_MAX ?>" step="1" required />
+                            <div class="form-text" data-i18n="page.projects.fieldNumberHelp">ほかのタスクが使っていない番号にできます。手元の道具(proj-tasks.ps1)の -Id もこの番号です。</div>
+                          </div>
+                        <?php endif; ?>
                         <div class="mb-3">
                           <label class="form-label" for="<?= km_e($id) ?>-title" data-i18n="page.projects.fieldTitle">タスク名</label>
                           <input type="text" class="form-control" id="<?= km_e($id) ?>-title" name="title" maxlength="255" required />
@@ -363,6 +385,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
                 task = {};
               }
               document.getElementById('km-task-edit-id').value = task.id ?? '';
+              document.getElementById('km-task-edit-new-id').value = task.id ?? '';
               document.getElementById('km-task-edit-title').value = task.title ?? '';
               document.getElementById('km-task-edit-status').value = task.status ?? 'todo';
               document.getElementById('km-task-edit-progress').value = task.progress ?? 0;

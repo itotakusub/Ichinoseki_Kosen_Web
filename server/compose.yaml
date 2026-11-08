@@ -714,7 +714,7 @@ services:
     # `latest` のままだと次の `up -d` で中身が入れ替わる。
     # 上げるときは scripts/check-updates.sh --pins が出す行で置き換える
     # タグ v1(1 系。2026-11-06 に付けた。それまでは v1.31.4 の digest だけ)
-    image: axllent/mailpit:v1@sha256:9b3a463be15354c0f0eba91697d80e3e0d8a5623ef0e627cacc836bc17fd5231
+    image: axllent/mailpit:v1@sha256:aef2aacc11f075ec0fb6874275ee4a421e688e11a96ebb296134d1735c7761ce
     container_name: km-mailpit
     restart: unless-stopped
     security_opt:
@@ -748,7 +748,7 @@ services:
   glances:
     # ホストの使用量(タスクマネージャー。2026-10-05、利用者の指示)。**API だけ**を出し、Web 画面は出さない。
     # 4.5.7(2026-09-26 の latest)。タグを残すのは check-updates.sh が新しい版を読むため(postgres と同じ)
-    image: nicolargo/glances:latest@sha256:413ddc0b03422ab0bcbf30f53faf63c3ee91b354bf544cd01aa60afa73a4cda2
+    image: nicolargo/glances:latest@sha256:a8a1614c2d531f8bd66125050968be3317c093484c82730cc96c83a2df3c732c
     container_name: km-glances
     restart: unless-stopped
     # **ホスト全体だけを見る。docker.sock は渡さない**(利用者の決定。読み取りでも root 相当の口になる)。

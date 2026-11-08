@@ -43,7 +43,7 @@ done
 APT_CONF="/etc/apt/apt.conf.d/52kosenmap-unattended"
 CRON_FILE="/etc/cron.d/kosenmap-updates"
 # **並びを変えたら上げること。** 古いホストの cron を書き直す合図になる
-CRON_VERSION=13
+CRON_VERSION=14
 LOG_DIR="/var/log/kosenmap"
 CHECK_SCRIPT="$PATH_ROOT/scripts/check-updates.sh"
 SECURITY_SCRIPT="$PATH_ROOT/scripts/host-security-check.sh"
@@ -65,6 +65,8 @@ IMAGE_SCAN_SCRIPT="$PATH_ROOT/scripts/host-image-scan.sh"
 DOCKER_PRUNE_SCRIPT="$PATH_ROOT/scripts/host-docker-prune.sh"
 # phpMyAdmin はトンネルが開いている間だけ動かす(版 12 で 18〜21 時、版 13 でトンネルの合図に。2026-11-07)
 PMA_WINDOW_SCRIPT="$PATH_ROOT/scripts/host-pma-window.sh"
+# Cloudflare の分析の取り込み(版 14。2026-11-08)。設定(cloudflare.local.conf)が無ければ何もしない
+CF_IMPORT_SCRIPT="$PATH_ROOT/scripts/host-cloudflare-import.sh"
 
 PROBLEMS=0
 note() { echo "  $1"; }
@@ -125,7 +127,7 @@ echo "== 確認スクリプト =="
 # **配備は実行ビットを保たない。** tar 越しに置いた直後は 644 のことがあるので、
 # cron が呼ぶものをまとめて見る(1本ずつ手で chmod すると、必ずどれかを忘れる)。
 # 版 6 で host-cert.sh と、それを包む send-log.sh を足した。版 7 で host-stats.sh と host-resource-alert.sh。
-for _script in "$CHECK_SCRIPT" "$SECURITY_SCRIPT" "$EMERGENCY_SCRIPT" "$BACKUP_SCRIPT" "$CERT_SCRIPT" "$SEND_LOG_SCRIPT" "$STATS_SCRIPT" "$RESOURCE_SCRIPT" "$GEOBLOCK_SCRIPT" "$APK_INBOX_SCRIPT" "$IMAGE_SCAN_SCRIPT" "$DOCKER_PRUNE_SCRIPT" "$PMA_WINDOW_SCRIPT"; do
+for _script in "$CHECK_SCRIPT" "$SECURITY_SCRIPT" "$EMERGENCY_SCRIPT" "$BACKUP_SCRIPT" "$CERT_SCRIPT" "$SEND_LOG_SCRIPT" "$STATS_SCRIPT" "$RESOURCE_SCRIPT" "$GEOBLOCK_SCRIPT" "$APK_INBOX_SCRIPT" "$IMAGE_SCAN_SCRIPT" "$DOCKER_PRUNE_SCRIPT" "$PMA_WINDOW_SCRIPT" "$CF_IMPORT_SCRIPT"; do
   if [ -x "$_script" ]; then
     note "あり: $_script"
   elif [ -f "$_script" ]; then
@@ -280,6 +282,12 @@ else
 # host-pma-window.sh が **1 分ごと**に、km の家の目印(トンネル開通SSH.cmd の SSH が 20 秒ごとに触る)を見て、
 # 60 秒より新しければ phpMyAdmin を起こし、古いか無ければ止める。**ふだんは止まっている。** Chrome を閉じるとトンネルが切れ、2 分以内に止まる。
 # 1 分ごとなので send-log.sh は通さない(失敗は pma-window.log に残る)。
+#
+# ## Cloudflare の分析の取り込み(版 14 で足した。2026-11-08)
+#
+# host-cloudflare-import.sh が **毎時 13 分**に、WAF で止めた記録と時間ごとの通信量を GraphQL Analytics API から取り、web に DB へ入れさせる
+# (管理画面の訪問者に出す。トークンは root だけが読む cloudflare.local.conf。web には渡さない)。**失敗したときだけ**送る(同じ失敗は 6 時間に 1 回)。
+# **設定が無ければ何もしない。** ほかの毎時・毎日の仕事(:17 の更新の確認など)と分を重ねない。
 SHELL=/bin/sh
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
@@ -303,6 +311,7 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 47 4 * * 0  root  $SEND_LOG_SCRIPT --path $PATH_ROOT --label イメージの検査 --only-failure --run "$IMAGE_SCAN_SCRIPT --path $PATH_ROOT --notify" >>$LOG_DIR/image-scan.log 2>&1
 47 5 * * 0  root  $SEND_LOG_SCRIPT --path $PATH_ROOT --label イメージの片付け --only-failure --run "$DOCKER_PRUNE_SCRIPT --path $PATH_ROOT --apply" >>$LOG_DIR/docker-prune.log 2>&1
 * * * * *    root  $PMA_WINDOW_SCRIPT --path $PATH_ROOT >>$LOG_DIR/pma-window.log 2>&1
+13 * * * *   root  $SEND_LOG_SCRIPT --path $PATH_ROOT --label Cloudflare の取り込み --only-failure --run "$CF_IMPORT_SCRIPT --path $PATH_ROOT" >>$LOG_DIR/cloudflare.log 2>&1
 CONF
     chmod 644 "$CRON_FILE"
     chown root:root "$CRON_FILE"

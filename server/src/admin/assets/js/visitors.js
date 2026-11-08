@@ -11,7 +11,10 @@
  * スイッチ「位置を調べる」を入れたときだけ、IP ごとに 1 回、外部へ問い合わせる(訪問者の IP が外部へ渡るため既定は切)。
  *   1. ipwho.is   … 国・地域・都市と、ISP・組織名・ASN(鍵なし・CORS あり。ASN は 2026-10-08 から)
  *   2. api.country.is … 1 が断る・落ちているときの落とし先。国だけ
- * 結果はこのブラウザの IndexedDB(km-visitors / geo)に 30 日覚える(記録そのものも 30 日で消えるので、それより長く持たない)。
+ * 結果はこのブラウザの IndexedDB(km-visitors / geo)に 30 日覚え、**サーバーの DB にも残す**(2026-11-08。admin/api/visitor-geo.php・
+ * lib/visitor-geo.php。利用者「位置の保存は永久に」。消さない・変わったら前の結果を履歴に)。開くたびにサーバーの位置を先に読むので、
+ * ほかの PC・ほかの管理者が引いた IP は引き直さない。書けるのは書き込みの権限がある管理者だけ(読むだけの管理者はブラウザに覚えるだけ)。
+ * Cloudflare の WAF で止めた IP は、国と ASN だけがサーバーで先に入る(src = cloudflare)。訪問に出てきたら、都市まで引き直す。
  * 問い合わせは 1.2 秒に 1 回・1 回の表示で 150 件まで(外部の無料枠を食い潰さない)。LAN の IP は問い合わせない。
  *
  * 文字はすべて textContent で入れる(端末名・パスを HTML として読まない)。
@@ -236,9 +239,79 @@
       // 覚えられないだけ
     }
   };
+  // ---- サーバーの位置(2026-11-08)----
+  let geoCanWrite = false;
+  const geoOutbox = [];
+  let geoFlushTimer = null;
+  const csrf = document.querySelector('meta[name="km-csrf"]')?.content ?? '';
+  const flushGeo = async () => {
+    geoFlushTimer = null;
+    if (!geoCanWrite || !root.dataset.geoSrc || geoOutbox.length === 0) {
+      geoOutbox.length = 0;
+      return;
+    }
+    const entries = geoOutbox.splice(0, 200);
+    try {
+      await fetch(root.dataset.geoSrc, {
+        method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', 'X-KM-CSRF': csrf },
+        body: JSON.stringify({ entries }),
+      });
+    } catch {
+      // 残せなくても、このブラウザには覚えてある(次に引いたときにまた送る)
+    }
+    if (geoOutbox.length > 0) {
+      geoFlushTimer = setTimeout(flushGeo, 1000);
+    }
+  };
+  /** サーバーに残っている位置を読む。ブラウザの覚えより新しければ入れ替える */
+  const loadServerGeo = async () => {
+    if (!root.dataset.geoSrc) {
+      return;
+    }
+    try {
+      const res = await fetch(root.dataset.geoSrc, { credentials: 'same-origin', cache: 'no-store' });
+      if (!res.ok) {
+        return;
+      }
+      const data = await res.json();
+      geoCanWrite = data?.canWrite === true;
+      (Array.isArray(data?.rows) ? data.rows : []).forEach((r) => {
+        if (!Array.isArray(r) || typeof r[0] !== 'string') {
+          return;
+        }
+        const entry = {
+          ip: r[0], code: r[1] || '', region: r[2] || '', city: r[3] || '', asn: Number.isInteger(r[4]) ? r[4] : null,
+          org: r[5] || '', isp: r[6] || '', src: r[7] || '', at: (Number(r[8]) || 0) * 1000, changes: Number(r[9]) || 0, server: true,
+        };
+        const local = geo.get(entry.ip);
+        // 都市まで引いたブラウザの覚えを、国と ASN だけの Cloudflare の位置で上書きしない
+        const weaker = entry.src === 'cloudflare' && local && local.src !== 'cloudflare';
+        if (!weaker && (!local || (local.at || 0) <= entry.at)) {
+          geo.set(entry.ip, entry);
+        } else if (geoCanWrite && !local.server) {
+          // このブラウザの方が新しい(前に引いて、まだ送っていない)→ 送る
+          geoOutbox.push(local);
+        }
+      });
+      if (geoOutbox.length > 0 && geoFlushTimer === null) {
+        geoFlushTimer = setTimeout(flushGeo, 1000);
+      }
+    } catch {
+      // 読めなくても、ブラウザの覚えで動く
+    }
+  };
   const saveGeo = (entry) => {
     geo.set(entry.ip, entry);
     put('geo', entry);
+    if (geoCanWrite) {
+      geoOutbox.push(entry);
+      if (geoFlushTimer === null) {
+        geoFlushTimer = setTimeout(flushGeo, geoOutbox.length >= 20 ? 0 : 3000);
+      }
+    }
   };
 
   // ---- 外部への問い合わせ ----
@@ -287,7 +360,8 @@
   /** ASN を引いていない古い覚え(2026-10-08 より前の ipwho.is)は、引き直す */
   const needsLookup = (ip) => {
     const g = geo.get(ip);
-    return !g || (g.src === 'ipwho.is' && !('asn' in g));
+    // Cloudflare の WAF の記録から入った位置は国と ASN だけ。訪問に出てきたら都市まで引く
+    return !g || g.src === 'cloudflare' || (g.src === 'ipwho.is' && !('asn' in g));
   };
 
   // ---- 読み込みと集計 ----
@@ -635,6 +709,12 @@
       tr.title = [(judge.reasons || []).join('\n'), v.ua || ''].filter((x) => x).join('\n');
       return tr;
     }), '記録がありません');
+
+    // Cloudflare(2026-11-08。assets/js/visitors-cloudflare.js)。同じ IP の訪問と判定を並べる
+    window.KmVisitorCloudflare?.render({
+      visits, list, judged, geo, place, ispLabel, countryName, isPrivate, cell, badge, row, fill, setText, csvDownload: download, stamp,
+      days: Number(daysSelect?.value || 7), LEVEL_LABEL, LEVEL_BADGE, LEVEL_CLASS,
+    });
   };
 
   // 送り元と最近の訪問は列が多いので、折り返さずに横へ流す(狭い画面では表の中で横に送る)。理由だけ折り返す
@@ -785,6 +865,8 @@
     const days = Number(daysSelect?.value || 7);
     setText('status', '読み込み中…');
     const bansDone = loadBans();
+    const geoDone = loadServerGeo();
+    const cloudflareDone = window.KmVisitorCloudflare ? window.KmVisitorCloudflare.load(root, days) : Promise.resolve();
     try {
       const res = await fetch(`${root.dataset.src}?days=${days}`, { credentials: 'same-origin', cache: 'no-store' });
       if (!res.ok) {
@@ -810,6 +892,8 @@
       });
       visits = parsed;
       await bansDone;
+      await geoDone;
+      await cloudflareDone;
       const notes = [];
       if (res.headers.get('X-KM-Visit-Log') === 'missing') {
         notes.push('記録の置き場がありません(reverse-proxy と web の作り直しが要ります)');

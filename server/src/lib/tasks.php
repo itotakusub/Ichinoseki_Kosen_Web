@@ -356,9 +356,78 @@ function km_tasks_create(PDO $pdo, string $title, string $status, int $progress,
         'INSERT INTO km_tasks (title, status, progress, topic, sort_order, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, NOW(), NOW())'
     );
-    $stmt->execute([trim($title), $status, $progress, $topic, $next]);
+    try {
+        $stmt->execute([trim($title), $status, $progress, $topic, $next]);
+    } catch (PDOException $exception) {
+        // 番号を付け替えた(km_tasks_renumber)あとは、自動の番号が使い済みの番号に当たることがある
+        // (UPDATE では AUTO_INCREMENT が進まない)。そのときだけ「いちばん大きい番号 + 1」で入れ直す
+        if ((string) $exception->getCode() !== '23000') {
+            throw $exception;
+        }
+        $retry = $pdo->prepare(
+            'INSERT INTO km_tasks (id, title, status, progress, topic, sort_order, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())'
+        );
+        $id = (int) $pdo->query('SELECT COALESCE(MAX(id), 0) + 1 FROM km_tasks')->fetchColumn();
+        $retry->execute([$id, trim($title), $status, $progress, $topic, $next]);
+
+        return $id;
+    }
 
     return (int) $pdo->lastInsertId();
+}
+
+/**
+ * 番号(#・id)の付け替え(2026-11-08、利用者「プロジェクト状況の # は編集できるようにしてください」)。
+ *
+ * # は km_tasks.id そのもの(proj-tasks.ps1 の -Id・status.md の「#112」と同じ)。**表の作りは変えない**(行の id を UPDATE するだけ)。
+ * 1〜KM_TASK_ID_MAX の整数で、ほかのタスクが使っていない番号だけ。補足の表(km_task_details.task_id)も一緒に付け替える。
+ * 消したタスクの補足が残っていれば(外部キーが無いので起こりうる)、新しい番号の古い補足は先に消す。
+ */
+const KM_TASK_ID_MAX = 999999;
+
+function km_tasks_validate_new_id(int $newId): void
+{
+    if ($newId < 1 || $newId > KM_TASK_ID_MAX) {
+        throw new InvalidArgumentException('番号は 1〜' . KM_TASK_ID_MAX . ' の整数にしてください。');
+    }
+}
+
+function km_tasks_renumber(PDO $pdo, int $id, int $newId): void
+{
+    km_tasks_ensure_table($pdo);
+    km_tasks_validate_new_id($newId);
+    if ($newId === $id) {
+        return;
+    }
+    if (km_tasks_find($pdo, $id) === null) {
+        throw new InvalidArgumentException('そのタスクはありません。');
+    }
+    if (km_tasks_find($pdo, $newId) !== null) {
+        throw new InvalidArgumentException("番号 {$newId} はほかのタスクが使っています。");
+    }
+
+    $own = !$pdo->inTransaction();
+    if ($own) {
+        $pdo->beginTransaction();
+    }
+    try {
+        $pdo->prepare('DELETE FROM km_task_details WHERE task_id = ?')->execute([$newId]);
+        $pdo->prepare('UPDATE km_tasks SET id = ?, updated_at = NOW() WHERE id = ?')->execute([$newId, $id]);
+        $pdo->prepare('UPDATE km_task_details SET task_id = ? WHERE task_id = ?')->execute([$newId, $id]);
+        if ($own) {
+            $pdo->commit();
+        }
+    } catch (Throwable $exception) {
+        if ($own) {
+            $pdo->rollBack();
+        }
+        // 同時にほかの人が同じ番号を取ったときは、重複の失敗になる
+        if ($exception instanceof PDOException && (string) $exception->getCode() === '23000') {
+            throw new InvalidArgumentException("番号 {$newId} はほかのタスクが使っています。");
+        }
+        throw $exception;
+    }
 }
 
 function km_tasks_update(PDO $pdo, int $id, string $title, string $status, int $progress, string $topic = ''): void

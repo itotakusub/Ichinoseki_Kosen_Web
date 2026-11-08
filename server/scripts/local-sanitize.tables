@@ -102,6 +102,11 @@ km_test_events               wipe   # 試験モードの操作の記録
 km_guide_chat_log            wipe   # 案内チャットの質問と答え
 km_guide_chat_usage          keep   # 日ごとの回数だけ
 km_bench_runs                wipe   # 本番のホストの様子が入る
+km_visitor_geo               wipe   # 訪問者の IP と位置(2026-11-08。本番では消さない)
+km_visitor_geo_history       wipe
+km_cf_waf_events             wipe   # Cloudflare で止めた接続の IP・端末
+km_cf_traffic_hourly         wipe   # 本番の通信量
+km_cf_import_state           wipe
 km_tasks                     wipe   # プロジェクト状況。local-sanitize.sh がダミーを 3 件入れる
 km_task_details              wipe
 # ---- ファイル(実体の uploads/ は写していない)

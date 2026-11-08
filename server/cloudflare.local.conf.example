@@ -1,0 +1,19 @@
+# Cloudflare の分析の取り込み(scripts/host-cloudflare-import.sh。2026-11-08)
+#
+# 本番ホストの /opt/kosenmap/cloudflare.local.conf に写して値を入れる。**root の持ち物・600 にすること:**
+#
+#   sudo install -m 600 -o root -g root /dev/null /opt/kosenmap/cloudflare.local.conf
+#   sudo nano /opt/kosenmap/cloudflare.local.conf
+#
+# `名前=値` の行だけを読む(シェルとして実行しない)。引用符は付けない。
+# `*.local.conf` なので、配備でも GitHub の控えでも送らない。web のコンテナにも渡さない(読むのは root の台本だけ)。
+#
+# ゾーンの ID: Cloudflare の画面で ito4.jp を開き、「概要」の右下の「ゾーン ID」(32 桁の 16 進)
+CF_ZONE_ID=
+#
+# API トークン: 右上の人の印 → 「プロフィール」→「API トークン」→「トークンを作成」→「カスタム トークン」
+#   権限: ゾーン → Analytics → 読み取り(これだけ)
+#   ゾーン リソース: 特定のゾーン → ito4.jp
+#   クライアント IP アドレスのフィルタ: 本番の IP だけ(任意。付けると、漏れてもほかの所からは使えない)
+#   TTL: 付けるなら、切れる前に作り直すこと(切れると取り込みが止まり、メールが届く)
+CF_API_TOKEN=

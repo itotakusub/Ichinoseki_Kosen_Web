@@ -46,7 +46,7 @@ param(
     [string]$Choice = '',
     [switch]$DryRun,
     # 繋ぐホスト(本番)
-    [string]$HostName = 'ito4.jp',
+    [string]$HostName = 'ssh.ito4.jp',
     # deploy-to-host.ps1 と同じ。docker あり・sudo なし(docs/12 §7-4 B)
     [string]$User = 'kmops',
     # SSH の秘密鍵(配備と同じ)

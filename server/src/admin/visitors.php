@@ -11,7 +11,10 @@ require __DIR__ . '/_inc/guard.php';
  * - 記録は nginx が書く(公開のページだけ・クエリなし・30 日で消える。lib/visit-log.php)
  * - admin/api/visit-log.php は**生の行をそのまま**渡す
  * - **数える・まとめる・IP を位置に直すのは、このページを開いたブラウザ**(assets/js/visitors.js)
- *   位置は ipwho.is(国・地域・都市)、引けなければ api.country.is(国だけ)。結果はこのブラウザに 30 日覚える
+ *   位置は ipwho.is(国・地域・都市)、引けなければ api.country.is(国だけ)。結果はこのブラウザに 30 日覚え、
+ *   **サーバーの DB にも消さずに残す**(2026-11-08。admin/api/visitor-geo.php・lib/visitor-geo.php。変わったら前の結果を履歴に)
+ * - Cloudflare の分析(2026-11-08): WAF で止めた記録と時間ごとの通信量を、ホストの cron が DB へ取り込む(lib/cloudflare-analytics.php)。
+ *   admin/api/cloudflare-data.php が渡し、assets/js/visitors-cloudflare.js が同じ IP の訪問・判定と並べる
  * - **外部で引くのはスイッチを入れたときだけ**(訪問者の IP が外部へ渡るため。既定は切)
  * - 色分けは ① ISP/ASN 〜 ⑦ 過去の挙動 の点数(assets/js/visitors-threats.js。2026-10-08)
  * - CSV の書き出し・表示する件数(10/50/100/200)・国の行の ▷ で地域・都市を開く も、すべてブラウザ(2026-10-08)
@@ -46,13 +49,14 @@ require __DIR__ . '/_inc/partials/page-header.php';
 ?>
         <!--begin::App Content-->
         <div class="app-content">
-          <div class="container-fluid" id="km-visitors" data-src="./api/visit-log.php" data-bans-src="./api/visitor-bans.php">
+          <div class="container-fluid" id="km-visitors" data-src="./api/visit-log.php" data-bans-src="./api/visitor-bans.php" data-geo-src="./api/visitor-geo.php" data-cloudflare-src="./api/cloudflare-data.php">
             <div class="alert alert-info d-flex align-items-start" role="alert">
               <i class="bi bi-info-circle-fill me-2 mt-1" aria-hidden="true"></i>
               <div data-i18n="page.visitors.notice">
                 公開のページ(地図・お試しのリンク・共有リンク・よくある質問・お問い合わせ・アプリの地図)を開いた記録です。
                 30 日で消えます。数える・まとめる・位置に直すのはこのブラウザで、サーバーは記録をそのまま渡すだけです。
                 「位置を調べる」を入れると、このブラウザが訪問者の IP を外部(ipwho.is、だめなら api.country.is)へ送って国・都市を引きます。
+                引いた位置はサーバーにも消さずに残し、ほかの PC でも使います。Cloudflare で止めた接続(サーバーには届かない分)は下の Cloudflare のカードにあります。
               </div>
             </div>
 
@@ -122,6 +126,7 @@ require __DIR__ . '/_inc/partials/page-header.php';
               $tile('signed', 'bi-person-badge', 'info', 'page.visitors.signed', 'お試し・サインイン・アプリ');
               $tile('danger', 'bi-exclamation-octagon', 'danger', 'page.visitors.danger', '危険な送り元');
               $tile('suspect', 'bi-exclamation-triangle', 'warning', 'page.visitors.suspect', '怪しい送り元');
+              $tile('cfWaf', 'bi-shield-x', 'secondary', 'page.visitors.cfWaf', 'Cloudflare で止めた');
               ?>
             </div>
 
@@ -221,6 +226,50 @@ require __DIR__ . '/_inc/partials/page-header.php';
               ?>
             </div>
 
+            <?php // Cloudflare(2026-11-08)。取り込みの様子・日別・止めた国・止めた記録 ?>
+            <p class="fs-7 text-body-secondary mb-2"><i class="bi bi-cloud me-1" aria-hidden="true"></i><span data-km-vs="cfStatus"></span></p>
+            <div class="row">
+              <?php
+              $table('cfByDay', 'page.visitors.cfByDay', 'Cloudflare 全体(日別)', [
+                  ['page.visitors.colDay', '日付'],
+                  ['page.visitors.cfRequests', '要求'],
+                  ['page.visitors.cfCached', 'キャッシュ'],
+                  ['page.visitors.cfBytes', '転送量'],
+                  ['page.visitors.cfThreats', '脅威'],
+                  ['page.visitors.cfWaf', 'Cloudflare で止めた'],
+                  ['page.visitors.cfReached', 'サーバーに届いた訪問'],
+              ], 'col-12 col-xl-7', collapsible: true);
+              $table('cfByCountry', 'page.visitors.cfByCountry', 'Cloudflare で止めた国(上位 30)', [
+                  ['page.visitors.colCountry', '国・地域'],
+                  ['page.visitors.cfCount', '件数'],
+                  ['page.visitors.ips', '送り元(IP)'],
+              ], 'col-12 col-xl-5', collapsible: true);
+              ?>
+            </div>
+
+            <div class="row">
+              <?php
+              $table('cfWafList', 'page.visitors.cfWafList', 'Cloudflare で止めた接続(新しい順・100 件まで)', [
+                  ['page.visitors.colTime', '時刻'],
+                  ['page.visitors.colIp', 'IP'],
+                  ['page.visitors.colPlace', '場所'],
+                  ['page.visitors.colIsp', 'ISP・ASN'],
+                  ['page.visitors.cfPath', 'ホスト・パス'],
+                  ['page.visitors.cfRule', 'ルール'],
+                  ['page.visitors.cfSeen', 'この IP の訪問'],
+                  ['page.visitors.colScore', '判定・点'],
+              ], 'col-12', false, static function (): void {
+                  ?>
+                  <span class="text-body-secondary fs-7" data-km-vs="cfWafListSub"></span>
+                  <button type="button" class="btn btn-sm btn-outline-success" id="km-visitors-export-waf" title="いま読んでいる期間の止めた記録(5000 件まで)を CSV に書き出す">
+                    <i class="bi bi-filetype-csv me-1" aria-hidden="true"></i>
+                    <span data-i18n="page.visitors.exportWaf">止めた記録を CSV に</span>
+                  </button>
+                  <?php
+              }, true);
+              ?>
+            </div>
+
             <div class="row">
               <?php
               $table('threats', 'page.visitors.threats', '危険・怪しい送り元(点の高い順・100 件まで)', [
@@ -284,5 +333,6 @@ require __DIR__ . '/_inc/partials/page-header.php';
         <script src="./vendor/jsvectormap/maps/world.js"></script>
         <script src="<?= km_e(km_asset('./assets/js/visitors-world.js')) ?>"></script>
         <script src="<?= km_e(km_asset('./assets/js/visitors-threats.js')) ?>"></script>
+        <script src="<?= km_e(km_asset('./assets/js/visitors-cloudflare.js')) ?>"></script>
         <script src="<?= km_e(km_asset('./assets/js/visitors.js')) ?>"></script>
 <?php require __DIR__ . '/_inc/partials/footer.php'; ?>

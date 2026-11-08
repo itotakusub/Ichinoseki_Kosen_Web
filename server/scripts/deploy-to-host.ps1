@@ -431,6 +431,9 @@ $include = @(
     # 使っていないイメージとビルドのキャッシュの片付け(2026-11-06)。root の cron が毎週日曜に呼ぶ(版 11)
     './scripts/host-docker-prune.sh'
     './scripts/host-pma-window.sh'
+    # Cloudflare の分析の取り込み(2026-11-08)。root の cron が 1 時間ごとに呼ぶ(版 14)。設定 cloudflare.local.conf はホストにだけ置く
+    './scripts/host-cloudflare-import.sh'
+    './cloudflare.local.conf.example'
     <#
       SSH ログインの知らせと、切る・BAN する道具(2026-09-25)。
       **ここに置くのは原本だけ。** PAM と sudo から root で走るのは、ssh-login-notify-setup.sh --fix が
@@ -500,6 +503,9 @@ $mustContain = @(
     './scripts/host-image-scan.sh'
     './scripts/host-docker-prune.sh'
     './scripts/host-pma-window.sh'
+    # Cloudflare の分析の取り込み(2026-11-08)。web 側の口と**対**(片方だけだと cron が空振りする)
+    './scripts/host-cloudflare-import.sh'
+    './src/scripts/cloudflare-import.php'
     # バックアップと通知。こちらも**対**
     './scripts/host-backup.sh'
     './scripts/ssh-backup-gate.sh'

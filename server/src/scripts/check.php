@@ -113,10 +113,139 @@ const KM_CHECK_PURE = [
     'alias-csv',
     // 管理アプリが塗った色分けの絵を受け取る(2026-11-07、plan.md 段 2-3)
     'area-paint-app',
+    // Cloudflare の分析の取り込みと、訪問者の位置を DB に(2026-11-08)
+    'cloudflare',
 ];
 
-/** 名前を明示したときだけ走る検査。置かれている設定を読む。 */
-const KM_CHECK_ENVIRONMENT = ['recaptcha'];
+/**
+ * Cloudflare の分析の取り込み(lib/cloudflare-analytics.php・scripts/host-cloudflare-import.sh)と、訪問者の位置を DB に(lib/visitor-geo.php)。2026-11-08。
+ * DB に触る所は MariaDB の書き方なので、ここでは純粋関数と、台本・画面の形を見る。
+ */
+function km_check_cloudflare(): void
+{
+    km_check_heading('cloudflare: Cloudflare の分析の取り込み・訪問者の位置を DB に');
+    require_once __DIR__ . '/../lib/cloudflare-analytics.php';
+    $root = dirname(__DIR__, 2);
+    $read = static fn (string $rel): string => (string) @file_get_contents($root . '/' . $rel);
+    $lib = $read('src/lib/cloudflare-analytics.php');
+    $geoLib = $read('src/lib/visitor-geo.php');
+    $host = $read('scripts/host-cloudflare-import.sh');
+    $setup = $read('scripts/host-updates-setup.sh');
+    $deploy = $read('scripts/deploy-to-host.ps1');
+    $compose = $read('compose.yaml');
+    $geoApi = $read('src/admin/api/visitor-geo.php');
+    $cfApi = $read('src/admin/api/cloudflare-data.php');
+    $page = $read('src/admin/visitors.php');
+    $js = $read('src/admin/assets/js/visitors.js');
+    $cfJs = $read('src/admin/assets/js/visitors-cloudflare.js');
+
+    // 窓・範囲
+    check('窓: 1 時間ずつ・最後は端で切る', [[0, 3600], [3600, 7200], [7200, 10000]], km_cf_windows(0, 10000, 3600));
+    check('窓: 数の上限', 2, count(km_cf_windows(0, 100000, 3600, 2)));
+    check('窓: 0 や短すぎる長さは 1 時間にする', [[0, 3600], [3600, 5000]], km_cf_windows(0, 5000, 10));
+    check('範囲: 読めなければ控えめな値(1 日・1 万件・7 日)', KM_CF_DEFAULT_LIMITS, km_cf_limits(null));
+    check('範囲: 窓は 7 日・1 ページは 1 万件まで', ['maxDuration' => 7 * 86400, 'maxPageSize' => 10000, 'notOlderThan' => 2678400],
+        km_cf_limits(['maxDuration' => 30 * 86400, 'maxPageSize' => 50000, 'notOlderThan' => 2678400]));
+    check('時刻: GraphQL の Time(UTC)', '2026-11-08T02:49:07Z', km_cf_time(1794106147));
+
+    // 答えを読む(11-08 に利用者が Cloudflare の画面から書き出した記録の形。IP は文書用に変えた)
+    $now = 1794110000;
+    $event = [
+        'action' => 'block', 'clientASNDescription' => 'DEDIK SERVICES LIMITED', 'clientAsn' => '209413', 'clientCountryName' => 'CH',
+        'clientIP' => '203.0.113.34', 'clientRequestHTTPHost' => 'ito4.jp:443', 'clientRequestHTTPMethodName' => 'GET', 'clientRequestPath' => '/',
+        'datetime' => '2026-11-08T02:49:07Z', 'description' => '日本以外をBlock', 'rayName' => 'a571433fbf2ebac1',
+        'ruleId' => '49885a8abab0474b868c8eebee57621a', 'source' => 'firewallCustom', 'userAgent' => "Mozilla/5.0\n(Mac)",
+    ];
+    $w = km_cf_waf_normalize($event, $now);
+    check('WAF: 書き出しの記録を読める(ASN は数・時刻は秒・改行は消す)',
+        ['a571433fbf2ebac1', 1794106147, 'CH', 209413, 'DEDIK SERVICES LIMITED', 'GET', '/', 'firewallCustom', 'Mozilla/5.0 (Mac)'],
+        $w === null ? null : [$w['ray'], $w['at'], $w['country'], $w['asn'], $w['asnName'], $w['method'], $w['path'], $w['source'], $w['ua']]);
+    check('WAF: Ray ID・時刻がおかしければ捨てる', [null, null], [
+        km_cf_waf_normalize(['rayName' => 'zz<script>', 'datetime' => '2026-11-08T02:49:07Z'] + $event, $now),
+        km_cf_waf_normalize(['datetime' => 'きのう'] + $event, $now),
+    ]);
+    check('WAF: IP の形が違えば空・国は 2 文字だけ', ['', ''], (static function () use ($event, $now): array {
+        $x = km_cf_waf_normalize(['clientIP' => '1.2.3', 'clientCountryName' => 'JPN'] + $event, $now);
+        return [$x['ip'] ?? null, $x['country'] ?? null];
+    })());
+    check('WAF: 1 ページで足りなかったときの続きは、読めたうちいちばん新しい時刻', 1794106147, km_cf_waf_last_at([$event, ['datetime' => '2026-11-08T01:00:00Z']], 0));
+    $hour = ['dimensions' => ['datetime' => '2026-11-08T02:00:00Z'], 'sum' => ['requests' => 120, 'cachedRequests' => 30, 'bytes' => 5000, 'cachedBytes' => 1000,
+        'threats' => 2, 'pageViews' => 40, 'countryMap' => [['clientCountryName' => 'JP', 'requests' => 100, 'threats' => 0, 'bytes' => 4000], ['clientCountryName' => '<x>', 'requests' => 1]]],
+        'uniq' => ['uniques' => 9]];
+    $h = km_cf_traffic_normalize($hour);
+    check('通信量: 時間ごとの数と国(おかしな国は捨てる)', [1794103200, 120, 30, 9, ['JP' => [100, 0, 4000]]],
+        $h === null ? null : [$h['hour'], $h['requests'], $h['cachedRequests'], $h['uniques'], $h['countries']]);
+    check('通信量: 時間の区切りでない時刻は捨てる', null, km_cf_traffic_normalize(['dimensions' => ['datetime' => '2026-11-08T02:30:00Z']] + $hour));
+    $zoneError = null;
+    try {
+        km_cf_zone_of('{"data":null,"errors":[{"message":"not authorized"}]}');
+    } catch (RuntimeException $e) {
+        $zoneError = $e->getMessage();
+    }
+    check_bool('答え: errors があれば理由ごと断る', $zoneError !== null && str_contains($zoneError, 'not authorized'));
+    check('答え: 最初のゾーンを返す', ['firewallEventsAdaptive' => []], km_cf_zone_of('{"data":{"viewer":{"zones":[{"firewallEventsAdaptive":[]}]}},"errors":null}'));
+    check_bool('ゾーンの ID は 32 桁の 16 進だけ', km_cf_valid_zone(str_repeat('a1', 16)) && !km_cf_valid_zone('ito4.jp') && !km_cf_valid_zone(str_repeat('A', 32)));
+
+    // 問い合わせの中身
+    check_bool('問い合わせ: クエリ(?…)は取らない・どちらも datetime で区切って古い順', !str_contains(KM_CF_QUERY_WAF, 'clientRequestQuery')
+        && str_contains(KM_CF_QUERY_WAF, 'datetime_geq: $since, datetime_lt: $until') && str_contains(KM_CF_QUERY_TRAFFIC, 'datetime_geq: $since, datetime_lt: $until')
+        && str_contains(KM_CF_QUERY_WAF, 'orderBy: [datetime_ASC]') && str_contains(KM_CF_QUERY_TRAFFIC, 'orderBy: [datetime_ASC]'));
+    check_bool('表: 新しく作るだけ(ALTER・DROP しない)・**消さない**(WAF・通信量・位置)', !preg_match('/\b(ALTER|DROP|TRUNCATE)\b/', $lib . $geoLib)
+        && !preg_match('/DELETE\s+FROM\s+km_(cf_|visitor_geo)/i', $lib . $geoLib) && substr_count($lib . $geoLib, 'CREATE TABLE IF NOT EXISTS km_') === 5);
+    check_bool('続き: WAF と通信量は「読み終えた所」を別に覚える(記録が無い時間で止まらない)', str_contains($lib, "km_cf_state_get(\$pdo, 'waf_cursor')")
+        && str_contains($lib, "km_cf_state_set(\$pdo, 'waf_cursor'") && str_contains($lib, "km_cf_state_set(\$pdo, 'traffic_cursor'"));
+    check_bool('位置: WAF の記録からは、まだ無い IP だけ入れる(都市まで引いた結果を上書きしない)', str_contains($lib, 'km_visitor_geo_save($pdo, array_values($geo), true);')
+        && str_contains($geoLib, 'if ($weak) {'));
+
+    // 位置
+    $g = km_visitor_geo_normalize(['ip' => '203.0.113.9', 'code' => 'jp', 'region' => "Iwate\n", 'city' => 'Ichinoseki', 'asn' => 'AS2516', 'org' => 'KDDI', 'isp' => 'KDDI', 'src' => 'ipwho.is', 'at' => 1794100000000], $now);
+    check('位置: 形をそろえる(国は大文字・ASN は数・ミリ秒は秒に)', ['JP', 'Iwate', 2516, 1794100000], $g === null ? null : [$g['country'], $g['region'], $g['asn'], $g['at']]);
+    check('位置: IP・国・引いた先がおかしければ捨てる', [null, null, null], [
+        km_visitor_geo_normalize(['ip' => 'localhost', 'src' => 'ipwho.is'], $now),
+        km_visitor_geo_normalize(['ip' => '203.0.113.9', 'code' => 'JPN', 'src' => 'ipwho.is'], $now),
+        km_visitor_geo_normalize(['ip' => '203.0.113.9', 'code' => 'JP', 'src' => 'evil.example'], $now),
+    ]);
+    check('位置: 先の時刻は今にする', $now, km_visitor_geo_normalize(['ip' => '203.0.113.9', 'src' => 'country.is', 'at' => $now + 86400], $now)['at'] ?? null);
+    check_bool('位置: 中身が同じか(時刻と引いた先は比べない)', $g !== null && km_visitor_geo_same($g, ['src' => 'cloudflare', 'at' => 1] + $g) && !km_visitor_geo_same($g, ['city' => 'Morioka'] + $g));
+    check_bool('位置: 変わったら前の結果を履歴へ・古い結果では上書きしない', str_contains($geoLib, 'INSERT INTO km_visitor_geo_history') && str_contains($geoLib, "if (\$e['at'] < (int) \$old['looked_up_at']) {"));
+
+    // 口と画面
+    check_bool('口(位置): POST は CSRF を本文より先に・200 件まで・IP を URL に載せない', strpos($geoApi, 'km_csrf_verify()') < strpos($geoApi, "file_get_contents('php://input'")
+        && str_contains($geoApi, 'KM_VISITOR_GEO_SAVE_MAX') && !str_contains($geoApi, "\$_GET['ip"));
+    check_bool('口(Cloudflare): 読むだけ(GET だけを想定・例外の文面を出さない)', !str_contains($cfApi, 'php://input') && str_contains($cfApi, "'Cloudflare の表を読めませんでした。'"));
+    check_bool('画面: 位置と Cloudflare の口・JS の順(Cloudflare の JS は visitors.js より前)・style 属性なし', str_contains($page, 'data-geo-src="./api/visitor-geo.php"')
+        && str_contains($page, 'data-cloudflare-src="./api/cloudflare-data.php"') && strpos($page, 'visitors-cloudflare.js') < strpos($page, "assets/js/visitors.js'")
+        && preg_match('/<[a-z][^>]*\sstyle=/i', $page) !== 1);
+    check_bool('JS: 引いた位置をサーバーへ送る(CSRF)・読むだけの管理者は送らない', str_contains($js, "'X-KM-CSRF': csrf") && str_contains($js, 'geoCanWrite = data?.canWrite === true;')
+        && str_contains($js, 'window.KmVisitorCloudflare?.render('));
+    check_bool('JS: Cloudflare の文字は textContent(innerHTML を使わない)', !str_contains($cfJs, 'innerHTML') && !str_contains($cfJs, 'insertAdjacentHTML'));
+    $dictMissing = [];
+    preg_match_all('/data-i18n="(page\.visitors\.cf[A-Za-z]+|page\.visitors\.exportWaf)"/', $page, $keys);
+    foreach (array_unique($keys[1]) as $key) {
+        foreach (['ja', 'en'] as $lang) {
+            if (!str_contains($read("src/admin/assets/i18n/{$lang}.js"), "\"{$key}\"")) {
+                $dictMissing[] = "{$lang}:{$key}";
+            }
+        }
+    }
+    check('辞書: Cloudflare のカードの文言が日英にある', [], $dictMissing);
+
+    // ホストの台本
+    check_bool('ホスト: 鍵は root だけの設定から・シェルとして読まない・web へ渡さない', str_contains($host, 'CONF="$PATH_ROOT/cloudflare.local.conf"')
+        && !preg_match('/^\s*\.\s+"?\$CONF/m', $host) && !str_contains($compose, 'CF_API_TOKEN'));
+    check_bool('ホスト: 鍵は 600 のファイルで -H @ に渡す(引数に出さない)・https だけ・宛先は api.cloudflare.com だけ', str_contains($host, "printf 'Authorization: Bearer %s\\n' \"\$CF_API_TOKEN\" > \"\$WORK/auth\"")
+        && str_contains($host, '-H @"$WORK/auth"') && str_contains($host, '--proto =https') && str_contains($host, 'API="https://api.cloudflare.com/client/v4/graphql"')
+        && preg_match_all('#https://([A-Za-z0-9.-]+)#', $host, $hosts) > 0 && array_unique($hosts[1]) === ['api.cloudflare.com']);
+    check_bool('ホスト: 同じ失敗は 6 時間に 1 回・設定が無ければ何もしない・やり直しは 6 回まで', str_contains($host, '-lt 21600') && str_contains($host, '何もしません') && str_contains($host, 'MAX_ROUNDS=6'));
+    check_bool('ホスト: web の計画の名前は 3 種だけ受ける', str_contains($host, 'settings|waf:*|traffic:*) ;;'));
+    check_bool('cron(版 14): 毎時 13 分・失敗だけ送る・実行ビットの一覧と配備物にある', preg_match('/^CRON_VERSION=(1[4-9]|[2-9][0-9])$/m', $setup) === 1
+        && str_contains($setup, '13 * * * *   root  $SEND_LOG_SCRIPT --path $PATH_ROOT --label Cloudflare の取り込み --only-failure --run "$CF_IMPORT_SCRIPT --path $PATH_ROOT"')
+        && str_contains($setup, '"$CF_IMPORT_SCRIPT"; do') && substr_count($deploy, "'./scripts/host-cloudflare-import.sh'") === 2 && str_contains($deploy, "'./src/scripts/cloudflare-import.php'")
+        && preg_match("/^HOST_SCRIPTS='[^']*\\bhost-cloudflare-import\\.sh\\b[^']*'$/m", $read('scripts/host-setup.sh')) === 1 && str_contains($deploy, "'./cloudflare.local.conf.example'")
+        && is_file($root . '/cloudflare.local.conf.example'));
+}
+
+/** 名前を明示したときだけ走る検査。置かれている設定を読む。 */const KM_CHECK_ENVIRONMENT = ['recaptcha'];
 
 $failures = 0;
 $checks = 0;
@@ -6215,7 +6344,8 @@ function km_check_hardening(): void
     $setup = $file('scripts/host-updates-setup.sh');
     // 版 6 で証明書を足し、版 7(2026-10-05)でタスクマネージャーの集計と使用率の警告を、版 8(2026-10-06)で訪問者の記録の片付けを、
     // 版 9(2026-10-09)でアプリの受け箱を、版 10(2026-11-06)でイメージの検査を、版 11(同日)でイメージの片付けを、版 12(同日)で phpMyAdmin の見張りを足し、版 13(11-07)でトンネルの合図に変えた
-    check_bool('cron は版 13', preg_match('/^CRON_VERSION=13$/m', $setup) === 1);
+    // 版 14(11-08)で Cloudflare の分析の取り込みを足した
+    check_bool('cron は版 14', preg_match('/^CRON_VERSION=14$/m', $setup) === 1);
     // 国単位のアクセス拒否(2026-10-06)。毎月の取り直しと、再起動のあとの当て直し
     check_bool('cron(版 8)に国の拒否の取り直しと再起動後の当て直しがある', str_contains($setup, '53 4 2 * *  root  sh $GEOBLOCK_SCRIPT --path $PATH_ROOT update')
         && str_contains($setup, '@reboot     root  sleep 30 && sh $GEOBLOCK_SCRIPT --path $PATH_ROOT apply'));
@@ -11185,7 +11315,8 @@ function km_check_image_scan(): void
         && str_contains($pruneCode, 'docker compose config --images') && str_contains($pruneCode, 'docker/php/Dockerfile') && str_contains($pruneCode, 'scripts/host-image-scan.sh')
         && str_contains($prune, 'KEEP_REFS="alpine:latest composer:2"') && str_contains($pruneCode, '> "$WORK/previous"'));
     check_bool('片付け: compose の一覧が取れなければ消さない・検査の終わりを待つ', str_contains($pruneCode, 'if [ -z "$COMPOSE_IMAGES" ]; then') && str_contains($pruneCode, 'flock -w 3600 9'));
-    check_bool('片付け: ビルドのキャッシュは古いものだけ', str_contains($pruneCode, 'docker builder prune -f --filter "until=$((BUILD_CACHE_DAYS * 24))h"'));
+    check_bool('片付け: ビルドのキャッシュは合計の上限(3GB)でも削る(日数だけでは消えなかった。11-08)', str_contains($pruneCode, 'BUILD_CACHE_MAX=3gb') && str_contains($pruneCode, 'docker builder prune -a -f --max-used-space "$BUILD_CACHE_MAX"'));
+    check_bool('片付け: ビルドのキャッシュは古いものだけ(-a が無いと dangling しか消えない。11-08)', str_contains($pruneCode, 'docker builder prune -a -f --filter "until=$((BUILD_CACHE_DAYS * 24))h"'));
     check_bool('片付け: cron(版 11)は日曜 5:47・検査のあと・失敗は send-log.sh・配備物と実行ビットの一覧にある', preg_match('/^CRON_VERSION=(1[1-9]|[2-9][0-9])$/m', $setup) === 1
         && str_contains($setup, '47 5 * * 0  root  $SEND_LOG_SCRIPT --path $PATH_ROOT --label イメージの片付け --only-failure --run "$DOCKER_PRUNE_SCRIPT --path $PATH_ROOT --apply"')
         && str_contains($setup, '"$IMAGE_SCAN_SCRIPT" "$DOCKER_PRUNE_SCRIPT"') && preg_match("/^HOST_SCRIPTS='[^']*\\bhost-docker-prune\\.sh\\b[^']*'$/m", $file('scripts/host-setup.sh')) === 1
@@ -11205,7 +11336,7 @@ function km_check_image_scan(): void
         && str_contains($pmaCode, "''|*[!0-9]*)") && str_contains($pmaCode, '[ "$OPEN_MINUTES" -gt "$MAX_OPEN_MINUTES" ]'));
     check_bool('phpMyAdmin: cron(版 13)は 1 分ごと・配備物と実行ビットの一覧にある', preg_match('/^CRON_VERSION=(1[3-9]|[2-9][0-9])$/m', $setup) === 1
         && str_contains($setup, '* * * * *    root  $PMA_WINDOW_SCRIPT --path $PATH_ROOT >>$LOG_DIR/pma-window.log 2>&1')
-        && str_contains($setup, '"$DOCKER_PRUNE_SCRIPT" "$PMA_WINDOW_SCRIPT"; do') && preg_match("/^HOST_SCRIPTS='[^']*\\bhost-pma-window\\.sh\\b[^']*'$/m", $file('scripts/host-setup.sh')) === 1
+        && str_contains($setup, '"$DOCKER_PRUNE_SCRIPT" "$PMA_WINDOW_SCRIPT"') && preg_match("/^HOST_SCRIPTS='[^']*\\bhost-pma-window\\.sh\\b[^']*'$/m", $file('scripts/host-setup.sh')) === 1
         && substr_count($file('scripts/deploy-to-host.ps1'), "'./scripts/host-pma-window.sh'") === 2);
     // nginx は phpMyAdmin を通さない(止まっていても nginx が起動できる)
     check_bool('phpMyAdmin: nginx の設定が phpmyadmin を名前で引かない', !preg_match('/\bphpmyadmin:80\b|proxy_pass http:\/\/phpmyadmin/', $file('nginx/default.conf.template')));
@@ -11345,6 +11476,46 @@ function km_check_proj_api(): void
         }
     }
     check('分類と欄の訳が日英の辞書にある', [], $missing);
+
+    // 番号(#)の付け替え(2026-11-08、利用者「プロジェクト状況の # は編集できるようにしてください」)
+    $badIds = 0;
+    foreach ([0, -1, KM_TASK_ID_MAX + 1] as $bad) {
+        try {
+            km_tasks_validate_new_id($bad);
+        } catch (InvalidArgumentException) {
+            $badIds++;
+        }
+    }
+    try {
+        km_tasks_validate_new_id(1);
+        km_tasks_validate_new_id(KM_TASK_ID_MAX);
+        $okIds = true;
+    } catch (InvalidArgumentException) {
+        $okIds = false;
+    }
+    check_bool('番号: 1〜' . KM_TASK_ID_MAX . ' だけ(0・負・上限超えは断る)', $okIds && $badIds === 3);
+    $renumber = preg_match('/function km_tasks_renumber\(.*?\n}\n/s', $tasks, $rm) === 1 ? $rm[0] : '';
+    check_bool('番号: 使い済みの番号は断り、表の作りは変えない(行の id を UPDATE するだけ)', str_contains($renumber, 'km_tasks_find($pdo, $newId) !== null') && str_contains($renumber, 'UPDATE km_tasks SET id = ?')
+        && !str_contains($renumber, 'ALTER'));
+    check_bool('番号: 補足の表も同じトランザクションで付け替える(古い補足は先に消す)', str_contains($renumber, 'UPDATE km_task_details SET task_id = ? WHERE task_id = ?')
+        && strpos($renumber, 'DELETE FROM km_task_details WHERE task_id = ?') < strpos($renumber, 'UPDATE km_tasks SET id = ?') && str_contains($renumber, '$pdo->rollBack();'));
+    check_bool('番号: 付け替えたあと自動の番号が当たっても、いちばん大きい番号 + 1 で足せる', str_contains($tasks, "(string) \$exception->getCode() !== '23000'") && str_contains($tasks, 'SELECT COALESCE(MAX(id), 0) + 1 FROM km_tasks'));
+    $pageNo = $file('src/admin/projects.php');
+    check_bool('番号: 画面の編集で直せる(先に使い済みを確かめ、記録に前後の番号)', str_contains($pageNo, 'name="new_id"') && str_contains($pageNo, "getElementById('km-task-edit-new-id').value = task.id")
+        && strpos($pageNo, 'km_tasks_validate_new_id($newId);') < strpos($pageNo, 'km_tasks_update($pdo, $id,') && str_contains($pageNo, '"#{$id} → #{$newId} {$title}"'));
+    check_bool('番号: 口は本文の id で付け替え、新しい番号で読み直す', str_contains($api, "array_key_exists('id', \$input)") && str_contains($api, 'km_tasks_renumber($pdo, $id, $newId);')
+        && str_contains($api, 'km_proj_task_out((array) km_tasks_find($pdo, $newId))'));
+    check_bool('番号: 手元の道具の -NewId', str_contains($file('scripts/proj-tasks.ps1'), "if (\$bound.ContainsKey('NewId')) { \$body.id = \$NewId }"));
+    $missingNo = [];
+    foreach (['fieldNumber', 'fieldNumberHelp'] as $k) {
+        foreach (['ja' => $ja, 'en' => $en] as $lang => $dict) {
+            if (!str_contains($dict, '"page.projects.' . $k . '"')) {
+                $missingNo[] = "{$lang}:{$k}";
+            }
+        }
+    }
+    check('番号: 欄の訳が日英の辞書にある', [], $missingNo);
+
     $page = $file('src/admin/projects.php');
     check_bool('画面: 段の番号とメモを出し、直せる(style 属性を使わない)', str_contains($page, 'km_task_details_set($pdo, $newId, $planRef, $note);') && str_contains($page, 'name="plan_ref"')
         && str_contains($page, 'name="note"') && str_contains($page, "getElementById('km-task-edit-note')") && preg_match('/<[a-z][^>]*\sstyle=/i', $page) !== 1);
@@ -12152,6 +12323,9 @@ foreach ($selected as $name) {
             break;
         case 'area-paint-app':
             km_check_area_paint_app();
+            break;
+        case 'cloudflare':
+            km_check_cloudflare();
             break;
         case 'recaptcha':
             // 環境依存。数えず、終了コードだけを持ち帰る。
