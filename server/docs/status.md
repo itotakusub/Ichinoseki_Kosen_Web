@@ -59,6 +59,25 @@
 
 ## 記録 2026 年 11 月(新しい順)
 
+### 2026-11-08 — 検証機(192.168.3.31)を起こし、本番と並べた(利用者「docs/13 §0 の続きから。検証機が本番と変わりなくなるまで」)
+
+- 起こすまでに直したこと(利用者):
+  - おすすめの snap が 80 番を取っていたので snap と snapd を外した(docs/13 0-1 に「何も選ばない」と書いた)
+  - 再起動のあと eth0 に DNS が無かったので、`/etc/systemd/resolved.conf.d/kosenmap-dns.conf`(DNS=192.168.3.1)を足した
+- 配備: この PC から kmops で、最新のコードを `deploy-to-host.ps1 -HostName 192.168.3.31 -User kmops -KeyPath …km_test30_ops` で置いた。そのあと `docker compose up -d` で全部 healthy になった(phpMyAdmin は本番と同じく合図の間だけ)
+- 並べた結果(読むだけ):
+  - 同じもの: イメージの digest(nginx・Logto 1.46.0・MariaDB・Postgres・phpMyAdmin・glances)・PHP 8.4.27・カーネル 6.8.0-149・Docker 29.9.3・cron(kosenmap-updates)・待ち受け(22・80・443・127.0.0.1:3002。検証機だけ Mailpit の 8025)
+  - わざと違うもの: certbot と postfix の代わりに Mailpit・自前の CA なので HSTS は付けない(`hsts-enable.conf.example` の注意)
+  - 直したもの:
+    - **本番の `src/vendor/` が 08-28 のまま**だった(11-02 に外した pusher・psr/log が残っていた)。原因は `deploy-to-host.ps1` の判定: composer.lock を**送ったあとに**ホストの lock と比べていたので、一度も入れ直していなかった。ホストの `vendor/composer/installed.json` の「名前=版」と lock を比べる形に直した → **次の本番の配備で入れ直す**(本番は 2 つ多い・検証機は一致を読むだけで確かめた)
+    - 検証機にタスクマネージャーの許可(`nginx/km/taskmgr-allow.local.conf`。LAN の 192.168.3.0/24)を置いた(本番はあり・検証機は無く、誰も入れなかった)
+    - 検証機の `scripts/host-setup.sh`(11-06 の土台の写し。本番には無い)を `~kmops/bootstrap-leftovers/` へ退避
+- 利用者が済ませた: `src/vendor/` と `certs/` を kmops の持ち物に(sudo chown)・外へ出る定期処理 5 つを止めた(`local-disable.sh --apply`。「すべて止まっています」)・PC に検証機の CA(指紋 449DEAEE…)を入れた
+- Console が `r.identifiers` で落ちた → 原因は **PC が 107 の古い CA(6AEAF2AE…。CN は同じ「KosenMap Local CA (test)」)しか信頼していなかった**こと。Console の `auth.<ドメイン>/api/…` が TLS で断られ、nginx に 1 件も届いていなかった。docs/13 0-8 に「先に CA を入れる・指紋で見分ける」を書いた
+- 本番と違っていた名前を直した: 検証機の証明書に admin・html・share が無く、管理画面も別オリジンになっていなかった → `host-local.sh` が証明書にいつも auth・html・share を入れる(status でも確かめる)ようにし、`init --admin-domain admin.192-168-3-31.sslip.io` で作り直した。PC から証明書を検証したまま 5 つの名前が開け、`/admin/` は本番と同じく admin の名前へ 308。docs/13 0-5 に `--admin-domain`・sudo を付けないことを書いた
+- 残り: 0-8 Console(管理者・m2m)→ 0-9 `local-refresh.ps1 -SeedLogto -CopyPublicImages`
+- 自己検査 3071 件すべて通過
+
 ### 2026-11-08 — 検証機の Console は -D で(利用者「トンネルはやっぱり -L ではなく -D のほうじゃないとだめですね」)
 
 - docs/13 の 0-8 の `ssh -L 3002:…` を、デスクトップの `検証機トンネルSSH.cmd` に替えた(本番の `トンネル開通SSH.cmd` の写し。km@192.168.3.31・鍵 km_test30・SOCKS 127.0.0.1:10801・Chrome のプロフィール chrome-socks-test31。本番のトンネルと同時に開ける)

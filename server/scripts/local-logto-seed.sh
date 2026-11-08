@@ -3,10 +3,10 @@
 # 検証機の空の Logto を本番の形に組む(src/scripts/local-logto-seed.php の包み)。**検証機でだけ動く。**
 #
 #   sh scripts/local-logto-seed.sh < logto-email-templates.json          作るものを並べるだけ
-#   sh scripts/local-logto-seed.sh --apply < logto-email-templates.json  作って、ID と秘密を .env に、ダミーの利用者を run/dummy-accounts.txt に
+#   sh scripts/local-logto-seed.sh --apply < logto-email-templates.json  作って、ID と秘密を .env に、ダミーの利用者を local-state/dummy-accounts.txt に
 #
 # 標準入力はメールのテンプレートの正本(PC の server/docs/logto-email-templates.json。docs/ は配備しないので PC から流す)。
-# **値は画面に出さない。** .env に書いたキーの名前と、利用者の名前だけを出す。パスワードは run/dummy-accounts.txt(置き場の持ち主だけ読める。600)。
+# **値は画面に出さない。** .env に書いたキーの名前と、利用者の名前だけを出す。パスワードは local-state/dummy-accounts.txt(置き場の持ち主だけ読める。600)。
 # 書いたあと web と logto を起こし直す(.env を読み直させる)。2026-11-07 段 5-4。
 # POSIX sh。**`[ … ] && cmd` を単独で書かない**(set -e の下で、偽のときにスクリプトごと終わる)。
 
@@ -84,9 +84,9 @@ while IFS="$(printf '\t')" read -r _kind _key _value _rest; do
   _n=$((_n + 1))
 done < "$_out"
 
-echo "== ダミーの利用者(run/dummy-accounts.txt。パスワードはこのファイルにだけ)"
-mkdir -p run
-_acc=run/dummy-accounts.txt
+echo "== ダミーの利用者(local-state/dummy-accounts.txt。パスワードはこのファイルにだけ)"
+( umask 077 && mkdir -p local-state )
+_acc=local-state/dummy-accounts.txt
 if [ ! -f "$_acc" ]; then
   ( umask 077 && printf '# 検証機のダミーの利用者(local-logto-seed.sh が作った)。利用者名\tメール\tパスワード\t役割\n' > "$_acc" )
 fi
@@ -98,4 +98,4 @@ if [ "$_n" -gt 0 ]; then
   echo "== .env を読み直させる(web・logto)"
   docker compose up -d web logto >/dev/null
 fi
-echo "済みました。サインインは run/dummy-accounts.txt の利用者で(確認コードのメールは https://$_domain:8025)。"
+echo "済みました。サインインは local-state/dummy-accounts.txt の利用者で(確認コードのメールは https://$_domain:8025)。"

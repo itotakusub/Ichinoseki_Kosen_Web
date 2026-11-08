@@ -378,6 +378,12 @@ IP Address:127.0.0.1"
   _want="$_want
 DNS:auth.$DOMAIN"
   _ext="$_ext,DNS:auth.$DOMAIN"
+  # HTML 展開サイトと共有リンク(2026-11-05。compose が html.<ドメイン>・share.<ドメイン> の server を必ず作る)。
+  # 本番の証明書には入っているのに、ここに無かった(2026-11-08 に検証機 .31 で見つけた)
+  _want="$_want
+DNS:html.$DOMAIN
+DNS:share.$DOMAIN"
+  _ext="$_ext,DNS:html.$DOMAIN,DNS:share.$DOMAIN"
   if [ -n "$ADMIN" ] && [ "$ADMIN" != "$DOMAIN" ]; then
     _want="$_want
 DNS:$ADMIN"
@@ -506,7 +512,7 @@ do_status() {
       fi
     done
     if [ -f "$CERTS/local-server.pem" ]; then
-      for _name in "$_domain" $_admin; do
+      for _name in "$_domain" $_admin ${_domain:+auth.$_domain html.$_domain share.$_domain}; do
         if [ -z "$_name" ]; then
           continue
         fi

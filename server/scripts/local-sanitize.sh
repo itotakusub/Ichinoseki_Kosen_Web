@@ -24,7 +24,7 @@
 #   ポスター    … 題 →「ポスター P001」、説明・リンク → 空(画像は local-dummy-files.php がダミーを作る)
 #   予定        … 主催 →「主催 001」、説明 →「(ダミーの説明)」。題は残す
 #   設定        … 試験モードの PIN → 未設定・案内 AI の利用者 → 空・アンケートの URL → https://example.test/survey
-#   人の列      … 塩(検証機の run/sanitize-salt。本番には無い)で混ぜたハッシュ。同じ人は同じダミーになる(数や並びは本番どおり)
+#   人の列      … 塩(検証機の local-state/sanitize-salt。本番には無い)で混ぜたハッシュ。同じ人は同じダミーになる(数や並びは本番どおり)
 #   タスク      … 空にしてダミーを 3 件
 #
 # 無い表は飛ばす(控えの時期で表の揃いが違うため)。
@@ -102,9 +102,10 @@ run_sql() {
 }
 
 # 塩。**検証機にだけ置く**(本番の値と突き合わせて元に戻せないように)。同じ塩なら同じ人は同じダミーになる
-SALT_FILE=run/sanitize-salt
+# 置き場は local-state/(検証機だけの、置き場の持ち主の 700)。run/ は本番と同じく root の持ち物で書けない(2026-11-08)
+SALT_FILE=local-state/sanitize-salt
 if [ ! -s "$SALT_FILE" ]; then
-  mkdir -p run
+  ( umask 077 && mkdir -p local-state )
   ( umask 077 && od -An -N24 -tx1 /dev/urandom | tr -d ' \n' > "$SALT_FILE" )
 fi
 SALT="$(tr -cd '0-9a-f' < "$SALT_FILE")"

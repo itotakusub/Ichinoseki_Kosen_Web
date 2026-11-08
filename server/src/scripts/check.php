@@ -5333,7 +5333,7 @@ function km_check_hardening(): void
     check_bool('local-sanitize.sh はメールアドレスと本番の名前を残す表の全部で置き換える', str_contains($sanitize, "''contact@example.test'') WHERE REPLACE(") && str_contains($sanitize, "''ito8795.com'', ''\$DOMAIN''), ''ito4.jp'', ''\$DOMAIN'')"));
     check_bool('local-sanitize.sh は英語名・読み・ポスター・予定・設定もダミーに', str_contains($sanitize, 'UPDATE km_english_names e') && str_contains($sanitize, 'DELETE a FROM km_search_aliases a')
         && str_contains($sanitize, "SET title = CONCAT('ポスター P'") && str_contains($sanitize, "CONCAT('主催 '") && str_contains($sanitize, "'test_mode_signout_pin_hash', 'guide_chat_sub'"));
-    check_bool('local-sanitize.sh は検証機の印が無いと止まり、塩は検証機の run/ にだけ置く', str_contains($sanitize, 'MARKER=/etc/kosenmap-test-host') && str_contains($sanitize, 'if [ ! -f "$MARKER" ]; then') && str_contains($sanitize, 'SALT_FILE=run/sanitize-salt'));
+    check_bool('local-sanitize.sh は検証機の印が無いと止まり、塩は検証機の local-state/ にだけ置く(run/ は root の持ち物)', str_contains($sanitize, 'MARKER=/etc/kosenmap-test-host') && str_contains($sanitize, 'if [ ! -f "$MARKER" ]; then') && str_contains($sanitize, 'SALT_FILE=local-state/sanitize-salt'));
     check_bool('local-sanitize.sh は数えた結果をパイプの先で数えない(子のシェルで PROBLEMS が消える)', str_contains($sanitize, 'count_line < "$_tmp"') && !str_contains($sanitize, '} | count_line'));
     $import = $file('scripts/local-import.sh');
     check_bool('local-import.sh は使い捨ての MariaDB を網なし・tmpfs で立て、必ず消す', str_contains($import, '--network none') && str_contains($import, '--tmpfs /var/lib/mysql:') && str_contains($import, 'trap cleanup EXIT INT TERM'));

@@ -160,7 +160,8 @@ docker exec "$NAME" sh -c '
 echo "== 5. 本物の DB でも数える"
 sh scripts/local-sanitize.sh --check
 
-mkdir -p run
-printf '%s 控えから入れた(表 %s 個・抜いてから)\n' "$(date '+%F %T')" "$_tables" >> run/local-import.log
+# run/ は本番と同じく root の持ち物で書けない。検証機だけの local-state/(置き場の持ち主の 700)へ(2026-11-08)
+( umask 077 && mkdir -p local-state )
+printf '%s 控えから入れた(表 %s 個・抜いてから)\n' "$(date '+%F %T')" "$_tables" >> local-state/local-import.log
 echo
 echo "入れました。web は止めたまま —— 次は local-refresh.ps1 の続き(ダミーのファイル → 起動)。"

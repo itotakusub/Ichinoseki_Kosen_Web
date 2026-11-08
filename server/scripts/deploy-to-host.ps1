@@ -1023,16 +1023,42 @@ if ($NoSetup) {
       毎回走らせない —— vendor/ を作り直す作業で、途中で失敗すると
       **サイトが動かない状態で残る**。配備のたびに賭ける類のものではない。
       逆に、変わったのに入れ直さないと「ホストだけ古い依存」が静かに残るので、
-      **lock の中身を突き合わせて判断する。**
+      **lock と、ホストに入っているもの(vendor/composer/installed.json)を突き合わせて判断する。**
+
+      **ホストの composer.lock と比べてはいけない(2026-11-08 に直した)。** ここに来る時点で
+      lock は**もう送ってある**ので、必ず同じになり、一度も入れ直さなかった。
+      本番の vendor/ は 08-28 のまま、11-02 に外した pusher・psr/log が残っていた
+      (検証機と本番を並べて見つけた)。入っている名前と版の組で比べれば、送った順に左右されない。
     #>
     $composerChanged = $false
     $localLock = Join-Path $Root 'src/composer.lock'
     if ((Get-RemoteShell) -eq 'sh' -and (Test-Path $localLock)) {
-        $localHash = (Get-FileHash -Algorithm SHA256 -Path $localLock).Hash.ToLowerInvariant()
-        $remoteHash = "$(Invoke-Remote "sha256sum '$RemotePath/src/composer.lock' 2>/dev/null | cut -d' ' -f1" -AllowFailure)".Trim()
-        if ($remoteHash -ne '' -and $remoteHash -ne $localHash) {
-            $composerChanged = $true
-            Write-Host '  composer.lock が変わっています。vendor/ を入れ直します。' -ForegroundColor Yellow
+        $packageSet = {
+            param($list)
+            @($list | Where-Object { $_ -and $_.name } | ForEach-Object { "$($_.name)=$($_.version)" } | Sort-Object -Unique) -join "`n"
+        }
+        try {
+            $lockJson = [IO.File]::ReadAllText($localLock) | ConvertFrom-Json
+            $want = & $packageSet $lockJson.packages
+            $installedRaw = (@(Invoke-Remote "cat '$RemotePath/src/vendor/composer/installed.json' 2>/dev/null" -AllowFailure) -join "`n").Trim()
+            if ($installedRaw -eq '') {
+                $composerChanged = $true
+                Write-Host '  ホストに vendor/ がありません。入れます。' -ForegroundColor Yellow
+            } else {
+                $installedJson = $installedRaw | ConvertFrom-Json
+                # composer 2 は {"packages": [...]}・composer 1 は配列そのもの
+                $have = & $packageSet $(if ($installedJson.PSObject.Properties.Name -contains 'packages') { $installedJson.packages } else { $installedJson })
+                if ($have -ne $want) {
+                    $composerChanged = $true
+                    $diff = Compare-Object @($want -split "`n") @($have -split "`n") | ForEach-Object {
+                        if ($_.SideIndicator -eq '<=') { "+ $($_.InputObject)" } else { "- $($_.InputObject)" }
+                    }
+                    Write-Host '  ホストの vendor/ が composer.lock と違います。入れ直します:' -ForegroundColor Yellow
+                    $diff | Select-Object -First 20 | ForEach-Object { Write-Host "    $_" }
+                }
+            }
+        } catch {
+            Write-Host "  vendor/ と composer.lock を比べられませんでした($($_.Exception.Message))。入れ直しは行いません。" -ForegroundColor Yellow
         }
     }
 

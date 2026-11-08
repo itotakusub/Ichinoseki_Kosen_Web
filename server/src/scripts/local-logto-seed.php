@@ -10,7 +10,7 @@ declare(strict_types=1);
  *   docker compose exec -T -u www-data web php scripts/local-logto-seed.php - --apply   作る(何度流してもよい。在るものは使い回す)
  *
  * 標準入力はメールのテンプレートの正本(docs/logto-email-templates.json)。`-` の代わりに `--no-templates` なら SMTP のコネクタを作らない。
- * ふつうは scripts/local-logto-seed.sh(ホストで動く包み)から呼ぶ。包みが下の出力を .env と run/dummy-accounts.txt に振り分ける。
+ * ふつうは scripts/local-logto-seed.sh(ホストで動く包み)から呼ぶ。包みが下の出力を .env と local-state/dummy-accounts.txt に振り分ける。
  *
  * ## 出力(標準出力。人向けの説明は標準エラー)
  *
