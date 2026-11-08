@@ -28,6 +28,16 @@
 #   EXEMPT_PORTS=22                  **どの国からでも通すポート(既定 22 = SSH)。締め出されないために残すこと**
 #   ALLOW_GOOGLE=yes                 Google の送り元を GOOGLE_PORTS だけ通す(2026-11-07、利用者の決定。既定は no)。下の「Google」
 #   GOOGLE_PORTS=443                 ALLOW_GOOGLE で通すポート(既定 443)
+#   ALLOW_CLOUDFLARE=yes             Cloudflare の中継の送り元を CLOUDFLARE_PORTS だけ通す(2026-11-08。既定は no)。下の「Cloudflare」
+#   CLOUDFLARE_PORTS=80 443          ALLOW_CLOUDFLARE で通すポート(既定 80 と 443)
+#
+# ## Cloudflare(ALLOW_CLOUDFLARE=yes)
+#
+# 名前を橙(中継)にすると、80・443 に来る送り元は**全部 Cloudflare の IP** になる。その多くは日本の割り当てではないので、
+# 反転(日本だけ通す)のままだと**公開ページが丸ごと落ちる**。Cloudflare が公開している範囲
+# (https://www.cloudflare.com/ips-v4・ips-v6)を国で落とす前に通す。**国で絞るのは Cloudflare の WAF の側へ移す**(docs/17 §2)。
+# 灰の名前(SSH・管理画面)に直に来る相手には、今までどおり国の拒否が効く。
+# 一覧は nginx/km/cloudflare-real-ip.conf(本当の送り元を取る設定)とも見比べ、違えば注意を出す(あちらを直して配備する)。
 #
 # ## Google(ALLOW_GOOGLE=yes)
 #
@@ -75,7 +85,7 @@ while [ $# -gt 0 ]; do
     --path) PATH_ROOT="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     status|update|apply|remove) ACTION="$1"; shift ;;
-    -h|--help) sed -n '2,54p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,76p' "$0"; exit 0 ;;
     *) echo "知らない引数: $1" >&2; exit 2 ;;
   esac
 done
@@ -96,6 +106,10 @@ GOOGLE_FETCH_URLS="https://developers.google.com/static/crawling/ipranges/common
 https://developers.google.com/static/crawling/ipranges/special-crawlers.json
 https://developers.google.com/static/crawling/ipranges/user-triggered-fetchers.json
 https://developers.google.com/static/crawling/ipranges/user-triggered-fetchers-google.json"
+# Cloudflare の中継の範囲(ALLOW_CLOUDFLARE=yes のときだけ取る)。置き場の名前は cf.v4 / cf.v6
+CLOUDFLARE_V4_URL="https://www.cloudflare.com/ips-v4"
+CLOUDFLARE_V6_URL="https://www.cloudflare.com/ips-v6"
+CLOUDFLARE_NGINX_CONF="nginx/km/cloudflare-real-ip.conf"
 
 # ---- 設定を読む(`名前=値` だけ。シェルとして実行しない) ----
 DENY_COUNTRIES=""
@@ -105,6 +119,8 @@ ADMIN_PORTS=""
 EXEMPT_PORTS="22"
 ALLOW_GOOGLE=""
 GOOGLE_PORTS="443"
+ALLOW_CLOUDFLARE=""
+CLOUDFLARE_PORTS="80 443"
 HAVE_CONF=0
 if [ -f "$CONF" ]; then
   HAVE_CONF=1
@@ -124,6 +140,8 @@ if [ -f "$CONF" ]; then
       EXEMPT_PORTS) EXEMPT_PORTS="$value" ;;
       ALLOW_GOOGLE) ALLOW_GOOGLE="$value" ;;
       GOOGLE_PORTS) GOOGLE_PORTS="$value" ;;
+      ALLOW_CLOUDFLARE) ALLOW_CLOUDFLARE="$value" ;;
+      CLOUDFLARE_PORTS) CLOUDFLARE_PORTS="$value" ;;
     esac
   done < "$CONF"
 fi
@@ -137,7 +155,7 @@ for cc in $DENY_COUNTRIES $ADMIN_COUNTRIES; do
     exit 2
   fi
 done
-for port in $ADMIN_PORTS $EXEMPT_PORTS $GOOGLE_PORTS; do
+for port in $ADMIN_PORTS $EXEMPT_PORTS $GOOGLE_PORTS $CLOUDFLARE_PORTS; do
   if ! valid_port "$port"; then
     echo "ポートの指定が不正です: $port" >&2
     exit 2
@@ -163,6 +181,16 @@ case "$ALLOW_GOOGLE" in
 esac
 if [ "$GOOGLE" -eq 1 ] && [ -z "$GOOGLE_PORTS" ]; then
   echo "ALLOW_GOOGLE=yes なのに GOOGLE_PORTS が空です(既定は 443)" >&2
+  exit 2
+fi
+CLOUDFLARE=0
+case "$ALLOW_CLOUDFLARE" in
+  yes|1|true|on) CLOUDFLARE=1 ;;
+  ''|no|0|false|off) CLOUDFLARE=0 ;;
+  *) echo "ALLOW_CLOUDFLARE の値が不正です: $ALLOW_CLOUDFLARE(yes か no)" >&2; exit 2 ;;
+esac
+if [ "$CLOUDFLARE" -eq 1 ] && [ -z "$CLOUDFLARE_PORTS" ]; then
+  echo "ALLOW_CLOUDFLARE=yes なのに CLOUDFLARE_PORTS が空です(既定は 80 443)" >&2
   exit 2
 fi
 if [ "$INVERT" -eq 1 ] && [ -z "$DENY_COUNTRIES" ]; then
@@ -245,6 +273,60 @@ fetch_google() {
   rm -f "$json"
 }
 
+# Cloudflare の範囲(1 行 1 つの文)を $DATA_DIR/cf.v4 / cf.v6 に置く。取れない・形が違えば前の一覧を使う
+fetch_cloudflare() {
+  for family in v4 v6; do
+    if [ "$family" = "v4" ]; then
+      url="$CLOUDFLARE_V4_URL"; pattern='^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$'
+    else
+      url="$CLOUDFLARE_V6_URL"; pattern='^[0-9a-f:]+/[0-9]{1,3}$'
+    fi
+    raw="$DATA_DIR/cf.$family.raw"
+    tmp="$DATA_DIR/cf.$family.tmp"
+    if ! curl -fsS --max-time 60 --max-filesize 100000 -o "$raw" "$url"; then
+      rm -f "$raw"
+      echo "  cf ($family): 取れませんでした(前の一覧を使います)" >&2
+      continue
+    fi
+    # 最後の行に改行が無いことがある(集合を作るときに隣の一覧とつながらないよう、1 行ずつ書き直す)
+    tr -d '\r' < "$raw" | tr 'A-F' 'a-f' | awk 'NF { print $1 }' | sort -u > "$tmp"
+    rm -f "$raw"
+    total="$(grep -c . "$tmp" || true)"
+    good="$(grep -Ec "$pattern" "$tmp" || true)"
+    if [ "$total" -eq 0 ] || [ "$good" -ne "$total" ]; then
+      rm -f "$tmp"
+      echo "  cf ($family): 形が違います(全 $total 行のうち正しいのは $good 行)。前の一覧を使います" >&2
+      continue
+    fi
+    mv "$tmp" "$DATA_DIR/cf.$family"
+    echo "  cf ($family): $total 件"
+  done
+  check_cloudflare_nginx
+}
+
+# nginx の本当の送り元の設定(set_real_ip_from)と、取った一覧が同じかを見る。違えば注意だけ出す(止めない)
+check_cloudflare_nginx() {
+  conf="$PATH_ROOT/$CLOUDFLARE_NGINX_CONF"
+  if [ ! -f "$conf" ]; then
+    echo "  注意: $conf がありません(配備していない?)。本当の送り元が取れません" >&2
+    return 0
+  fi
+  if [ ! -s "$DATA_DIR/cf.v4" ]; then
+    return 0
+  fi
+  want="$(mktemp)"; have="$(mktemp)"
+  cat "$DATA_DIR/cf.v4" "$DATA_DIR/cf.v6" 2>/dev/null | sort -u > "$want"
+  sed -n 's/^[[:space:]]*set_real_ip_from[[:space:]]*\([^;[:space:]]*\);.*$/\1/p' "$conf" | tr 'A-F' 'a-f' | sort -u > "$have"
+  if cmp -s "$want" "$have"; then
+    echo "  cf: nginx の set_real_ip_from と同じです"
+  else
+    echo "  注意: Cloudflare の範囲が nginx/km/cloudflare-real-ip.conf と違います。あちらを直して配備してください:" >&2
+    comm -23 "$want" "$have" | sed 's/^/    足りない: /' >&2
+    comm -13 "$want" "$have" | sed 's/^/    もう無い: /' >&2
+  fi
+  rm -f "$want" "$have"
+}
+
 do_update() {
   mkdir -p "$DATA_DIR"
   chmod 700 "$DATA_DIR"
@@ -256,6 +338,9 @@ do_update() {
     fetch_google g-fetch "$GOOGLE_FETCH_URLS"
     fetch_google g-all "$GOOGLE_ALL_URL"
     fetch_google g-cloud "$GOOGLE_CLOUD_URL"
+  fi
+  if [ "$CLOUDFLARE" -eq 1 ]; then
+    fetch_cloudflare
   fi
 }
 
@@ -289,6 +374,11 @@ build_ruleset() {
     gall4="$(elements v4 g-all)"; gall6="$(elements v6 g-all)"
     gcloud4="$(elements v4 g-cloud)"; gcloud6="$(elements v6 g-cloud)"
   fi
+  cfports=""; cf4=""; cf6=""
+  if [ "$CLOUDFLARE" -eq 1 ]; then
+    cfports="$(ports_set "$CLOUDFLARE_PORTS")"
+    cf4="$(elements v4 cf)"; cf6="$(elements v6 cf)"
+  fi
 
   echo "table inet $TABLE {}"
   echo "delete table inet $TABLE"
@@ -308,6 +398,8 @@ build_ruleset() {
     echo "  set gall6 { type ipv6_addr; flags interval; auto-merge; elements = { $gall6 } }"
     echo "  set gcloud6 { type ipv6_addr; flags interval; auto-merge; elements = { $gcloud6 } }"
   fi
+  if [ -n "$cf4" ]; then echo "  set cf4 { type ipv4_addr; flags interval; auto-merge; elements = { $cf4 } }"; fi
+  if [ -n "$cf6" ]; then echo "  set cf6 { type ipv6_addr; flags interval; auto-merge; elements = { $cf6 } }"; fi
   echo "  chain pre {"
   echo "    type filter hook prerouting priority -150; policy accept;"
   printf '%s\n' '    iif "lo" accept'
@@ -322,6 +414,11 @@ build_ruleset() {
     if [ -n "$gfetch6" ]; then printf '    tcp dport { %s } ip6 saddr @gfetch6 counter accept comment "%s"\n' "$gports" "km: Google の巡回と取得"; fi
     if [ -n "$gall4" ] && [ -n "$gcloud4" ]; then printf '    tcp dport { %s } ip saddr @gall4 ip saddr != @gcloud4 counter accept comment "%s"\n' "$gports" "km: Google(Cloud の利用者を除く)"; fi
     if [ -n "$gall6" ] && [ -n "$gcloud6" ]; then printf '    tcp dport { %s } ip6 saddr @gall6 ip6 saddr != @gcloud6 counter accept comment "%s"\n' "$gports" "km: Google(Cloud の利用者を除く)"; fi
+  fi
+  # Cloudflare の中継(橙の名前)は、国で落とす前に CLOUDFLARE_PORTS だけ通す。国で絞るのは Cloudflare の WAF
+  if [ -n "$cfports" ]; then
+    if [ -n "$cf4" ]; then printf '    tcp dport { %s } ip saddr @cf4 counter accept comment "%s"\n' "$cfports" "km: Cloudflare の中継"; fi
+    if [ -n "$cf6" ]; then printf '    tcp dport { %s } ip6 saddr @cf6 counter accept comment "%s"\n' "$cfports" "km: Cloudflare の中継"; fi
   fi
   if [ "$INVERT" -eq 1 ]; then
     # 反転: 書いた国の集合に**入っていない**送り元を落とす。IPv6 の一覧が無ければ、外からの IPv6 は全部落とす
@@ -356,6 +453,11 @@ case "$ACTION" in
     else
       echo "  Google: 国と同じに扱う(ALLOW_GOOGLE=no)"
     fi
+    if [ "$CLOUDFLARE" -eq 1 ]; then
+      echo "  Cloudflare の中継を通すポート: $CLOUDFLARE_PORTS(国で絞るのは Cloudflare の WAF)"
+    else
+      echo "  Cloudflare: 国と同じに扱う(ALLOW_CLOUDFLARE=no。名前を橙にする前に yes へ)"
+    fi
     echo "一覧: $DATA_DIR"
     for cc in $(printf '%s\n' $DENY_COUNTRIES $ADMIN_COUNTRIES | sort -u); do
       for family in v4 v6; do
@@ -378,6 +480,17 @@ case "$ACTION" in
           fi
         done
       done
+    fi
+    if [ "$CLOUDFLARE" -eq 1 ]; then
+      for family in v4 v6; do
+        f="$DATA_DIR/cf.$family"
+        if [ -s "$f" ]; then
+          echo "  cf ($family): $(grep -c . "$f") 件($(date -r "$f" '+%Y-%m-%d'))"
+        else
+          echo "  cf ($family): まだ取っていません(update で取る)"
+        fi
+      done
+      check_cloudflare_nginx
     fi
     if command -v nft >/dev/null 2>&1 && nft list table inet "$TABLE" >/dev/null 2>&1; then
       echo "当てています(nft の表 inet $TABLE)。落とした数:"
@@ -409,6 +522,7 @@ case "$ACTION" in
       if [ ! -s "$DATA_DIR/$cc.v4" ]; then missing=1; fi
     done
     if [ "$GOOGLE" -eq 1 ] && { [ ! -s "$DATA_DIR/g-fetch.v4" ] || [ ! -s "$DATA_DIR/g-cloud.v4" ]; }; then missing=1; fi
+    if [ "$CLOUDFLARE" -eq 1 ] && [ ! -s "$DATA_DIR/cf.v4" ]; then missing=1; fi
     if [ "$missing" -eq 1 ] && [ "$DRY_RUN" -eq 0 ]; then
       echo "一覧がまだ無い国があるので取ります"
       do_update
@@ -434,6 +548,11 @@ case "$ACTION" in
     fi
     if [ "$GOOGLE" -eq 1 ] && [ -z "$(elements v4 g-cloud)" ]; then
       echo "注意: Google Cloud の一覧(cloud.json)がありません。Google 全体は通さず、巡回と取得の一覧だけ通します" >&2
+    fi
+    # Cloudflare を通すと決めたのに一覧が無いまま当てると、橙の名前に来る全員を落とす。当てない
+    if [ "$CLOUDFLARE" -eq 1 ] && [ -z "$(elements v4 cf)" ]; then
+      echo "ALLOW_CLOUDFLARE=yes なのに Cloudflare の一覧がありません。橙の名前に来る全員を落とすので当てません(先に update)" >&2
+      exit 1
     fi
     RULES="$(mktemp)"
     trap 'rm -f "$RULES"' EXIT

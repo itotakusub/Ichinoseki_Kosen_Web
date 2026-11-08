@@ -410,6 +410,13 @@ $include = @(
     './scripts/host-local.sh'
     # 機密なしのコピー: 控えから戻した MariaDB から氏名・記録・鍵を抜く。**KM_ENV=local でなければ止まる**(docs/13)
     './scripts/local-sanitize.sh'
+    # その台帳(全部の表を keep / scrub / wipe に分けたもの。2026-11-07 段 5-3)と、控えの DB を使い捨ての MariaDB で抜いてから入れる口
+    './scripts/local-sanitize.tables'
+    './scripts/local-import.sh'
+    # 空の Logto を本番の形に組む包み(中身は src/scripts/local-logto-seed.php)
+    './scripts/local-logto-seed.sh'
+    # 検証機で外へ出る・本番の代わりに動く cron と設定を止める(受け箱・国の拒否・証明書・控え・検査・案内 AI・reCAPTCHA)
+    './scripts/local-disable.sh'
     # タスクマネージャーと使用率のメール(2026-10-05)。root の cron が呼ぶ(host-updates-setup.sh の版 7)
     './scripts/host-stats.sh'
     './scripts/host-resource-alert.sh'
@@ -481,6 +488,8 @@ $mustContain = @(
     # メンテナンス中の画面(2026-10-21)。conf が無いと nginx が起動しない(include の名前に * が無いため)
     './nginx/km/maintenance.conf'
     './nginx/km/maintenance.html'
+    # Cloudflare 越しの本当の送り元(2026-11-08)。include の名前に * が無いので、無いと nginx が起動しない
+    './nginx/km/cloudflare-real-ip.conf'
     # 更新の確認と通知。**この2つは対**で、片方だけだと cron が空振りする
     './scripts/check-updates.sh'
     './src/scripts/notify-update.php'

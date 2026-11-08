@@ -263,8 +263,12 @@ if (Test-Path -LiteralPath $allowConf) {
 # 前に / が付くものは版(Chrome/120.0.0.0)。lock ファイルは依存の版の一覧なので見ない
 $ipPattern = '(?<![\w./-])(\d{1,3}(?:\.\d{1,3}){3})(?![\w.-]*[A-Za-z])(?![\d.])'
 $ipSkipFiles = '(^|/)([^/]*\.lock|package-lock\.json|gradle\.lockfile)(:\d+)?$'
+# Cloudflare の中継の範囲(2026-11-08)。cloudflare.com/ips が誰にでも出している一覧で、こちらの所在地は何も教えない。
+# **この 1 ファイルの set_real_ip_from の行だけ**除く(ほかのファイルや、ほかの書き方の行に IP が入れば今までどおり止まる)
+$ipSkipCloudflare = '(^|/)nginx/km/cloudflare-real-ip\.conf:\d+$'
+$ipCloudflareLine = '^\s*set_real_ip_from\s+[0-9.]+/\d{1,2}\s*;\s*$'
 # JDK の版(「jdk-21.0.11.10 が 21.0.12.8 に」)は、同じ行に jdk とあれば版として扱う
-$ipHits = @($located | Where-Object { $_.Where -notmatch $ipSkipFiles -and $_.Text -notmatch '(?i)jdk' } | ForEach-Object {
+$ipHits = @($located | Where-Object { $_.Where -notmatch $ipSkipFiles -and $_.Text -notmatch '(?i)jdk' -and -not ($_.Where -match $ipSkipCloudflare -and $_.Text -match $ipCloudflareLine) } | ForEach-Object {
     $entry = $_
     [regex]::Matches($entry.Text, $ipPattern) | ForEach-Object {
         $ip = $_.Groups[1].Value

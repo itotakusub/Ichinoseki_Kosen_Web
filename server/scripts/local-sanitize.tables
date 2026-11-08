@@ -1,0 +1,124 @@
+# 検証機(機密なしのコピー)へ持ち込む MariaDB の表の台帳。local-sanitize.sh が読む。2026-11-07(段 5-3)
+#
+# 1 行に 1 表:  <表の名前> <keep|scrub|wipe>  # どうするか
+#
+#   keep  … 中身をそのまま使う(地図・設定など、人の情報が無いもの)
+#   scrub … 残すが、local-sanitize.sh の決まった段で中身をダミーに置き換える
+#   wipe  … 空にする(人の情報・記録・鍵・写していないファイルの台帳)
+#
+# **keep と scrub の表にも、どの表にも効く 3 つの決まりを掛ける**(表の名前に関係なく、列の名前で拾う):
+#   - 人の識別子・名前の列(*sub・user_id・*_by・owner_name・user_name・actor_name・voter_hash など)→ 乱数の塩で混ぜた dummy-…
+#   - 文字の列の中のメールアドレス → contact@example.test
+#   - 文字の列の中の本番の名前(ito4.jp・ito8795.com)→ 検証機の名前
+#
+# **ここに無い表が DB にあれば、空にして警告する**(新しい表で人の情報が漏れないように)。
+# check.php は、コードの CREATE TABLE と本番にある表がすべてここにあるかを見る。
+#
+# ---- 地図の形(人の情報なし)
+km_map_nodes                 scrub  # 教職員名 → 教員A001・メモ → 空・部屋と施設の名前 → 「教員室 D012」
+km_map_edges                 keep
+km_map_floors                keep
+km_map_floor_bounds          keep
+km_map_floor_custom          keep
+km_map_node_stairs           keep
+km_map_node_area             keep
+km_map_node_links            keep
+km_map_node_projects         keep
+km_map_overlays              keep
+km_map_calibration           keep
+km_map_fingerprints          keep   # Wi-Fi の指紋(BSSID と強さ)。学校の外へは出ない名前なので残す(現地で測位を試すため)
+km_positioning_params        keep
+km_display_defaults          keep
+km_migrations                keep
+km_node_panoramas            keep   # 360° 写真の台帳。写真は local-dummy-files.php がダミーを作る
+km_english_names             scrub  # ダミーにした部屋・施設・ポスターの英語名 → Room D012 など
+km_search_aliases            scrub  # ダミーにした部屋・施設・ポスターの読み・別名 → 消す(読みから氏名が分かる)
+# ---- 案内・公開の文
+km_faq                       keep   # メールアドレスは共通の決まりで置き換える
+km_legal_sections            keep
+km_notices                   keep
+km_qr_links                  keep
+km_test_mode_texts           keep
+km_settings                  scrub  # 試験モードの PIN・案内 AI の利用者・アンケートの URL → ダミー
+km_events                    keep
+# ---- イベント(会期の地図)
+km_map_events                keep
+km_map_event_aliases         keep
+km_map_event_closures        keep
+km_map_event_hidden          keep
+km_map_event_options         keep
+km_map_event_pois            keep
+km_map_event_sources         keep
+km_map_event_web_edits       keep
+km_event_schedule            scrub  # 主催・説明 → ダミー(人の名前が入りうる)。題は残す
+km_event_schedule_extra      keep
+km_stalls                    wipe   # 屋台の鍵のハッシュ
+km_stall_status              wipe
+# ---- ポスター
+km_posters                   scrub  # 題・説明・リンク → 「ポスター P001」。画像は local-dummy-files.php がダミーを作る
+km_poster_projects           keep
+km_poster_stats              keep   # 日ごとの表示・押した数だけ
+km_poster_likes              keep   # 投票者のハッシュは共通の決まりで混ぜ直す(数は残る)
+km_poster_archives           wipe   # 控えのファイルは写していない
+km_node_likes                keep   # 同上
+# ---- ランキング(集計だけ残す)
+km_map_ranking_places        keep
+km_map_ranking_users         wipe
+km_map_ranking_queries       wipe
+km_map_ranking_query_sources wipe
+km_map_ranking_hidden_queries wipe
+km_map_ranking_publications  wipe
+km_map_ranking_published_queries wipe
+# ---- Wi-Fi の学習(測ったものは残し、上げた人は共通の決まりで混ぜる)
+km_learning_samples          keep
+km_learning_evaluations      keep
+km_learning_seq              keep
+km_learning_backups          wipe   # 控えのファイルは写していない
+# ---- 利用者・記録・鍵(空にする)
+km_admin_log                 wipe
+km_form_submissions          wipe
+km_chat_messages             wipe
+km_chat_reads                wipe
+km_staff_requests            wipe
+km_staff_node_assignments    wipe
+km_staff_node_edits          wipe
+km_staff_node_consents       wipe
+km_map_guest_links           wipe
+km_map_guest_accounts        wipe
+km_guest_unlock_attempts     wipe
+km_map_unlock_attempts       wipe
+km_app_unlock_attempts       wipe
+km_html_share_unlock_attempts wipe
+km_user_profiles             wipe
+km_user_map_data             wipe
+km_user_stats_cache          wipe
+km_app_settings              wipe
+km_app_presence              wipe
+km_app_secrets               wipe   # 使うときに作り直される
+km_table_api_keys            wipe
+km_table_manage_deleted      wipe
+km_test_accounts             wipe   # 試験モードの利用者(Logto の利用者 ID)
+km_test_events               wipe   # 試験モードの操作の記録
+km_guide_chat_log            wipe   # 案内チャットの質問と答え
+km_guide_chat_usage          keep   # 日ごとの回数だけ
+km_bench_runs                wipe   # 本番のホストの様子が入る
+km_tasks                     wipe   # プロジェクト状況。local-sanitize.sh がダミーを 3 件入れる
+km_task_details              wipe
+# ---- ファイル(実体の uploads/ は写していない)
+km_files                     wipe
+km_file_shares               wipe
+km_distributables            wipe
+km_apk_inbox                 wipe
+km_map_backups               wipe   # 控えを作った人の名前が入る
+km_map_backup_meta           wipe
+km_ar_sessions               wipe
+km_ar_frames                 wipe
+km_html_sites                wipe
+km_html_versions             wipe
+km_html_shares               wipe
+km_html_share_grants         wipe
+km_html_temp                 wipe
+km_html_tickets              wipe
+km_html_viewers              wipe
+# ---- 使われていない
+kmt_database                 wipe   # コードのどこからも使われていない(2026-11-07 に確かめた)

@@ -41,9 +41,10 @@
 | 4 | **完了**(11-07): 本番の Web 地図の速さの測り直し・案内チャットの確かめ(AI の答えとカード・403・家の PC が止まったとき・無い店) |
 | 5 | 検証環境を作り直す(107 は 10-06 から応答なし。**作り方から見直す**) |
 | 6 | ストリートビュー(360°)を Website へ: **11-07 に作った・配備待ち**(WebGL・撮りそろうまで管理者だけ)。残りは利用者が撮る(本番の写真は 0 枚) |
+| 8 | ito4.jp を Cloudflare に載せる(11-08): SSH・国の拒否・本当の送り元を**手元で用意・配備待ち**。DNS・ネームサーバー・Cloudflare の画面は利用者([17](17-cloudflare.ipynb) §3) |
 | 7〜 | **管理画面「プロジェクト状況」に置く**(11-07、利用者の指示。分類つき。plan.md には段の見出しと設計だけ書く) |
 
-**配備待ち**(手元で済み): プロジェクト状況の番号の列と並び(`admin/projects.php`・`lib/tasks.php`)・段 6 ストリートビューを Website へ(`Main/panorama-viewer.js`・`lib/panorama.php`・`lib/map-data.php`・`Main/app.js`・`Main/i18n.js`・`Main/styles.css`・`index.php`・`admin/map-editor.php`・`admin/assets/js/map-editor.js`・`admin/map-settings.php`・`lib/admin-log.php`)・建物の「中へ」が 2 度出る(萩友会館など)・建物の階の呼び名・案内のカードの階(`Main/app.js`・`Main/user-history.js`・`lib/guide-chat.php`)・寮食堂に萩友会館の階が出る(`lib/building-floors.php`。アプリは版 57 で公開済み)。「教室」からトイレを外す(段 7-2)・案内の例のボタンの崩れ(段 4-2)は 11-07 夜に配備済み(本番の app.js・styles.css で確認)。それより前のものは 11-07 にすべて配備済み(イベントの地点の倍率・置き去り 16 個の退避・読み・別名の CSV・`api/area-paint.php`・階段の向きを下の階から埋める・色分けの画面の 404・国の拒否で Google を 443 だけ通す(`google.allowed: true`)・プロジェクト状況の口と鍵・Logto のテンプレートの台本)。
+**配備待ち**(手元で済み): 段 8 Cloudflare の用意(`nginx/km/cloudflare-real-ip.conf`・`nginx/default.conf.template`・`scripts/host-geoblock.sh`・`scripts/host-stats.sh`・`geoblock.local.conf.example`。灰のうちは何も変わらない)・プロジェクト状況の番号の列と並び(`admin/projects.php`・`lib/tasks.php`)・段 6 ストリートビューを Website へ(`Main/panorama-viewer.js`・`lib/panorama.php`・`lib/map-data.php`・`Main/app.js`・`Main/i18n.js`・`Main/styles.css`・`index.php`・`admin/map-editor.php`・`admin/assets/js/map-editor.js`・`admin/map-settings.php`・`lib/admin-log.php`)・建物の「中へ」が 2 度出る(萩友会館など)・建物の階の呼び名・案内のカードの階(`Main/app.js`・`Main/user-history.js`・`lib/guide-chat.php`)・寮食堂に萩友会館の階が出る(`lib/building-floors.php`。アプリは版 57 で公開済み)。「教室」からトイレを外す(段 7-2)・案内の例のボタンの崩れ(段 4-2)は 11-07 夜に配備済み(本番の app.js・styles.css で確認)。それより前のものは 11-07 にすべて配備済み(イベントの地点の倍率・置き去り 16 個の退避・読み・別名の CSV・`api/area-paint.php`・階段の向きを下の階から埋める・色分けの画面の 404・国の拒否で Google を 443 だけ通す(`google.allowed: true`)・プロジェクト状況の口と鍵・Logto のテンプレートの台本)。
 **進み具合はプロジェクト状況が正**(`scripts/proj-tasks.ps1 list`)。
 
 **保留**(利用者、11-07):
@@ -59,6 +60,38 @@
 ---
 
 ## 記録 2026 年 11 月(新しい順)
+
+### 2026-11-08 — 段 8 ito4.jp を Cloudflare に載せる用意(利用者「ito4.jp を Cloudflare に移行します。確かポートはやめたはずですよね？」「1〜3 と docs/17 の書き直しを用意してください」。**手元で作った・未配備**)
+
+- 本番を読むだけ: 外から開いているのは **22・80・443 だけ**(ほかは 127.0.0.1:3002 の Logto Console)。nginx の像に realip がある(`nginx -V`)。**ポートの壁は無い**
+- 橙にする前に止まるもの 3 つを用意した([17](17-cloudflare.ipynb) §2):
+  - **SSH**: `scripts/ssh-host-alias.ps1`(この PC の `~\.ssh\config` の先頭に `Host ito4.jp` → `HostName ssh.ito4.jp`・`HostKeyAlias ito4.jp`)。写しの config で付け外し・`admin.ito4.jp` へ曲げて kmops に繋がることを確かめた(本物の config は触っていない)
+  - **国の拒否**: `host-geoblock.sh` に `ALLOW_CLOUDFLARE`・`CLOUDFLARE_PORTS`(cloudflare.com の一覧を国の drop より前に accept・一覧が無ければ当てない・nginx の範囲と見比べる)。`host-stats.sh` は通した数を BAN に数えない。見本 `geoblock.local.conf.example` にも
+  - **本当の送り元**: `nginx/km/cloudflare-real-ip.conf`(IPv4 15・IPv6 7・`real_ip_header CF-Connecting-IP`)を `default.conf.template` の http の段で include。配備の `$mustContain` に足した。**`nginx -t` は未(この PC に docker が無い)** → 配備のあと docs/17 の %%host のセル
+- docs/17 を書き直し(結論・名前の分け方・用意したもの・Cloudflare の画面で決めること・手順 0〜8・戻し方・未確認)。目次の 1 行を 5 冊で直した。plan.md に段 8、「やらない」の Cloudflare の行は「覆した判断」へ
+- check.php に「国の拒否: …Cloudflare…」「Cloudflare: …」の 8 行。全体 FAIL 0
+
+### 2026-11-07 — 段 5 検証機の下ごしらえ(利用者「全てオススメで」「UbuntuServer は私が作成します。ブリッジ接続で行きます」「機能の追加の無効化すべきものを上げて無効化処理を行うコマンド…これは Windows ですよ。検証機の方です」。**手元で作った・未配備**)
+
+- **VM と Ubuntu は利用者が作る**。29 には利用者が外部スイッチ「新しい仮想スイッチ」と VM「Ubuntu」(第 2 世代・2.5GB・4 vCPU・円盤なし)を作ってあった。台本で VM を作る `testhost-vm.ps1` は `Old/scripts/` へ
+- **192.168.3.30 は別の機械(MAC 30-6D-F9-AF-86-45)が使っていた** → 空いている 192.168.3.31 を勧める(名前 `192-168-3-31.sslip.io`)
+- 作ったもの:
+  - `scripts/testhost-bootstrap.sh`(入れた Ubuntu を本番の土台に: docker.com の Docker・スワップ 2GB・鍵だけの SSH・ufw は LAN だけ・外へのメールを断る・印)
+  - `scripts/local-sanitize.sh` を台帳で作り直し、`scripts/local-sanitize.tables`(99 表を keep/scrub/wipe。台帳に無い表は空にする)・列の名前で人の識別子を拾う・メールと本番の名前を置き換える・英語名と読み・ポスター・予定・設定も
+  - `scripts/local-import.sh`(使い捨ての MariaDB(網なし・tmpfs)で抜いてから本物の DB へ)・`scripts/local-refresh.ps1`(PC から通しで。本番の秘密とハッシュで比べる・開いた控えを消す)
+  - `src/scripts/local-logto-seed.php` と `scripts/local-logto-seed.sh`(空の Logto に本番と同じアプリ・ロール・組織・webhook・メールとダミーの利用者 8 人)・`src/scripts/local-dummy-files.php`(ポスター・360° のダミー画像)
+  - `scripts/local-disable.sh`(VM の外へ出る cron と設定を止める: 受け箱・国の拒否・証明書・控え・検査・案内 AI・reCAPTCHA)
+  - `scripts/testhost-windows.ps1`(29 の Windows の要らない機能を止める。既定は見るだけ・記録して -Undo で戻せる)。**読んだら IIS と FTP・LPD・Simple TCP・メッセージ キュー・WinRM が自動起動で動き、SMB 1.0・Telnet・TFTP なども有効だった**
+  - 検証機だけの鍵 `~\.ssh\km_test30`・`km_test30_ops`(パスフレーズなし。最初に作った分は `""` が付いたので `~\.ssh\Old\` へ)
+- `host-local.sh --fresh-secrets` は `KM_PROJ_PASSKEY` も作り、Logto・案内 AI のキーを空の行で置く
+- check.php に組「testhost」(台帳がコードの CREATE TABLE と本番の 99 表を覆うか ほか)。全体 3019 PASS・0 FAIL。docs/13 §0 に通しの順番
+- 途中で本番の kmops の鍵が数分断られた(`Permission denied (publickey)`)。その後は通る
+
+### 2026-11-07 — 段 5 検証機の計画(利用者「計画書はあくまで参考程度…すぐ実装ではなく前提を確認」「機密は誤って読んでも分からないダミー」「教職員名の暗号化は抹消」。**作っていない**)
+
+- 検証機 192.168.3.29 を鍵で読むだけ(利用者名は `ito`): Windows 11 Pro for Workstations・Hyper-V 有効・VM 0 台・メモリの空き 2GB 前後・HDD・有線が 100 Mbps でつながっている
+- 本番の 99 表の列を読み(中身は読まない)、今の `local-sanitize.sh`(25 表)から漏れる表と列を洗い出した
+- 計画は plan.md 段 5(5-0 前提 〜 5-6 決めること)。プロジェクト状況 #103 を 10%・答え待ちに。教職員名の暗号化は plan.md「やらないと決めたこと」へ
 
 ### 2026-11-07 — プロジェクト状況を番号順に・完了したら消す・#108 を読んだ(利用者の指示。Web は配備待ち)
 

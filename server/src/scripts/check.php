@@ -5148,11 +5148,111 @@ function km_check_hardening(): void
     $sanitize = $file('scripts/local-sanitize.sh');
     check_bool('local-sanitize.sh がある', $sanitize !== '');
     check_bool('local-sanitize.sh は KM_ENV=local でなければ・本番の名前なら止まる', str_contains($sanitize, 'if [ "$(env_value KM_ENV)" != "local" ]; then') && str_contains($sanitize, 'PROD_DOMAINS="ito4.jp ito8795.com"'));
-    check_bool('local-sanitize.sh は氏名をダミーに・記録と鍵を空にする', str_contains($sanitize, "SET occupant_name = CONCAT('教員'") && str_contains($sanitize, 'km_admin_log') && str_contains($sanitize, 'km_app_secrets') && str_contains($sanitize, 'km_staff_requests'));
+    $ledgerText = $file('scripts/local-sanitize.tables');
+    check_bool('local-sanitize.sh は氏名をダミーに・記録と鍵を空にする(空にする表は台帳から)', str_contains($sanitize, "SET occupant_name = CONCAT('教員'")
+        && preg_match('/^km_admin_log\s+wipe\b/m', $ledgerText) === 1 && preg_match('/^km_app_secrets\s+wipe\b/m', $ledgerText) === 1 && preg_match('/^km_staff_requests\s+wipe\b/m', $ledgerText) === 1);
     check_bool('local-sanitize.sh は部屋・施設の名前もダミーにする(分類+連番)', str_contains($sanitize, "WHERE type IN ('room', 'facility')") && str_contains($sanitize, "' D', LPAD(@n := @n + 1, 3, '0')"));
     check_bool('local-sanitize.sh はパスワードを引数に載せない(MYSQL_PWD)', str_contains($sanitize, 'MYSQL_PWD="$MARIADB_ROOT_PASSWORD"') && !preg_match('/-p"?\$MARIADB/', $sanitize));
     check_bool('compose は Android のアプリ ID を渡し、空なら本番の既定に落ちる(KM_ANDROID_APP_ID)', str_contains($file('compose.yaml'), 'KOSENMAP_LOGTO_APP_ID: ${KM_ANDROID_APP_ID:-}') && str_contains($file('src/logto_config.php'), "'KOSENMAP_LOGTO_APP_ID',"));
     check_bool('配備物に local-sanitize.sh がある', str_contains($deploy, "'./scripts/local-sanitize.sh'"));
+
+    /*
+     * ## 検証機を作り直す(2026-11-07 段 5。plan.md 5-1〜5-5)
+     *
+     * 192.168.3.29 の Windows(Hyper-V)に VM(192.168.3.30)を台本で作り、控えの DB は使い捨ての MariaDB で抜いてから入れ、
+     * Logto は空から本番の形に組む。**本番の 99 表と突き合わせたら、10-05 の抜き取りは利用者の識別子を持つ表を漏らしていた**ので、
+     * 全部の表を台帳に載せ、台帳に無い表は空にする。ここでは「新しい表を足したのに台帳に載せ忘れる」を止める。
+     */
+    km_check_heading('testhost: 検証機の VM・表の台帳・使い捨ての DB で抜く・Logto の種まき');
+    $ledger = [];
+    $ledgerDup = [];
+    foreach (preg_split('/\R/u', $ledgerText) ?: [] as $line) {
+        $line = trim((string) preg_replace('/#.*/u', '', $line));
+        if ($line === '') {
+            continue;
+        }
+        $parts = preg_split('/\s+/u', $line) ?: [];
+        if (isset($ledger[$parts[0]])) {
+            $ledgerDup[] = $parts[0];
+        }
+        $ledger[$parts[0]] = $parts[1] ?? '';
+    }
+    check_bool('台帳は keep / scrub / wipe だけ・重なりなし', $ledger !== [] && $ledgerDup === [] && array_diff(array_unique(array_values($ledger)), ['keep', 'scrub', 'wipe']) === []);
+    $created = [];
+    $srcIter = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($repoRoot . '/src', FilesystemIterator::SKIP_DOTS));
+    foreach ($srcIter as $srcFile) {
+        $path = str_replace('\\', '/', $srcFile->getPathname());
+        if (!preg_match('/\.(php|sql)$/', $path) || str_contains($path, '/vendor/') || str_contains($path, '/Old/')) {
+            continue;
+        }
+        if (preg_match_all('/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?`?(kmt?_[a-z0-9_]+)/i', (string) file_get_contents($path), $m) > 0) {
+            foreach ($m[1] as $name) {
+                $created[strtolower($name)] = true;
+            }
+        }
+    }
+    $notInLedger = array_values(array_diff(array_keys($created), array_keys($ledger)));
+    check_bool('コードの CREATE TABLE の表はすべて台帳にある(足したら scripts/local-sanitize.tables へ)' . ($notInLedger === [] ? '' : ': ' . implode(' ', $notInLedger)), count($created) >= 80 && $notInLedger === []);
+    // 2026-11-07 に本番で数えた 99 表のうち、コードに CREATE TABLE が無いもの(初期の SQL・手で作られたもの)
+    $prodOnly = ['kmt_database', 'km_chat_messages', 'km_chat_reads', 'km_guest_unlock_attempts', 'km_html_share_unlock_attempts', 'km_map_edges', 'km_map_floors', 'km_migrations', 'km_table_api_keys'];
+    check_bool('本番にだけある表(初期の SQL など)も台帳にある', array_diff($prodOnly, array_keys($ledger)) === []);
+    $mustWipe = ['km_admin_log', 'km_test_accounts', 'km_test_events', 'km_guide_chat_log', 'km_map_backups', 'km_html_sites', 'km_user_map_data', 'km_staff_node_consents', 'km_bench_runs', 'km_app_secrets', 'km_table_api_keys', 'km_stalls'];
+    check_bool('人の記録・鍵・控えの台帳は wipe', array_filter($mustWipe, fn ($t) => ($ledger[$t] ?? '') !== 'wipe') === []);
+    check_bool('local-sanitize.sh は台帳に無い表を空にし、--check で落ちる', str_contains($sanitize, 'WIPE="$(ledger wipe) $UNKNOWN"') && str_contains($sanitize, 'if [ "$PROBLEMS" -gt 0 ] || [ -n "$UNKNOWN" ]; then'));
+    check_bool('local-sanitize.sh は列の名前で人の識別子・投票のハッシュを拾う(表に関係なく)', str_contains($sanitize, "PERSON_COLS='^(sub|user_id|user_sub|owner_sub|actor_sub|owner_name|user_name|actor_name|[a-z]+_by)\$'")
+        && str_contains($sanitize, "HASH_COLS='^(voter_hash|source_hash|rate_hash)\$'"));
+    check_bool('local-sanitize.sh はメールアドレスと本番の名前を残す表の全部で置き換える', str_contains($sanitize, "''contact@example.test'') WHERE REPLACE(") && str_contains($sanitize, "''ito8795.com'', ''\$DOMAIN''), ''ito4.jp'', ''\$DOMAIN'')"));
+    check_bool('local-sanitize.sh は英語名・読み・ポスター・予定・設定もダミーに', str_contains($sanitize, 'UPDATE km_english_names e') && str_contains($sanitize, 'DELETE a FROM km_search_aliases a')
+        && str_contains($sanitize, "SET title = CONCAT('ポスター P'") && str_contains($sanitize, "CONCAT('主催 '") && str_contains($sanitize, "'test_mode_signout_pin_hash', 'guide_chat_sub'"));
+    check_bool('local-sanitize.sh は検証機の印が無いと止まり、塩は検証機の run/ にだけ置く', str_contains($sanitize, 'MARKER=/etc/kosenmap-test-host') && str_contains($sanitize, 'if [ ! -f "$MARKER" ]; then') && str_contains($sanitize, 'SALT_FILE=run/sanitize-salt'));
+    check_bool('local-sanitize.sh は数えた結果をパイプの先で数えない(子のシェルで PROBLEMS が消える)', str_contains($sanitize, 'count_line < "$_tmp"') && !str_contains($sanitize, '} | count_line'));
+    $import = $file('scripts/local-import.sh');
+    check_bool('local-import.sh は使い捨ての MariaDB を網なし・tmpfs で立て、必ず消す', str_contains($import, '--network none') && str_contains($import, '--tmpfs /var/lib/mysql:') && str_contains($import, 'trap cleanup EXIT INT TERM'));
+    check_bool('local-import.sh は抜き残しがあれば本物の DB に入れない(--check が先)', strpos($import, 'local-sanitize.sh --check --container') !== false
+        && strpos($import, 'local-sanitize.sh --check --container') < strpos($import, 'DROP DATABASE IF EXISTS'));
+    check_bool('local-import.sh は本番・印の無いホストで止まり、パスワードを引数に載せない', str_contains($import, 'MARKER=/etc/kosenmap-test-host') && str_contains($import, 'PROD_DOMAINS="ito4.jp ito8795.com"')
+        && str_contains($import, '--env-file "$_envf"') && !preg_match('/-e MARIADB_ROOT_PASSWORD=/', $import));
+    $seedPhp = $file('src/scripts/local-logto-seed.php');
+    check_bool('local-logto-seed.php は KM_ENV=local でだけ・本番の名前なら止まる', str_contains($seedPhp, "if (getenv('KM_ENV') !== 'local') {") && str_contains($seedPhp, "const KM_SEED_PROD_DOMAINS = ['ito4.jp', 'ito8795.com'];"));
+    check_bool('local-logto-seed.php はアプリを自社用で作る(サードパーティは invalid_scope になる)', substr_count($seedPhp, "'isThirdParty' => false") === 2);
+    check_bool('local-logto-seed.php のロールとスコープは本番(docs/14 §5)と同じ名前', str_contains($seedPhp, "'kosenmap-admin' => ['admin:users:read', 'admin:users:write', 'admin:api-keys:read', 'admin:api-keys:write']") && str_contains($seedPhp, "'kosenmap-staff' => ['staff:event:access']"));
+    check_bool('local-logto-seed.php はパスワードを説明(標準エラー)に出さない', !preg_match('/km_seed_say\([^;]*\$password/', $seedPhp));
+    $seedSh = $file('scripts/local-logto-seed.sh');
+    check_bool('local-logto-seed.sh は値を画面に出さず、知っているキーだけを .env に書く', str_contains($seedSh, "printf '  書いた %s\\n' \"\$_key\"") && !preg_match('/echo[^\n]*\$_value/', $seedSh)
+        && str_contains($seedSh, 'LOGTO_APP_ID|LOGTO_APP_SECRET|KM_ANDROID_APP_ID|KM_LOGTO_ORG_ID|LOGTO_WEBHOOK_SIGNING_KEY) ;;') && str_contains($seedSh, 'chmod 600 "$_acc"'));
+    check_bool('local-dummy-files.php は KM_ENV=local でだけ・名前の形を確かめてから書く', str_contains($file('src/scripts/local-dummy-files.php'), "if (getenv('KM_ENV') !== 'local') {") && str_contains($file('src/scripts/local-dummy-files.php'), 'km_dummy_safe_name($name)'));
+    check_bool('--fresh-secrets はプロジェクト状況の鍵も新しく作る', str_contains($hostLocal, 'fill_if_empty KM_PROJ_PASSKEY "$(random_secret)" secret'));
+    // VM は利用者が入れる(2026-11-07「UbuntuServer は私が作成します。ブリッジ接続で行きます」)。入れたあとの土台を 1 本で揃える
+    $boot = $file('scripts/testhost-bootstrap.sh');
+    check_bool('testhost-bootstrap.sh は本番(証明書・本番の名前・LAN でないアドレス)で止まり、24.04 でだけ動く', str_contains($boot, '/etc/letsencrypt/live /opt/kosenmap/certs/live') && str_contains($boot, 'PROD_DOMAINS="ito4.jp ito8795.com"')
+        && str_contains($boot, 'LAN でないアドレス') && str_contains($boot, 'if [ "${VERSION_ID:-}" != "24.04" ]; then'));
+    check_bool('testhost-bootstrap.sh は鍵が無いまま SSH を締めない・sshd -t が通らなければ戻す', str_contains($boot, '_keys="$(grep -c \'^ssh-\' "$_home/.ssh/authorized_keys"') && str_contains($boot, 'if sshd -t; then'));
+    check_bool('testhost-bootstrap.sh は LAN からだけ・外へメールを出さない(ホストとコンテナ)・検証機の印', str_contains($boot, 'ufw allow from "$LAN" to any port "$_p" proto tcp') && str_contains($boot, 'ufw deny out "$_p/tcp"')
+        && str_contains($boot, '-I DOCKER-USER -p tcp -m multiport --dports 25,465,587 -j REJECT') && str_contains($boot, 'MARKER=/etc/kosenmap-test-host'));
+    check_bool('testhost-bootstrap.sh は本番と同じ docker.com の Docker・スワップ 2GB', str_contains($boot, 'docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin') && str_contains($boot, 'fallocate -l 2G /swapfile'));
+    check_bool('systemd の ExecStart の $ は $$ にしてある(systemd が展開しないように)', str_contains($boot, 'do $$t -C DOCKER-USER') && !str_contains($boot, 'do $t -C DOCKER-USER'));
+    check_bool('使わなくなった VM 作りの台本は scripts/ に無い(Old/ へ移した)', !is_file($repoRoot . '/scripts/testhost-vm.ps1'));
+    $disable = $file('scripts/local-disable.sh');
+    check_bool('local-disable.sh は検証機でだけ動き、受け箱・国の拒否・証明書・控え・検査の cron を止める', str_contains($disable, 'MARKER=/etc/kosenmap-test-host')
+        && str_contains($disable, 'OFF_JOBS="host-apk-inbox.sh host-geoblock.sh host-cert.sh host-backup.sh host-image-scan.sh"'));
+    check_bool('local-disable.sh は cron の行を消さずに印を付け(--undo で戻せる)、持ち主を保って書き戻す', str_contains($disable, "TAG='#KM-LOCAL-OFF '") && str_contains($disable, 'cat "$_t" > "$CRON_FILE"') && !str_contains($disable, 'sed -i'));
+    check_bool('local-disable.sh は案内 AI・reCAPTCHA のキーを空にし、mailserver・certbot を止める', str_contains($disable, 'EMPTY_KEYS="KM_GUIDE_LLM_URL KM_GUIDE_LLM_KEY RECAPTCHA_SITE_KEY') && str_contains($disable, 'OFF_SERVICES="certbot mailserver"'));
+    check_bool('配備物に local-disable.sh がある', str_contains($deploy, "'./scripts/local-disable.sh'"));
+    // 検証機の入れ物(29 の Windows)の要らない機能を止める(2026-11-07 利用者「これは Windows ですよ。検証機の方です」)
+    $win = $file('scripts/testhost-windows.ps1');
+    check_bool('testhost-windows.ps1 は既定で見るだけ(-Apply で止める・yes を聞く)', str_contains($win, "Say '見ただけです。止めるなら: .\\testhost-windows.ps1 -Apply'") && str_contains($win, "Read-Host '上の「止め」を止めます。続けるなら yes'"));
+    check_bool('testhost-windows.ps1 は Hyper-V・SSH・リモート デスクトップ・Defender・Default Switch の共有に触らない', str_contains($win, "\$Protected = @('vmms', 'vmcompute', 'HvHost', 'sshd', 'chromoting', 'WinDefend'")
+        && str_contains($win, "'SharedAccess'") && str_contains($win, '$ProtectedFeature = \'^(Microsoft-Hyper-V|HyperV-|'));
+    check_bool('testhost-windows.ps1 は止める前に前の状態を残し、-Undo で戻せる', ($x = strpos($win, 'Set-Content -Path $recordPath')) !== false && $x < strpos($win, "Head 'サービス'\nforeach (\$s in \$Services) {\n    if (\$Protected")
+        && str_contains($win, 'if ($Undo) {'));
+    check_bool('testhost-windows.ps1 は LAN に口を開けていたもの(FTP・LPD・Simple TCP・MSMQ・WinRM)と SMB 1.0 を止める', str_contains($win, "@{ Match = '^IIS-'") && str_contains($win, "Name = 'LPDSVC'") && str_contains($win, "Name = 'simptcp'")
+        && str_contains($win, "@{ Match = '^MSMQ-'") && str_contains($win, "Name = 'WinRM'") && str_contains($win, "@{ Match = '^SMB1Protocol'"));
+    check_bool('testhost-windows.ps1 は再起動しない・Windows PowerShell 5.1 でも読める(BOM)', !preg_match('/Restart-Computer|shutdown(\.exe)?\s+\/r/i', $win) && str_starts_with($win, "\xEF\xBB\xBF"));
+    $refresh = $file('scripts/local-refresh.ps1');
+    check_bool('local-refresh.ps1 は本番の名前・公開のアドレスには流さない', str_contains($refresh, 'には流しません。') && str_contains($refresh, 'は LAN のアドレスではありません。') && str_contains($refresh, "test -f /etc/kosenmap-test-host && cd \$RemotePath && grep -qx 'KM_ENV=local' .env"));
+    check_bool('local-refresh.ps1 はダンプをファイルに置かず local-import.sh へ流す・本番の秘密とハッシュで比べる', str_contains($refresh, "Send-FileToVm -Path \$dump -Command 'sh scripts/local-import.sh'") && str_contains($refresh, '本番の秘密と一致するものは 0'));
+    check_bool('local-refresh.ps1 は自分で開いた控え(平文)を最後に消す', str_contains($refresh, 'if ($createdOpened -and (Test-Path $Opened)) {'));
+    check_bool('配備物に台帳・local-import.sh・local-logto-seed.sh がある', str_contains($deploy, "'./scripts/local-sanitize.tables'") && str_contains($deploy, "'./scripts/local-import.sh'") && str_contains($deploy, "'./scripts/local-logto-seed.sh'"));
 
     /*
      * ## 2026-10-05 夜の依頼(スクリプトと管理画面の小さな直し)
@@ -6140,7 +6240,7 @@ function km_check_hardening(): void
 // Google を 443 だけ通す(2026-11-07。日本だけ通すと App Links の確認が Google から届かず、共有のリンクがアプリで開かなかった)
 check_bool('国の拒否: ALLOW_GOOGLE は既定で切・値は yes か no・通すポートの既定は 443', str_contains($geoblock, "ALLOW_GOOGLE=\"\"\nGOOGLE_PORTS=\"443\"")
     && str_contains($geoblock, '      ALLOW_GOOGLE) ALLOW_GOOGLE="$value" ;;') && str_contains($geoblock, 'ALLOW_GOOGLE の値が不正です')
-    && str_contains($geoblock, 'for port in $ADMIN_PORTS $EXEMPT_PORTS $GOOGLE_PORTS; do'));
+    && str_contains($geoblock, 'for port in $ADMIN_PORTS $EXEMPT_PORTS $GOOGLE_PORTS $CLOUDFLARE_PORTS; do'));
 check_bool('国の拒否: Google の一覧は Google の公開の場所からだけ取る', str_contains($geoblock, 'GOOGLE_ALL_URL="https://www.gstatic.com/ipranges/goog.json"')
     && str_contains($geoblock, 'GOOGLE_CLOUD_URL="https://www.gstatic.com/ipranges/cloud.json"')
     && substr_count($geoblock, 'https://developers.google.com/static/crawling/ipranges/') === 4
@@ -6155,6 +6255,37 @@ check_bool('国の拒否: Google 全体は Cloud の利用者を除けるとき�
 check_bool('国の拒否: Google を通した数は落とした数に混ぜない(BAN の集計)', str_contains($file('scripts/host-stats.sh'), 'if ($0 ~ / accept/) { gp += p } else if ($0 ~ /!= @admin/)')
     && str_contains($file('scripts/host-stats.sh'), '"google":{"allowed":%s,"packets":%s}'));
 check_bool('国の拒否: 見本に ALLOW_GOOGLE がある(既定 no)', str_contains($file('geoblock.local.conf.example'), "\nALLOW_GOOGLE=no\n"));
+// Cloudflare の中継を通す(2026-11-08。橙にすると送り元が全部 Cloudflare になり、日本だけ通す反転のままだと公開ページが丸ごと落ちる。docs/17)
+check_bool('国の拒否: ALLOW_CLOUDFLARE は既定で切・値は yes か no・通すポートの既定は 80 と 443', str_contains($geoblock, "ALLOW_CLOUDFLARE=\"\"\nCLOUDFLARE_PORTS=\"80 443\"")
+    && str_contains($geoblock, '      ALLOW_CLOUDFLARE) ALLOW_CLOUDFLARE="$value" ;;') && str_contains($geoblock, 'ALLOW_CLOUDFLARE の値が不正です')
+    && str_contains($geoblock, 'for port in $ADMIN_PORTS $EXEMPT_PORTS $GOOGLE_PORTS $CLOUDFLARE_PORTS; do'));
+check_bool('国の拒否: Cloudflare の一覧は cloudflare.com からだけ取る・大きさに上限・1 行ずつ書き直す', str_contains($geoblock, 'CLOUDFLARE_V4_URL="https://www.cloudflare.com/ips-v4"')
+    && str_contains($geoblock, 'CLOUDFLARE_V6_URL="https://www.cloudflare.com/ips-v6"') && str_contains($geoblock, '--max-filesize 100000')
+    && str_contains($geoblock, "awk 'NF { print \$1 }' | sort -u > \"\$tmp\""));
+check_bool('国の拒否: Cloudflare は国で落とすより前に CLOUDFLARE_PORTS だけ通す・一覧が無ければ当てない', str_contains($gbRules, 'tcp dport { %s } ip saddr @cf4 counter accept comment')
+    && str_contains($gbRules, 'tcp dport { %s } ip6 saddr @cf6 counter accept comment')
+    && strpos($gbRules, 'ip saddr @cf4 counter accept') < strpos($gbRules, 'ip saddr != @deny4 counter drop')
+    && strpos($gbRules, 'ip saddr @cf4 counter accept') < strpos($gbRules, 'ip saddr @deny4 counter drop')
+    && strpos($gbRules, 'ct state established,related accept') < strpos($gbRules, 'ip saddr @cf4')
+    && str_contains($geoblock, 'ALLOW_CLOUDFLARE=yes なのに Cloudflare の一覧がありません'));
+check_bool('国の拒否: 取った Cloudflare の一覧を nginx の set_real_ip_from と見比べる・見本に ALLOW_CLOUDFLARE(既定 no)', str_contains($geoblock, 'CLOUDFLARE_NGINX_CONF="nginx/km/cloudflare-real-ip.conf"')
+    && str_contains($geoblock, 'check_cloudflare_nginx') && str_contains($file('geoblock.local.conf.example'), "\nALLOW_CLOUDFLARE=no\nCLOUDFLARE_PORTS=80 443\n"));
+check_bool('国の拒否: Cloudflare を通した数は落とした数にも Google にも数えない(BAN の集計)', str_contains($file('scripts/host-stats.sh'), "if (\$0 ~ /Cloudflare/) { next }\n      if (\$0 ~ / accept/) { gp += p }"));
+// 本当の送り元(2026-11-08)。橙の名前では $remote_addr が Cloudflare になり、回数の制限が全員で 1 つのバケツになる
+$cfRealIp = $file('nginx/km/cloudflare-real-ip.conf');
+$nginxTpl = $file('nginx/default.conf.template');
+preg_match_all('/^set_real_ip_from ([0-9a-f:.]+\/\d+);$/m', $cfRealIp, $cfRanges);
+$cfV4 = array_filter($cfRanges[1], static fn ($r) => str_contains($r, '.'));
+check_bool('Cloudflare: 本当の送り元は CF-Connecting-IP・Cloudflare の範囲(IPv4 15・IPv6 7)からだけ読む・たどらない', str_contains($cfRealIp, "\nreal_ip_header CF-Connecting-IP;\n")
+    && count($cfV4) === 15 && count($cfRanges[1]) === 22 && !str_contains($cfRealIp, 'real_ip_recursive on')
+    && !preg_match('/set_real_ip_from\s+(0\.0\.0\.0|::\/0|10\.|172\.16|192\.168|127\.)/', $cfRealIp));
+check_bool('Cloudflare: default.conf.template の http の段(回数の制限と server より前)で include・配備の $mustContain にある', ($cfInc = strpos($nginxTpl, 'include /etc/nginx/km/cloudflare-real-ip.conf;')) !== false
+    && $cfInc < strpos($nginxTpl, 'limit_req_zone') && $cfInc < strpos($nginxTpl, 'server {') && str_contains($mustContain, "'./nginx/km/cloudflare-real-ip.conf'"));
+$sshAlias = $file('scripts/ssh-host-alias.ps1');
+check_bool('Cloudflare: SSH は ~/.ssh/config で灰の名前へ曲げる(ホスト鍵は ito4.jp の行のまま・灰でなければ書かない・前のファイルを Old へ)', str_contains($sshAlias, '"    HostKeyAlias $Name"')
+    && str_contains($sshAlias, "[string]\$SshName = 'ssh.ito4.jp'") && str_contains($sshAlias, "if (\$sshState -ne 'gray') {")
+    && str_contains($sshAlias, "Join-Path \$SshDir 'Old'") && str_contains($sshAlias, "'nginx\\km\\cloudflare-real-ip.conf'")
+    && str_starts_with($sshAlias, "\u{FEFF}<#") && !str_contains($sshAlias, "\r\n"));
     check_bool('国の拒否: 設定はリポジトリに置かない(見本だけ)・スクリプトと見本は配備に載る', !is_file(km_check_repo_root() . '/geoblock.local.conf') && is_file(km_check_repo_root() . '/geoblock.local.conf.example')
         && str_contains($deploy, "'./scripts/host-geoblock.sh'") && str_contains($deploy, "'./geoblock.local.conf.example'"));
     check_bool('cron の証明書は host-cert.sh を指す', str_contains($setup, 'CERT_SCRIPT="$PATH_ROOT/scripts/host-cert.sh"'));

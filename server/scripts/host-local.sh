@@ -243,8 +243,11 @@ fresh_secrets() {
   fill_if_empty POSTGRES_PASSWORD "$(random_secret)" secret
   # 空の Logto には、この名前で API リソースを作る(本番の名前は使わない)
   fill_if_empty KM_API_RESOURCE "https://$DOMAIN/api" name
-  # compose が既定なしで読むキー。空の行を置いて「設定されていない」の警告を止める(値は Console で作ってから書く)
-  for _key in LOGTO_APP_ID LOGTO_APP_SECRET LOGTO_M2M_APP_ID LOGTO_M2M_APP_SECRET RECAPTCHA_SITE_KEY RECAPTCHA_PROJECT_ID RECAPTCHA_API_KEY RECAPTCHA_SECRET_KEY; do
+  # プロジェクト状況の鍵(scripts/proj-tasks.ps1)。**本番の値は使わない**(2026-11-07 段 5)。PC の docs/.env とは別の値になる
+  fill_if_empty KM_PROJ_PASSKEY "$(random_secret)" secret
+  # compose が既定なしで読むキー。空の行を置いて「設定されていない」の警告を止める
+  # (Logto の分は local-logto-seed.php が作って書く。案内 AI・reCAPTCHA は検証機では空のまま = 使わない)
+  for _key in LOGTO_APP_ID LOGTO_APP_SECRET LOGTO_M2M_APP_ID LOGTO_M2M_APP_SECRET LOGTO_M2M_READONLY_APP_ID LOGTO_M2M_READONLY_APP_SECRET LOGTO_WEBHOOK_SIGNING_KEY KM_ANDROID_APP_ID KM_LOGTO_ORG_ID KM_GUIDE_LLM_URL KM_GUIDE_LLM_KEY RECAPTCHA_SITE_KEY RECAPTCHA_PROJECT_ID RECAPTCHA_API_KEY RECAPTCHA_SECRET_KEY; do
     if ! grep -q "^$_key=" .env; then
       printf '%s=\n' "$_key" >> .env
     fi

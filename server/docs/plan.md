@@ -1,6 +1,6 @@
 # 設計プラン —— これから何をするか
 
-最終更新: 2026-11-07(先頭に「次のプラン」。**プランはこの文書に書く**。2026-11-07、利用者の指示)
+最終更新: 2026-11-08(段 8 Cloudflare を足した。先頭に「次のプラン」。**プランはこの文書に書く**。2026-11-07、利用者の指示)
 
 **文書は3本組。** どれを読めばよいかを先に決めてある。
 
@@ -74,6 +74,98 @@ status.md の「残っていること」を利用者と見直して決めた(202
   - C: 検証は手元の写し(試し場のサーバー)と `check.php` に寄せ、VM は Logto の移行のときだけ立てる
 - **決めること(利用者)**: A・B・C のどれか(組み合わせも可)、VM の置き場(今の PC か別の PC か)
 
+**11-07 利用者の答え**: **A を別の PC(192.168.3.29)で**。できる限り本番の写しに近づけ、機密は「誤って読んでも分からないダミー」に置き換える(自動で上書きする台本)。
+参考に持ってきた計画書(`Downloads\writing-block (1).md`。Docker Desktop・Git・7 段の一般論)は**参考程度**。下は前提を確かめてから書いたもの(**まだ作らない**)。
+
+#### 5-0. 確かめた前提(11-07。読むだけ)
+
+| 見たもの | 分かったこと | 計画への効き |
+|---|---|---|
+| 検証機 192.168.3.29 | Windows 11 **Pro for Workstations** 26100・dynabook T75/BB・i7-6500U(2 コア 4 スレッド)・メモリ 7.9GB(**空きは 2GB 前後**)・HDD 500GB(空き 417GB)・BitLocker なし | VM に回せるのは 2〜3GB。HDD なので VM の円盤は**固定サイズ**にする |
+| 同 | **Hyper-V は有効**(`Microsoft-Hyper-V-All`・管理の PowerShell・`HypervisorPresent`)。VM は 0 台・スイッチは Default Switch だけ。WSL2 と Ubuntu も入っている(止まっている) | 案 A は追加のインストールなしで作れる。この PC の「WSL は使わない」は検証機には掛からない |
+| 同 | 有線 I219-V が **100 Mbps でつながっている**(1 Gbps の口)。IP は手で 192.168.3.29・DNS は IPv6 のルーターだけ | イメージを引くのは遅い(数 GB で十数分)。ケーブルか口を利用者が見る(任意) |
+| 同 | SSH は Microsoft の OpenSSH(`PasswordAuthentication no`・鍵だけ)。利用者名は **`ito`**(管理者)。鍵は `~/.ssh/Local/id_ed25519` | Windows 側の読み取りはこちらでできる。Hyper-V の操作も届くが、**スイッチを作ると数秒切れる**ので利用者の手元で |
+| 同 | 常駐: JQuake(Java)・Chrome リモート デスクトップ・Defender のリアルタイム保護・Windows Update(TiWorker が動いていた)・スリープしない設定 | メモリを食うものは利用者の判断で止める。Defender の除外(VM の置き場)は**セキュリティの設定なので利用者が** |
+| 本番 | 2 コア・2GB+スワップ 2GB(495MB 使用)。8 つのコンテナの使用は合わせて約 0.6GB(上限は合わせて 2.3GB)。MariaDB 174MB・Postgres 82MB・`uploads/` 962MB(**うち 904MB が配る APK 32 個**) | VM は**本番と同じ 2GB+スワップ 2GB**で窮屈さまで写せる。APK は写さない |
+| 本番の表 | **99 表**。今の `local-sanitize.sh` が空にするのは 25 表だけで、利用者の識別子・氏名を持つ表が抜けている(`km_test_accounts`・`km_test_events`・`km_guide_chat_log`・`km_map_backups`(user_name)・`km_html_sites`(owner_name)・`km_learning_samples`(uploaded_by)・`km_staff_node_consents`・`km_user_map_data`・`km_bench_runs` ほか)。`kmt_database` はコードのどこからも使われていない | 抜き取りを**表ごとの台帳**にし、台帳に無い表は止める(下の 5-3) |
+| 本番の設定(`km_settings` 36 件) | 秘密に当たるのは `test_mode_signout_pin_hash`・`guide_chat_sub`、外へつながるのは `*_survey_url` | ダミーと `example.test` に置き換える |
+| 今の道具 | `host-local.sh init --fresh-secrets`・`local-sanitize.sh`(`--check`)・`compose.local.yaml`(certbot・mailserver を外し mailpit)・docs/13 §4-2。どれも Linux のホスト前提 | VM の中の Ubuntu でそのまま使える(作り直しは要らない。足す) |
+
+**11-07 の答えと、手元で作ったもの(未配備・検証機はまだ無い)**: 決めることは全部勧めどおり(名前は sslip.io)・ダウンロード可・JQuake は止めない。
+その後 **「UbuntuServer は私が作成します。ブリッジ接続で行きます」** —— VM と OS は利用者が作る(29 には利用者が外部スイッチ「新しい仮想スイッチ」と VM「Ubuntu」を作ってあった)。
+台本で VM を作る `testhost-vm.ps1` は `Old/scripts/` へ退避し、入れたあとの土台を揃える `scripts/testhost-bootstrap.sh` に替えた。
+**192.168.3.30 は別の機械(MAC 30-6D-F9-AF-86-45)が使っていた** → 空いている **192.168.3.31** を勧める(名前は `192-168-3-31.sslip.io`)。
+作ったもの: `local-sanitize.sh`(台帳で作り直し)・`local-sanitize.tables`(99 表)・`local-import.sh`・`local-logto-seed.php/.sh`・`local-dummy-files.php`・`local-refresh.ps1`・
+`local-disable.sh`(VM の外へ出る cron と設定を止める)・`testhost-windows.ps1`(29 の Windows の要らない機能を止める)。手順は docs/13 §0。下の 5-1〜5-4 は計画のときの文(名前は実際と少し違う: `local-dummy.sh` → `local-sanitize.sh` に広げた・台帳は `local-sanitize.tables`・rehash は列の名前の決まりに含めた)。
+
+#### 5-1. 形(勧めるもの)
+
+```
+192.168.3.29 Windows(Hyper-V) ── 外部スイッチ(I219-V)── LAN 192.168.3.0/24
+   └ VM km-test: Ubuntu Server 24.04・2 vCPU・2GB+スワップ 2GB・固定 60GB・IP 192.168.3.30(固定)
+        └ /opt/kosenmap: compose.yaml + compose.local.yaml(本番と同じ上限・同じイメージの digest)
+          名前: 192-168-3-30.sslip.io(または LAN の DNS で km.test)
+```
+
+- **なぜ VM か**: 本番と同じ Ubuntu・ufw・sshd・`km`/`kmops`・cron・`host-*.sh` がそのまま動き、`deploy-to-host.ps1` の練習になる。Docker Desktop や WSL2 は網の形(NAT)とファイルの持ち主が本番と違う
+- **作り方は台本**(`scripts/testhost-vm.ps1`。Windows で利用者が管理者で流す): Ubuntu の**クラウドイメージ**(Hyper-V で動く Azure 向けの VHD)を固定サイズの VHDX にし、cloud-init の種(`CIDATA` の小さい円盤)で `km` の鍵・固定 IP・スワップ・時刻を入れて起動する。**画面での OS の手入れは無し**。壊れたら VM を消して流し直す
+- VM の中は 09 の手順どおり(`host-setup.sh` → `kmops` → `host-local.sh init --fresh-secrets`)。ufw は **LAN からだけ** 22・80・443・8025。**外向きの 25・465・587 は閉じる**(メールを外へ出さない)
+- Console(3002)・phpMyAdmin は本番と同じく 127.0.0.1 だけ(SSH のトンネル)
+
+#### 5-2. 持ち込むもの・持ち込まないもの
+
+| 種類 | どうする |
+|---|---|
+| MariaDB | 控えの `km-mariadb.sql` だけを使う。**生のまま VM の円盤に置かない**: PC で開いた控えから SSH で流し込み、VM の中の**使い捨ての MariaDB(網なし・データは tmpfs=メモリの上)**に入れて抜き取り → 抜いた後のダンプだけを本物の DB へ入れる。InnoDB の古いページや binlog に生の行が残らない |
+| `.env`・`config/*.local.php` | 本番からは何も写さない。全部の鍵を新しく作る(`--fresh-secrets` を全部のキーに広げる)。reCAPTCHA は Google が公開している試験用の鍵か OFF。案内 AI の URL は空 |
+| Logto(Postgres) | 写さない。空から立て、**台本で本番と同じ形に組む**(下の 5-4) |
+| `uploads/` | 写すのは中身に人の情報が無いもの(`area_*`・`floor_*`)だけ。ほかは**ダミーを作る**: ポスター・360° 写真・アバターは DB の大きさに合わせた「DUMMY」入りの画像、配る APK・AR の写真・地図の控え・HTML サイトは無し(行も消す)。配信の地図は抜いた DB から管理画面で発行し直す |
+| メール | mailpit だけ。ダミーの宛先は全部 `@example.test` |
+
+#### 5-3. 自動でダミーに上書きする台本(`scripts/local-dummy.sh`。今の `local-sanitize.sh` を広げる)
+
+- **止まる条件(先に見る)**: `KM_ENV=local` でない・名前が本番(`ito4.jp`・旧 `ito8795.com` とその下)・ホストに印(`/etc/kosenmap-test-host`)が無い → 何もせず止まる
+- **表の台帳 `scripts/local-dummy.tables`**: 99 表を全部 `keep`(残す)/ `scrub`(列を置き換える)/ `wipe`(空にする)/ `rehash`(件数を残して識別子だけ混ぜ直す)に分ける。**台帳に無い表があれば空にして警告**し、`check.php` は「`CREATE TABLE` があるのに台帳に無い」を FAIL にする(新しい表を足したときの抜けを防ぐ)
+- **列の名前でも拾う**: `*sub`・`user_id`・`*_by`・`*_name`(人)・`actor_name`・`owner_name`・`user_name` は表にかかわらず `dummy-user-NN` / 「ダミー利用者NN」に置き換える
+- **中身の作り方**(誤って読んでも分からない・見ればダミーと分かる):
+  - 地点の教職員名 → 「教員A001」、部屋の名前 → 「教員室 D012」(今のまま)。**同じ地点の英語の名前・読み・別名(`km_english_names`・`km_search_aliases`)も合わせて置き換える**(今は抜けている。読みから氏名が分かる)
+  - 予定の主催(`organizer`)・ポスターの題と説明 → 「企画 P018」の連番(番号の対応は残すので地図と予定のつながりは本番どおり)
+  - いいね(`km_node_likes`・`km_poster_likes`)→ 件数は残し、`voter_hash`・`source_hash` を乱数の塩で混ぜ直す
+  - 試験モードの PIN → 決まった試験用の値のハッシュ(値は VM の中のファイルにだけ置く)、アンケートの URL → `https://example.test/survey`
+  - プロジェクト状況 → 空にしてダミーのタスクを 3 件
+- **最後に確かめる(`--check`。件数だけ出す)**: 手元の氏名一覧と突き合わせ 0 件・`@example.test` 以外のメールアドレス 0 件・本番の名前を含む URL の数・台帳に無い表 0
+- **流し直しても同じ結果**(何度でも)。PC からは `scripts/local-refresh.ps1`(新規): 最新の控えを開く → 流し込み → 抜き取り → `--check` → web を起動、までを 1 本で
+
+#### 5-4. Logto を本番の形に組む(`scripts/local-logto-seed.php`。新規)
+
+- 利用者が Console(SSH のトンネル)で**管理者を作り、m2m のアプリ 1 つに Management API の権限を付ける**ところまで(パスワードは利用者が入れる)
+- あとは台本が Management API で作る: サイトのアプリ(**自社用**)・Android のネイティブアプリ(戻り先 2 つ)・API リソース `https://<名前>/api`・管理者のロール・組織と組織ロール `staff:normal:access`・メールのテンプレート(`docs/logto-email-templates.json`)・SMTP は mailpit
+- **ダミーの利用者**: 管理者 1・教職員 2(組織に入れる)・一般 3・試験モード 2。パスワードは乱数で作って VM の `/opt/kosenmap/run/dummy-accounts.txt`(km だけ読める)にだけ置く。画面には出さない
+- ID と秘密は台本が VM の `.env` と `config/logto-m2m.local.php` に書く
+- サインインの体験(MFA・パスワード方針)は本番の読むだけの m2m で**設定の形だけ**を読んで合わせる(利用者の情報は読まない)
+
+#### 5-5. 受け入れの確かめ(参考の計画書の「受け入れテスト」を、この構成に合わせたもの)
+
+1. **本番の秘密と 1 つも一致しない**: PC で、開いた控えの `.env` の値と VM の `.env`・config の値をハッシュどうしで比べる(値は出さない)→ 一致 0
+2. 5-3 の `--check` が全部 0
+3. 本番と同じ順で起動し、公開の地図・管理画面・地図編集・予定・ストリートビュー・案内チャット(AI なし)が開く。PC の Chrome と Pixel 7a(debug 版を検証機の名前で作る)でダミーの教職員がサインインできる
+4. メールは mailpit に届き、外へは出ない(外向き 25 が閉じている)
+5. LAN の外から届かない(ufw は LAN だけ・ルーターに転送なし)
+6. `deploy-to-host.ps1 -Backup -Yes` を検証機に向けて通る(配備の練習)。`host-backup.sh` も通る
+7. 作り直し: VM を消して `testhost-vm.ps1` → `local-refresh.ps1` で同じところまで戻る(時間を記録)
+8. ベンチマーク(タスクマネージャー)を 1 回測り、本番との差を記録(HDD の遅さを数字で持っておく)
+
+#### 5-6. 決めること(利用者)
+
+| # | 何 | 勧め |
+|---|---|---|
+| 1 | 置き方: Hyper-V の VM / WSL2 の Ubuntu に Docker Engine / Docker Desktop | **Hyper-V の VM** |
+| 2 | VM の網: 外部スイッチで VM に別の固定 IP(例 192.168.3.30)/ VM は内向きの網にして 29 で受けて転送 | **外部スイッチ・別の IP**(29 は Windows のまま) |
+| 3 | VM のメモリ: 本番と同じ 2GB+スワップ 2GB / 3GB | **2GB**(本番の窮屈さを写す)。JQuake などを止めるかは利用者 |
+| 4 | 名前: `192-168-3-30.sslip.io` / LAN の DNS(ルーター)に `km.test` | sslip.io(登録が要らない。ルーターの rebinding 保護で引けなければ DNS) |
+| 5 | ダウンロードの許可: Ubuntu 24.04 のクラウドイメージ(cloud-images.ubuntu.com・約 0.6GB)を検証機へ | — |
+| 6 | Windows 側で利用者がやること: 台本を管理者で流す(スイッチを作ると数秒切れる)・Defender の除外(VM の置き場)・Windows Update の再起動の時間 | — |
+
 ### 段 7 —— 実機で見つけたものの続き(11-07。中身はプロジェクト状況 #109・#110)
 
 - ~~7-1 来場者の画面の英語化の残り~~ **11-07 完了**(利用者の答え「全て英語に」。版 56。設定の画面は `SettingsEnglish.kt` の表、ほかは `ui("日本語", "English")`)
@@ -88,6 +180,19 @@ status.md の「残っていること」を利用者と見直して決めた(202
 **11-07 手元で作った(配備待ち)**: `Main/panorama-viewer.js`(見る画面)・地図のデータに `panoramas`(地図編集にはいつも・公開は設定が ON のときだけ・出している地点の分だけ)・
 地点の詳細の「🔭 360° 写真」・地図編集の地点の窓の「360° 写真を見る」・管理画面「地図データ公開設定」の「来場者にも出す」(既定 OFF)。
 **残り**: 利用者が撮って上げる(本番の写真は 11-07 時点で 0 枚)→ 地図編集で見て確かめる → 撮りそろったら「来場者にも出す」を ON。向き(heading)を Web の管理画面で直す口は作っていない(アプリで上げるときに入れる)
+
+### 段 8 —— ito4.jp を Cloudflare に載せる(11-08。手順の正本は [17-cloudflare](17-cloudflare.ipynb)。進み具合はプロジェクト状況)
+
+利用者(11-08)「ito4.jp を Cloudflare に移行します」「1〜3 と docs/17 の書き直しを用意してください」。
+**ポートの壁はもう無い**(外は 22・80・443 だけ。11-08 実測)。橙(中継)にする前に止まるものが 3 つあり、**手元で用意した(未配備)**:
+
+| # | 何 | 用意したもの | 誰が |
+|---|---|---|---|
+| 8-1 | SSH(Cloudflare は 22 番を中継しない) | `scripts/ssh-host-alias.ps1`: この PC の `~\.ssh\config` で `ito4.jp` → 灰の `ssh.ito4.jp`(HostKeyAlias で known_hosts はそのまま)。スクリプト・タスク・cmd は変えない | DNS の `ssh` の A(灰)は利用者・-Apply は利用者 |
+| 8-2 | 国の拒否(日本だけ通す反転のままだと公開ページが丸ごと落ちる) | `host-geoblock.sh` の `ALLOW_CLOUDFLARE`(既定 no)・`CLOUDFLARE_PORTS`(80 443)。国は Cloudflare の WAF で絞る | 配備のあと km で update → apply |
+| 8-3 | 本当の送り元(回数の制限・IP の許可・訪問者の記録) | `nginx/km/cloudflare-real-ip.conf`(Cloudflare の範囲だけ信じる `CF-Connecting-IP`)を http の段で include。PHP は直さない(`X-Real-IP` = `$remote_addr`) | 配備は利用者 |
+| 8-4 | DNS の取り込み・ネームサーバー・Cloudflare の画面(Full (strict)・Always Use HTTPS 切・Bot Fight Mode 切・WAF の国) | docs/17 §2-4・§3 | 利用者 |
+| 8-5 | `ito4.jp` を橙 → 確かめ → `auth`・`share`・HTML 展開を 1 つずつ | docs/17 §3 の 7・8(admin・ssh・mail は灰のまま) | 利用者・確かめはこちら(読むだけ) |
 ---
 
 ## 優先順位の軸
@@ -2036,7 +2141,7 @@ Website は今、現在地を測らない。校内の QR(`/?here=`。フェー�
 | **P2P による地図の配布** | 有効期限と失効が効かず、`staffOnly` の除去も成立しない。真正性の根拠も無い |
 | **Play ストアへの公開申請** | **抹消**(2026-11-07、利用者)。配布は Website と受け箱(apk-push)で足りている。中身の対応(第5段)は残っているが、申請はしない |
 | **教職員の申請を Teams に知らせる** | **抹消**(2026-11-07、利用者)。09-18 に「後の段」としたもの。申請はメールと管理画面の一覧で受ける |
-| **Cloudflare 対応** | `km_map_rate_limit_ip()` は `X-Real-IP` を見る。Cloudflare 越しでは `CF-Connecting-IP` になるが、**いまは直結なので実害なし**。挟む日に直す |
+| **DB の教職員名の暗号化** | **抹消**(2026-11-07、利用者)。プロジェクト状況にあった「暗号化するか」の読み取りの項目は消した。検証機では暗号化ではなくダミーへの置き換え(段 5-3)で守る |
 
 ### 覆した判断(かつて「やらない」と書いていたもの)
 
@@ -2046,6 +2151,7 @@ Website は今、現在地を測らない。校内の QR(`/?here=`。フェー�
 | **minSdk を 33 から下げる** | **実装済み**(2026-08-30)。**29**。分岐は1箇所だけだった。Photo Picker のフォールバックは androidx が持っており、**手当ては要らなかった** |
 | **Website UI の全面再構築** | **第4段として実施**(2026-09-02、利用者の判断)。地図の正本がアプリへ移り、**Web 側の編集機能が宙に浮いた**のが理由 |
 | **User-Agent を記録しない** | **第6段として実施**(2026-09-02)。`ALTER` を配備利用者に頼めるなら、素直に列で持つ |
+| **Cloudflare 対応は挟む日に直す** | **段 8 として用意**(2026-11-08、利用者「ito4.jp を Cloudflare に移行します」)。`km_map_rate_limit_ip()` などの `X-Real-IP` は nginx の realip で本当の送り元になるので、**PHP は直さない**([17](17-cloudflare.ipynb) §2-3) |
 | **Play ストアの中身の対応** | **第5段として実施**。**公開そのものは 2026-11-07 に抹消**(上の表) |
 
 ### 誤解されがちなもの
