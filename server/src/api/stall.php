@@ -21,7 +21,8 @@ require_once __DIR__ . '/../lib/stalls.php';
 
 require_method('POST');
 
-$key = km_stall_key_from_header((string) ($_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? ''));
+// $_SERVER['HTTP_AUTHORIZATION'] は空のことがある(2026-11-08。正しい鍵でも 401 だった。km_request_authorization の説明)
+$key = km_stall_key_from_header(km_request_authorization());
 if (!km_stall_key_valid($key)) {
     header('WWW-Authenticate: Bearer');
     respond(['success' => false, 'message' => '鍵が要ります(Authorization: Bearer kms_…)。'], 401);

@@ -39,7 +39,7 @@
 | 3 | **完了**(11-07): 試験だけで見ていない画面(版 55)・共有のリンクをアプリで開く(19:47 に Google の確認が通った)。Wi-Fi 測位の比べ・AR の実測は保留へ |
 | 7 | 実機で見つけたものの続き: 英語化の残り(#109)は **版 56 で完了**・「教室」からトイレを外す(#110)はアプリ済み・Web は配備待ち |
 | 4 | **完了**(11-07): 本番の Web 地図の速さの測り直し・案内チャットの確かめ(AI の答えとカード・403・家の PC が止まったとき・無い店) |
-| 5 | 検証環境を作り直す(107 は 10-06 から応答なし。**作り方から見直す**) |
+| 5 | **完了**(11-08): 検証機 192.168.3.31(Hyper-V の VM)を本番と同じ形にした(コード・イメージ・cron・DB と Logto の利用者・方針)。入れ直しはデスクトップの `検証機を本番と同じに.cmd`。プロジェクト状況 #103 は消した |
 | 6 | ストリートビュー(360°)を Website へ: **11-07 に作った・配備待ち**(WebGL・撮りそろうまで管理者だけ)。残りは利用者が撮る(本番の写真は 0 枚) |
 | 7〜 | **管理画面「プロジェクト状況」に置く**(11-07、利用者の指示。分類つき。plan.md には段の見出しと設計だけ書く) |
 
@@ -75,7 +75,26 @@
 - 利用者が済ませた: `src/vendor/` と `certs/` を kmops の持ち物に(sudo chown)・外へ出る定期処理 5 つを止めた(`local-disable.sh --apply`。「すべて止まっています」)・PC に検証機の CA(指紋 449DEAEE…)を入れた
 - Console が `r.identifiers` で落ちた → 原因は **PC が 107 の古い CA(6AEAF2AE…。CN は同じ「KosenMap Local CA (test)」)しか信頼していなかった**こと。Console の `auth.<ドメイン>/api/…` が TLS で断られ、nginx に 1 件も届いていなかった。docs/13 0-8 に「先に CA を入れる・指紋で見分ける」を書いた
 - 本番と違っていた名前を直した: 検証機の証明書に admin・html・share が無く、管理画面も別オリジンになっていなかった → `host-local.sh` が証明書にいつも auth・html・share を入れる(status でも確かめる)ようにし、`init --admin-domain admin.192-168-3-31.sslip.io` で作り直した。PC から証明書を検証したまま 5 つの名前が開け、`/admin/` は本番と同じく admin の名前へ 308。docs/13 0-5 に `--admin-domain`・sudo を付けないことを書いた
-- 残り: 0-8 Console(管理者・m2m)→ 0-9 `local-refresh.ps1 -SeedLogto -CopyPublicImages`
+- 0-8: 利用者が Console で管理者・m2m を作り、Logto の設定と .env を本番に近づけた。.env を本番とハッシュどうしで比べた(値は出さない): **本番の秘密と同じ値は 0**(同じなのは DB の名前 `logto` だけ)
+- phpMyAdmin の「環境保管領域が完全に設定されていません」: 本番と同じ形で作った(DB `phpmyadmin` の 19 表・`pma` は `phpmyadmin.*` だけ・TLS 必須・パスワードは検証機で作って .env の `KM_PMA_CONTROLPASS`。phpMyAdmin が止まっている間でも像から SQL を読む)
+- 0-9 データ: `local-refresh.ps1 -CopyPublicImages` で 11-08 12:04 の控えから入れた(表 99・色分けの絵 17 枚・本番の秘密との一致 0・抜き残し 0)。-SeedLogto は流していない(Logto は利用者が手で組んだ)。途中で直したもの:
+  - `run/` は本番と同じく root の持ち物で書けず、`local-sanitize.sh` の塩で止まった → 塩・取り込みの記録・ダミーの利用者を検証機だけの `local-state/`(700)へ(`local-sanitize.sh`・`local-import.sh`・`local-logto-seed.sh`・`.php`・check.php・docs/13)
+  - `local-sanitize.sh` が、自分で入れたダミーのプロジェクト状況 3 件を「空にする表に残っている」と数えて毎回止まっていた → ダミーは数えない
+  - (自分の誤り)一括の置き換えで `local-import.sh`・`local-logto-seed.php`・`check.php` を壊した(1 組だけの配列が平たくなり、1 文字ずつ置き換えた)。検証機の写し(本番と同じハッシュ)から戻し、壊した差が置き換えた文字だけであることを確かめてから直し直した
+- **デスクトップの `検証機を本番と同じに.cmd`**(利用者の指示)→ `scripts/testhost-sync.ps1`: 配備(-Action up)→ `restart reverse-proxy` → 本番の控えからデータ(`local-refresh.ps1 -CopyPublicImages`)。**検証機では控えを作らない・GitHub へ送らない**(利用者の指示): `deploy-to-host.ps1` は本番以外へは `-Backup`・`-BackupOnly`・`-OpenBackup` を断り、GitHub へは出さない。通しで流して 4 分 27 秒・終了コード 0・GitHub の控えは増えていない。※ その指示の前、18:08 の検証機への配備で一度 GitHub へ出ていた(中身は手元の同じコード)
+- 本番の形に揃えた(利用者「本番の形に揃えてください」。docs/12 §6-3・§3 と同じ手順を検証機で):
+  - MariaDB: `kosenmap@%` → `kosenmap@172.30.2.%`・TLS 必須、`root@%` を消した、phpMyAdmin の root は閉じたまま(`KM_PMA_ALLOW_ROOT=`)。web から TLS で DB を読めた(地点 904)。データの入れ直し(`local-import.sh`)は DB を作り直すだけで利用者には触れない。DB と利用者の名前(`kosenmap`)はコードが名前に頼っていないので変えていない。本番の `Ito`(自分用)は利用者が自分で作るもの
+  - Logto: `logto_app`(SUPERUSER・CREATEROLE・CREATEDB・BYPASSRLS なし)で繋ぐ。表 79 個の持ち主・権限の不足の記録 0・healthy
+- 0-10 Android: 検証機の Logto に組織・API リソース(sslip の名前)・ネイティブアプリがあることを確かめ、.env の値で debug 版を両方作った(版 58・`192-168-3-31.sslip.io` と `auth.` を含み `ito4.jp` は含まない・debug の署名)。デスクトップの `検証機の端末用` に APK 2 つと CA。docs/13 §9 のセルに `-Pkosenmap.logtoAppId` を足した
+- 利用者が端末に CA と debug 版を入れ、サインインできた(Logto の記録でトークン 200・天気・統計も 200)
+- **検証機で見つけた本番の不具合**: サインインのあと `api/user-map-data.php`(履歴とブックマークの同期)が 401。**本番でも 7 日間で 26 回すべて 401**(アプリからの同期は一度も通っていなかった)。原因はこの web(Apache + mod_php)で `$_SERVER['HTTP_AUTHORIZATION']` が空のままなこと: user-map-data.php はそれだけで「アプリか」を決めていて、アプリを「サインインしていない Web」と取り違えていた。`api/stall.php`(屋台の鍵)も同じで、正しい形の鍵でも「鍵が要ります」の 401 だった。
+  `api_bootstrap.php` に `km_request_authorization()`(HTTP_AUTHORIZATION → REDIRECT_ → getallheaders())を足し、2 つの口をそれで読むようにした(Logto の確かめの `logto_authorization_header()` は前から getallheaders() も見ていたので通っていた)。check.php に 2 件(3073 件すべて通過)。検証機に配備し、偽のトークンで 2 つとも先へ進むことを確かめた。**本番は配備待ち**
+- 利用者が本番へ配備した(18:51)。本番の `vendor/` は composer.lock と一致(pusher・psr/log が消えた)・本番の同期の口も偽のトークンで先へ進む。検証機の端末で同期が 200 になった
+- 最後に並べ直した: コードは同じ(違うのは composer が入れるたびに名前の変わる autoload 3 つと、わざと付けない HSTS)。cron は本番 24 行・検証機は同じ 24 行のうち外へ出る 8 行を止めた形。`config/db・logto-m2m・recaptcha.local.php` は検証機に無いが、どれも .env が先に効くので要らない
+- Logto の残りの違いを本番に揃えた(検証機の DB だけ):
+  - メールのコネクタが本番の `mailserver:587` のまま(検証機に無い)で、確認コードを送れなかった → `mailpit:1025`・認証なし(local-logto-seed.php と同じ)。Logto から Mailpit の 220 を確かめた。写してあった SMTP の利用者名とパスワードは本番と同じ値だったが、本番でも 2 つは同じ 5 文字(中の網のメールサーバーの仮の値)。消した
+  - Console(admin テナント)の MFA が NoPrompt・パスワード方針とロックが空 → 本番と同じ(MFA Mandatory の Totp・WebAuthn・12 文字以上・5 回で 60 秒)。default の MFA にも本番と同じくメールの確認コードを足した。**検証機の Console の管理者は MFA が 0 件なので、次に入るときに登録を求められる**
+- 組織のトークン(教職員)が 403 なのは、検証機の組織に利用者が居ないため(アプリは通常のトークンへ落とす。本番でも教職員でない人は同じ)
 - 自己検査 3071 件すべて通過
 
 ### 2026-11-08 — 検証機の Console は -D で(利用者「トンネルはやっぱり -L ではなく -D のほうじゃないとだめですね」)

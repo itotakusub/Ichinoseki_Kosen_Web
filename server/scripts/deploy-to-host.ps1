@@ -181,6 +181,19 @@ if ($HostName -eq '') { $HostName = $preset.HostName }
 #>
 if ($HostName -notin $prodHostNames) {
     $preset.Label = "**$HostName(本番ではないホスト)**"
+    <#
+      **本番以外へは、控えを取らない・GitHub へ出さない**(2026-11-08、利用者の指示
+      「検証機ではバックアップなんて絶対に作らないでください」「GitHub にも送らないでください」)。
+      検証機の中身は本番の控えから作る写しなので、取っても意味がなく、GitHub の控えは本番に置けたものと揃えるためのもの。
+      付け忘れで出ないよう、引数に関係なくここで止める・外す。
+    #>
+    if ($Backup -or $BackupOnly -or $OpenBackup) {
+        throw "本番ではないホスト($HostName)では控えを取りません(-Backup・-BackupOnly・-OpenBackup を外してください)。"
+    }
+    if ($GitHub -ne 'none') {
+        Write-Host "本番ではないホスト($HostName)なので、GitHub の控えへは出しません。" -ForegroundColor DarkGray
+        $GitHub = 'none'
+    }
 }
 if ($User -eq '') { $User = $preset.User }
 if ($KeyPath -eq '') { $KeyPath = $preset.KeyPath }

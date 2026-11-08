@@ -27,7 +27,9 @@ if (!in_array($method, ['GET', 'POST', 'DELETE'], true)) {
 }
 
 $subject = '';
-if (trim((string) ($_SERVER['HTTP_AUTHORIZATION'] ?? '')) !== '') {
+// アプリかどうかは Authorization ヘッダーの有無で決める。**$_SERVER['HTTP_AUTHORIZATION'] は空のことがある**
+// (2026-11-08。それでアプリを Web と取り違え、本番で毎回 401 だった。km_request_authorization の説明)
+if (km_request_authorization() !== '') {
     // アプリ。トークンが正しくなければ logto_require_principal が 401 で止める
     $principal = logto_require_principal();
     $subject = trim((string) ($principal['subject'] ?? ''));

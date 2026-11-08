@@ -51,6 +51,33 @@ function km_api_json_body(int $maxBytes = KM_API_JSON_MAX_BYTES): array
     return $input;
 }
 
+/**
+ * 要求の Authorization ヘッダー(無ければ '')。
+ *
+ * **`$_SERVER['HTTP_AUTHORIZATION']` だけを見てはいけない。** この web(Apache + mod_php)では
+ * アプリが送っても空のままで、getallheaders() にだけ届く(2026-11-08 に検証機と本番で確かめた)。
+ * それで api/user-map-data.php はアプリを「サインインしていない Web」と取り違えて毎回 401、
+ * api/stall.php は正しい形の鍵でも「鍵が要ります」の 401 を返していた。
+ * logto_guard.php の logto_authorization_header() と同じ読み方(あちらは Logto の確かめに使う)。
+ */
+function km_request_authorization(): string
+{
+    foreach (['HTTP_AUTHORIZATION', 'REDIRECT_HTTP_AUTHORIZATION'] as $key) {
+        $value = trim((string) ($_SERVER[$key] ?? ''));
+        if ($value !== '') {
+            return $value;
+        }
+    }
+    if (function_exists('getallheaders')) {
+        foreach (getallheaders() as $name => $value) {
+            if (strcasecmp((string) $name, 'Authorization') === 0) {
+                return trim((string) $value);
+            }
+        }
+    }
+    return '';
+}
+
 function require_method(string $method): void
 {
     if (($_SERVER['REQUEST_METHOD'] ?? '') !== $method) {

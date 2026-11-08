@@ -8869,6 +8869,12 @@ function km_check_layout(): void
     check_bool('口: 誰のものかはトークンかサインインのセッションの sub だけ・Web の書き込みは CSRF・サインインしていなければ 401', str_contains($userMapApi, '$principal = logto_require_principal();')
         && str_contains($userMapApi, "\$subject = trim((string) (\$client->getIdTokenClaims()->sub ?? ''));") && str_contains($userMapApi, 'if (!km_csrf_verify()) {')
         && !str_contains($userMapApi, "\$_GET['user") && !str_contains($userMapApi, "\$input['user") && str_contains($userMapApi, "respond(['success' => false, 'message' => 'サインインしていません"));
+    // 2026-11-08: $_SERVER['HTTP_AUTHORIZATION'] だけで「アプリか」を決めていて、この web では空なので、アプリが本番で毎回 401 だった
+    check_bool('口: アプリかどうかは km_request_authorization() で見る(HTTP_AUTHORIZATION だけで決めない)', str_contains($userMapApi, "if (km_request_authorization() !== '') {")
+        && !preg_match('/^if \(trim\(\(string\) \(\$_SERVER\[.HTTP_AUTHORIZATION.\]/m', $userMapApi));
+    $bootstrapForAuth = (string) file_get_contents(__DIR__ . '/../api_bootstrap.php');
+    check_bool('api_bootstrap: Authorization は HTTP_AUTHORIZATION・REDIRECT_・getallheaders() の順に読む', str_contains($bootstrapForAuth, 'function km_request_authorization(): string')
+        && str_contains($bootstrapForAuth, "['HTTP_AUTHORIZATION', 'REDIRECT_HTTP_AUTHORIZATION']") && str_contains($bootstrapForAuth, 'getallheaders()'));
     check_bool('退会で消える', in_array('km_user_map_data', KM_ACCOUNT_DELETE_TABLES, true));
     $termsForHistory = (string) json_encode(km_legal_terms(), JSON_UNESCAPED_UNICODE);
     $privacyForHistory = (string) json_encode(km_legal_privacy(), JSON_UNESCAPED_UNICODE);
@@ -10150,7 +10156,7 @@ function km_check_layout(): void
     $stallApi = (string) file_get_contents(__DIR__ . '/../api/stall.php');
     $stallsApi = (string) file_get_contents(__DIR__ . '/../api/stalls.php');
     $stallsAdmin = (string) file_get_contents(__DIR__ . '/../admin/stalls.php');
-    check_bool('送る口: POST・鍵は見出しだけ(URL を読まない)・本文 8KB・5 秒に 1 回(429)', str_contains($stallApi, "require_method('POST');") && str_contains($stallApi, "\$_SERVER['HTTP_AUTHORIZATION']")
+    check_bool('送る口: POST・鍵は見出しだけ(URL を読まない)・本文 8KB・5 秒に 1 回(429)', str_contains($stallApi, "require_method('POST');") && str_contains($stallApi, '$key = km_stall_key_from_header(km_request_authorization());')
         && !str_contains($stallApi, '$_GET') && str_contains($stallApi, 'km_api_json_body(8 * 1024)') && str_contains($stallApi, "=== 'limited'") && str_contains($stallApi, ', 429);'));
     check_bool('読む口: 錠が掛かっていれば空・場所を返さない・控えは端末の中だけ', str_contains($stallsApi, "if (!km_map_view_unlocked(km_map_access_config())) {")
         && str_contains($stallsApi, 'km_stalls_status_rows(') && str_contains($stallsApi, "header('Cache-Control: private, max-age=15');"));

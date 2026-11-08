@@ -170,7 +170,13 @@ count_left() {
   # 空にする表で行が残っているもの(table_rows は見積もりなので数え直す)
   _sql=""
   for _t in $WIPE; do
-    if present "$_t"; then
+    if ! present "$_t"; then
+      continue
+    fi
+    if [ "$_t" = "km_tasks" ]; then
+      # 4 で入れるダミー 3 件は数えない(2026-11-08。数えていたので、毎回ここで止まっていた)
+      _sql="$_sql SELECT '$_t', COUNT(*) FROM \`$_t\` WHERE title NOT LIKE 'ダミーのタスク(検証機)%';"
+    else
       _sql="$_sql SELECT '$_t', COUNT(*) FROM \`$_t\`;"
     fi
   done
