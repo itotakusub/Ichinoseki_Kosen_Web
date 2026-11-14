@@ -1,13 +1,13 @@
 {
-  "_lspLanguageFeatures-U2Hgu88n.js": {
-    "file": "assets/lspLanguageFeatures-U2Hgu88n.js",
+  "_lspLanguageFeatures-F28XGgbV.js": {
+    "file": "assets/lspLanguageFeatures-F28XGgbV.js",
     "name": "lspLanguageFeatures",
     "imports": [
       "src/main.js"
     ]
   },
-  "_workers-BFIk_fhs.js": {
-    "file": "assets/workers-BFIk_fhs.js",
+  "_workers-m3tToO5W.js": {
+    "file": "assets/workers-m3tToO5W.js",
     "name": "workers",
     "imports": [
       "src/main.js"
@@ -40,7 +40,7 @@
     "isDynamicEntry": true
   },
   "node_modules/monaco-editor/esm/vs/languages/definitions/html/html.js": {
-    "file": "assets/html-BbqTrGi1.js",
+    "file": "assets/html-DTOUdN73.js",
     "name": "html",
     "src": "node_modules/monaco-editor/esm/vs/languages/definitions/html/html.js",
     "isDynamicEntry": true,
@@ -49,7 +49,7 @@
     ]
   },
   "node_modules/monaco-editor/esm/vs/languages/definitions/javascript/javascript.js": {
-    "file": "assets/javascript-CkNPCefS.js",
+    "file": "assets/javascript-ockOM23_.js",
     "name": "javascript",
     "src": "node_modules/monaco-editor/esm/vs/languages/definitions/javascript/javascript.js",
     "isDynamicEntry": true,
@@ -64,7 +64,7 @@
     "isDynamicEntry": true
   },
   "node_modules/monaco-editor/esm/vs/languages/definitions/typescript/typescript.js": {
-    "file": "assets/typescript-OfCTqAiY.js",
+    "file": "assets/typescript-deFLsqQY.js",
     "name": "typescript",
     "src": "node_modules/monaco-editor/esm/vs/languages/definitions/typescript/typescript.js",
     "isDynamicEntry": true,
@@ -73,7 +73,7 @@
     ]
   },
   "node_modules/monaco-editor/esm/vs/languages/definitions/xml/xml.js": {
-    "file": "assets/xml-hh3wQF7f.js",
+    "file": "assets/xml-dOmCRiHx.js",
     "name": "xml",
     "src": "node_modules/monaco-editor/esm/vs/languages/definitions/xml/xml.js",
     "isDynamicEntry": true,
@@ -82,13 +82,13 @@
     ]
   },
   "node_modules/monaco-editor/esm/vs/languages/features/css/cssMode.js": {
-    "file": "assets/cssMode-BcbR095o.js",
+    "file": "assets/cssMode-DIBPKOps.js",
     "name": "cssMode",
     "src": "node_modules/monaco-editor/esm/vs/languages/features/css/cssMode.js",
     "isDynamicEntry": true,
     "imports": [
-      "_workers-BFIk_fhs.js",
-      "_lspLanguageFeatures-U2Hgu88n.js",
+      "_workers-m3tToO5W.js",
+      "_lspLanguageFeatures-F28XGgbV.js",
       "src/main.js"
     ],
     "assets": [
@@ -96,13 +96,13 @@
     ]
   },
   "node_modules/monaco-editor/esm/vs/languages/features/html/htmlMode.js": {
-    "file": "assets/htmlMode-C9ACUhN0.js",
+    "file": "assets/htmlMode-DJHvn6HO.js",
     "name": "htmlMode",
     "src": "node_modules/monaco-editor/esm/vs/languages/features/html/htmlMode.js",
     "isDynamicEntry": true,
     "imports": [
-      "_workers-BFIk_fhs.js",
-      "_lspLanguageFeatures-U2Hgu88n.js",
+      "_workers-m3tToO5W.js",
+      "_lspLanguageFeatures-F28XGgbV.js",
       "src/main.js"
     ],
     "assets": [
@@ -110,13 +110,13 @@
     ]
   },
   "node_modules/monaco-editor/esm/vs/languages/features/json/jsonMode.js": {
-    "file": "assets/jsonMode-CDWxuRS2.js",
+    "file": "assets/jsonMode-D_KXqcEw.js",
     "name": "jsonMode",
     "src": "node_modules/monaco-editor/esm/vs/languages/features/json/jsonMode.js",
     "isDynamicEntry": true,
     "imports": [
-      "_workers-BFIk_fhs.js",
-      "_lspLanguageFeatures-U2Hgu88n.js",
+      "_workers-m3tToO5W.js",
+      "_lspLanguageFeatures-F28XGgbV.js",
       "src/main.js"
     ],
     "assets": [
@@ -124,20 +124,20 @@
     ]
   },
   "node_modules/monaco-editor/esm/vs/languages/features/typescript/tsMode.js": {
-    "file": "assets/tsMode-DWVzSi9a.js",
+    "file": "assets/tsMode-B3GxZHzH.js",
     "name": "tsMode",
     "src": "node_modules/monaco-editor/esm/vs/languages/features/typescript/tsMode.js",
     "isDynamicEntry": true,
     "imports": [
       "src/main.js",
-      "_workers-BFIk_fhs.js"
+      "_workers-m3tToO5W.js"
     ],
     "assets": [
-      "assets/ts.worker-CVbFdYz4.js"
+      "assets/ts.worker-D-YRgf6p.js"
     ]
   },
   "src/main.js": {
-    "file": "assets/main-Hl27njQT.js",
+    "file": "assets/main-lUMoUGP_.js",
     "name": "main",
     "src": "src/main.js",
     "isEntry": true,
@@ -163,7 +163,7 @@
       "assets/editor.worker-CX7Cj20z.js",
       "assets/html.worker-DNu74flJ.js",
       "assets/css.worker-DA-Gmr7e.js",
-      "assets/ts.worker-CVbFdYz4.js",
+      "assets/ts.worker-D-YRgf6p.js",
       "assets/json.worker-BfeARH1Q.js",
       "assets/codicon-DF1abBS2.ttf"
     ]

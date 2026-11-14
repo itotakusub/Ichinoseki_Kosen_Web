@@ -753,7 +753,18 @@ const load = (rel) => import(pathToFileURL(path.join(SRC, rel)).href);
             cssMoreBad.map((x) => x[0]), Object.keys(cssMore.CSS_JA_MORE_PROPS).every((k) => k in CSS_JA.props),
             Object.keys(cssMore.CSS_JA_MORE_PROPS).filter((k) => CSS_JA.props[k] !== cssMore.CSS_JA_MORE_PROPS[k]),
         ]);
-        const sp = await import(pathToFileURL(path.join(CODE_SRC, 'shims', 'path.js')).href);
+        // 2026-11-14: JS の型の定義の MDN の説明を外す(/editor/ と /code/ の組み立てが使う)
+        const mdn = await import(pathToFileURL(path.join(__dirname, '..', '..', '..', 'editor-src', 'build', 'strip-mdn-docs.js')).href);
+        const mdnIn = '/** keep (TypeScript) */\ninterface A {\n    /**\n     * The **`x`** property.\n     * @deprecated Use y.\n     *\n     * [MDN Reference](https://developer.mozilla.org/x)\n     */\n    x: number;\n    /** [MDN Reference](https://developer.mozilla.org/z) */\n    z(): void;\n    /**\n     * No link here.\n     */\n    w: string;\n}\n';
+        const mdnOut = mdn.stripMdnDocs(mdnIn);
+        check('11-14: MDN の説明のかたまりだけ外す・@deprecated は残す・ほかの説明は残す', [
+            '/** keep (TypeScript) */\ninterface A {\n    /** @deprecated Use y. */\n    x: number;\n    z(): void;\n    /**\n     * No link here.\n     */\n    w: string;\n}\n', 2, 0,
+        ], [mdnOut.text, mdnOut.removed, mdnOut.left]);
+        check('11-14: リンクの無い MDN の要約(**`名前`** の書き方)も外す・仕様の説明は残す', ['interface D {\n    getElementById(id: string): void;\n    /** Set to true if x. */\n    x: boolean;\n}\n', 1], (({ text, removed }) => [text, removed])(mdn.stripMdnDocs('interface D {\n    /** The **`getElementById()`** method of the DocumentFragment returns an Element. */\n    getElementById(id: string): void;\n    /** Set to true if x. */\n    x: boolean;\n}\n')));        const mdnLib = mdn.monacoLibModule({ 'lib.dom.d.ts': mdnIn, 'lib.es5.d.ts': '/** a */\nx;\n' });
+        check('11-14: monaco の lib.js は読み込んだ値から JSON の文字列で作り直す', [2, 0, true, true], [
+            mdnLib.removed, mdnLib.left, mdnLib.code.startsWith('const libFileMap = {};\nlibFileMap["lib.dom.d.ts"] = "/** keep (TypeScript) */\\ninterface A {'),
+            mdnLib.code.endsWith('libFileMap["lib.es5.d.ts"] = "/** a */\\nx;\\n";\nexport { libFileMap };\n'),
+        ]);        const sp = await import(pathToFileURL(path.join(CODE_SRC, 'shims', 'path.js')).href);
         check('ESLint 用の node:path の代わり', ['.js', '', 'a/c.js', 'b.js', '/x', '../b'], [sp.extname('/a/b.js'), sp.extname('/a/.htmlhintrc'), sp.join('a', 'b', '..', 'c.js'), sp.basename('/a/b.js'), sp.dirname('/x/y'), sp.relative('/a/c', '/a/b')]);
     }
 

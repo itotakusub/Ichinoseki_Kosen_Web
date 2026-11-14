@@ -130,7 +130,7 @@ function km_check_cloudflare(): void
     km_check_heading('cloudflare: Cloudflare の分析の取り込み・訪問者の位置を DB に');
     require_once __DIR__ . '/../lib/cloudflare-analytics.php';
     $root = dirname(__DIR__, 2);
-    $read = static fn (string $rel): string => (string) @file_get_contents($root . '/' . $rel);
+    $read = static fn (string $rel): string => km_check_repo_file($rel);
     $lib = $read('src/lib/cloudflare-analytics.php');
     $geoLib = $read('src/lib/visitor-geo.php');
     $host = $read('scripts/host-cloudflare-import.sh');
@@ -276,6 +276,43 @@ function km_check_repo_root(): ?string
 }
 
 /**
+ * 作業ツリーの中のファイルを、根からの相対パス(例 'scripts/host-setup.sh'・'src/lib/x.php')で読む。無ければ ''。
+ *
+ * 配備先の web コンテナ(/var/www/html)には src/ しか無い。そこでは **src/… は src から読む**(コンテナでも本当に確かめられる)。
+ * ほかのもの(scripts/・nginx/・compose.yaml・docs/・editor-src/・code-src/ …)は '' を返し、**この節で無かったものとして覚える**
+ * → その節で落ちた検査は FAIL ではなく SKIP と出す(km_check_repo_missing_note)。
+ * 2026-11-14: host-setup.sh がコンテナの中で流すと 92 件の FAIL が並んでいた(先頭の 20 行しか出ないので気づかれていなかった)
+ */
+function km_check_repo_file(string $rel): string
+{
+    $rel = ltrim($rel, '/');
+    $root = km_check_repo_root();
+    if ($root !== null) {
+        return (string) @file_get_contents($root . '/' . $rel);
+    }
+    if (str_starts_with($rel, 'src/')) {
+        return (string) @file_get_contents(dirname(__DIR__) . '/' . substr($rel, 4));
+    }
+    $GLOBALS['km_check_repo_missing'][$rel] = true;
+
+    return '';
+}
+
+/**
+ * 配備先で、この節が作業ツリーにしか無いファイルを読もうとしていたら、その説明(どこで確かめるか)。無ければ null。
+ * 落ちた検査をこの説明つきで SKIP にする(手元では作業ツリーがあるので必ず null = 今までどおり FAIL になる)
+ */
+function km_check_repo_missing_note(): ?string
+{
+    $missing = array_keys($GLOBALS['km_check_repo_missing'] ?? []);
+    if ($missing === [] || km_check_repo_root() !== null) {
+        return null;
+    }
+
+    return '手元の作業ツリーで確認する。配備先のコンテナに無い: ' . implode('・', array_slice($missing, 0, 3)) . (count($missing) > 3 ? ' ほか' : '');
+}
+
+/**
  * 調べられないものを飛ばす。**黙って飛ばさない。**
  *
  * 出さずに飛ばすと「出ていない = 通った」と読まれる。
@@ -292,8 +329,12 @@ function check_skip(string $label, string $where): void
 function check(string $label, $expected, $actual): void
 {
     global $failures, $checks;
-    $checks++;
     $ok = $expected === $actual;
+    if (!$ok && ($note = km_check_repo_missing_note()) !== null) {
+        check_skip($label, $note);
+        return;
+    }
+    $checks++;
     if (!$ok) {
         $failures++;
     }
@@ -309,6 +350,10 @@ function check(string $label, $expected, $actual): void
 function check_bool(string $label, bool $ok, string $detail = ''): void
 {
     global $failures, $checks;
+    if (!$ok && ($note = km_check_repo_missing_note()) !== null) {
+        check_skip($label, $note);
+        return;
+    }
     $checks++;
     if (!$ok) {
         $failures++;
@@ -318,6 +363,8 @@ function check_bool(string $label, bool $ok, string $detail = ''): void
 
 function km_check_heading(string $title): void
 {
+    // 作業ツリーに無かったファイルは節ごとに数え直す(km_check_repo_file)
+    $GLOBALS['km_check_repo_missing'] = [];
     echo "\n== {$title} ==\n";
 }
 
@@ -2233,13 +2280,20 @@ function km_check_guide_chat(): void
     check_bool('鍵は環境変数から(ブラウザに出さない)', str_contains($lib, "getenv('KM_GUIDE_LLM_KEY')")
         && !str_contains((string) file_get_contents(__DIR__ . '/../Main/guide-chat.js'), 'KM_GUIDE_LLM'));
     $root = km_check_repo_root();
-    $guideNginx = (string) @file_get_contents($root . '/nginx/default.conf.template');
-    check_bool('nginx: 専用の zone で IP ごとに絞る・本文 12k(直前の会話 2 往復)・LLM を待つ 90 秒', str_contains($guideNginx, 'limit_req_zone $binary_remote_addr zone=km_guide:10m rate=10r/m;')
-        && preg_match('/location = \/api\/guide-chat\.php \{\s*client_max_body_size 12k;\s*limit_req zone=km_guide burst=5 nodelay;\s*include \/etc\/nginx\/km\/proxy-web\.conf;\s*proxy_set_header X-Forwarded-Port \$\{KM_APP_PORT\};\s*proxy_read_timeout 90s;/', $guideNginx) === 1);
-    $compose = (string) @file_get_contents($root . '/compose.yaml');
-    $envExample = (string) @file_get_contents($root . '/.env.example');
-    foreach (['KM_GUIDE_LLM_URL', 'KM_GUIDE_LLM_KEY', 'KM_GUIDE_LLM_MODEL'] as $name) {
-        check_bool("compose と .env.example に {$name}", str_contains($compose, "{$name}: \${{$name}:-}") && str_contains($envExample, "{$name}="));
+    // nginx/・compose.yaml・.env.example・guide-llm/ は手元の作業ツリーにだけある(配備先の web コンテナには src/ しか見えない。
+    // 2026-11-14、host-setup で FAIL と出ていた。km_check_repo_root() が null のときは飛ばす)
+    if ($root === null) {
+        check_skip('nginx: 案内チャットの zone・本文 12k・90 秒', '手元の作業ツリーで確認する。配備先のコンテナに nginx/ は無い');
+        check_skip('compose と .env.example に KM_GUIDE_LLM_URL・KEY・MODEL', '手元の作業ツリーで確認する。配備先のコンテナに compose.yaml・.env.example は無い');
+    } else {
+        $guideNginx = (string) @file_get_contents($root . '/nginx/default.conf.template');
+        check_bool('nginx: 専用の zone で IP ごとに絞る・本文 12k(直前の会話 2 往復)・LLM を待つ 90 秒', str_contains($guideNginx, 'limit_req_zone $binary_remote_addr zone=km_guide:10m rate=10r/m;')
+            && preg_match('/location = \/api\/guide-chat\.php \{\s*client_max_body_size 12k;\s*limit_req zone=km_guide burst=5 nodelay;\s*include \/etc\/nginx\/km\/proxy-web\.conf;\s*proxy_set_header X-Forwarded-Port \$\{KM_APP_PORT\};\s*proxy_read_timeout 90s;/', $guideNginx) === 1);
+        $compose = (string) @file_get_contents($root . '/compose.yaml');
+        $envExample = (string) @file_get_contents($root . '/.env.example');
+        foreach (['KM_GUIDE_LLM_URL', 'KM_GUIDE_LLM_KEY', 'KM_GUIDE_LLM_MODEL'] as $name) {
+            check_bool("compose と .env.example に {$name}", str_contains($compose, "{$name}: \${{$name}:-}") && str_contains($envExample, "{$name}="));
+        }
     }
     $guideIndex = (string) file_get_contents(__DIR__ . '/../index.php');
     check_bool('画面は選んだテスト用アカウントだけ(ボタンと guide-chat.js)', str_contains($guideIndex, '$kmGuideChat = km_guide_allowed($_SESSION, time(), km_guide_settings(km_db()));')
@@ -2279,32 +2333,37 @@ function km_check_guide_chat(): void
         && str_contains($guideAdmin, "if (trim((string) (\$_POST['confirm'] ?? '')) !== '消す') {")
         && str_contains($guideAdmin, "km_admin_log_record('content', 'guide.log_clear',")
         && str_contains((string) file_get_contents(__DIR__ . '/../lib/admin-log.php'), "'guide.log_clear' =>"));
-    $llmDir = $root . '/guide-llm';
+    $llmDir = ($root ?? '') . '/guide-llm';
     $serverPy = (string) @file_get_contents($llmDir . '/server.py');
+    // 自宅 PC の門番(guide-llm/)は手元の作業ツリーにだけある。配備先のコンテナでは飛ばす(2026-11-14、host-setup で FAIL と出ていた)
+    $llmHere = $root !== null && is_file($llmDir . '/server.py');
+    $llmCheck = static function (string $label, bool $ok) use ($llmHere): void {
+        $llmHere ? check_bool($label, $ok) : check_skip($label, '手元の作業ツリーで確認する。配備先のコンテナに guide-llm/ は無い');
+    };
     /*
      * 2026-10-25 に作り直した(利用者の指示「WSL は使わない」「Unsloth に API リクエストする」)。同じ日に Bionic に替えた。
      * 2026-10-29、利用者「Unsloth API が使えるようになったので変更」「AI を選択できるように」: 頼み先を 2 つ持つ**門番**(標準ライブラリだけ)
      */
-    check_bool('自宅 PC: 門番は 127.0.0.1 だけ(番号を 2 つ目に取らせない)・鍵は定数時間で比べる・頼み先はこの PC の中だけ', str_contains($serverPy, 'ExclusiveServer(("127.0.0.1", PORT), Handler).serve_forever()')
+    $llmCheck('自宅 PC: 門番は 127.0.0.1 だけ(番号を 2 つ目に取らせない)・鍵は定数時間で比べる・頼み先はこの PC の中だけ', str_contains($serverPy, 'ExclusiveServer(("127.0.0.1", PORT), Handler).serve_forever()')
         && str_contains($serverPy, 'allow_reuse_address = False')
         && str_contains($serverPy, 'secrets.compare_digest(') && str_contains($serverPy, 'parts.hostname in ("127.0.0.1", "localhost", "::1")')
         && str_contains($serverPy, 'if not is_local_url(backend.url):')
         && !preg_match('/^\s*(import|from)\s+(fastapi|uvicorn|unsloth|torch)\b/m', $serverPy));
-    check_bool('自宅 PC: 頼み先は Unsloth と Bionic(Bionic は古い名前 LLM_API_URL でも読む)・一覧に無い模型は既定へ', str_contains($serverPy, 'BACKEND_NAMES = ("unsloth", "bionic")')
+    $llmCheck('自宅 PC: 頼み先は Unsloth と Bionic(Bionic は古い名前 LLM_API_URL でも読む)・一覧に無い模型は既定へ', str_contains($serverPy, 'BACKEND_NAMES = ("unsloth", "bionic")')
         && str_contains($serverPy, 'os.environ.get("BIONIC_API_URL", "").strip() or os.environ.get("LLM_API_URL", "").strip()')
         && str_contains($serverPy, "if isinstance(requested, str) and requested in catalog:\n        return requested"));
-    check_bool('自宅 PC: Unsloth には道具を使わせない(enable_tools・mcp_enabled を false。頼み直しでも外さない)', str_contains($serverPy, 'body["enable_tools"] = False')
+    $llmCheck('自宅 PC: Unsloth には道具を使わせない(enable_tools・mcp_enabled を false。頼み直しでも外さない)', str_contains($serverPy, 'body["enable_tools"] = False')
         && str_contains($serverPy, 'body["mcp_enabled"] = False') && str_contains($serverPy, 'OPTIONAL_KEYS = ("chat_template_kwargs", "reasoning_effort", "enable_thinking")'));
-    check_bool('自宅 PC: 模型は 1 つだけ読む(ほかを外してから)・入れ替えの間は答えない・起動のときはアンロードしてからロード', str_contains($serverPy, 'unload_everything()')
+    $llmCheck('自宅 PC: 模型は 1 つだけ読む(ほかを外してから)・入れ替えの間は答えない・起動のときはアンロードしてからロード', str_contains($serverPy, 'unload_everything()')
         && str_contains($serverPy, '"/api/v1/models/load"') && str_contains($serverPy, '"/v1/load"')
         && str_contains($serverPy, 'switching = next((k for k, v in LOAD_STATE.items() if v == "loading"), None)')
         && str_contains($serverPy, 'load_model(key, reload=True)'));
     // 2 つ読むと PC が固まりかねない(利用者 2026-10-29): Unsloth へは横に読まない指定・外しきれていなければ読まない
-    check_bool('自宅 PC: Unsloth は alongside なし・外しきれていなければ読まない・文字起こしの模型は一覧に出さない',
+    $llmCheck('自宅 PC: Unsloth は alongside なし・外しきれていなければ読まない・文字起こしの模型は一覧に出さない',
         str_contains($serverPy, '{"model_path": model_id, "alongside": False}') && str_contains($serverPy, 'raise BadRequest(503, "another model is still loaded")')
         && str_contains($serverPy, 'if item.get("task"):'));
     // 2026-11-07、利用者「模型を 2 つ以上読み込ませない」: 読み込み中の模型も数えて外す・一覧を読めない頼み先があれば読まない
-    check_bool('自宅 PC: 読み込み中の模型も数える・一覧を読めない頼み先があれば読まない',
+    $llmCheck('自宅 PC: 読み込み中の模型も数える・一覧を読めない頼み先があれば読まない',
         str_contains($serverPy, 'busy = loaded or item["id"] == active or state not in ("", "unloaded")')
         && str_contains($serverPy, 'if not entry.get("busy", entry["loaded"]) or key == except_key:')
         && str_contains($serverPy, 'raise BadRequest(503, "backend unreachable: "'));
@@ -2319,7 +2378,7 @@ function km_check_guide_chat(): void
         preg_match_all('/^\.km-guide-chip \{/m', $chipCss) === 1 && preg_match('/^\.km-guide-chip \{[^}]*position\s*:/m', $chipCss) !== 1
         && str_contains($chipCss, '.km-turn-pin .km-pin-chip {') && !str_contains((string) file_get_contents(__DIR__ . '/../Main/app.js'), 'km-guide-chip'));
     // Bionic は chat_template_kwargs を聞かない。reasoning_effort で考えを止めないと Qwen3.5 の本文が空になる(2026-10-25 のベンチで 20 件中 19 件)
-    check_bool('自宅 PC: 考えは reasoning_effort で止める・空の答えは 1 度 low で頼み直し、それでも空なら 502', str_contains($serverPy, 'body["reasoning_effort"] = effort')
+    $llmCheck('自宅 PC: 考えは reasoning_effort で止める・空の答えは 1 度 low で頼み直し、それでも空なら 502', str_contains($serverPy, 'body["reasoning_effort"] = effort')
         && str_contains($serverPy, 'if not text and effort in ("", "none"):') && str_contains($serverPy, 'raise BadRequest(502, "upstream empty")'));
     // 2026-10-25、利用者「Website 側で、考えるの ON-OFF はできませんか」: 管理画面で選び、頼みのたびに reasoning_effort で伝える
     $llmBody = static fn (string $reasoning): array => km_guide_llm_body(['model' => 'm', 'reasoning' => $reasoning], [['role' => 'user', 'content' => 'x']], 160);
@@ -2329,11 +2388,11 @@ function km_check_guide_chat(): void
     check_bool('考える: 管理画面で選ぶ(一覧の値だけ)・ON の間は口が長く待つ', str_contains($guideAdmin, 'km_setting_set($pdo, KM_GUIDE_REASONING_SETTING, $reasoning);')
         && str_contains($guideAdmin, '} elseif (!array_key_exists($reasoning, KM_GUIDE_REASONING_CHOICES)) {')
         && str_contains($api, "\$llmConfig['reasoning'] = \$settings['reasoning'];") && str_contains($api, '$perCall = $thinking ? 40 : ($maxTokens <= 160 ? 20 : 30);'));
-    check_bool('自宅 PC: Website の指定を受ける・止められない模型の OFF は low にする', str_contains($serverPy, 'REQUESTABLE_EFFORTS = ("none", "low", "medium", "high")')
+    $llmCheck('自宅 PC: Website の指定を受ける・止められない模型の OFF は low にする', str_contains($serverPy, 'REQUESTABLE_EFFORTS = ("none", "low", "medium", "high")')
         && str_contains($serverPy, 'if effort == "none" and off_ok == "no":') && str_contains($serverPy, 'effort = choose_effort(payload.get("reasoning_effort"), ')); 
-    check_bool('自宅 PC: 模型の名前と出す字数は門番が決める・余計な項目は渡さない', str_contains($serverPy, '"model": model_id,')
+    $llmCheck('自宅 PC: 模型の名前と出す字数は門番が決める・余計な項目は渡さない', str_contains($serverPy, '"model": model_id,')
         && str_contains($serverPy, '"max_tokens": min(max_tokens, MAX_NEW_TOKENS_CAP) + (REASONING_HEADROOM if thinking else 0),'));
-    check_bool('自宅 PC: 本文をログに書かない', str_contains($serverPy, '# **本文は書かない**。時間と字数と模型だけ') && !preg_match('/LOG\.\w+\([^)]*(messages|text|body)\b/', $serverPy)
+    $llmCheck('自宅 PC: 本文をログに書かない', str_contains($serverPy, '# **本文は書かない**。時間と字数と模型だけ') && !preg_match('/LOG\.\w+\([^)]*(messages|text|body)\b/', $serverPy)
         && str_contains($serverPy, 'def log_message(self, format: str, *args: Any) -> None:'));
     // 2026-10-29: 模型を選ぶ(管理画面 → 門番の /v1/models・/v1/select)。答えた模型を記録に残す
     check_bool('模型を選ぶ: 管理画面は門番の一覧の模型だけ・変えたら読み込みを頼む・答えた模型を残す', str_contains($guideAdmin, '$modelList = km_guide_llm_models($llmConfig);')
@@ -2345,25 +2404,25 @@ function km_check_guide_chat(): void
     check('本文の model: 選んでいなければ default', ['default', 'unsloth:x'], [km_guide_llm_body(['model' => ''], [], 10)['model'], km_guide_llm_body(['model' => 'unsloth:x'], [], 10)['model']]);
     $startPs = (string) @file_get_contents($llmDir . '/start-guide-llm.ps1');
     // 説明の文の「WSL」ではなく、wsl を呼ぶ形(wsl -d … / Start-Process 'wsl' / WSLENV)を探す
-    check_bool('自宅 PC: WSL を使わない・鍵は環境変数で渡す・古いつなぎ(ngrok)は消した(11-12)', !preg_match("/\bwsl(\.exe)?\s+-|FilePath\s+'wsl|WSLENV/i", $startPs)
+    $llmCheck('自宅 PC: WSL を使わない・鍵は環境変数で渡す・古いつなぎ(ngrok)は消した(11-12)', !preg_match("/\bwsl(\.exe)?\s+-|FilePath\s+'wsl|WSLENV/i", $startPs)
         && !preg_match('/&\s*ngrok\b|\[.NGROK_DOMAIN.\]/', $startPs) && !str_contains($lib, 'ngrok-skip-browser-warning') && str_contains($startPs, "\$env:KM_GUIDE_LLM_KEY = \$conf['KM_GUIDE_LLM_KEY']")
         && str_contains($startPs, "if (-not \$cfTunnel) { throw 'guide-llm.env に CLOUDFLARE_TUNNEL と CLOUDFLARE_HOSTNAME"));
     // 段 12(2026-11-12): つなぎを Cloudflare Tunnel に。設定ファイルは一時フォルダ(秘密は入らない)・行き先は 1 つの名前と 404 だけ
-    check_bool('段 12: cloudflared は設定ファイルで起こし、行き先は 1 つの名前 → 門番と「それ以外は 404」だけ・止めたら設定ファイルを消す', str_contains($startPs, '& cloudflared tunnel --config $cfConfig --protocol $cfProtocol run')
+    $llmCheck('段 12: cloudflared は設定ファイルで起こし、行き先は 1 つの名前 → 門番と「それ以外は 404」だけ・止めたら設定ファイルを消す', str_contains($startPs, '& cloudflared tunnel --config $cfConfig --protocol $cfProtocol run')
         && str_contains($startPs, "\"  - hostname: \$cfHost\"\n            \"    service: http://127.0.0.1:\$port\"\n            '  - service: http_status:404'")
         && str_contains($startPs, 'Remove-Item -LiteralPath $cfConfig -Force'));
-    check_bool('段 12: 設定ファイルに書く値は形を確かめる(UUID・ホスト名・つなぎ方)・トンネルの鍵は場所だけ(中身を読まない・トークンをコマンドに載せない)', str_contains($startPs, "if (\$cfTunnel -notmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\$') {")
+    $llmCheck('段 12: 設定ファイルに書く値は形を確かめる(UUID・ホスト名・つなぎ方)・トンネルの鍵は場所だけ(中身を読まない・トークンをコマンドに載せない)', str_contains($startPs, "if (\$cfTunnel -notmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\$') {")
         && str_contains($startPs, "if (\$cfHost -notmatch '^(?=.{4,253}\$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,}\$') {")
         && str_contains($startPs, "if (\$cfProtocol -notin 'auto', 'http2', 'quic') {")
         && str_contains($startPs, 'Test-Path -LiteralPath $cfCredentials') && !preg_match('/Get-Content[^\n]*cfCredentials|ReadAllText\(\$cfCredentials|--token|TUNNEL_TOKEN/', $startPs));
     check_bool('段 12: PHP の呼び出しに User-Agent を付ける(Cloudflare は無い要求を断ることがある)・https だけ・証明書を確かめる・転送しない', str_contains($lib, "CURLOPT_USERAGENT => 'KosenMap-Guide/1',")
         && str_contains($lib, 'CURLOPT_PROTOCOLS => CURLPROTO_HTTPS,') && str_contains($lib, 'CURLOPT_SSL_VERIFYHOST => 2,') && str_contains($lib, 'CURLOPT_FOLLOWLOCATION => false,'));
     // Lib の無い python(C:\Python315)は警告だけで終了コード 0 になるので、標準ライブラリのファイルまで見る(2026-10-29)
-    check_bool('自宅 PC: python は標準ライブラリが在るものだけ使う', str_contains($startPs, "sysconfig.get_paths()['stdlib']")
+    $llmCheck('自宅 PC: python は標準ライブラリが在るものだけ使う', str_contains($startPs, "sysconfig.get_paths()['stdlib']")
         && str_contains($startPs, "('http', 'server.py')") && str_contains($startPs, '-c $pythonProbe'));
     // 鍵の入るファイルは git に入れない。見本(git に入る)には**値を入れない**(2026-10-25、利用者が入れた値を guide-llm.env へ移した)
     $exampleEnv = (string) @file_get_contents($llmDir . '/guide-llm.env.example');
-    check_bool('自宅 PC: guide-llm.env は git に入れない・見本の鍵とドメインは空', str_contains((string) @file_get_contents($llmDir . '/.gitignore'), 'guide-llm.env')
+    $llmCheck('自宅 PC: guide-llm.env は git に入れない・見本の鍵とドメインは空', str_contains((string) @file_get_contents($llmDir . '/.gitignore'), 'guide-llm.env')
         && preg_match('/^KM_GUIDE_LLM_KEY=\s*$/m', $exampleEnv) === 1 && !str_contains($exampleEnv, 'NGROK_DOMAIN')
         && preg_match('/^CLOUDFLARE_TUNNEL=\s*$/m', $exampleEnv) === 1 && preg_match('/^CLOUDFLARE_HOSTNAME=\s*$/m', $exampleEnv) === 1 && preg_match('/^CLOUDFLARE_PROTOCOL=\s*$/m', $exampleEnv) === 1
         && preg_match('/^UNSLOTH_API_KEY=\s*$/m', $exampleEnv) === 1 && preg_match('/^BIONIC_API_KEY=\s*$/m', $exampleEnv) === 1
@@ -9420,13 +9479,19 @@ function km_check_layout(): void
         && str_contains($viewCss, '.floor-nav .floor-btn.is-on-route { box-shadow: inset 0 0 0 3px #ef4444; }'));
 
     km_check_heading('地図: 共有のリンクを一般向けアプリで開く(App Links。2026-10-24)');
-    $linkNginx = (string) @file_get_contents(km_check_repo_root() . '/nginx/default.conf.template');
+    // nginx/ は手元の作業ツリーにだけある(配備先のコンテナでは飛ばす。2026-11-14、host-setup で FAIL と出ていた)
+    $linkRoot = km_check_repo_root();
+    $linkNginx = (string) @file_get_contents(($linkRoot ?? '') . '/nginx/default.conf.template');
     // Android が確かめる。一般向けだけ(管理アプリを載せると、同じリンクで選ぶ画面が出る)。リダイレクトさせず JSON で返す
-    check_bool('assetlinks.json を返す(一般向けのパッケージ・リリースの鍵・JSON)', str_contains($linkNginx, 'location = /.well-known/assetlinks.json {')
+    if ($linkRoot === null) {
+        check_skip('assetlinks.json を返す(一般向けのパッケージ・リリースの鍵・JSON)', '手元の作業ツリーで確認する。配備先のコンテナに nginx/ は無い');
+    } else {
+        check_bool('assetlinks.json を返す(一般向けのパッケージ・リリースの鍵・JSON)', str_contains($linkNginx, 'location = /.well-known/assetlinks.json {')
         && str_contains($linkNginx, '"package_name":"com.ito.kosenmap",')
         && str_contains($linkNginx, '"sha256_cert_fingerprints":["D7:1F:BF:0A:0D:92:FA:EE:D8:67:CD:88:F0:E7:B3:3C:3D:D9:A7:49:66:90:0B:B0:2A:19:F1:E4:3C:2A:93:AF"]')
         && !str_contains($linkNginx, '"package_name":"com.ito.kosenmap.admin"')
         && preg_match('/location = \/\.well-known\/assetlinks\.json \{\s*default_type application\/json;/', $linkNginx) === 1);
+    }
 
     km_check_guide_chat();
 
@@ -10186,7 +10251,7 @@ function km_check_layout(): void
         && !str_contains($stallApi, '$_GET') && str_contains($stallApi, 'km_api_json_body(8 * 1024)') && str_contains($stallApi, "=== 'limited'") && str_contains($stallApi, ', 429);'));
     check_bool('読む口: 錠が掛かっていれば空・場所を返さない・控えは端末の中だけ', str_contains($stallsApi, "if (!km_map_view_unlocked(km_map_access_config())) {")
         && str_contains($stallsApi, 'km_stalls_status_rows(') && str_contains($stallsApi, "header('Cache-Control: private, max-age=15');"));
-    check_bool('nginx: 屋台の 2 つの口とアプリの予定を km_api で絞る',str_contains((string) file_get_contents(dirname(__DIR__, 2) . '/nginx/default.conf.template'), '|map-events|poster-like|stall|stalls|app-schedule)|logto_me)\.php$ {'));
+    check_bool('nginx: 屋台の 2 つの口とアプリの予定を km_api で絞る',str_contains(km_check_repo_file('nginx/default.conf.template'), '|map-events|poster-like|stall|stalls|app-schedule)|logto_me)\.php$ {'));
     check_bool('管理画面: guard・CSRF・鍵は 1 度だけ(セッションから出して消す。URL に載せない)・書き込みの権限・記録に文言・サイドバー', str_contains($stallsAdmin, "require __DIR__ . '/_inc/guard.php';")
         && str_contains($stallsAdmin, 'km_csrf_verify()') && str_contains($stallsAdmin, 'unset($_SESSION[KM_STALL_FLASH]);') && !preg_match('/Location: [^\n]*\$(key|newKey)/', $stallsAdmin)
         && str_contains($stallsAdmin, '<?php if ($KM_ADMIN_CAN_WRITE): ?>')
@@ -10262,7 +10327,7 @@ function km_check_layout(): void
         [km_update_notice_subject([['name' => 'PHP 8.4.15', 'current' => '8.4.14', 'available' => '8.4.15', 'kind' => 'vuln'], ['name' => 'logto', 'current' => '1', 'available' => '2', 'kind' => 'release']]),
             count(km_update_notice_parse('{"items":[{"name":"Ubuntu USN-1","kind":"vuln"}]}')['items'])]);
     check_bool('メール: 当て方(PHP・composer・Ubuntu とカーネルの再起動)を書く', str_contains(km_update_notice_body([['name' => 'x', 'current' => '', 'available' => '', 'kind' => 'vuln']], 'h'), 'カーネル(linux-…)は再起動するまで効かない'));
-    $updatesForVulns = (string) @file_get_contents(dirname(__DIR__, 2) . '/scripts/check-updates.sh');
+    $updatesForVulns = km_check_repo_file('scripts/check-updates.sh');
     if ($updatesForVulns === '') {
         check_skip('check-updates.sh の脆弱性の欄', '配備先には scripts/ が無い');
     } else {
@@ -11307,7 +11372,7 @@ function km_check_image_scan(): void
 {
     require_once __DIR__ . '/../lib/image-scan.php';
     $root = dirname(__DIR__, 2);
-    $file = static fn (string $path): string => (string) @file_get_contents($root . '/' . $path);
+    $file = static fn (string $path): string => km_check_repo_file($path);
     $scan = $file('scripts/host-image-scan.sh');
     check_bool('スクリプトがある(LF・sh)', $scan !== '' && !str_contains($scan, "\r") && str_starts_with($scan, "#!/bin/sh\n"));
     // docker.sock を渡すとホストの root を渡すのと同じ。tar を読み取り専用で渡すだけにする
@@ -11431,7 +11496,7 @@ function km_check_proj_api(): void
     require_once __DIR__ . '/../lib/tasks.php';
     require_once __DIR__ . '/../lib/admin-log.php';
     $root = dirname(__DIR__, 2);
-    $file = static fn (string $path): string => (string) @file_get_contents($root . '/' . $path);
+    $file = static fn (string $path): string => km_check_repo_file($path);
 
     // 鍵(純粋な関数)
     $good = str_repeat('Ab3(-)', 6);
@@ -11708,7 +11773,7 @@ function km_check_alias_csv(): void
         && km_alias_csv_plan($export, 'node', $targets, [$b => ['きょういんしつ']], [])['unchanged'] === 1);
     check_bool('取り込み: 大きさと行の上限', KM_ALIAS_CSV_MAX_BYTES === 1048576 && km_alias_csv_plan(str_repeat('x', KM_ALIAS_CSV_MAX_BYTES + 1), 'node', $targets, [], [])['errors'] !== []);
 
-    $page = (string) file_get_contents($root . '/src/admin/search-aliases.php');
+    $page = km_check_repo_file('src/admin/search-aliases.php');
     check_bool('画面: 上げただけでは書かない(計画をセッションに置いて見せる)', str_contains($page, "\$_SESSION[KM_ALIAS_IMPORT_SESSION_KEY] = ['kind' => \$kind, 'token' => bin2hex(random_bytes(16))")
         && preg_match('/import_preview.*?km_search_alias_save/s', $page) === 1 && strpos($page, "if (\$importAction === 'import_preview')") < strpos($page, "if (\$importAction === 'import_apply')"));
     check_bool('画面: 取り込むは CSRF(上の分岐)と印(hash_equals)と期限を確かめる', str_contains($page, "hash_equals((string) (\$stash['token'] ?? ''), \$token)") && str_contains($page, 'KM_ALIAS_CSV_PLAN_TTL')
@@ -11849,7 +11914,7 @@ function km_check_editor(): void
         $editorError(static fn () => km_editor_clean_manifest(['a.exe' => ['h' => $h, 's' => 1]])),
     ]);
     check('段 11: エディタだけの拡張子は HTML 展開の型の表に入れない(見せる側では使えない)', [], array_values(array_intersect(KM_EDITOR_EXTRA_TYPES, array_keys(KM_HTML_TYPES))));
-    $modelJs = $read($root . '/editor-src/src/project/model.js');
+    $modelJs = km_check_repo_file('editor-src/src/project/model.js');
     preg_match('/export const EDITOR_ONLY_EXTENSIONS = \[([^\]]*)\]/', $modelJs, $mm);
     check('段 11: エディタだけの拡張子は画面(model.js)とサーバーで同じ並び', KM_EDITOR_EXTRA_TYPES, isset($mm[1]) ? array_map(static fn (string $s): string => trim($s, " '"), explode(',', $mm[1])) : null);
     check('入口は目録の中の HTML だけ', ['a.html', '', ''], [km_editor_clean_entry('a.html', ['a.html' => []]), km_editor_clean_entry('b.html', ['a.html' => []]), km_editor_clean_entry('a.css', ['a.css' => []])]);
@@ -12078,9 +12143,9 @@ function km_check_code(): void
         && str_contains($viteConfig, 'this.error(`km-eslint-browser:') && str_contains($viteConfig, 'eslintBrowser(),') && is_file($root . '/code-src/src/shims/path.js')
         && str_contains($viteConfig, "return resolve(import.meta.dirname, 'node_modules/esquery/dist/esquery.min.js');"));
     // 2026-11-13: HTML の候補の一覧に出る付属の英語の説明(MDN)を出さない・打ちかけの < に赤い文を出さない
-    check_bool('11-13: HTML の候補の説明(MDN)は組み立てで外す(設定では消せない)・形が変われば止める・中身を変えたら名前も変える', str_contains($viteConfig, 'htmlNoCompletionDocs(),')
+    check_bool('11-13: HTML の候補の説明(MDN)は組み立てで外す(設定では消せない)・形が変われば止める・中身を変えたら名前も変える', str_contains($viteConfig, 'patchedResources(),')
         && str_contains($viteConfig, 'function ${name}(h,d,g){if(d===void 0)return;') && str_contains($viteConfig, 'の${patch.label}が ${found.length} か所(1 か所のはず。部品の版が変わった?)')
-        && str_contains($viteConfig, "this.emitFile({ type: 'asset', fileName: newName, source: patched });"));
+        && str_contains($viteConfig, 'return `new URL(\'${rel}\', import.meta.url).toString(), {"mimeType":"${mime}","size":${info.size}}`;'));
     $htmlServerOut = (array) glob($src . '/code/assets/htmlServerMain-*.js');
     if ($htmlServerOut === []) {
         check_skip('11-13: 組み立てた HTML の部品に書き換えが入っている', 'src/code を組み立てていない');
@@ -12092,14 +12157,30 @@ function km_check_code(): void
     check_bool('11-13: 打ちかけの「<a」に赤い文を出す spec-char-escape は既定で外す・はじめのプロジェクトの雛形に <title> がある', str_contains($read($root . '/code-src/src/webChecksCore.js'), "export const HTMLHINT_OFF_BY_DEFAULT = ['spec-char-escape'];")
         && str_contains($workbench, '<title>はじめの一歩</title>'));
     // 2026-11-13(続き): CSS の候補の説明も外す・カーソルを合わせたときの英語の説明は設定で(日本語の画面だけ)
-    check_bool('11-13: CSS の候補の説明も組み立てで外す(CSS の部品と、HTML の部品の中の CSS)', str_contains($viteConfig, "{ name: 'htmlServerMain', patches: ['html', 'css'] },")
-        && str_contains($viteConfig, "{ name: 'cssServerMain', patches: ['css'] },") && str_contains($viteConfig, 'if(${settings}===void 0)return;'));
+    check_bool('11-13: CSS の候補の説明も組み立てで外す(CSS の部品と、HTML の部品の中の CSS)', str_contains($viteConfig, "file: 'htmlServerMain.js', patches: ['html', 'css'] },")
+        && str_contains($viteConfig, "file: 'cssServerMain.js', patches: ['css'] },") && str_contains($viteConfig, 'if(${settings}===void 0)return;'));
     $cssServerOut = (array) glob($src . '/code/assets/cssServerMain-*.js');
     if ($cssServerOut !== []) {
         check_bool('11-13: 組み立てた CSS の部品は 1 つで、候補の説明を作らない形になっている', count($cssServerOut) === 1
             && preg_match('/function \w+\((\w),\w,(\w)\)\{if\(\2===void 0\)return;let \w;if\(\w\?\w=\{kind:"markdown"/', $read($cssServerOut[0])) === 1);
     }
-    check_bool('11-13: カーソルを合わせたときの付属の英語の説明は、日本語の画面だけ設定で消す(html・css・scss・less)', str_contains($workbench, "...(lang === 'ja' ? Object.fromEntries(['html', 'css', 'scss', 'less'].flatMap((id) => [[`\${id}.hover.documentation`, false], [`\${id}.hover.references`, false]])) : {}),"));
+    // 2026-11-14: JS の型の定義(lib.dom.d.ts など)の MDN の説明も外す(利用者「JS で MDN のコメントが出ています。消してください」)。
+    // 書き換えは組み立ての前(写しを作って URL を向け直す)。出来上がったあとで名前を替えると、workbench の名前が変わらず古い部品を取りに行くおそれがあった
+    $editorVite = $read($root . '/editor-src/vite.config.js');
+    check_bool('11-14: JS の型の定義の MDN の説明は /code/ と /editor/ の組み立てで同じ関数で外す・@deprecated は残す・外せなければ止める', str_contains($viteConfig, "import { stripMdnDocs } from '../editor-src/build/strip-mdn-docs.js';")
+        && str_contains($viteConfig, "this.error('km-patched-resources: MDN の説明を持つ型の定義が見つからない(部品の版が変わった?)');")
+        && str_contains($editorVite, "import { monacoLibModule } from './build/strip-mdn-docs.js';") && str_contains($editorVite, 'plugins: [stripMdnDocsPlugin()],')
+        && str_contains($editorVite, 'plugins: () => [stripMdnDocsPlugin()],') && str_contains($editorVite, 'if (result.removed === 0 || result.left !== 0) {')
+        && str_contains($read($root . '/editor-src/build/strip-mdn-docs.js'), 'return deprecated ? `${indent}/** ${deprecated.replace(/\*\//g, \'\')} */\n` : \'\';'));
+    check_bool('11-14: /code/ の書き換えは組み立ての前(写しは毎回作り直す・指す所が無ければ止める)・出来上がったあとで名前を替えない', str_contains($viteConfig, 'rmSync(PATCHED_DIR, { recursive: true, force: true });')
+        && str_contains($viteConfig, 'km-patched-resources: 書き換えた部品を指す所が見つからない') && !str_contains($viteConfig, 'delete bundle[oldName]') && !str_contains($viteConfig, 'htmlNoCompletionDocs'));
+    $typeLibsOut = array_merge((array) glob($src . '/code/assets/lib.*.d.ts-*.txt'), (array) glob($src . '/editor/assets/ts.worker-*.js'));
+    if ($typeLibsOut === []) {
+        check_skip('11-14: 組み立てた型の定義に MDN の説明が無い', 'src/code・src/editor を組み立てていない');
+    } else {
+        check_bool('11-14: 組み立てた型の定義(/code/ の lib.*.d.ts・/editor/ の ts.worker)に MDN の説明が無い・lib.dom はある', array_filter($typeLibsOut, static fn ($f) => str_contains($read($f), '[MDN Reference](') || preg_match('/\*\*`[A-Za-z][^`\n]*`\*\*/', $read($f)) === 1) === []
+            && glob($src . '/code/assets/lib.dom.d.ts-*.txt') !== []);
+    }    check_bool('11-13: カーソルを合わせたときの付属の英語の説明は、日本語の画面だけ設定で消す(html・css・scss・less)', str_contains($workbench, "...(lang === 'ja' ? Object.fromEntries(['html', 'css', 'scss', 'less'].flatMap((id) => [[`\${id}.hover.documentation`, false], [`\${id}.hover.references`, false]])) : {}),"));
 
     // 段 14-4(2026-11-13): 雛形を JSON で取り込む(管理画面は取り込みだけ)
     require_once $src . '/lib/editor-snippets.php';
@@ -12312,7 +12393,7 @@ function km_check_bench(): void
     require_once __DIR__ . '/../lib/bench.php';
     require_once __DIR__ . '/../lib/admin-log.php';
     $root = dirname(__DIR__, 2);
-    $file = static fn (string $path): string => (string) @file_get_contents($root . '/' . $path);
+    $file = static fn (string $path): string => km_check_repo_file($path);
 
     // 計算
     $s = km_bench_stats([0.3, 0.1, 0.2]);

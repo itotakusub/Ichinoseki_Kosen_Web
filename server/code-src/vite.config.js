@@ -10,9 +10,10 @@
  *   殻は CSP の nonce のため PHP で、.vite/manifest.json から名前を読む
  */
 import { defineConfig } from 'vite';
-import { resolve } from 'node:path';
-import { createHash } from 'node:crypto';
+import { dirname, relative, resolve, sep } from 'node:path';
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import vsixPlugin from '@codingame/monaco-vscode-rollup-vsix-plugin';
+import { stripMdnDocs } from '../editor-src/build/strip-mdn-docs.js';
 
 /*
  * 同梱の拡張機能から、ブラウザでは読まないファイルを外す(段 11-5。2026-11-09)。
@@ -124,7 +125,6 @@ function eslintBrowser() {
  * (html.hover.documentation・references)を見るが、**候補の説明は設定を渡さずに作る**ので、設定では消せない。
  * 説明を作る関数は 1 つで、候補からは設定が undefined のまま呼ばれる。そこで「設定が無ければ説明を作らない」に書き換える
  * (カーソルを合わせたときは設定が渡るので変わらない)。
- * 部品は出来合いの 1 ファイルで、名前の末尾は元の中身のハッシュ。中身を変えたら名前も変える(古い中身がブラウザに残らないように)。
  * 形が変わって見つからなければ組み立てを止める(部品の版を上げたときに気づくため)
  */
 /*
@@ -145,56 +145,100 @@ const DOC_PATCHES = {
   },
 };
 const DOC_TARGETS = [
-  { name: 'htmlServerMain', patches: ['html', 'css'] },
-  { name: 'cssServerMain', patches: ['css'] },
+  { pkg: 'monaco-vscode-html-language-features-default-extension', file: 'htmlServerMain.js', patches: ['html', 'css'] },
+  { pkg: 'monaco-vscode-css-language-features-default-extension', file: 'cssServerMain.js', patches: ['css'] },
 ];
-function htmlNoCompletionDocs() {
+/*
+ * 2026-11-14: JS の型の定義(付属の TypeScript の lib.dom.d.ts など)の MDN の説明も外す
+ * (利用者「JS で MDN のコメントが出ています。消してください」)。JS の候補の説明・カーソルを合わせたときの説明はここから来る。
+ * 外し方は editor-src/build/strip-mdn-docs.js(/editor/ と同じ関数。@deprecated は残す)。
+ */
+const TS_PKG = 'monaco-vscode-typescript-language-features-default-extension';
+const CODINGAME_DIR = resolve(import.meta.dirname, 'node_modules/@codingame');
+/** 書き換えた部品の置き場(node_modules の中なので配備も git もしない。組み立てのたびに作り直す) */
+const PATCHED_DIR = resolve(import.meta.dirname, 'node_modules/.km-patched');
+
+/*
+ * **書き換えは組み立ての前に行う**(2026-11-14 に直した)。
+ * 部品は拡張機能の index.js から `registerFileUrl('…', new URL('./resources/<名前>', import.meta.url).toString(), {"mimeType":…,"size":…})`
+ * で指されている。書き換えた写しを PATCHED_DIR に作り、その URL をそちらへ向け直す(size も直す)。こうすると Vite が写しの中身で名前のハッシュを付け、
+ * それを指す workbench の名前のハッシュも変わる。
+ * (11-13 の形は、出来上がったあとで部品の名前を替えて指す所を書き直していた。それだと workbench の中身が変わっても名前が変わらず、
+ *  前の workbench を覚えているブラウザが、もう無い古い名前の部品を取りに行って言語の機能が動かなくなるおそれがあった)
+ */
+function patchedResources() {
+  /** `${pkg}/${file}` → { path, size, hits } */
+  const replaced = new Map();
+  const writeCopy = (pkg, file, text) => {
+    const path = resolve(PATCHED_DIR, pkg, file);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, text);
+    replaced.set(`${pkg}/${file}`, { path, size: Buffer.byteLength(text), hits: 0 });
+  };
   return {
-    name: 'km-html-no-completion-docs',
+    name: 'km-patched-resources',
     apply: 'build',
-    enforce: 'post',
-    generateBundle(_options, bundle) {
+    enforce: 'pre',
+    buildStart() {
+      replaced.clear();
+      rmSync(PATCHED_DIR, { recursive: true, force: true });
       for (const target of DOC_TARGETS) {
-        const pattern = new RegExp(`(^|/)${target.name}-[\\w-]+\\.js$`);
-        const entries = Object.entries(bundle).filter(([name, out]) => out.type === 'asset' && pattern.test(name));
-        if (entries.length !== 1) {
-          this.error(`km-html-no-completion-docs: ${target.name} の出力が ${entries.length} 個(1 個のはず)`);
-        }
-        const [oldName, asset] = entries[0];
-        let patched = typeof asset.source === 'string' ? asset.source : Buffer.from(asset.source).toString('utf8');
+        let patched = readFileSync(resolve(CODINGAME_DIR, target.pkg, 'resources', target.file), 'utf8');
         for (const key of target.patches) {
           const patch = DOC_PATCHES[key];
           const found = patched.match(new RegExp(patch.from.source, 'g')) ?? [];
           if (found.length !== 1) {
-            this.error(`km-html-no-completion-docs: ${target.name} の${patch.label}が ${found.length} か所(1 か所のはず。部品の版が変わった?)`);
+            this.error(`km-patched-resources: ${target.file} の${patch.label}が ${found.length} か所(1 か所のはず。部品の版が変わった?)`);
           }
           patched = patched.replace(patch.from, patch.to);
         }
-        const hash = createHash('sha256').update(patched).digest('base64url').slice(0, 8);
-        const newName = oldName.replace(new RegExp(`${target.name}-[\\w-]+\\.js$`), `${target.name}-${hash}.js`);
-        const oldBase = oldName.slice(oldName.lastIndexOf('/') + 1);
-        const newBase = newName.slice(newName.lastIndexOf('/') + 1);
-        let references = 0;
-        for (const out of Object.values(bundle)) {
-          if (out.type === 'chunk' && out.code.includes(oldBase)) {
-            references += out.code.split(oldBase).length - 1;
-            out.code = out.code.split(oldBase).join(newBase);
-          } else if (out.type === 'asset' && out !== asset && typeof out.source === 'string' && out.source.includes(oldBase)) {
-            references += out.source.split(oldBase).length - 1;
-            out.source = out.source.split(oldBase).join(newBase);
-          }
+        writeCopy(target.pkg, target.file, patched);
+      }
+      let removed = 0;
+      const libDir = resolve(CODINGAME_DIR, TS_PKG, 'resources');
+      for (const file of readdirSync(libDir).filter((name) => /^lib\.[\w.]+\.d\.ts\.txt$/.test(name))) {
+        const text = readFileSync(resolve(libDir, file), 'utf8');
+        if (!text.includes('[MDN Reference](')) continue;
+        const result = stripMdnDocs(text);
+        if (result.left !== 0) {
+          this.error(`km-patched-resources: ${file} に MDN の説明が ${result.left} 個残った(書き方が変わった?)`);
         }
-        if (references === 0) {
-          this.error(`km-html-no-completion-docs: ${oldBase} を指している所が見つかりません`);
-        }
-        // 出力の表への代入は Rolldown が受けない(無視される)。古い名前を消し、新しい名前で出し直す
-        delete bundle[oldName];
-        this.emitFile({ type: 'asset', fileName: newName, source: patched });
+        removed += result.removed;
+        writeCopy(TS_PKG, file, result.text);
+      }
+      if (removed === 0) {
+        this.error('km-patched-resources: MDN の説明を持つ型の定義が見つからない(部品の版が変わった?)');
+      }
+    },
+    transform(code, id) {
+      const match = id.split('?')[0].match(/[\\/]@codingame[\\/](monaco-vscode-[\w-]+)[\\/]index\.js$/);
+      if (!match) return null;
+      let out = code;
+      let changed = false;
+      for (const [key, info] of replaced) {
+        if (!key.startsWith(`${match[1]}/`)) continue;
+        const file = key.slice(match[1].length + 1);
+        let rel = relative(dirname(id.split('?')[0]), info.path).split(sep).join('/');
+        if (!rel.startsWith('.')) rel = `./${rel}`;
+        const escaped = file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const pattern = new RegExp(`new URL\\('\\./resources/${escaped}', import\\.meta\\.url\\)\\.toString\\(\\), \\{"mimeType":"([^"]+)","size":\\d+\\}`, 'g');
+        out = out.replace(pattern, (_all, mime) => {
+          info.hits++;
+          changed = true;
+          return `new URL('${rel}', import.meta.url).toString(), {"mimeType":"${mime}","size":${info.size}}`;
+        });
+      }
+      return changed ? { code: out, map: null } : null;
+    },
+    buildEnd(error) {
+      if (error) return;
+      const missed = [...replaced].filter(([, info]) => info.hits === 0).map(([key]) => key);
+      if (missed.length > 0) {
+        this.error(`km-patched-resources: 書き換えた部品を指す所が見つからない(index.js の形が変わった?): ${missed.join(', ')}`);
       }
     },
   };
-}
-export default defineConfig({
+}export default defineConfig({
   base: '/code/',
   publicDir: 'public',
   plugins: [
@@ -202,7 +246,7 @@ export default defineConfig({
     vsixPlugin(),
     trimVsix(),
     eslintBrowser(),
-    htmlNoCompletionDocs(),
+    patchedResources(),
     {
       name: 'load-vscode-css-as-string',
       enforce: 'pre',
