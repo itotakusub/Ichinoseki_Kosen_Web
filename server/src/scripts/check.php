@@ -109,6 +109,8 @@ const KM_CHECK_PURE = [
     'bench',
     // Web Code Editor(/editor/。2026-11-08)
     'editor',
+    // VS Code 型のエディタ(/code/。段 11。2026-11-08)
+    'code',
     // プロジェクト状況の口(鍵 KM_PROJ_PASSKEY)・Logto のメールのテンプレート(2026-11-07)
     'proj-api',
     // 読み・別名と英語の名前を CSV でまとめて(2026-11-07、plan.md 段 2-1)
@@ -241,7 +243,7 @@ function km_check_cloudflare(): void
     check_bool('ホスト: 同じ失敗は 6 時間に 1 回・設定が無ければ何もしない・やり直しは 6 回まで', str_contains($host, '-lt 21600') && str_contains($host, '何もしません') && str_contains($host, 'MAX_ROUNDS=6'));
     check_bool('ホスト: web の計画の名前は 3 種だけ受ける', str_contains($host, 'settings|waf:*|traffic:*) ;;'));
     check_bool('cron(版 14): 毎時 13 分・失敗だけ送る・実行ビットの一覧と配備物にある', preg_match('/^CRON_VERSION=(1[4-9]|[2-9][0-9])$/m', $setup) === 1
-        && str_contains($setup, '13 * * * *   root  $SEND_LOG_SCRIPT --path $PATH_ROOT --label Cloudflare の取り込み --only-failure --run "$CF_IMPORT_SCRIPT --path $PATH_ROOT"')
+        && str_contains($setup, '13 * * * *   root  $SEND_LOG_SCRIPT --path $PATH_ROOT --label Cloudflare取り込み --only-failure --run "$CF_IMPORT_SCRIPT --path $PATH_ROOT"')
         && str_contains($setup, '"$CF_IMPORT_SCRIPT"; do') && substr_count($deploy, "'./scripts/host-cloudflare-import.sh'") === 2 && str_contains($deploy, "'./src/scripts/cloudflare-import.php'")
         && preg_match("/^HOST_SCRIPTS='[^']*\\bhost-cloudflare-import\\.sh\\b[^']*'$/m", $read('scripts/host-setup.sh')) === 1 && str_contains($deploy, "'./cloudflare.local.conf.example'")
         && is_file($root . '/cloudflare.local.conf.example'));
@@ -2343,15 +2345,27 @@ function km_check_guide_chat(): void
     check('本文の model: 選んでいなければ default', ['default', 'unsloth:x'], [km_guide_llm_body(['model' => ''], [], 10)['model'], km_guide_llm_body(['model' => 'unsloth:x'], [], 10)['model']]);
     $startPs = (string) @file_get_contents($llmDir . '/start-guide-llm.ps1');
     // 説明の文の「WSL」ではなく、wsl を呼ぶ形(wsl -d … / Start-Process 'wsl' / WSLENV)を探す
-    check_bool('自宅 PC: WSL を使わない・ngrok で出す・鍵は環境変数で渡す', !preg_match("/\bwsl(\.exe)?\s+-|FilePath\s+'wsl|WSLENV/i", $startPs)
-        && str_contains($startPs, '& ngrok http --url="https://$domain" $port') && str_contains($startPs, "\$env:KM_GUIDE_LLM_KEY = \$conf['KM_GUIDE_LLM_KEY']"));
+    check_bool('自宅 PC: WSL を使わない・鍵は環境変数で渡す・古いつなぎ(ngrok)は消した(11-12)', !preg_match("/\bwsl(\.exe)?\s+-|FilePath\s+'wsl|WSLENV/i", $startPs)
+        && !preg_match('/&\s*ngrok\b|\[.NGROK_DOMAIN.\]/', $startPs) && !str_contains($lib, 'ngrok-skip-browser-warning') && str_contains($startPs, "\$env:KM_GUIDE_LLM_KEY = \$conf['KM_GUIDE_LLM_KEY']")
+        && str_contains($startPs, "if (-not \$cfTunnel) { throw 'guide-llm.env に CLOUDFLARE_TUNNEL と CLOUDFLARE_HOSTNAME"));
+    // 段 12(2026-11-12): つなぎを Cloudflare Tunnel に。設定ファイルは一時フォルダ(秘密は入らない)・行き先は 1 つの名前と 404 だけ
+    check_bool('段 12: cloudflared は設定ファイルで起こし、行き先は 1 つの名前 → 門番と「それ以外は 404」だけ・止めたら設定ファイルを消す', str_contains($startPs, '& cloudflared tunnel --config $cfConfig --protocol $cfProtocol run')
+        && str_contains($startPs, "\"  - hostname: \$cfHost\"\n            \"    service: http://127.0.0.1:\$port\"\n            '  - service: http_status:404'")
+        && str_contains($startPs, 'Remove-Item -LiteralPath $cfConfig -Force'));
+    check_bool('段 12: 設定ファイルに書く値は形を確かめる(UUID・ホスト名・つなぎ方)・トンネルの鍵は場所だけ(中身を読まない・トークンをコマンドに載せない)', str_contains($startPs, "if (\$cfTunnel -notmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\$') {")
+        && str_contains($startPs, "if (\$cfHost -notmatch '^(?=.{4,253}\$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,}\$') {")
+        && str_contains($startPs, "if (\$cfProtocol -notin 'auto', 'http2', 'quic') {")
+        && str_contains($startPs, 'Test-Path -LiteralPath $cfCredentials') && !preg_match('/Get-Content[^\n]*cfCredentials|ReadAllText\(\$cfCredentials|--token|TUNNEL_TOKEN/', $startPs));
+    check_bool('段 12: PHP の呼び出しに User-Agent を付ける(Cloudflare は無い要求を断ることがある)・https だけ・証明書を確かめる・転送しない', str_contains($lib, "CURLOPT_USERAGENT => 'KosenMap-Guide/1',")
+        && str_contains($lib, 'CURLOPT_PROTOCOLS => CURLPROTO_HTTPS,') && str_contains($lib, 'CURLOPT_SSL_VERIFYHOST => 2,') && str_contains($lib, 'CURLOPT_FOLLOWLOCATION => false,'));
     // Lib の無い python(C:\Python315)は警告だけで終了コード 0 になるので、標準ライブラリのファイルまで見る(2026-10-29)
     check_bool('自宅 PC: python は標準ライブラリが在るものだけ使う', str_contains($startPs, "sysconfig.get_paths()['stdlib']")
         && str_contains($startPs, "('http', 'server.py')") && str_contains($startPs, '-c $pythonProbe'));
     // 鍵の入るファイルは git に入れない。見本(git に入る)には**値を入れない**(2026-10-25、利用者が入れた値を guide-llm.env へ移した)
     $exampleEnv = (string) @file_get_contents($llmDir . '/guide-llm.env.example');
     check_bool('自宅 PC: guide-llm.env は git に入れない・見本の鍵とドメインは空', str_contains((string) @file_get_contents($llmDir . '/.gitignore'), 'guide-llm.env')
-        && preg_match('/^KM_GUIDE_LLM_KEY=\s*$/m', $exampleEnv) === 1 && preg_match('/^NGROK_DOMAIN=\s*$/m', $exampleEnv) === 1
+        && preg_match('/^KM_GUIDE_LLM_KEY=\s*$/m', $exampleEnv) === 1 && !str_contains($exampleEnv, 'NGROK_DOMAIN')
+        && preg_match('/^CLOUDFLARE_TUNNEL=\s*$/m', $exampleEnv) === 1 && preg_match('/^CLOUDFLARE_HOSTNAME=\s*$/m', $exampleEnv) === 1 && preg_match('/^CLOUDFLARE_PROTOCOL=\s*$/m', $exampleEnv) === 1
         && preg_match('/^UNSLOTH_API_KEY=\s*$/m', $exampleEnv) === 1 && preg_match('/^BIONIC_API_KEY=\s*$/m', $exampleEnv) === 1
         && preg_match('/^GUIDE_LLM_MODEL=\s*$/m', $exampleEnv) === 1 && preg_match('/^GUIDE_LLM_PORT=8192$/m', $exampleEnv) === 1);
 }
@@ -6347,7 +6361,12 @@ function km_check_hardening(): void
     // 版 6 で証明書を足し、版 7(2026-10-05)でタスクマネージャーの集計と使用率の警告を、版 8(2026-10-06)で訪問者の記録の片付けを、
     // 版 9(2026-10-09)でアプリの受け箱を、版 10(2026-11-06)でイメージの検査を、版 11(同日)でイメージの片付けを、版 12(同日)で phpMyAdmin の見張りを足し、版 13(11-07)でトンネルの合図に変えた
     // 版 14(11-08)で Cloudflare の分析の取り込みを足した
-    check_bool('cron は版 14', preg_match('/^CRON_VERSION=14$/m', $setup) === 1);
+    // 版 15(11-13)で Cloudflare の --label の空白を外した(send-log.sh が「知らない引数」で止まっていた)
+    check_bool('cron は版 15', preg_match('/^CRON_VERSION=15$/m', $setup) === 1);
+    // cron の行の --label は引用しないので、空白があると次の語が別の引数になり send-log.sh が止まる(11-08〜11-13 に Cloudflare の取り込みが止まっていた)
+    preg_match_all('/^[^#\n]*\$SEND_LOG_SCRIPT [^\n]*--label (\S+) (\S+)/m', $setup, $labelMatches, PREG_SET_ORDER);
+    $badLabels = array_values(array_filter($labelMatches, static fn (array $m): bool => !str_starts_with($m[2], '--')));
+    check_bool('cron の --label に空白が無い(すぐ次が -- の引数)', count($labelMatches) >= 6 && $badLabels === [], $badLabels === [] ? '' : implode(' / ', array_column($badLabels, 0)));
     // 国単位のアクセス拒否(2026-10-06)。毎月の取り直しと、再起動のあとの当て直し
     check_bool('cron(版 8)に国の拒否の取り直しと再起動後の当て直しがある', str_contains($setup, '53 4 2 * *  root  sh $GEOBLOCK_SCRIPT --path $PATH_ROOT update')
         && str_contains($setup, '@reboot     root  sleep 30 && sh $GEOBLOCK_SCRIPT --path $PATH_ROOT apply'));
@@ -6413,6 +6432,9 @@ check_bool('Cloudflare: 本当の送り元は CF-Connecting-IP・Cloudflare の�
     && !preg_match('/set_real_ip_from\s+(0\.0\.0\.0|::\/0|10\.|172\.16|192\.168|127\.)/', $cfRealIp));
 check_bool('Cloudflare: default.conf.template の http の段(回数の制限と server より前)で include・配備の $mustContain にある', ($cfInc = strpos($nginxTpl, 'include /etc/nginx/km/cloudflare-real-ip.conf;')) !== false
     && $cfInc < strpos($nginxTpl, 'limit_req_zone') && $cfInc < strpos($nginxTpl, 'server {') && str_contains($mustContain, "'./nginx/km/cloudflare-real-ip.conf'"));
+$hostCert = $file('scripts/host-cert.sh');
+check_bool('Cloudflare: 証明書の発行の下見は、橙の名前(Cloudflare の番地)も認め、外から届くかは 80 番の試しで見る(一覧は realip と同じファイル・2026-11-09)', str_contains($hostCert, 'CLOUDFLARE_IPS="nginx/km/cloudflare-real-ip.conf"')
+    && str_contains($hostCert, 'elif [ "$_cf" -eq 1 ]; then') && strpos($hostCert, 'is_cloudflare_ip "$_ip"') < strpos($hostCert, '== 2. 80 番の確認用の道') && !str_contains($hostCert, "\r\n"));
 $sshAlias = $file('scripts/ssh-host-alias.ps1');
 check_bool('Cloudflare: SSH は ~/.ssh/config で灰の名前へ曲げる(ホスト鍵は ito4.jp の行のまま・灰でなければ書かない・前のファイルを Old へ)', str_contains($sshAlias, '"    HostKeyAlias $Name"')
     && str_contains($sshAlias, "[string]\$SshName = 'ssh.ito4.jp'") && str_contains($sshAlias, "if (\$sshState -ne 'gray') {")
@@ -9058,7 +9080,7 @@ function km_check_layout(): void
     check('スケジュール: 番号の一時地点も場所にする', [7], km_event_schedule_public_rows([['id' => 1, 'projectNo' => '21', 'title' => 'a', 'organizer' => '', 'description' => '', 'startsAt' => 'x', 'endsAt' => null, 'isPublic' => true]], [], ['21' => [7]])[0]['poiIds']);
     $appJsForPoi = (string) file_get_contents(__DIR__ . '/../Main/app.js');
     check_bool('公開の地図: 一時地点は部屋と同じ吹き出し・名前はポスターの見出し(7 文字以上は 6 文字 + …)・備考はポスターの説明', str_contains($appJsForPoi, 'marker.bindPopup(poiDetailHtml(poi, shown));')
-        && str_contains($appJsForPoi, "return chars.length >= 7 ? chars.slice(0, 6).join('') + '…' : chars.join('');")
+        && str_contains($appJsForPoi, "if (chars.reduce((sum, ch) => sum + width(ch), 0) <= 6) return chars.join('');")
         && str_contains($appJsForPoi, "note: poster && poster.description ? poster.description : String(poi.note || ''),"));
     check('教室のイベント中の名前が番号なら、その番号も付ける(二重にしない・番号でない名前は足さない)', ['n1' => ['22', '32'], 'n2' => ['33']],
         km_map_projects_with_aliases(['n1' => ['22'], 'n2' => ['33']], ['n1' => '32', 'n2' => '33', 'n3' => 'たこ焼き']));
@@ -9364,7 +9386,9 @@ function km_check_layout(): void
     $viewCss = (string) file_get_contents(__DIR__ . '/../Main/styles.css');
     check_bool('札はすべて縮める(地点・一時地点)', str_contains($shareApp, 'escapeHtml(shortPoiName(project ? project.name : displayNameFor(node)));')
         && str_contains($shareApp, 'escapeHtml(shortPoiName(shown.name))'));
-    check_bool('縮め方は 7 文字以上を 6 文字 + …', str_contains($shareApp, "return chars.length >= 7 ? chars.slice(0, 6).join('') + '…' : chars.join('');"));
+    check_bool('縮め方は 7 文字以上を 6 文字 + …(半角は 0.5 文字。英語の名前が全部「Buildi…」になった。11-11)', str_contains($shareApp, "const width = (ch) => (/^[\\u0000-\\u00ff\\uff61-\\uff9f]$/.test(ch) ? 0.5 : 1);")
+        && str_contains($shareApp, "if (chars.reduce((sum, ch) => sum + width(ch), 0) <= 6) return chars.join('');")
+        && str_contains($shareApp, 'if (used + width(ch) > 6) break;'));
     // イベントの地点 = 臨時の名前・企画の番号・ポスターのどれか(+ 一時地点)。イベント中・公開の地図だけ
     check_bool('イベントの地点の決め方', str_contains($shareApp, "if (window.isAdmin || !graphData.event) return '';")
         && str_contains($shareApp, "return node.alias || hasProject || hasPoster ? 'event' : 'unrelated';")
@@ -11785,7 +11809,10 @@ function km_check_editor(): void
     check('manifest が指す CSS・worker・フォントがすべてある', [], $missing);
     $bundle = $entryFile !== '' ? $read($src . '/editor/' . $entryFile) : '';
     preg_match_all('#/api/[A-Za-z0-9_-]+\.php#', $bundle, $apis);
-    check('本体の JS が呼ぶ口は /api/editor.php だけ(段 10-B)', ['/api/editor.php'], array_values(array_unique($apis[0])));
+    // 2026-11-13: 雛形の読み出し(/api/editor-snippets.php。GET だけ・何も送らない)が増えた
+    $apiList = array_values(array_unique($apis[0]));
+    sort($apiList);
+    check('本体の JS が呼ぶ口は /api/editor.php(段 10-B)と /api/editor-snippets.php(段 14-4)だけ', ['/api/editor-snippets.php', '/api/editor.php'], $apiList);
     check_bool('本体の JS はプレビューへ * で送り、受けるときは event.source で確かめる', str_contains($bundle, 'km-editor-run') && str_contains($bundle, 'km-editor-ready'));
 
     km_check_heading('editor: サーバーとの同期(段 10-B。lib/editor-projects.php・api/editor.php)');
@@ -11804,7 +11831,8 @@ function km_check_editor(): void
     check('目録: .. ・先頭の /・使えない拡張子・形の違い・大文字小文字だけ違う名前を断る', ['error', 'error', 'error', 'error', 'error', 'error'], [
         $editorError(static fn () => km_editor_clean_manifest(['../x.html' => ['h' => $h, 's' => 1]])),
         $editorError(static fn () => km_editor_clean_manifest(['/x.html' => ['h' => $h, 's' => 1]])),
-        $editorError(static fn () => km_editor_clean_manifest(['x.php' => ['h' => $h, 's' => 1]])),
+        // 段 11 から .php はエディタで書ける(KM_EDITOR_EXTRA_TYPES)ので、使えない拡張子は .exe で見る
+        $editorError(static fn () => km_editor_clean_manifest(['x.exe' => ['h' => $h, 's' => 1]])),
         $editorError(static fn () => km_editor_clean_manifest(['x.html' => ['h' => 'zz', 's' => 1]])),
         $editorError(static fn () => km_editor_clean_manifest(['A.html' => ['h' => $h, 's' => 1], 'a.html' => ['h' => $h, 's' => 1]])),
         $editorError(static fn () => km_editor_clean_manifest('x')),
@@ -11814,6 +11842,16 @@ function km_check_editor(): void
         $editorError(static fn () => km_editor_clean_manifest(array_fill_keys(array_map(static fn (int $i): string => 'f' . $i . '.txt', range(0, KM_EDITOR_MAX_FILES)), ['h' => $h, 's' => 0]))),
     ]);
     check('上限は 1 人 30・200MB、1 つ 20MB・500(画面の model.js と同じ)', [30, 200, 20, 500], [KM_EDITOR_MAX_PROJECTS, KM_EDITOR_MAX_OWNER_BYTES >> 20, KM_EDITOR_MAX_PROJECT_BYTES >> 20, KM_EDITOR_MAX_FILES]);
+    check('段 11: エディタだけの拡張子(.py・.ipynb・.ps1)は置ける・.exe は断る', ['ok', 'ok', 'ok', 'error'], [
+        is_array(km_editor_clean_manifest(['src/main.py' => ['h' => $h, 's' => 1]])) ? 'ok' : 'x',
+        is_array(km_editor_clean_manifest(['n.ipynb' => ['h' => $h, 's' => 1]])) ? 'ok' : 'x',
+        is_array(km_editor_clean_manifest(['run.ps1' => ['h' => $h, 's' => 1]])) ? 'ok' : 'x',
+        $editorError(static fn () => km_editor_clean_manifest(['a.exe' => ['h' => $h, 's' => 1]])),
+    ]);
+    check('段 11: エディタだけの拡張子は HTML 展開の型の表に入れない(見せる側では使えない)', [], array_values(array_intersect(KM_EDITOR_EXTRA_TYPES, array_keys(KM_HTML_TYPES))));
+    $modelJs = $read($root . '/editor-src/src/project/model.js');
+    preg_match('/export const EDITOR_ONLY_EXTENSIONS = \[([^\]]*)\]/', $modelJs, $mm);
+    check('段 11: エディタだけの拡張子は画面(model.js)とサーバーで同じ並び', KM_EDITOR_EXTRA_TYPES, isset($mm[1]) ? array_map(static fn (string $s): string => trim($s, " '"), explode(',', $mm[1])) : null);
     check('入口は目録の中の HTML だけ', ['a.html', '', ''], [km_editor_clean_entry('a.html', ['a.html' => []]), km_editor_clean_entry('b.html', ['a.html' => []]), km_editor_clean_entry('a.css', ['a.css' => []])]);
     check('足りない中身(重ねない)', [$h], km_editor_missing(['a' => ['h' => $h, 's' => 1], 'b' => ['h' => $h, 's' => 1], 'c' => ['h' => str_repeat('b', 64), 's' => 1]], [str_repeat('b', 64) => true]));
     check('使う量は同じ中身を 1 つと数える', 5, km_editor_unique_bytes(['a' => ['h' => $h, 's' => 5], 'b' => ['h' => $h, 's' => 5]]));
@@ -11891,6 +11929,382 @@ function km_check_editor(): void
     check_bool('配備: 古い組み立ては retired/editor-assets/ へ(1 世代)', str_contains($deploy, 'retired/editor-assets'));
     check_bool('nginx: /api/editor.php は 21m・km_editor(POST だけ数える)', (bool) preg_match('#location = /api/editor\.php \{\s+client_max_body_size 21m;\s+limit_req zone=km_editor burst=20 nodelay;#', $nginx)
         && str_contains($nginx, 'limit_req_zone $km_write_key zone=km_editor:10m rate=30r/m;'));
+}
+
+/**
+ * VS Code 型のエディタ(/code/。段 11。2026-11-08)。CSP の 'code'・殻・配備の一覧・拡張機能の入手先。
+ * 組み立てた出力(src/code/)は 11-7(2026-11-09)から本番にも配る。無ければ(配る前・手元で組み立てていない)飛ばす
+ */
+function km_check_code(): void
+{
+    require_once __DIR__ . '/../lib/csp.php';
+    require_once __DIR__ . '/../lib/site.php';
+    $src = dirname(__DIR__);
+    $root = km_check_repo_root();
+    $read = static fn (string $path): string => (string) @file_get_contents($path);
+    $directive = static function (string $policy, string $name): string {
+        foreach (explode(';', $policy) as $part) {
+            $part = trim($part);
+            if (str_starts_with($part, $name . ' ')) {
+                return $part;
+            }
+        }
+        return '';
+    };
+
+    km_check_heading('code: CSP の \'code\'');
+    $policy = km_csp_policy('code');
+    $script = $directive($policy, 'script-src');
+    check_bool('script-src は nonce と \'wasm-unsafe-eval\' だけ足す(\'unsafe-eval\'・\'unsafe-inline\' は無い)', str_contains($script, "'nonce-") && str_contains($script, "'wasm-unsafe-eval'")
+        && !str_contains($script, "'unsafe-eval'") && !str_contains($script, "'unsafe-inline'"));
+    check_bool('style-src は \'unsafe-inline\' で nonce を書かない', str_contains($directive($policy, 'style-src'), "'unsafe-inline'") && !str_contains($directive($policy, 'style-src'), "'nonce-"));
+    check('worker-src は同じオリジンと blob:(VS Code の起動の台本)', "worker-src 'self' blob:", $directive($policy, 'worker-src'));
+    check('connect-src は同じオリジンだけ(Marketplace・Open VSX へ出ない)', "connect-src 'self'", $directive($policy, 'connect-src'));
+    check('frame-src は枠のオリジン(webview.<ドメイン>)と見せる側だけ(本体の \'self\' は許さない。11-3)', 'frame-src ' . km_site_webview_origin() . ' ' . km_site_html_origin(), $directive($policy, 'frame-src'));
+    check_bool('枠のオリジンは本体とも見せる側とも違う', km_site_webview_origin() !== km_site_origin() && km_site_webview_origin() !== km_site_html_origin() && str_starts_with(km_site_webview_origin(), 'https://'));
+    check_bool('ほかのページの script-src に wasm-unsafe-eval は入らない', !str_contains(km_csp_policy('editor'), 'wasm-unsafe-eval') && !str_contains(km_csp_policy('public'), 'wasm-unsafe-eval'));
+
+    km_check_heading('code: 殻(src/code/index.php)');
+    $shell = $read($src . '/code/index.php');
+    if ($shell === '') {
+        check_skip('src/code/index.php', '組み立てた出力が無い(code-src で npm run build。本番は 11-7 の配備から置く)');
+    } else {
+        check_bool('殻は CSP の \'code\' を送る', str_contains($shell, "km_csp_send('code')"));
+        check_bool('11-0 の測定(__kmCsp)は外した', !str_contains($shell, '__kmCsp'));
+        $manifest = json_decode($read($src . '/code/.vite/manifest.json'), true);
+        $entry = is_array($manifest) ? (string) ($manifest['src/main.js']['file'] ?? '') : '';
+        check_bool('manifest の入口の JS がある', $entry !== '' && is_file($src . '/code/' . $entry));
+        // プレビューの窓(段 11-3): 'editor' の CSP(枠は見せる側だけ・wasm も blob の worker も無い)・VS Code の本体を読まない
+        $previewShell = $read($src . '/code/preview.php');
+        $previewEntry = is_array($manifest) ? (string) ($manifest['src/preview-main.js']['file'] ?? '') : '';
+        check_bool('段 11-3: プレビューの窓は CSP の \'editor\' を送り、見せる側(editor-run.html)へ渡す', str_contains($previewShell, "km_csp_send('editor')") && str_contains($previewShell, "km_site_html_origin() . '/editor-run.html'")
+            && str_contains($previewShell, 'sandbox="allow-scripts"') && !str_contains($previewShell, 'allow-same-origin'));
+        $previewJs = $previewEntry !== '' ? $read($src . '/code/' . $previewEntry) : '';
+        check_bool('段 11-3: プレビューの窓の入口の JS があり、ワークベンチを読まない', $previewJs !== '' && !str_contains($previewJs, 'workbench-') && !str_contains($previewJs, 'monaco-vscode'));
+    }
+
+    if ($root === null) {
+        check_skip('元(code-src)・nginx・配備の一覧', '手元の作業ツリーで php scripts/check.php');
+        return;
+    }
+    km_check_heading('code: 元(code-src)・nginx・配備(手元だけ)');
+    if ($shell !== '') {
+        check('殻は元(code-src/public/index.php)と同じ(組み立て直し忘れ)', $read($root . '/code-src/public/index.php'), $shell);
+        check('プレビューの窓は元(code-src/public/preview.php)と同じ', $read($root . '/code-src/public/preview.php'), $read($src . '/code/preview.php'));
+    }
+    $previewMain = $read($root . '/code-src/src/preview-main.js');
+    $commands = $read($root . '/code-src/src/commands.js');
+    check_bool('段 11-3: プレビューの窓は /editor/ の組み立て・枠の部品を使い回し(写しを作らない)、保存の知らせで組み直す', str_contains($previewMain, "from '../../editor-src/src/preview/projectBuilder.js'")
+        && str_contains($previewMain, "from '../../editor-src/src/preview/preview.js'") && str_contains($previewMain, 'onExternalChange(') && !is_dir($root . '/code-src/src/preview'));
+    check_bool('段 11-3: コンソールから開くのは同じプロジェクトの決まりどおりのパスだけ(revealTarget)', str_contains($commands, 'revealTarget(event.data, project.id)') && str_contains($read($root . '/code-src/src/paths.js'), 'writeProblem(path) !== null'));
+    // 段 11-4: 同期を syncManager.js に切り出し、/editor/ と /code/ の両方で使う
+    $codeShell = $read($root . '/code-src/public/index.php');
+    check_bool('段 11-4: /code/ の殻は DB を読まず、サインインは fail open で見て、CSRF の札とサインインしているかを meta で渡す', !str_contains($codeShell, 'db.php')
+        && str_contains($codeShell, "require dirname(__DIR__) . '/logto-client.php';") && str_contains($codeShell, '} catch (Throwable $exception) {') && str_contains($codeShell, 'km_session_start();')
+        && str_contains($codeShell, '<meta name="km-csrf" content="<?= km_code_e($csrf) ?>">') && str_contains($codeShell, '<meta name="km-signed-in" content="<?= $signedIn ? \'1\' : \'0\' ?>">'));
+    $editorMain = $read($root . '/editor-src/src/main.js');
+    $codeSync = $read($root . '/code-src/src/codeSync.js');
+    check_bool('段 11-4: /editor/ と /code/ は同じ同期の部品(syncManager.js)を使い、/editor/ に古い同期の本体が残っていない', str_contains($editorMain, "import { createSyncManager } from './project/syncManager.js';")
+        && !str_contains($editorMain, 'createSyncClient') && !str_contains($editorMain, 'async function refreshRemote') && !str_contains($editorMain, 'async function pushProject')
+        && str_contains($codeSync, "from '../../editor-src/src/project/syncManager.js'") && !str_contains($codeSync, 'createSyncClient'));
+    check_bool('段 11-4: /code/ のサインインの戻り先は /code/(sign-in.php は ? を通さない)・同期が書く記録は書き込みと同じ列に並ぶ', str_contains($codeSync, "'/sign-in.php?mode=signIn&return=/code/'")
+        && str_contains($read($root . '/code-src/src/projectFs.js'), 'this.chain = this.chain.then(run, run);') && str_contains($codeSync, 'await fs.mutateRecord(fn);'));
+    // 段 11-6: 入口・ライセンスの表示・規約
+    $editorShellSrc = $read($root . '/editor-src/public/index.php');
+    check_bool('段 11-6: /editor/ の「VS Code 型で開く」は /code/ を組み立てて置いてあるときだけ出す(本番は 11-7 まで無い)', str_contains($editorShellSrc, "\$codeReady = is_file(dirname(__DIR__) . '/code/.vite/manifest.json');")
+        && str_contains($editorShellSrc, "<?php if (\$codeReady): ?>") && str_contains($editorMain, "\$('wce-open-code')?.addEventListener('click'"));
+    $about = $read($root . '/code-src/src/about.js');
+    preg_match("/version: '([0-9.]+)'/", $read($root . '/code-src/node_modules/@codingame/monaco-vscode-api/vscode/src/vs/platform/product/common/product.js'), $vsv);
+    if (!isset($vsv[1])) {
+        check_skip('段 11-6: 「このエディタについて」の VS Code の版', 'code-src/node_modules が無い');
+    } else {
+        check_bool('段 11-6: 「このエディタについて」の VS Code の版は部品のものと同じ(' . $vsv[1] . ')', str_contains($about, "version: '" . $vsv[1] . '('));
+    }
+    $aboutLock = (array) (json_decode($read($root . '/code-src/extensions/extensions.lock.json'), true)['extensions'] ?? []);
+    check_bool('段 11-6: 「このエディタについて」に同梱の拡張機能の版(ロックと同じ)と MIT の本文・「Microsoft の製品ではありません」', $aboutLock !== []
+        && array_filter($aboutLock, static fn ($r) => !str_contains($about, "version: '" . $r['version'] . "'")) === []
+        && str_contains($about, 'Permission is hereby granted, free of charge') && str_contains($about, 'Microsoft の製品ではありません')
+        && str_contains($commands, "registerTextDocumentContentProvider('km-about'"));
+    $legalSrc = $read($src . '/lib/legal.php');
+    check_bool('段 11-6: 規約 第8条の3 は /code/ を含み、Microsoft の製品でないこと・拡張機能は同梱だけ・「このエディタについて」を書く(利用者が 11-09 に確かめた文面)', str_contains($legalSrc, '(かんたんな画面 /editor/ と、VS Code 型の画面 /code/)')
+        && str_contains($legalSrc, 'Microsoft の製品ではありません。') && str_contains($legalSrc, '利用者が拡張機能を追加することはできません。') && str_contains($legalSrc, '画面の「このエディタについて」に示します。'));
+    check_bool('段 11-3: プレビューは名前の付いた別の窓(使い回す)で、opener を切る', str_contains($commands, "window.open(`/code/preview.php?p=\${encodeURIComponent(project.id)}`, `km-code-preview-\${project.id}`)") && str_contains($previewMain, 'window.opener = null;'));
+    $workbench = $read($root . '/code-src/src/workbench.js');
+    check_bool('拡張機能の入手先(extensionsGallery)を設定しない(同梱のものだけ)', $workbench !== '' && !str_contains($workbench, 'extensionsGallery'));
+    check_bool('画面の状態(開いたタブなど)はプロジェクトごと(workspace の id)', str_contains($workbench, 'id: `km-${project.id}`'));
+    check_bool('信頼の確認と送信(telemetry)は切る', str_contains($workbench, "'security.workspace.trust.enabled': false") && str_contains($workbench, "'telemetry.telemetryLevel': 'off'"));
+    check_bool('段 11-2: 拡張機能の欄の部品を入れ、開いたら @builtin(同梱のもの)を出す', str_contains($workbench, 'getExtensionGalleryServiceOverride({ webOnly: true })') && str_contains($workbench, "container.search('@builtin ')"));
+    $initAt = strpos($workbench, 'await initialize(');
+    check_bool('段 11-2: 日本語の用法は initialize の前に登録する(後からだと欄に出ずオフにできない)', $initAt !== false && strpos($workbench, 'registerJapaneseHelp({ lang })') !== false && strpos($workbench, 'registerJapaneseHelp({ lang })') < $initAt);
+    $jaExt = $read($root . '/code-src/src/jaExtension.js');
+    check_bool('段 11-2: 日本語の用法は /editor/ のデータを使い回す(写しを作らない)・オフなら何も足さない', str_contains($jaExt, "from '../../editor-src/src/data/html.js'") && !is_dir($root . '/code-src/src/data')
+        && str_contains($jaExt, 'if (!vscode.extensions.getExtension(EXTENSION_ID)) {'));
+    check_bool('段 11-2: ノートブックの部品を起動の直後に作る(.ipynb を Jupyter の画面で開くため)', str_contains($workbench, 'getService(INotebookService).then((notebooks) => notebooks.getContributedNotebookTypes())'));
+    $vsix = glob($root . '/code-src/extensions/*.vsix') ?: [];
+    check('同梱の Open VSX の拡張機能は決めたものだけ', ['christian-kohler.path-intellisense-2.8.0.vsix', 'esbenp.prettier-vscode-12.4.0.vsix', 'usernamehw.errorlens-3.30.0.vsix'], array_map('basename', $vsix));
+    // 段 11-5: 版と sha256 は extensions.lock.json(Open VSX が公表する sha256 と 11-09 に照合)。vsix を差し替えたら止める
+    $vsixLock = json_decode($read($root . '/code-src/extensions/extensions.lock.json'), true);
+    $lockRows = is_array($vsixLock) ? ($vsixLock['extensions'] ?? []) : [];
+    check('段 11-5: 同梱の vsix はロック(extensions.lock.json)と同じ一覧', array_map('basename', $vsix), array_map(static fn ($r) => (string) ($r['file'] ?? ''), $lockRows));
+    check_bool('段 11-5: 同梱の vsix の sha256 がロックと一致・ライセンスは MIT・入手先は Open VSX の同じ版', $lockRows !== [] && array_filter($lockRows, static fn ($r) => !(
+        hash_file('sha256', $root . '/code-src/extensions/' . basename((string) ($r['file'] ?? 'x'))) === ($r['sha256'] ?? '')
+        && ($r['license'] ?? '') === 'MIT'
+        && str_starts_with((string) ($r['source'] ?? ''), 'https://open-vsx.org/api/') && str_ends_with((string) $r['source'], '/' . $r['version'] . '/file/' . $r['file'])
+    )) === []);
+    $viteConfig = $read($root . '/code-src/vite.config.js');
+    check_bool('段 11-5: Prettier はブラウザで読まないもの(node_modules・Node 用の入口・試験)を組み立てで外す', str_contains($viteConfig, "'esbenp.prettier-vscode-12.4.0.vsix': (p) =>") && str_contains($viteConfig, "['dist/web-extension.cjs', 'node_modules/prettier/LICENSE', 'node_modules/prettier/THIRD-PARTY-NOTICES.md'].includes(p)")
+        && str_contains($viteConfig, 'trimVsix(),'));
+    if (is_dir($src . '/code/assets/esbenp.prettier-vscode-12.4.0.vsix')) {
+        $prettierOut = array_map('basename', (array) glob($src . '/code/assets/esbenp.prettier-vscode-12.4.0.vsix/*'));
+        check_bool('段 11-5: 組み立てた Prettier は Web 版の入口と直下のファイルだけ(typescript・flow・experimental-cli などが無い)', $prettierOut !== []
+            && array_filter($prettierOut, static fn ($f) => str_starts_with($f, 'web-extension-')) !== []
+            && array_filter($prettierOut, static fn ($f) => (bool) preg_match('/^(typescript|flow|babel|estree|experimental-cli|extension|index|CLAUDE|tsconfig)[-.]/', $f)) === []);
+    }
+    // 段 11-8(2026-11-09): 利用者の希望の拡張機能。Path IntelliSense は同梱・タグの名前と括弧の色は VS Code の設定・
+    // HTMLHint・ESLint・CSS のクラス名は自作(webChecks.js。どれもブラウザの入口が無い)
+    check_bool('段 11-8: Path IntelliSense は import し、Web 版の入口とアイコン・直下のファイルだけ残す', str_contains($workbench, "import '../extensions/christian-kohler.path-intellisense-2.8.0.vsix';")
+        && str_contains($viteConfig, "'christian-kohler.path-intellisense-2.8.0.vsix': (p) => (!p.includes('/') && !p.startsWith('.')) || ['dist/web/extension.js', 'icon/path-intellisense.png'].includes(p),"));
+    check_bool('段 11-8: タグの名前をそろえる(リンクされた編集)・括弧の色・対の縦線は VS Code の設定', str_contains($workbench, "'editor.linkedEditing': true,")
+        && str_contains($workbench, "'editor.bracketPairColorization.enabled': true,") && str_contains($workbench, "'editor.guides.bracketPairs': 'active',"));
+    check_bool('段 11-8: Web の検査は initialize の前に登録する', $initAt !== false && strpos($workbench, 'registerWebChecks({ lang })') !== false && strpos($workbench, 'registerWebChecks({ lang })') < $initAt
+        && str_contains($workbench, 'await webChecksReady;'));
+    $webChecks = $read($root . '/code-src/src/webChecks.js');
+    check_bool('段 11-8: Web の検査は推奨の規則だけで、利用者の eslint.config.js を読まない・部品は要るときに読む・オフなら何も足さない', str_contains($webChecks, "import('eslint/universal')")
+        && str_contains($webChecks, '...recommended,') && !preg_match('/eslint\.config|\.eslintrc/', preg_replace('#/\*.*?\*/#s', '', $webChecks))
+        && str_contains($webChecks, "import('htmlhint')") && str_contains($webChecks, "vscode.Uri.joinPath(base, '.htmlhintrc.json')")
+        && str_contains($webChecks, 'if (!vscode.extensions.getExtension(EXTENSION_ID)) {'));
+    check_bool('段 11-8: ESLint の new Function(ajv の compile)と process.env を組み立てで外し、形が変われば組み立てを止める', str_contains($viteConfig, "{ file: 'eslint/lib/config/config.js', from: 'getAjv().compile(schema)', to: 'Object.assign(() => true, { errors: null })', count: 1 },")
+        && str_contains($viteConfig, "{ file: 'eslint/lib/linter/timing.js', from: 'process.env.TIMING', to: '(void 0)', count: 4 },")
+        && str_contains($viteConfig, 'this.error(`km-eslint-browser:') && str_contains($viteConfig, 'eslintBrowser(),') && is_file($root . '/code-src/src/shims/path.js')
+        && str_contains($viteConfig, "return resolve(import.meta.dirname, 'node_modules/esquery/dist/esquery.min.js');"));
+    // 2026-11-13: HTML の候補の一覧に出る付属の英語の説明(MDN)を出さない・打ちかけの < に赤い文を出さない
+    check_bool('11-13: HTML の候補の説明(MDN)は組み立てで外す(設定では消せない)・形が変われば止める・中身を変えたら名前も変える', str_contains($viteConfig, 'htmlNoCompletionDocs(),')
+        && str_contains($viteConfig, 'function ${name}(h,d,g){if(d===void 0)return;') && str_contains($viteConfig, 'の${patch.label}が ${found.length} か所(1 か所のはず。部品の版が変わった?)')
+        && str_contains($viteConfig, "this.emitFile({ type: 'asset', fileName: newName, source: patched });"));
+    $htmlServerOut = (array) glob($src . '/code/assets/htmlServerMain-*.js');
+    if ($htmlServerOut === []) {
+        check_skip('11-13: 組み立てた HTML の部品に書き換えが入っている', 'src/code を組み立てていない');
+    } else {
+        check_bool('11-13: 組み立てた HTML の部品は 1 つで、候補の説明を作らない形になっている・それを指す所がある', count($htmlServerOut) === 1
+            && preg_match('/function \w+\(h,d,g\)\{if\(d===void 0\)return;let T=\{kind/', $read($htmlServerOut[0])) === 1
+            && array_filter((array) glob($src . '/code/assets/workbench-*.js'), static fn ($f) => str_contains($read($f), basename($htmlServerOut[0]))) !== []);
+    }
+    check_bool('11-13: 打ちかけの「<a」に赤い文を出す spec-char-escape は既定で外す・はじめのプロジェクトの雛形に <title> がある', str_contains($read($root . '/code-src/src/webChecksCore.js'), "export const HTMLHINT_OFF_BY_DEFAULT = ['spec-char-escape'];")
+        && str_contains($workbench, '<title>はじめの一歩</title>'));
+    // 2026-11-13(続き): CSS の候補の説明も外す・カーソルを合わせたときの英語の説明は設定で(日本語の画面だけ)
+    check_bool('11-13: CSS の候補の説明も組み立てで外す(CSS の部品と、HTML の部品の中の CSS)', str_contains($viteConfig, "{ name: 'htmlServerMain', patches: ['html', 'css'] },")
+        && str_contains($viteConfig, "{ name: 'cssServerMain', patches: ['css'] },") && str_contains($viteConfig, 'if(${settings}===void 0)return;'));
+    $cssServerOut = (array) glob($src . '/code/assets/cssServerMain-*.js');
+    if ($cssServerOut !== []) {
+        check_bool('11-13: 組み立てた CSS の部品は 1 つで、候補の説明を作らない形になっている', count($cssServerOut) === 1
+            && preg_match('/function \w+\((\w),\w,(\w)\)\{if\(\2===void 0\)return;let \w;if\(\w\?\w=\{kind:"markdown"/', $read($cssServerOut[0])) === 1);
+    }
+    check_bool('11-13: カーソルを合わせたときの付属の英語の説明は、日本語の画面だけ設定で消す(html・css・scss・less)', str_contains($workbench, "...(lang === 'ja' ? Object.fromEntries(['html', 'css', 'scss', 'less'].flatMap((id) => [[`\${id}.hover.documentation`, false], [`\${id}.hover.references`, false]])) : {}),"));
+
+    // 段 14-4(2026-11-13): 雛形を JSON で取り込む(管理画面は取り込みだけ)
+    require_once $src . '/lib/editor-snippets.php';
+    $snipDefault = json_decode((string) km_editor_snippets_default_json(), true);
+    $snipOk = km_editor_snippets_validate($snipDefault);
+    check_bool('段 14-4: 同梱の雛形の JSON は形の確かめを通る(HTML 日本語・英語・JS が 1 個以上)', $snipOk['ok'] && count($snipOk['value']['html']['ja']) > 0 && count($snipOk['value']['html']['en']) > 0 && count($snipOk['value']['js']) > 0);
+    $snipItem = ['tag' => 'a', 'label' => 'リンク', 'body' => 'a href="${1}">'];
+    $snipBase = static fn (array $over): array => array_replace_recursive(['version' => 1, 'html' => ['ja' => [], 'en' => []], 'js' => []], $over);
+    check('段 14-4: 形の違うものは断る(版・形・タグ・改行入りの名前・空の body・長すぎ・多すぎ・NUL)', [false, false, false, false, false, false, false, false, false, true], [
+        km_editor_snippets_validate(['version' => 2, 'html' => ['ja' => [], 'en' => []], 'js' => []])['ok'],
+        km_editor_snippets_validate(['version' => 1, 'html' => ['ja' => []], 'js' => []])['ok'],
+        km_editor_snippets_validate([1, 2])['ok'],
+        km_editor_snippets_validate($snipBase(['html' => ['ja' => [['tag' => 'A b'] + $snipItem]]]))['ok'],
+        km_editor_snippets_validate($snipBase(['js' => [['label' => "a\nb", 'body' => 'x']]]))['ok'],
+        km_editor_snippets_validate($snipBase(['html' => ['en' => [['body' => ''] + $snipItem]]]))['ok'],
+        km_editor_snippets_validate($snipBase(['js' => [['label' => 'x', 'body' => str_repeat('あ', KM_EDITOR_SNIPPET_MAX_BODY + 1)]]]))['ok'],
+        km_editor_snippets_validate($snipBase(['html' => ['ja' => array_fill(0, KM_EDITOR_SNIPPET_MAX_ITEMS + 1, $snipItem)]]))['ok'],
+        km_editor_snippets_validate($snipBase(['js' => [['label' => 'x', 'body' => "a\0b"]]]))['ok'],
+        km_editor_snippets_validate($snipBase(['html' => ['ja' => [$snipItem + ['extra' => 1]]], 'js' => [['label' => 'for', 'body' => "for (;;) {\n\t\$0\n}"]]]))['ok'],
+    ]);
+    check('段 14-4: 知らない項目は捨てる・説明が無ければ空', [['tag' => 'a', 'label' => 'リンク', 'body' => 'a href="${1}">'], ['label' => 'for', 'body' => 'x', 'ja' => '', 'en' => '']], [
+        km_editor_snippets_validate($snipBase(['html' => ['ja' => [$snipItem + ['extra' => 1]]]]))['value']['html']['ja'][0],
+        km_editor_snippets_validate($snipBase(['js' => [['label' => 'for', 'body' => 'x']]]))['value']['js'][0],
+    ]);
+    check('段 14-4: ファイルの読み解き(BOM は外す・壊れた JSON・大きすぎ)', [true, false, false], [
+        km_editor_snippets_parse("\xEF\xBB\xBF" . json_encode($snipBase([])))['ok'], km_editor_snippets_parse('{bad')['ok'], km_editor_snippets_parse(str_repeat(' ', KM_EDITOR_SNIPPET_MAX_BYTES + 1))['ok'],
+    ]);
+    $snipLib = $read($src . '/lib/editor-snippets.php');
+    $snipJs = $read($root . '/editor-src/src/data/snippets.js');
+    check_bool('段 14-4: 上限はサーバーとエディタで同じ・新しい表だけ(ALTER しない)・前の中身は消さず 20 行まで残す', str_contains($snipJs, 'export const SNIPPET_LIMITS = { items: ' . KM_EDITOR_SNIPPET_MAX_ITEMS . ', cssItems: ' . KM_EDITOR_SNIPPET_MAX_CSS_ITEMS . ', tag: ' . KM_EDITOR_SNIPPET_MAX_TAG . ', label: ' . KM_EDITOR_SNIPPET_MAX_LABEL . ', body: ' . KM_EDITOR_SNIPPET_MAX_BODY . ', doc: ' . KM_EDITOR_SNIPPET_MAX_DOC . ' };')
+        && str_contains($snipLib, 'CREATE TABLE IF NOT EXISTS km_editor_snippets') && !preg_match('/ALTER\s+TABLE/i', $snipLib) && KM_EDITOR_SNIPPET_KEEP_ROWS === 20
+        && str_contains($snipLib, '// 保存したときに確かめてあるが、読むときにも確かめる'));
+    $snipApi = $read($src . '/api/editor-snippets.php');
+    check_bool('段 14-4: 公開の口は GET だけ・何も受け取らない・DB が読めなければ同梱(custom: false)', str_contains($snipApi, "if (\$method !== 'GET' && \$method !== 'HEAD') {")
+        && !preg_match('/\$_(GET|POST|COOKIE|REQUEST)\b|php:\/\/input/', $snipApi) && str_contains($snipApi, "\$current = ['custom' => false, 'data' => null, 'updatedAt' => null];") && str_contains($snipApi, 'catch (Throwable $exception)'));
+    $snipAdmin = $read($src . '/admin/editor-snippets.php');
+    check_bool('段 14-4: 管理画面は guard の内側・CSRF を先に見る・確かめを通ったものだけ入れる・記録に残す・書き出しは添付で', str_contains($snipAdmin, "require __DIR__ . '/_inc/guard.php';")
+        && strpos($snipAdmin, '!km_csrf_verify()') < strpos($snipAdmin, 'km_editor_snippets_store(') && str_contains($snipAdmin, 'is_uploaded_file(')
+        && str_contains($snipAdmin, "if (!\$parsed['ok']) {") && str_contains($snipAdmin, "km_admin_log_record('content', 'editor-snippets.import'") && str_contains($snipAdmin, "km_admin_log_record('content', 'editor-snippets.reset')")
+        && str_contains($snipAdmin, "header('Content-Disposition: attachment; filename=") && !preg_match('/\sstyle="|\son[a-z]+="/', $snipAdmin));
+    check_bool('段 14-4: 横の一覧・訳(日本語・英語)・記録の文がある', str_contains($read($src . '/admin/_inc/partials/sidebar.php'), "['editorSnippets', './editor-snippets.php', 'bi-braces', 'side.editorSnippets', 'エディタの雛形'],")
+        && str_contains($read($src . '/admin/assets/i18n/ja.js'), '"page.editorSnippets.h1": "エディタの雛形",') && str_contains($read($src . '/admin/assets/i18n/en.js'), '"page.editorSnippets.h1": "Editor templates",')
+        && str_contains($read($src . '/lib/admin-log.php'), "'editor-snippets.import' =>") && str_contains($read($src . '/lib/admin-log.php'), "'editor-snippets.reset' =>"));
+    check_bool('段 14-4: /editor/ と /code/ は雛形を snippets から読み(候補を出すたび)、起動のときにサーバーのものを読む', str_contains($read($root . '/editor-src/src/editor/languages.js'), "const list = lang === 'en' ? snippets.htmlEn : snippets.htmlJa;")
+        && str_contains($read($root . '/editor-src/src/editor/languages.js'), 'loadServerSnippets();') && str_contains($read($root . '/code-src/src/jaExtension.js'), '(ja ? snippets.htmlJa : snippets.htmlEn).map(')
+        && str_contains($read($root . '/code-src/src/jaExtension.js'), 'loadServerSnippets();') && str_contains($snipJs, "credentials: 'omit'") && str_contains($snipJs, "return 'bundled';"));
+    // 段 14-5(2026-11-14): 利用者の v2.json で分かったこと(HTML の body が < で始まると <<a になる・css を黙って捨てていた)
+    $snipLt = km_editor_snippets_validate($snipBase(['html' => ['ja' => [['tag' => 'a', 'label' => 'x', 'body' => '<a href="">$1</a>'], ['tag' => 'b', 'label' => 'y', 'body' => 'b>$0</b>']]]]));
+    check('段 14-5: HTML の body の先頭の < は 1 つだけ外し、外した数を知らせる・< だけなら断る', [['a href="">$1</a>', 'b>$0</b>'], true, false], [
+        array_column($snipLt['value']['html']['ja'], 'body'), str_contains(implode('', $snipLt['notes']), '< を 1 個外しました'),
+        km_editor_snippets_validate($snipBase(['html' => ['ja' => [['tag' => 'a', 'label' => 'x', 'body' => '<']]]]))['ok'],
+    ]);
+    $snipCss = km_editor_snippets_validate($snipBase(['css' => [['label' => 'display flex', 'body' => "display: flex;\ngap: \${1:1rem};", 'ja' => '横に並べる。', 'en' => 'Row.']], 'extra' => 1]));
+    check('段 14-5: css を受ける・無くても通る・知らない項目は捨てて知らせる・CSS は 1,000 個まで', [true, 1, [], true, true, false, false], [
+        $snipCss['ok'], count($snipCss['value']['css']), km_editor_snippets_validate($snipBase([]))['value']['css'],
+        str_contains(implode('', $snipCss['notes']), '知らない項目 extra は使わずに捨てました'),
+        km_editor_snippets_validate($snipBase(['css' => array_fill(0, KM_EDITOR_SNIPPET_MAX_CSS_ITEMS, ['label' => 'x', 'body' => 'y'])]))['ok'],
+        km_editor_snippets_validate($snipBase(['css' => array_fill(0, KM_EDITOR_SNIPPET_MAX_CSS_ITEMS + 1, ['label' => 'x', 'body' => 'y'])]))['ok'],
+        km_editor_snippets_validate($snipBase(['css' => ['a' => 1]]))['ok'],
+    ]);
+    check_bool('段 14-5: 上限は 1MB(利用者の v2 は約 256KB)・取り込みの知らせは 1 回だけ出す・CSS の数も出す', KM_EDITOR_SNIPPET_MAX_BYTES === 1048576
+        && str_contains($snipAdmin, "\$_SESSION['km_editor_snippets_notes'] = \$parsed['notes'];") && str_contains($snipAdmin, "unset(\$_SESSION['km_editor_snippets_notes']);")
+        && str_contains($snipAdmin, "CSS <?= (int) (\$shown['css'] ?? 0) ?> 個") && str_contains($snipLib, "'css' => count(\$checked['value']['css'])"));
+    $snipLang = $read($root . '/editor-src/src/editor/languages.js');
+    $snipJa = $read($root . '/code-src/src/jaExtension.js');
+    check_bool('段 14-5: CSS の雛形は /editor/ と /code/ の CSS と <style> の中で出す(出す所は cssSnippetTyped・htmlStyleBefore)', str_contains($snipLang, "monaco.languages.registerCompletionItemProvider('css', {")
+        && str_contains($snipLang, 'cssSuggestions(model, position, htmlStyleBefore(textBefore(model, position)))') && str_contains($snipJa, "vscode.languages.registerCompletionItemProvider(['css', 'scss', 'less'], {")
+        && str_contains($snipJa, 'cssItems(position, htmlStyleBefore(textBefore(document, position)))') && str_contains($snipJs, 'export function cssSnippetTyped(before) {'));
+
+    // 段 15(2026-11-14): 地図の埋め込み(登録したサイトだけ・来場者と同じ地図・JSON は登録したオリジンだけ CORS)
+    require_once $src . '/lib/map-embed.php';
+    check('段 15: オリジンは https だけ・パスと * と利用者名は断る・小文字に・:443 は外す', ['https://example.ac.jp', 'https://example.ac.jp:8443', 'https://example.ac.jp', null, null, null, null, null, null], [
+        km_embed_normalize_origin('https://Example.ac.jp/'), km_embed_normalize_origin('https://example.ac.jp:8443'), km_embed_normalize_origin('https://example.ac.jp:443'),
+        km_embed_normalize_origin('http://example.ac.jp'), km_embed_normalize_origin('https://*.example.ac.jp'), km_embed_normalize_origin('https://example.ac.jp/page'),
+        km_embed_normalize_origin('https://user@example.ac.jp'), km_embed_normalize_origin('https://example.ac.jp?x=1'), km_embed_normalize_origin('https://exa mple.ac.jp'),
+    ]);
+    check('段 15: オリジンの並びは改行・カンマで分け、重ねたものは 1 つに・空と 6 個以上は断る', [true, ['https://a.jp', 'https://b.jp'], false, false, false], [
+        km_embed_parse_origins("https://a.jp\nhttps://b.jp, https://A.jp/")['ok'], km_embed_parse_origins("https://a.jp\nhttps://b.jp, https://A.jp/")['origins'],
+        km_embed_parse_origins(" \n ")['ok'], km_embed_parse_origins('https://a.jp https://b.jp https://c.jp https://d.jp https://e.jp https://f.jp')['ok'],
+        km_embed_parse_origins('https://a.jp http://b.jp')['ok'],
+    ]);
+    $embedSite = ['enabled' => true, 'origins' => ['https://a.jp', 'https://b.jp:8443']];
+    check('段 15: 枠の親は札のオリジンだけ(無い・止めた札は none)・CORS も登録したオリジンだけ', ["'self' https://a.jp https://b.jp:8443", "'none'", "'none'", true, true, false, false, false], [
+        km_embed_frame_ancestors($embedSite), km_embed_frame_ancestors(null), km_embed_frame_ancestors(['enabled' => false] + $embedSite),
+        km_embed_origin_allowed($embedSite, 'https://a.jp'), km_embed_origin_allowed($embedSite, 'https://b.jp:8443'), km_embed_origin_allowed($embedSite, 'https://c.jp'),
+        km_embed_origin_allowed($embedSite, 'null'), km_embed_origin_allowed(['enabled' => false] + $embedSite, 'https://a.jp'),
+    ]);
+    check('段 15: 引数は形の合うものだけ(札は 16 桁の 16 進・階と地点は英数字と _.:-・言語は ja か en)', [
+        ['site' => '0123456789abcdef', 'floor' => '1F', 'focus' => 'n-12', 'lang' => 'en'], ['site' => '', 'floor' => null, 'focus' => null, 'lang' => 'ja'],
+    ], [
+        km_embed_parse_query(['site' => '0123456789abcdef', 'floor' => '1F', 'focus' => 'n-12', 'lang' => 'en']),
+        km_embed_parse_query(['site' => '0123456789ABCDEF', 'floor' => '<x>', 'focus' => ['a'], 'lang' => 'fr']),
+    ]);
+    $embedData = km_embed_public_data([
+        'floors' => [['id' => '1F', 'label' => '1階', 'areaPath' => '/img/1f.png', 'coordWidth' => 1000, 'coordHeight' => 800, 'kind' => 'campus'], ['id' => 'out', 'label' => '屋外', 'svgPath' => '/img/out.svg']],
+        'nodes' => [
+            'a' => ['id' => 'a', 'type' => 'room', 'floor' => '1F', 'name' => '教室', 'alias' => '1-1 教室', 'nameEn' => 'Room 1-1', 'x' => 10, 'y' => 20, 'teachers' => ['氏名'], 'memo' => 'メモ', 'links' => ['x']],
+            'b' => ['id' => 'b', 'type' => 'path', 'floor' => '1F', 'name' => '道'],
+            'c' => ['id' => 'c', 'type' => 'room', 'floor' => '1F', 'name' => '隠した部屋', 'hidden' => true],
+            'd' => ['id' => 'd', 'type' => 'room', 'floor' => '1F', 'name' => ''],
+            'e' => ['id' => 'e', 'type' => 'stairs', 'floor' => 'nowhere', 'name' => '階段'],
+            'f' => ['id' => 'f', 'type' => 'entrance', 'floor' => 'out', 'title' => '正門', 'x' => 1, 'y' => 2],
+        ],
+        'edges' => [['a', 'b', 3]],
+    ]);
+    check('段 15: 出すのは階と名前のある地点だけ(氏名・メモ・リンク・道・隠した地点・階の無い地点・経路は出さない)', [
+        'locked' => false,
+        'floors' => [
+            ['id' => '1F', 'label' => '1階', 'labelEn' => '1F', 'kind' => 'campus', 'image' => '/img/1f.png', 'width' => 1000.0, 'height' => 800.0],
+            ['id' => 'out', 'label' => '屋外', 'labelEn' => 'Outdoors', 'kind' => 'campus', 'image' => '/img/out.svg', 'width' => null, 'height' => null],
+        ],
+        'places' => [
+            ['id' => 'a', 'floor' => '1F', 'name' => '1-1 教室', 'type' => 'room', 'x' => 10.0, 'y' => 20.0, 'nameEn' => 'Room 1-1'],
+            ['id' => 'f', 'floor' => 'out', 'name' => '正門', 'type' => 'entrance', 'x' => 1.0, 'y' => 2.0],
+        ],
+    ], $embedData);
+    check('段 15: 地図に錠が掛かっていれば中身は空・階の英語の名前', [['locked' => true, 'floors' => [], 'places' => []], '2F', 'B1F', 'B2F', '体育館'], [
+        km_embed_public_data(['mapLocked' => true, 'floors' => [['id' => '1F']], 'nodes' => ['a' => ['type' => 'room', 'floor' => '1F', 'name' => 'x']]]),
+        km_embed_floor_label_en('2F'), km_embed_floor_label_en('B1'), km_embed_floor_label_en('地下2階'), km_embed_floor_label_en('体育館'),
+    ]);
+    $embedLib = $read($src . '/lib/map-embed.php');
+    $embedPage = $read($src . '/embed/index.php');
+    $embedApi = $read($src . '/api/embed-places.php');
+    $embedAdmin = $read($src . '/admin/embed-sites.php');
+    $embedJs = $read($src . '/Main/embed.js');
+    $embedV1 = $read($src . '/embed/v1.js');
+    check_bool('段 15: 表は新しく作るだけ(ALTER しない)・札は乱数 8 バイト・読むときもオリジンを確かめ直す・消し込み用の表に載せる', str_contains($embedLib, 'CREATE TABLE IF NOT EXISTS km_embed_sites')
+        && str_contains($embedLib, 'CREATE TABLE IF NOT EXISTS km_embed_views_daily') && !preg_match('/ALTER\s+TABLE/i', $embedLib) && str_contains($embedLib, '$key = bin2hex(random_bytes(8));')
+        && str_contains($embedLib, 'is_string($o) ? km_embed_normalize_origin($o) : null') && preg_match('/^km_embed_sites\s+keep\s/m', $read($root . '/scripts/local-sanitize.tables')) === 1
+        && preg_match('/^km_embed_views_daily\s+keep\s/m', $read($root . '/scripts/local-sanitize.tables')) === 1);
+    check_bool('段 15: 埋め込みと JSON はセッションを開かずに来場者の地図を読む(セッションがあれば止まる)', str_contains($embedLib, "if (session_status() === PHP_SESSION_ACTIVE) {\n        throw new LogicException(")
+        && str_contains($embedLib, '$_SESSION = [];') && !preg_match('/session_start|km_session|km_admin_session/', $embedPage . $embedApi)
+        && str_contains($embedPage, '$data = km_embed_load_public($pdo);') && str_contains($embedApi, '$data = km_embed_load_public($pdo);'));
+    check_bool('段 15: 埋め込みの CSP は公開ページのものの frame-ancestors だけを札で替える・知らない札は 404 で none・GET だけ', str_contains($embedPage, "\$csp = preg_replace(\"/frame-ancestors 'self'/\", 'frame-ancestors ' . \$frameAncestors, km_csp_policy('public'), 1);")
+        && str_contains(km_csp_policy('public'), "frame-ancestors 'self'") && str_contains($embedPage, "\$frameAncestors = km_embed_frame_ancestors(\$problem === 'site' ? null : \$site);")
+        && str_contains($embedPage, "'site' => 404,") && str_contains($embedPage, "if (\$method !== 'GET' && \$method !== 'HEAD') {") && !preg_match('/\sstyle="|\son[a-z]+="/', $embedPage)
+        && substr_count($embedPage, 'km_csp_nonce_attr()') === 2);
+    check_bool('段 15: JSON の口は登録したオリジンにだけ CORS(Vary: Origin・Cookie は許さない)・知らない札は 404・画像は絶対 URL', str_contains($embedApi, "header('Vary: Origin');")
+        && str_contains($embedApi, "if (km_embed_origin_allowed(\$site, \$origin)) {\n    header('Access-Control-Allow-Origin: ' . km_embed_normalize_origin(\$origin));")
+        && !str_contains($embedApi, 'Access-Control-Allow-Credentials') && !str_contains($embedApi, "Access-Control-Allow-Origin: *") && str_contains($embedApi, "respond(['success' => false, 'message' => 'unknown site'], 404);")
+        && str_contains($embedApi, "\$floor['image'] = \$floor['image'] !== '' && str_starts_with(\$floor['image'], '/') ? \$base . \$floor['image'] : \$floor['image'];"));
+    check_bool('段 15: 枠との話は相手を決め打ち(枠: 登録した親だけから受けて親だけへ送る・v1.js: 地図のオリジンと同じ枠だけ)', str_contains($embedV1, 'if (event.source !== iframe.contentWindow || event.origin !== mapOrigin) return;')
+        && str_contains($embedV1, 'iframe.contentWindow.postMessage(Object.assign({ kosenmap: 1 }, message), mapOrigin);') && !preg_match("/postMessage\([^)]*'\*'/", $embedV1 . $embedJs)
+        && str_contains($embedJs, 'event.source !== window.parent') && str_contains($embedJs, 'parents.indexOf(event.origin)') && !str_contains($embedJs, 'innerHTML'));
+    check_bool('段 15: 管理画面は guard の内側・CSRF を先に見る・記録に残す・消す口は無い・style 属性もインラインの on… も無い', str_contains($embedAdmin, "require __DIR__ . '/_inc/guard.php';")
+        && strpos($embedAdmin, '!km_csrf_verify()') < strpos($embedAdmin, 'km_embed_site_create(') && str_contains($embedAdmin, "'embed-site.create'") && str_contains($embedAdmin, "'embed-site.enable'")
+        && !str_contains($embedAdmin, 'DELETE FROM') && !preg_match('/\sstyle="|\son[a-z]+="/', $embedAdmin));
+    check_bool('段 15: 横の一覧・訳(日本語・英語)・記録の文がある', str_contains($read($src . '/admin/_inc/partials/sidebar.php'), "['embedSites', './embed-sites.php', 'bi-window-stack', 'side.embedSites', '地図の埋め込み'],")
+        && str_contains($read($src . '/admin/assets/i18n/ja.js'), '"page.embedSites.h1": "地図の埋め込み",') && str_contains($read($src . '/admin/assets/i18n/en.js'), '"page.embedSites.h1": "Map embeds",')
+        && str_contains($read($src . '/lib/admin-log.php'), "'embed-site.disable' =>"));
+    $embedNginx = (string) (preg_match('#location \^~ /embed/ \{(.*?)\n    \}#s', $read($root . '/nginx/default.conf.template'), $em) ? $em[1] : '');
+    check_bool('段 15: nginx の /embed/ は X-Frame-Options を出さない(枠の可否は PHP の frame-ancestors)・ほかの守りの頭書きは出し直す・回数を絞る', $embedNginx !== ''
+        && !str_contains($embedNginx, 'X-Frame-Options') && str_contains($embedNginx, 'add_header X-Content-Type-Options nosniff always;') && str_contains($embedNginx, 'include /etc/nginx/km/hsts-')
+        && str_contains($embedNginx, 'limit_req zone=km_api') && str_contains($read($root . '/nginx/default.conf.template'), "location = /embed {\n        return 308 \${KM_APP_URL}/embed/\$is_args\$args;"));
+
+    check_bool('段 11-8: Web の検査はファイルの一覧を workspace.fs でたどる(findFiles は起動の直後に落ちる)・集めるのに失敗したら覚えない', !str_contains($webChecks, 'workspace.findFiles(')
+        && str_contains($webChecks, 'await vscode.workspace.fs.readDirectory(dir);') && str_contains($webChecks, 'const remember = (get, set, make) =>'));
+    $codePkgDeps = is_array($pkg ?? null) ? ($pkg['dependencies'] ?? []) : (json_decode($read($root . '/code-src/package.json'), true)['dependencies'] ?? []);
+    check_bool('段 11-8: 検査の部品の版と、「このエディタについて」の版が同じ(eslint・@eslint/js・globals・htmlhint)', array_filter(['eslint', '@eslint/js', 'globals', 'htmlhint'],
+        static fn ($n) => !isset($codePkgDeps[$n]) || !str_contains($about, "version: '" . $codePkgDeps[$n] . "'")) === []);
+    $builtJs = (array) glob($src . '/code/assets/universal-*.js');
+    if ($builtJs === []) {
+        check_skip('段 11-8: 組み立てた ESLint に new Function が無い', 'src/code を組み立てていない');
+    } else {
+        $eslintOut = $read($builtJs[0]);
+        check_bool('段 11-8: 組み立てた ESLint に new Function・ajv の compile・Node の部品の空の代わりが無い(CSP に unsafe-eval が無い)', !preg_match('/\bnew Function\s*\(/', $eslintOut)
+            && !str_contains($eslintOut, 'getAjv().compile') && !str_contains($eslintOut, '__vite-browser-external'));
+    }
+    $pkg = json_decode($read($root . '/code-src/package.json'), true);
+    $versions = is_array($pkg) ? array_merge($pkg['dependencies'] ?? [], $pkg['devDependencies'] ?? []) : [];
+    check_bool('部品の版は固定(^ や ~ を使わない。別名は npm:…@版)', $versions !== [] && array_filter($versions, static fn ($v) => !preg_match('/^(npm:[@\w\/.-]+@)?\d+\.\d+\.\d+$/', (string) $v)) === []);
+    check_bool('package-lock.json がある', is_file($root . '/code-src/package-lock.json'));
+    $nginx = $read($root . '/nginx/default.conf.template');
+    check_bool('nginx: /code は https の /code/ へ', str_contains($nginx, "location = /code {\n        return 308 \${KM_APP_URL}/code/\$is_args\$args;"));
+    $deploy = $read($root . '/scripts/deploy-to-host.ps1');
+    check_bool('段 11-7: 配備は本番にも src/code を送り(除外しない)、殻・プレビューの窓・manifest が入っているかを見張る', !str_contains($deploy, "`$excludes += './src/code'")
+        && str_contains($deploy, "'./src/code/index.php'") && str_contains($deploy, "'./src/code/preview.php'") && str_contains($deploy, "'./src/code/.vite/manifest.json'"));
+    check_bool('段 11-7: /code/ の古い組み立ては retired/code-assets/ へ(1 世代・拡張機能の下のフォルダも)', str_contains($deploy, 'retired/code-assets') && str_contains($deploy, 'for f in src/code/assets/* src/code/assets/*/*; do'));
+    check_bool('段 11-3: 試作の仮の口(code-proto-iframe.conf)は退避し、nginx から読まない', !is_file($root . '/nginx/km/code-proto-iframe.conf') && !str_contains($nginx, 'code-proto'));
+
+    km_check_heading('code: 枠のオリジン webview.<ドメイン>(段 11-3)');
+    $webviewServer = (string) (preg_match('/server \{\s+listen 443 ssl;\s+listen \[::\]:443 ssl;\s+http2 on;\s+server_name \$\{KM_WEBVIEW_DOMAIN\};(.*?)\n\}\n/s', $nginx, $wm) ? $wm[1] : '');
+    check_bool('nginx: webview の server がある', $webviewServer !== '');
+    preg_match_all('#location ~ \^/code/assets/([a-zA-Z-]+)-\[A-Za-z0-9_-\]\+\\\\\.(html|js)\$#', $webviewServer, $wl);
+    check('nginx: webview が返すのは枠の HTML 3 つと Service Worker だけ(ほかは 404)', ['index', 'fake', 'service-worker', 'webWorkerExtensionHostIframe'], $wl[1]);
+    check_bool('nginx: webview の残りは 404・GET だけ・枠の親は本体だけ', str_contains($webviewServer, "location / {\n        return 404;")
+        && substr_count($webviewServer, 'limit_except GET {') === 4 && substr_count($webviewServer, 'frame-ancestors ${KM_APP_URL}') === 2
+        && str_contains($webviewServer, "frame-ancestors 'self' \${KM_APP_URL}"));
+    // 拡張機能ホストの枠の中のインラインの台本(sha256)は、組み立てた HTML と nginx のヘッダーで同じであること(部品を上げたら変わる)
+    $iframeHtml = (array) glob($src . '/code/assets/webWorkerExtensionHostIframe-*.html');
+    if ($iframeHtml === []) {
+        check_skip('拡張機能ホストの枠の sha256', '組み立てた出力が無い(本番)');
+    } else {
+        preg_match('#<script>(.*?)</script>#s', $read((string) $iframeHtml[0]), $sm);
+        $hash = 'sha256-' . base64_encode(hash('sha256', $sm[1] ?? '', true));
+        check_bool('拡張機能ホストの枠の台本の sha256 が nginx のヘッダーと同じ(' . $hash . ')', isset($sm[1]) && str_contains($webviewServer, "'" . $hash . "'"));
+    }
+    check_bool('nginx: 本体の /code/assets/ は枠の HTML を返さず、CORS は webview のオリジンだけ', (bool) preg_match('#location \^~ /code/assets/ \{\s+location ~ \\\\\.html\$ \{\s+return 404;#', $nginx)
+        && str_contains($nginx, 'add_header Access-Control-Allow-Origin https://${KM_WEBVIEW_DOMAIN} always;') && substr_count($nginx, 'Access-Control-Allow-Origin') === 1);
+    check_bool('compose: reverse-proxy に KM_WEBVIEW_DOMAIN(いつも定義)・web に KM_WEBVIEW_URL', str_contains($read($root . '/compose.yaml'), 'KM_WEBVIEW_DOMAIN: ${KM_WEBVIEW_DOMAIN:-webview.')
+        && str_contains($read($root . '/compose.vps.yaml'), 'KM_WEBVIEW_DOMAIN: ${KM_WEBVIEW_DOMAIN:-webview.${KM_DOMAIN}}') && str_contains($read($root . '/compose.vps.yaml'), 'KM_WEBVIEW_URL: ${KM_WEBVIEW_URL:-https://${KM_WEBVIEW_DOMAIN:-webview.${KM_DOMAIN}}}'));
+    check_bool('証明書: 検証機(host-local.sh)は webview の名前を入れ、本番(host-cert.sh)は確かめる', str_contains($read($root . '/scripts/host-local.sh'), 'DNS:webview.$DOMAIN') && str_contains($read($root . '/scripts/host-cert.sh'), '_webview="${_webview:-webview.${_domain}}"'));
+    check_bool('殻は枠のオリジンを meta で渡し、ワークベンチは拡張機能ホストと webview の両方に使う', str_contains($read($root . '/code-src/public/index.php'), 'name="km-webview-origin"')
+        && str_contains($workbench, 'iframeAlternateDomain: webviewOrigin') && str_contains($workbench, 'getWorkbenchServiceOverride(undefined, webviewOrigin)'));
+    check_bool('配備: code-src は送らない', str_contains($deploy, "'./code-src/'"));
 }
 
 function km_check_bench(): void
@@ -12523,6 +12937,9 @@ foreach ($selected as $name) {
             break;
         case 'editor':
             km_check_editor();
+            break;
+        case 'code':
+            km_check_code();
             break;
         case 'proj-api':
             km_check_proj_api();

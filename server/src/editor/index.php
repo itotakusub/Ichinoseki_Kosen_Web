@@ -63,6 +63,8 @@ function km_editor_entry(string $dir): ?array
 }
 
 $entry = km_editor_entry(__DIR__);
+// VS Code 型のエディタ(/code/。段 11-6)の入口は、組み立てたものが置いてあるときだけ出す(本番は 11-7 で配るまで無い)
+$codeReady = is_file(dirname(__DIR__) . '/code/.vite/manifest.json');
 $runUrl = km_site_html_origin() . '/editor-run.html';
 if ($entry === null) {
     http_response_code(503);
@@ -109,6 +111,9 @@ if ($entry === null) {
             <button type="button" class="wce-btn" id="wce-template" data-i18n="action.new">新規</button>
             <button type="button" class="wce-btn" id="wce-import" data-i18n="action.import">読み込み</button>
             <button type="button" class="wce-btn" id="wce-download" data-i18n="action.download">ダウンロード</button>
+<?php if ($codeReady): ?>
+            <button type="button" class="wce-btn wce-open-code" id="wce-open-code" data-i18n="action.openCode" data-i18n-title="action.openCodeTitle" title="同じプロジェクトを VS Code 型のエディタ(PC 向け)で開きます">VS Code 型で開く</button>
+<?php endif; ?>
             <button type="button" class="wce-btn" id="wce-settings" data-i18n="action.settings">設定</button>
             <button type="button" class="wce-btn" id="wce-theme" data-i18n-title="action.theme" title="見た目を切り替える" aria-label="見た目を切り替える"></button>
             <button type="button" class="wce-btn" id="wce-lang" lang="en">English</button>

@@ -27,6 +27,9 @@ server/Downloaded/
 server/Old/
 server/out/
 server/certs/
+# /code/ の組み立ての出力(code-src から npm run build で作り直せる。2026-11-14。殻の index.php・preview.php は入れる)
+server/src/code/assets/
+server/src/code/.vite/
 node_modules/
 *.log
 

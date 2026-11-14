@@ -481,6 +481,51 @@ server {
     location = /editor {
         return 308 ${KM_APP_URL}/editor/$is_args$args;
     }
+    # VS Code 型のエディタ(段 11。2026-11-08)。理由は上の /editor と同じ
+    location = /code {
+        return 308 ${KM_APP_URL}/code/$is_args$args;
+    }
+    # 地図の埋め込み(段 15。2026-11-14。src/embed/・lib/map-embed.php)。理由は上の /editor と同じ
+    location = /embed {
+        return 308 ${KM_APP_URL}/embed/$is_args$args;
+    }
+    # - **X-Frame-Options を付けない** —— 別のサイトの枠に入れるため。入れてよい親は PHP(embed/index.php)が
+    #   CSP の frame-ancestors で出す(札に登録したオリジンだけ。知らない札・止めた札は 'none')。
+    #   v1.js(埋め込む側が読む静的な JS)は既定の CSP のまま(JS には frame-ancestors は効かない)
+    # - Referrer-Policy は PHP が出す(v1.js には要らない)
+    # - ★ add_header を書くので、server の add_header は継承されない(要るものを書き直す)
+    # - 回数は km_api(公開の口と同じ)
+    location ^~ /embed/ {
+        limit_req zone=km_api burst=60 nodelay;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Permissions-Policy $km_permissions_policy always;
+        add_header Content-Security-Policy $km_csp_fallback always;
+        include /etc/nginx/km/hsts-*.conf;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
+    # VS Code 型のエディタの組み立て(段 11-3。2026-11-08。ファイル名にハッシュが入る = 長くキャッシュしてよい)。
+    # - 拡張機能ホストと webview の枠は **webview.<ドメイン>**(下の server)で動き、そこから本体のこの JS・拡張機能の
+    #   ファイルを読む → **CORS はその 1 つのオリジンだけ**に許す(Cookie は送らせない。中身は誰でも取れる公開のファイル)
+    # - 枠の HTML(index・fake・webWorkerExtensionHostIframe・taskProgress)は本体のオリジンでは返さない
+    #   (本体の上で開くと、枠の中の台本が本体の Cookie・IndexedDB と同じオリジンで動く)
+    # - ★ add_header を書くので、server の add_header は継承されない(下の静的資材と同じものを書き直す)
+    location ^~ /code/assets/ {
+        location ~ \.html$ {
+            return 404;
+        }
+        add_header X-Content-Type-Options nosniff always;
+        add_header Referrer-Policy strict-origin-when-cross-origin always;
+        add_header Permissions-Policy $km_permissions_policy always;
+        add_header X-Frame-Options SAMEORIGIN always;
+        add_header Content-Security-Policy $km_csp_fallback always;
+        add_header Access-Control-Allow-Origin https://${KM_WEBVIEW_DOMAIN} always;
+        include /etc/nginx/km/hsts-*.conf;
+        # 成功のときだけ(404 を 30 日キャッシュさせない。下の静的資材と同じ理由)
+        add_header Cache-Control "public, max-age=2592000";
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port ${KM_APP_PORT};
+    }
 
     # Apache の状態(2026-10-05)。web の中の PHP が 127.0.0.1 で読むだけ。**外からは見せない**
     # (Apache 側も Require local。docker/php/apache-km.conf)
@@ -965,6 +1010,90 @@ server {
         # 札(/auth?t=…)は 1 回限りで 60 秒の値だが、ログに残さない
         access_log /var/log/nginx/access.log km_no_query;
         rewrite ^ /html-view.php? break;
+    }
+}
+
+# ---------------------------------------------------------------------------
+# **VS Code 型のエディタ(/code/)の枠: webview.<ドメイン>**(段 11-3。2026-11-08)
+#
+# 拡張機能ホスト(Prettier・Error Lens などを動かす枠)と webview(Markdown のプレビュー・ノートブックの出力)を、
+# 本体と別のオリジンで動かす。本体の Cookie(__Host-KMSID)・IndexedDB(プロジェクト)・CSRF の札に、
+# 拡張機能や、利用者の Markdown・ノートブックの中身が手を届かせないため。html.<ドメイン>(利用者が上げた HTML)とも分ける。
+#
+# 返すのは **組み立てた枠の HTML 3 つと Service Worker だけ**(ほかは 404)。JS と拡張機能のファイルは本体の
+# /code/assets/ から CORS で読む(上の location ^~ /code/assets/)。
+# - 枠に入れてよい親は本体だけ(frame-ancestors ${KM_APP_URL})。中の空のページ(fake)は同じオリジンの外枠と、その上の本体
+# - 中の CSP は HTML の <meta>(VS Code が書いたもの)。拡張機能ホストの枠だけは、<meta> の「https: どこでも」を
+#   ヘッダーで本体と自分に絞る(CSP は両方が効く = 厳しい側になる)。sha256 は枠の中のインラインの台本(check.php が確かめる)
+# - ゲートは掛けない(誰でも開ける /code/ の部品)。Cookie はこの名前には無い
+#
+# 名前は**証明書に入っていること**(host-cert.sh issue --also webview.<ドメイン>)と、**DNS が向いていること**。
+# ---------------------------------------------------------------------------
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name ${KM_WEBVIEW_DOMAIN};
+    keepalive_timeout 30s;
+    limit_conn km_conn 100;
+    client_max_body_size 1k;
+
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy same-origin always;
+    include /etc/nginx/km/hsts-*.conf;
+
+    # webview の外枠(本体の画面が枠に入れる)
+    location ~ ^/code/assets/index-[A-Za-z0-9_-]+\.html$ {
+        limit_except GET {
+            deny all;
+        }
+        limit_req zone=km_api burst=120 nodelay;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Referrer-Policy same-origin always;
+        add_header Content-Security-Policy "frame-ancestors ${KM_APP_URL}" always;
+        include /etc/nginx/km/hsts-*.conf;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port 443;
+    }
+    # webview が中身を書き込む空のページ(外枠と同じオリジンの枠)。中身の CSP は中身の <meta>(Markdown のプレビューなど)
+    location ~ ^/code/assets/fake-[A-Za-z0-9_-]+\.html$ {
+        limit_except GET {
+            deny all;
+        }
+        limit_req zone=km_api burst=120 nodelay;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Referrer-Policy same-origin always;
+        # frame-ancestors は**上にあるすべての枠**を見る(直接の親の外枠だけでなく、いちばん上の本体の画面も)。
+        # 'self' だけだと本体が外れて中身が出ない(11-3 に Chrome で見つけた)
+        add_header Content-Security-Policy "frame-ancestors 'self' ${KM_APP_URL}" always;
+        include /etc/nginx/km/hsts-*.conf;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port 443;
+    }
+    # webview の Service Worker(中身が読む画像などを、本体の画面から受け取って返す)
+    location ~ ^/code/assets/service-worker-[A-Za-z0-9_-]+\.js$ {
+        limit_except GET {
+            deny all;
+        }
+        limit_req zone=km_api burst=120 nodelay;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port 443;
+    }
+    # 拡張機能ホストの枠
+    location ~ ^/code/assets/webWorkerExtensionHostIframe-[A-Za-z0-9_-]+\.html$ {
+        limit_except GET {
+            deny all;
+        }
+        limit_req zone=km_api burst=120 nodelay;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Referrer-Policy same-origin always;
+        add_header Content-Security-Policy "default-src 'none'; child-src 'self' blob:; worker-src 'self' blob:; script-src 'self' 'unsafe-eval' 'sha256-2EBQn+AFduI8Wb0riLwbeshEGP4dJlHornyvuFAgYnA=' blob: ${KM_APP_URL}; connect-src 'self' ${KM_APP_URL}; frame-ancestors ${KM_APP_URL}" always;
+        include /etc/nginx/km/hsts-*.conf;
+        include /etc/nginx/km/proxy-web.conf;
+        proxy_set_header X-Forwarded-Port 443;
+    }
+    location / {
+        return 404;
     }
 }
 

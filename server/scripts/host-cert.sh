@@ -223,6 +223,14 @@ do_status() {
         *",DNS:${_share},"*) echo "   共有リンクの名前(${_share})も入っています。" ;;
         *) echo "★ 共有リンクの名前(${_share})が証明書にありません。issue --domain ${_domain} --also ${_admin:-${_domain}} --also ${_auth:-auth.${_domain}} --also ${_html} --also ${_share} で足してください。"; _rc=1 ;;
       esac
+      # VS Code 型のエディタ(/code/)の枠(段 11-3。2026-11-08。nginx の webview の server)。.env に無ければ webview.<ドメイン>。
+      # **11-7 で /code/ を本番へ出すまでは注意だけ**(失敗にしない。それまでは本番で使わない名前のため)
+      _webview="$(env_value KM_WEBVIEW_DOMAIN)"
+      _webview="${_webview:-webview.${_domain}}"
+      case ",${_san}," in
+        *",DNS:${_webview},"*) echo "   エディタの枠の名前(${_webview})も入っています。" ;;
+        *) echo "   注意: エディタの枠の名前(${_webview})が証明書にありません(/code/ を出すとき。issue --domain ${_domain} --also ${_admin:-${_domain}} --also ${_auth:-auth.${_domain}} --also ${_html} --also ${_share} --also ${_webview})" ;;
+      esac
       _served="$(served_fingerprint "$_domain" || true)"
       if [ -z "$_served" ]; then
         echo "★ 443 番から証明書を受け取れません(nginx が動いているか確かめてください)"
@@ -301,6 +309,25 @@ do_renew() {
   do_status
 }
 
+# IPv4 が Cloudflare の番地か。一覧は nginx の realip と同じファイル(段 8。写しを作らない)。
+# 一覧が無ければ「違う」(DNS の下見は今までどおりこのホストの IP だけを認める)
+CLOUDFLARE_IPS="nginx/km/cloudflare-real-ip.conf"
+is_cloudflare_ip() {
+  if [ ! -r "$CLOUDFLARE_IPS" ]; then
+    return 1
+  fi
+  awk -v ip="$1" '
+    function num(a,   p) { split(a, p, "."); return ((p[1] * 256 + p[2]) * 256 + p[3]) * 256 + p[4] }
+    BEGIN { if (ip !~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) exit 1; x = num(ip); found = 0 }
+    $1 == "set_real_ip_from" && $2 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/[0-9]+;?$/ {
+      c = $2; sub(/;$/, "", c); split(c, q, "/")
+      size = 2 ^ (32 - q[2]); base = num(q[1]); base -= base % size
+      if (x >= base && x < base + size) { found = 1 }
+    }
+    END { exit found ? 0 : 1 }
+  ' "$CLOUDFLARE_IPS"
+}
+
 # ---------------------------------------------------------------------------
 # issue
 # ---------------------------------------------------------------------------
@@ -326,20 +353,28 @@ do_issue() {
     set -- "$@" "$_extra"
   done
 
-  echo "== 1. DNS がこのホストを指しているか"
+  echo "== 1. DNS がこのホストを指しているか(Cloudflare の橙の名前は Cloudflare の番地でよい)"
   _mine="$(hostname -I 2>/dev/null || true)"
   _bad=0
   for _name in "$@"; do
     _ips="$(getent ahostsv4 "$_name" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ')"
     _hit=0
+    _cf=1
     for _ip in $_ips; do
       case " $_mine " in *" $_ip "*) _hit=1 ;; esac
+      if ! is_cloudflare_ip "$_ip"; then
+        _cf=0
+      fi
     done
     if [ -z "$_ips" ]; then
       echo "★ $_name は名前を引けません(A レコードが無い / まだ広まっていない)"
       _bad=1
     elif [ "$_hit" -eq 1 ]; then
       echo "  $_name → $_ips(このホスト)"
+    elif [ "$_cf" -eq 1 ]; then
+      # 段 8(2026-11-08)から ito4・auth・share・html・webview は Cloudflare を通る(橙)。HTTP-01 の確認も
+      # Cloudflare 経由で 80 番に届く(docs/17: Always Use HTTPS は切・WAF は acme-challenge を除く)。届くかは次の 2 で確かめる
+      echo "  $_name → $_ips(Cloudflare 経由。届くかは次の 2 で確かめます)"
     else
       echo "★ $_name → $_ips は、このホストの IP($_mine)ではありません"
       _bad=1

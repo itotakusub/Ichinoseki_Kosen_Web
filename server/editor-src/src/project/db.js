@@ -29,6 +29,46 @@ function done(tx) {
 
 export const fileKey = (projectId, path) => `${projectId}${SEP}${path}`;
 
+/*
+ * ほかのタブへの知らせ(段 11。2026-11-08)。/editor/ と /code/ は同じ置き場を使うので、片方で書いたら
+ * BroadcastChannel で { projectId, paths, kind } を流す。受け取った側は自分の画面を読み直す(onExternalChange)。
+ * 自分が流したものは sender で見分けて無視する。BroadcastChannel が無いブラウザでは何もしない
+ */
+const CHANNEL_NAME = 'km-editor-changes';
+const SENDER = Math.random().toString(36).slice(2) + Date.now().toString(36);
+let channel = null;
+try {
+  channel = typeof BroadcastChannel === 'function' ? new BroadcastChannel(CHANNEL_NAME) : null;
+} catch {
+  channel = null;
+}
+
+function announce(projectId, paths, kind) {
+  try {
+    channel?.postMessage({ sender: SENDER, projectId, paths, kind });
+  } catch {
+    // 知らせられなくても保存は済んでいる
+  }
+}
+
+/**
+ * ほかのタブが書いたときに呼ぶ。kind は 'files'(paths が変わった・消えた)・'project'(記録だけ)・'deleted'。
+ * @returns {() => void} やめる
+ */
+export function onExternalChange(callback) {
+  if (!channel) {
+    return () => {};
+  }
+  const handler = (event) => {
+    const d = event.data;
+    if (d && d.sender !== SENDER && typeof d.projectId === 'string' && Array.isArray(d.paths)) {
+      callback({ projectId: d.projectId, paths: d.paths.filter((p) => typeof p === 'string'), kind: String(d.kind) });
+    }
+  };
+  channel.addEventListener('message', handler);
+  return () => channel.removeEventListener('message', handler);
+}
+
 class IdbStore {
   constructor(db) {
     this.db = db;
@@ -49,6 +89,7 @@ class IdbStore {
     const tx = this.db.transaction('projects', 'readwrite');
     tx.objectStore('projects').put(project);
     await done(tx);
+    announce(project.id, [], 'project');
   }
 
   async getFiles(projectId) {
@@ -71,6 +112,7 @@ class IdbStore {
       tx.objectStore('projects').put(project);
     }
     await done(tx);
+    announce(projectId, [...puts.map((f) => f.path), ...deletes], 'files');
   }
 
   async deleteProject(projectId) {
@@ -78,6 +120,7 @@ class IdbStore {
     tx.objectStore('files').delete(IDBKeyRange.bound(`${projectId}${SEP}`, `${projectId}${SEP}￿`));
     tx.objectStore('projects').delete(projectId);
     await done(tx);
+    announce(projectId, [], 'deleted');
   }
 }
 

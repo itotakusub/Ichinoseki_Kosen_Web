@@ -35,6 +35,21 @@ check('外全体図', 'Campus overview', t('外全体図'));
 check('HTML の改行と字下げは 1 つの空白にして引く', true, /^\n  Login codes .* to be sure\.\n$/.test(t('\n  ログインの確認コードやお問い合わせの返信は、迷惑メールとして振り分けられることがあります。\n          このサイトからのメールを受信できるように設定しておくと確実です。\n')));
 check('訳せない文の改行はそのまま返す', '\n  電算部\n    展示\n', t('\n  電算部\n    展示\n'));
 check('号棟', 'Building 4', t('4号棟'));
+// 2026-11-11: 英語の画面に日本語のまま残っていたもの(案内の例・苦手な質問・テスト用アカウントの札)
+check('案内の例と印', ['Most reliable', 'Where is the haunted house?', 'From Practice Room 2 to the gym'], [t('いちばん確実'), t('怖い企画はどこ？'), t('第二実習室から体育館への行き方')]);
+check('苦手な質問とその理由', [false, false], [/[ぁ-んァ-ヶ一-龠]/.test(t('苦手な質問(答えられない・まちがえやすい)')), /[ぁ-んァ-ヶ一-龠]/.test(t('値段・メニューは、ポスターの説明に書いてあるときだけ答えられます'))]);
+{
+    // 案内の例・苦手な質問(Main/guide-chat.js)と操作方法の既定の文(lib/test-mode.php)は、どれも辞書にあること
+    const fs = require('fs');
+    const guideSrc = fs.readFileSync(path.join(__dirname, '..', '..', 'Main', 'guide-chat.js'), 'utf8');
+    const block = guideSrc.slice(guideSrc.indexOf('const EXAMPLES = ['), guideSrc.indexOf('function examplesBlock()'));
+    const texts = [...block.matchAll(/'((?:[^'\\]|\\.)+)'/g)].map((m) => m[1]);
+    const testMode = fs.readFileSync(path.join(__dirname, '..', '..', 'lib', 'test-mode.php'), 'utf8');
+    const guide = /KM_TEST_GUIDE_DEFAULT = <<<'TEXT'\r?\n([\s\S]*?)\r?\nTEXT;/.exec(testMode);
+    const lines = guide ? guide[1].split(/\r?\n/) : ['(読めない)'];
+    check('案内の例・苦手な質問は全部訳がある', [], texts.filter((s) => t(s) === s));
+    check('操作方法の既定の文は全部訳がある', [], lines.filter((s) => t(s) === s));
+}
 
 console.log('型');
 check('待ち人数', '12 waiting', t('12 人待ち'));

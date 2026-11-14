@@ -353,6 +353,25 @@ function km_site_share_origin(): string
     return $parts['scheme'] . '://share.' . $parts['host'] . ($parts['port'] === null ? '' : ':' . $parts['port']);
 }
 
+/**
+ * **VS Code 型のエディタ(/code/)の枠**(段 11-3。2026-11-08)。末尾にスラッシュは付けない。
+ * 正本は環境変数 `KM_WEBVIEW_URL`。無ければ `https://webview.<本体のホスト>`。
+ *
+ * 拡張機能ホスト(Prettier・Error Lens などを動かす枠)と webview(Markdown のプレビュー・ノートブックの出力)を
+ * 本体と別のオリジンで動かす。本体の Cookie・IndexedDB(プロジェクト)・CSRF の札に、拡張機能や
+ * 利用者の Markdown・ノートブックの中身が手を届かせないため。html.<本体> とも分ける(あちらは利用者が上げた HTML)
+ */
+function km_site_webview_origin(): string
+{
+    $url = trim((string) getenv('KM_WEBVIEW_URL'));
+    if ($url !== '' && is_array($parsed = parse_url($url)) && isset($parsed['host'], $parsed['scheme'])) {
+        return strtolower($parsed['scheme']) . '://' . strtolower($parsed['host']) . (isset($parsed['port']) ? ':' . (int) $parsed['port'] : '');
+    }
+    $parts = km_site_parts();
+
+    return $parts['scheme'] . '://webview.' . $parts['host'] . ($parts['port'] === null ? '' : ':' . $parts['port']);
+}
+
 /** 「host:port」の表示用。接続先を人に見せるところで使う。 */
 function km_site_host_port(string $service): string
 {

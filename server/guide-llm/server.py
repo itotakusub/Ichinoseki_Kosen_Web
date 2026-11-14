@@ -6,10 +6,10 @@
 Website の管理画面「案内チャット」で選んだ模型があれば、頼みの model(「unsloth:<id>」「bionic:<id>」)でそちらへ渡す。
 模型はこのプログラムでは読まない。Python の標準ライブラリだけで動く(Windows の python でそのまま。入れるものは無い)。
 
-    VPS の PHP(src/lib/guide-chat.php)─ https ─ ngrok ─ この門番(127.0.0.1)─ Unsloth の API / Bionic の API(この PC の中)
+    VPS の PHP(src/lib/guide-chat.php)─ https ─ Cloudflare Tunnel(cloudflared)─ この門番(127.0.0.1)─ Unsloth の API / Bionic の API(この PC の中)
 
 門番を挟む理由(企画書 §8「API キーや秘密情報を管理」「LLM の API を無制限に呼び出せないようにする」):
-  - ngrok の URL は外から誰でも叩ける。**鍵(KM_GUIDE_LLM_KEY)の無い頼みは 401**(定数時間で比べる)
+  - トンネルの URL は外から叩ける(Cloudflare の WAF で本番サーバーの IP だけに絞るが、それに頼らない)。**鍵(KM_GUIDE_LLM_KEY)の無い頼みは 401**(定数時間で比べる)
   - 受ける本文・頼みの数(メッセージ)・出す字数に上限を置く。同時に 1 件ずつ渡す(GPU を取り合わない)
   - **模型は頼み先の一覧にあるものだけ**(一覧に無い名前は既定へ回す)。読まれていない模型は、ほかの模型を外してから読み込む
     (GPU に 1 つだけ。Bionic は LM Studio と同じ /api/v1/models/load・unload、Unsloth は /v1/load・/v1/unload)
@@ -631,7 +631,7 @@ def main() -> None:
     LOG.info("default %s / backends %s / waiting on 127.0.0.1:%d", key, ", ".join(BACKENDS), PORT)
     if others:
         LOG.info("also listing models of %s (selectable from the admin page)", ", ".join(others))
-    # 外へは ngrok だけが出す。ここは 127.0.0.1 だけで待つ
+    # 外へはトンネル(cloudflared)だけが出す。ここは 127.0.0.1 だけで待つ
     ExclusiveServer(("127.0.0.1", PORT), Handler).serve_forever()
 
 

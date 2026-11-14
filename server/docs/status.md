@@ -1,5 +1,6 @@
 # 現況
 
+- **本番の証明書に webview.ito4.jp を足した**(11-09、利用者が配備 -Action up のあと host-cert.sh issue): 名前は admin・auth・html・ito4.jp・share・webview の 6 つ、期限 2027-02-06。読むだけで確かめた: webview.ito4.jp は 404(枠のファイルは 11-7 まで本番に無い)・/editor/・html・auth は 200・reverse-proxy に KM_WEBVIEW_DOMAIN・web に KM_WEBVIEW_URL・nginx の emerg/crit は 0
 **この文書の形**(2026-11-07 に組み直した。利用者の指示「構造がバラバラなので整理」):
 1. **いま** —— 本番の実測の表(ここが正)
 2. **残っていること** —— 次にやること(中身は [plan.md](plan.md) の「次のプラン」)・保留・抹消・配備待ち
@@ -17,7 +18,7 @@
 | サービス | 8 個(`reverse-proxy web postgres logto mailserver certbot mariadb glances`)。glances 以外は healthy。**phpMyAdmin はふだん止めてあり、トンネル開通SSH.cmd の合図の間だけ動く**(11-07)。Soketi は 11-02 に撤去、Mailpit は本番では使わない |
 | イメージ | nginx `1-alpine`・certbot `latest`・postfix `latest-debian`(5.2.1)・Logto **1.46.0**・MariaDB 11.4・Postgres 17・phpMyAdmin 5.2.3。**どれもタグ + digest で固定**(11-06)。週 1 回 Trivy(日曜 4:47)、片付け(日曜 5:47) |
 | 証明書 | `ito4.jp`(SAN に `admin`・`auth`・`html`・`share`)—— **2027-02-03 まで**。CAA は `0 issue "letsencrypt.org"` |
-| ホスト | Ubuntu 24.04・カーネル **6.8.0-149**(11-07 に再起動。CVE-2026-98432 は Ubuntu の頁ではまだ「作業中」なので、つなぎ km-ipopt・MPTCP 0 は続ける)・Docker 29.9.2 |
+| ホスト | Ubuntu 24.04・カーネル **6.8.0-149.149**(11-07 から。11-11 18:18 に利用者が再起動)。**CVE-2026-98432 は直った**(11-11 に Ubuntu の頁が「noble: Fixed in 6.8.0-149.149」になった)。つなぎ km-ipopt・MPTCP 0 はまだ入っている(外してよい。外すのは利用者)・Docker 29.9.2 |
 | メモリ / ディスク | 1.9Gi 中 1.1Gi 使用(available 880Mi)/ 99G 中 37G(40%。イメージ 14.6GB・ビルドのキャッシュ 10.7GB → 日曜の片付けで減る見込み) |
 | PHP | 8.4.27(10-22。RCE の直った版) |
 | 地点 | `km_map_nodes` 904 行 |
@@ -42,16 +43,14 @@
 | 5 | **完了**(11-08): 検証機 192.168.3.31(Hyper-V の VM)を本番と同じ形にした(コード・イメージ・cron・DB と Logto の利用者・方針)。入れ直しはデスクトップの `検証機を本番と同じに.cmd`。プロジェクト状況 #103 は消した |
 | 6 | ストリートビュー(360°)を Website へ: **11-07 に作った・配備待ち**(WebGL・撮りそろうまで管理者だけ)。残りは利用者が撮る(本番の写真は 0 枚) |
 | 9 | **完了**(11-08): Web Code Editor(`/editor/`)を配備・QR のリンク集に入口・スマホの幅も利用者が確認。優先度 4 は段 10 |
+| 11 | **完了**(11-11 までに本番へ): VS Code 型のエディタ `https://ito4.jp/code/`(ブラウザの中だけ・拡張機能は同梱だけ・枠は `webview.ito4.jp`・プレビューは別の窓・同期は /editor/ と共通・「このエディタについて」・規約 第8条の3)と、11-8 の拡張機能(Path IntelliSense・リンクされた編集・括弧の色・自作の「Web の検査」)。中身は plan.md の段 11 |
 | 10 | **完了**(11-08): Web Code Editor 優先度 4。10-A(複数ファイル・プロジェクト・ZIP・読み込み・ショートカット・配色)と 10-B(サインインしてサーバーへ同期・規約 第8条の3)を本番へ配備 |
 | 7〜 | **管理画面「プロジェクト状況」に置く**(11-07、利用者の指示。分類つき。plan.md には段の見出しと設計だけ書く) |
 
-**配備待ち**(手元で済み): プロジェクト状況の番号の列と並び(`admin/projects.php`・`lib/tasks.php`)・段 6 ストリートビューを Website へ(`Main/panorama-viewer.js`・`lib/panorama.php`・`lib/map-data.php`・`Main/app.js`・`Main/i18n.js`・`Main/styles.css`・`index.php`・`admin/map-editor.php`・`admin/assets/js/map-editor.js`・`admin/map-settings.php`・`lib/admin-log.php`)・建物の「中へ」が 2 度出る(萩友会館など)・建物の階の呼び名・案内のカードの階(`Main/app.js`・`Main/user-history.js`・`lib/guide-chat.php`)・寮食堂に萩友会館の階が出る(`lib/building-floors.php`。アプリは版 57 で公開済み)。「教室」からトイレを外す(段 7-2)・案内の例のボタンの崩れ(段 4-2)は 11-07 夜に配備済み(本番の app.js・styles.css で確認)。それより前のものは 11-07 にすべて配備済み(イベントの地点の倍率・置き去り 16 個の退避・読み・別名の CSV・`api/area-paint.php`・階段の向きを下の階から埋める・色分けの画面の 404・国の拒否で Google を 443 だけ通す(`google.allowed: true`)・プロジェクト状況の口と鍵・Logto のテンプレートの台本)。
+**配備待ち**(手元で済み): **地図の埋め込み(段 15。nginx を変えたので `-Action restart -Services reverse-proxy`。`lib/map-embed.php`・`embed/`・`Main/embed.*`・`api/embed-places.php`・`admin/embed-sites.php`・横の一覧・訳・記録の文・`nginx/default.conf.template`・`scripts/local-sanitize.tables`。配備のあと管理画面で html.ito4.jp と share.ito4.jp を登録)**・エディタの雛形の直し(段 14-5。`lib/editor-snippets.php`・`admin/editor-snippets.php`・`editor-src/`・`code-src/`。**配備だけで本番の `<<a` が直る**。そのあと管理画面で v3.json を取り込む)・プロジェクト状況の番号の列と並び(`admin/projects.php`・`lib/tasks.php`)・段 6 ストリートビューを Website へ(`Main/panorama-viewer.js`・`lib/panorama.php`・`lib/map-data.php`・`Main/app.js`・`Main/i18n.js`・`Main/styles.css`・`index.php`・`admin/map-editor.php`・`admin/assets/js/map-editor.js`・`admin/map-settings.php`・`lib/admin-log.php`)・建物の「中へ」が 2 度出る(萩友会館など)・建物の階の呼び名・案内のカードの階(`Main/app.js`・`Main/user-history.js`・`lib/guide-chat.php`)・寮食堂に萩友会館の階が出る(`lib/building-floors.php`。アプリは版 57 で公開済み)。「教室」からトイレを外す(段 7-2)・案内の例のボタンの崩れ(段 4-2)は 11-07 夜に配備済み(本番の app.js・styles.css で確認)。それより前のものは 11-07 にすべて配備済み(イベントの地点の倍率・置き去り 16 個の退避・読み・別名の CSV・`api/area-paint.php`・階段の向きを下の階から埋める・色分けの画面の 404・国の拒否で Google を 443 だけ通す(`google.allowed: true`)・プロジェクト状況の口と鍵・Logto のテンプレートの台本)。
 **進み具合はプロジェクト状況が正**(`scripts/proj-tasks.ps1 list`)。
 
-**保留**(利用者、11-07):
-- カーネルの直った版 —— CVE-2026-98432 を Ubuntu が直した版を出したら上げて再起動する。それまでつなぎ(km-ipopt・MPTCP 0)を続ける
-- Web の画面での確かめ —— ログインしたまま配備してログインが残るか・色分けの塗り・英語の名前・札と QR のカメラ
-- Wi-Fi 測位の比べ(元は段 3-3)・AR の実測(元は段 3-4)—— 現地の作業で、今はできない(利用者、11-07。プロジェクト状況 #99・#100)
+**保留**: いまは無し(11-12。カーネル・Web の画面での確かめは 11-11 に済み、Wi-Fi 測位の比べは打ち切り、AR の実測は段 13 へ)
 
 **抹消**(利用者、11-07。plan.md「やらないと決めたこと」): Play ストアへの公開申請・教職員の申請の Teams 通知。
 
@@ -60,6 +59,251 @@
 ---
 
 ## 記録 2026 年 11 月(新しい順)
+
+### 2026-11-14 — 段 15 地図を別のサイトに埋め込む(手元で済み・検証機で確かめた・**配備待ち**)
+
+利用者(11-14)「マップの API を作成してください。別のサイトで表示されるような埋め込み方を想定してください」。決めたこと: 登録したサイトだけ・v1 は見る / 階 / 地点を指す / 押すと名前・JSON の口も作る・最初の埋め込み先は HTML 展開サイト。中身は [plan.md](plan.md) の段 15。
+
+- **作った**: `/embed/`(iframe の地図。Leaflet・来場者と同じ地図をセッションなしで読み、氏名・メモ・経路は出さない)・`/embed/v1.js`(`KosenMap.embed()`。postMessage は相手のオリジンを決め打ち)・`/api/embed-places.php`(登録したオリジンにだけ CORS)・管理画面「地図の埋め込み」(登録・直す・止める・貼るコード・30 日の回数)・表 `km_embed_sites`・`km_embed_views_daily`(新しく作るだけ)。nginx の `/embed/` は X-Frame-Options を出さず、PHP が札ごとに `frame-ancestors` を出す
+- **検証機の Chrome で確かめた**(html.<検証機> のオリジンから): 地図が出る・`focus`・`select`・`floor`・階を替えると指した輪が消える・JSON を読める。オリジンを登録から外すと**枠はブラウザが止め**、JSON も読めない。地点 426 件に氏名・研究室は無い
+- **途中で直した**: 引いた倍率で名前が重なって読めない → 1 段拡大するまでは触れた印の名前だけ / 階を替えても赤い輪が残る / 最初の `floor` の知らせが `ready` より先に届く / 記録の文言を変数で組んでいて check.php の「すべての操作に文言」に掛かった / 貼るコードの見本の `<script` を check.php が nonce 無しの台本と見た
+- 試験: check.php に段 15 の 13 項目(3239 件すべて通過)・editor.test.js 297 件。plan.md の段 14-5 の最後の行に段 15 の見出しがつながっていたのも直した
+### 2026-11-14 — 段 14-5 雛形 JSON(v2)の点検と取り込みの直し(手元で済み・検証機で確かめた・**配備待ち**)
+
+- 利用者「スニペット集の JSON を作成したので、不足分や説明不足などを確認・修正してください」→ 決定(AskUserQuestion): プロパティ 1 つの 506 個は雛形から外す・廃止タグは外す・説明はこちらが書く
+- **本番で見つけたこと(読むだけ)**: 本番には 11-13 12:50 に v2 が取り込まれていて、HTML の body が `<` で始まるため、いま `<a` を選ぶと `<<a` になる。css 641 個は取り込みのときに捨てられていた
+- **取り込み**(`lib/editor-snippets.php`・`editor-src/src/data/snippets.js`): 先頭の `<` を外す(**読むときも**外す → 配備だけで本番の `<<a` が直る)・`css` を受ける・知らない項目は捨てて知らせる・上限 1MB / CSS 1,000 個。表は変えない(CSS の数は中身から数える)。管理画面に CSS の数と取り込みの知らせ(1 回だけ)
+- **CSS の雛形の候補**: /editor/(`languages.js`)と /code/(`jaExtension.js`)の CSS と `<style>` の中。出すのはルール・プロパティの書き始め(`{` `}` `;` の後)だけ
+- **説明**: `editor-src/src/data/css-more.js` に CSS のプロパティの日本語の説明 281 個(自分で書いた)。`CSS_JA` は 167 → 448 個
+- **`Downloads\v3.json`**(v2 は触らない)と `v3-changes.txt`: 先頭の `<` 286 個・廃止タグ 25 個・プロパティ 1 つの 506 個を外した・`${1(…)}` の壊れた入力欄 5 個・重なり 3 個・`wbr`・`&` で始まる 32 個をふつうのセレクタへ・CSS の説明 17 個・JS の説明 13 個。HTML 144・144・CSS 132・JS 270・147KB
+- **確かめた**: check.php 3225 件・editor.test.js 297 件。検証機の Chrome: 管理画面で v2 を取り込むと「< を 336 個外しました」・CSS 641 個 → v3 を取り込むと HTML 144・CSS 132。/editor/ で `<a` →「a リンク」が `<a href=…>`(二重にならない)・`<style>` の中で `disp` に「display flex」などが出る。/code/ の CSS でも出る。打った文字は戻した。**検証機には v3 を入れたまま**
+- 検証機の自己検査で 3 件 NG(assetlinks・案内の nginx の zone・`KM_GUIDE_LLM_URL`)。今回は nginx・compose を触っていない(検証機に `.env.example` が無いなどで、前からのもの)
+### 2026-11-13 — 訪問者の Cloudflare が 11-08 から取り込めていなかった(cron 版 15。**11-13 本番で済み**)
+
+- 利用者「訪問者で Cloudflare からデータが取得されていないようです」
+- **見たこと(本番を読むだけ)**: `km_cf_import_state` の最後の成功は 11-08 12:53(手で流した 1 回)・その後は成功も失敗も 1 つも無い・WAF 29 件・通信量 3 時間のまま
+- **原因**: cron(版 14)の行が `--label Cloudflare の取り込み --only-failure …`。cron の行は引用しないので `の取り込み` が別の引数になり、`send-log.sh` が「知らない引数」で exit 2 → 取り込みの台本まで行かない。出力は root だけが読む `cloudflare.log` に入るだけで、メールも画面の「失敗」も出なかった
+- **直したもの**: `scripts/host-updates-setup.sh` の `--label` を `Cloudflare取り込み` に・`CRON_VERSION=15`(古いホストの cron を書き直す合図)。check.php に「cron の `--label` に空白が無い」を足した(直す前の行なら落ちるのを確かめた)。docs/17 §6 の手順を版 15 に
+- **取り戻せるもの**: WAF の記録は Cloudflare が 31 日持つので、11-08 からの分は次の 1 回で全部入る。時間ごとの通信量は Cloudflare が約 3 日しか持たないので、**11-08 12 時〜11-10 夜ごろの分は取れない**(台本は持っている範囲だけを頼むので、断られはしない)
+- 試験: check.php 3221 件が通過
+- **本番(11-13、利用者が配備・km で `--fix` と手で 1 回)**: cron は版 15・`--label Cloudflare取り込み`。手の 1 回は「問い合わせ 3 回」で成功(22:27)→ WAF 8175 件(11-08 10:53〜11-13 22:11。止まっていた間の分も入った)(日ごと 406・3298・1355・1854・443・819 件)・通信量 74 時間分。**抜けは 11-08 13 時〜11-10 22 時**(Cloudflare が約 3 日しか持たない分。思ったとおり)と 11-13 8 時の 1 時間(Cloudflare の答えにその時間が無かった)
+- **cron がひとりでに動いた**: 23:13:04 に成功(問い合わせ 2 回・WAF 8178 件・通信量 75 時間分)
+### 2026-11-13 — 段 14-2〜14-4 CSS の候補の説明・ホバーの英語の説明・雛形の JSON の取り込み(**11-13 本番で済み**)
+
+- 利用者「CSS の候補も外す、カーソルを合わせたときの英語の説明は設定だけで消す。雛形の JSON 管理は、管理画面の取り込みだけ作る。デプロイ終わっているので作業を開始」
+- **14-1 は本番に出ていた**(読むだけ): `htmlServerMain-d27FPn2I.js` が 1 つで書き換えた形・workbench がそれを指す・`/code/` 200・雛形に title・前の組み立ては `retired/code-assets/` に
+- **14-2 CSS の候補の説明**: 同じ部品(`km-html-no-completion-docs`)を広げ、CSS の言語サーバーと、HTML の言語サーバーの中の CSS の説明の入口(設定なしで呼ばれたら作らない)を書き換える。どれも 1 か所ちょうどでなければ組み立てを止める
+- **14-3 ホバー**: `html`・`css`・`scss`・`less` の `hover.documentation`・`hover.references` を false(日本語の画面だけ。英語の画面では残す)
+- **14-4 雛形の JSON の取り込み**:
+  - 形(version 1): `{ "version": 1, "html": { "ja": [{tag,label,body}], "en": […] }, "js": [{label,body,ja,en}] }`。HTML の body は先頭の `<` を書かない
+  - `editor-src/src/data/snippets.js`: 同梱の雛形を JSON にする・形を確かめる・口の答えを当てはめる・起動のときに読む(待たない・4 秒で切る・届かなければ同梱)。/editor/(`languages.js`)と /code/(`jaExtension.js`)は候補を出すたびにここを読む
+  - `src/lib/editor-snippets.php`: 形の確かめ(サーバーとエディタで同じ上限: 300 個・tag 40・label 80・body 2000・説明 400 字・ファイル 256KB)・新しい表 `km_editor_snippets`(取り込むたび 1 行。「同梱に戻す」も 1 行。新しいほうから 20 行残す)・読むときにも確かめる
+  - `src/api/editor-snippets.php`: GET だけ・何も受け取らない・DB が読めなければ `custom: false`
+  - `src/admin/editor-snippets.php`(公開ページ →「エディタの雛形」): いまの状態・書き出し 2 つ・取り込み・同梱に戻す。CSRF を先に見る・記録に残す(`editor-snippets.import`・`.reset`)
+  - `src/lib/editor-snippets.default.json`: 同梱の雛形の JSON(管理画面の「同梱の雛形を書き出す」が返す。editor.test.js が data/html.js・js.js と同じ中身かを見る。**雛形のデータを直したら、この JSON も作り直す**)
+  - 検証機の台帳 `scripts/local-sanitize.tables` に `km_editor_snippets keep`
+- **確かめた(検証機の Chrome)**: 口は `custom:false`・POST は 405・`/lib/…default.json` は直には 404。管理画面で形の違う JSON は断られて何も変わらない → 正しい JSON(「検証のリンク」を足したもの)を取り込むと 28 個になり、`/code/` の `<a` の候補に「検証のリンク」が出る → 同梱に戻すと 27 個・口は `custom:false`。CSS の `disp` の候補に説明の欄が出ない・`<head>` にカーソルを合わせると日本語の説明だけ。打った文字は戻した。**/editor/ の画面では見ていない**(同じ部品を読む。試験と組み立てで確かめた)
+- 試験: check.php 3220 件・editor.test.js 290 件が通過
+- **本番(11-13、利用者が配備・読んで確かめた)**: 口は `custom:false`・POST は 405・`default.json` は直には 404・`/code/` 200・`cssServerMain-KcKeC6UY.js` と `htmlServerMain-HcmBYS8Q.js` が書き換えた形(HTML・CSS の説明の入口とも)・管理画面「エディタの雛形」200(利用者が開いた)・PHP の失敗の記録なし・`lib/guide-chat.php` の ngrok のヘッダも外れた。プロジェクト状況 #134 は外した
+### 2026-11-13 — 段 14-1 /code/ の HTML の候補から英語の説明(MDN)を外した(手元で済み・検証機で確かめた・**配備待ち**)
+
+- 利用者「HTML の `<a` を入力したときのいらないコメント(Mozilla のコメント)はどうしても削除できませんか」。**初めは別のもの(行の右に出る赤い文)と取り違えた** → 利用者が「Mozilla のコメントです」と教えてくれた
+- **原因**: 付属の HTML の言語サーバーは、候補の説明を設定を見ずに作る(カーソルを合わせたときは `html.hover.*` を見る)。設定では消せない
+- **直し方**: `code-src/vite.config.js` の `km-html-no-completion-docs`。組み立てた `htmlServerMain-*.js` の説明を作る関数を「設定が無ければ作らない」に書き換え、中身のハッシュで名前を付け直す。見つからなければ組み立てを止める。Rolldown は出力の表への代入を受けない(無視されて部品が消えた)ので、消して `emitFile` で出し直す形にした
+- **ついでに直した**(取り違えて見つけたもの): 打ちかけの `<a` に HTMLHint の spec-char-escape が赤い文を出す → 既定で外した(`.htmlhintrc.json` で戻せる)。はじめのプロジェクトの雛形に `<title>` が無く、開いた直後から誤りが 1 件出ていた → 足した
+- **確かめた(検証機の Chrome)**: `<a` で付属の候補(a・abbr・address…)と自作の雛形が出る・候補の説明の欄に英語の文が出ない・赤い文が出ない。内蔵のブラウザは検証機の拡張機能の部品を読めず(extensionHost.worker の取得に失敗)、付属の候補が出ないので確かめに使えない
+- 試験: check.php 3208 件・editor.test.js 284 件が通過
+- 本番へ出す手順・戻し方・残り(CSS の説明・カーソルを合わせたときの説明・雛形の JSON 管理)は plan.md の段 14
+### 2026-11-12 — Android の組み立てを 1 本の台本に(利用者「ビルドを楽にするため、PS1 を作成」)
+
+- `Test\scripts\build-release.ps1`: JDK を探す(gradle.properties が無い JDK を指していたら直し方を出す)→ 組み立てのフォルダの読み取り専用の印を外す → 単体試験(一般・管理。件数は結果の XML から数え、0 件や失敗なら止める)→ 前の版を `Old\release-v<版>-<日付>` へ写す → リリース版 2 つ → 版と署名の確かめ(2 つが同じ版・前より大きい・署名の鍵が前と同じ)。Gradle は `--no-daemon`
+- オプション: `-Push`(apk-push.ps1 で受け箱へ。Git 付属の ssh が動かないときのために Windows の ssh を渡す)・`-PushOnly`・`-CheckOnly`(今ある APK を確かめるだけ)・`-DebugOnly`(試験とデバッグ版。版は上がらない)・`-SkipTests`・`-Help`
+- 確かめた: `-CheckOnly`(版 58・署名そろう)・`-DebugOnly`(試験 960 件 × 2・デバッグ版 2 つ。2 分 13 秒)・`-DebugOnly -Push` は断る。**リリース版を作る道(写す → 組み立て → 比べる)と `-Push` は、この台本ではまだ流していない**(版を無駄に上げないため。同じ手順は同じ日に手で通した)。古い `build-beta.ps1` は残した
+
+### 2026-11-12 — Wi-Fi 測位の比べは打ち切り・AR と 360° を 1 つに・学内の 3D を計画に・アプリから RTT の表示を外した(版 58)
+
+- 利用者の指示: 「#99 は削除。理由: 十分な精度を得られたから」「#100・#104 は合わせる」「AR の画像などは学内全域の点群(3D)+画像でもらえそうなので、学内 3D で Wi-Fi の精度向上も計画に」「360° は Insta360 X5 を使う予定」「RTT は AP305C で非対応なので表示は削除」
+- **プロジェクト状況**: #99(Wi-Fi 測位の比べ)は消した(十分な精度が出たので比べは要らない)。#100(AR の実測)は #104 に合わせて「ストリートビュー(360°)と AR の素材」(段 13)に。新しく「学内の 3D で Wi-Fi の測位の精度を上げる」(段 13)。保留の欄から Wi-Fi 測位の比べ・AR の実測を外した
+- **計画**: plan.md に段 13(学内の 3D を使う)。データをもらってから形式・座標の合わせ方を決める
+- **アプリ(版 58・一般と管理)**: 学内の AP(AP305C)は 802.11mc に応じないので、RTT の表示を外した
+  - 計算方法の選択肢から「Wi-Fi RTT」(保存してあった端末はハイブリッド法に戻る)
+  - 測位の診断の「Wi-Fi RTT: …」の行
+  - 比べの構成 G(Wi-Fi RTT)。記号は詰めない(前の記録・CSV の G と混ざらないように)
+  - 測位のパラメータの画面の「Wi-Fi RTT」の部分(一覧に出さないだけ。値の表と配る JSON はサーバーと項目をそろえるため残した)
+  - **測る仕組みそのものは残した**(応じる AP が無ければ何もしない。対応した AP に替わったら表示を戻せば使える)
+- 試験: 一般・管理とも 960 件が通過。リリース版 58(内部の番号 1000058)・署名は前の版と同じ(d71fbf0a…)。前の版 57 は `Test\Old\release-v57-20261112` へ写した。受け箱へ送った(検めに通れば自動で公開)
+- **はまった所**: `Test\app\build` のフォルダ 2175 個に読み取り専用の印が付いていて、Gradle(Java)がフォルダを消せず AccessDenied で落ちた → `attrib -R /S /D` で外した。既存の Gradle のデーモンは使わず `--no-daemon` で流した。apk-push は Git 付属の ssh がこの環境で動かないので `GIT_SSH` に Windows の ssh を渡した
+### 2026-11-12 — 段 12 案内AIのつなぎを ngrok から Cloudflare Tunnel へ(**完了**。利用者が管理画面で「届きました(0.1 秒・unsloth:…gemma-4-26B…)」を確認)
+
+- 利用者(11-11)「トンネルを経由する方針で行きましょう」。計画は plan.md の段 12、手順は docs/17 §7
+- **`guide-llm/start-guide-llm.ps1`**: `guide-llm.env` に `CLOUDFLARE_TUNNEL`(UUID)があれば cloudflared で出す。設定ファイルは一時フォルダに作り(秘密は入らない)、行き先は `CLOUDFLARE_HOSTNAME` → 門番と「それ以外は 404」。`cloudflared tunnel --config … --protocol … run`。止めたら門番も止め、設定ファイルを消す。UUID・ホスト名・つなぎ方は形を確かめてから書く。トンネルの鍵(`%USERPROFILE%\.cloudflared\<UUID>.json`)は在るかだけ見る(中身は読まない)。`-NoNgrok` は `-NoTunnel` に(古い名前も受ける)
+- **ngrok の分岐は残した**(`CLOUDFLARE_TUNNEL` が無く `NGROK_DOMAIN` があれば今までどおり)。cloudflared で確かめが済んだら消す(`ngrok-skip-browser-warning` の行も一緒に)
+- **`lib/guide-chat.php`**: 門番への呼び出しに `User-Agent: KosenMap-Guide/1`(PHP の curl は既定で付けない。Cloudflare の Browser Integrity Check は無い要求を断る。いまは切ってあるが、入れても止まらないように)
+- 見本 `guide-llm.env.example` に 3 つ(値なし)・注記と管理画面の見出し(「+ ngrok」→「+ トンネル」)・docs/17 に §7(作り方・WAF のルール 2 つ・確かめ方・戻し方・本番から届くかを見るセル)。**本番サーバーの IP は文書に書かない**
+- **確かめたこと**: 台本の構文・`-Help`・設定ファイルの中身(台本から抜き出して動かした)・形の確かめ(UUID でない名前・改行入りのホスト名を断る)。check.php 3205 件が通過
+- **まだ確かめていないこと**: **cloudflared そのものは動かしていない**(この PC に入っていない。入れるのは利用者)。つながるか・Norton が間に入るか・設定ファイルを cloudflared が受けるかは、利用者が入れたあとに見る
+- 利用者がすること(docs/17 §7-1): cloudflared を入れる → login → create → route dns → `guide-llm.env` → WAF のルール 2 つ → 本番の `.env` の `KM_GUIDE_LLM_URL` を替えて `-Action up` で配備### 2026-11-11 — カーネルの CVE が閉じた・Web の画面での確かめ・英語の札を直した(利用者「カーネルの直った版へ上げて再起動しました。Web の画面での確かめを行ってください」)
+
+- **カーネル(CVE-2026-98432)**: 本番は 11-07 から 6.8.0-149.149(11-11 18:18 に利用者が再起動。新しく入った版は無い)。**11-11 に Ubuntu の頁が「noble: Fixed in 6.8.0-149.149」になった**(11-07 までは「作業中」だった。changelog の「ipv4: free inet_opt and ireq_opt after an RCU grace period」がその直し)。再起動のあと 8 サービスとも動いている・更新待ちは distro-info の 2 つだけ。つなぎ(`km-ipopt.service`・`/etc/km-ipopt.nft`・`net.mptcp.enabled=0`)はまだ入っている。外してよい(外すのは利用者。コマンドは返事に書いた)。プロジェクト状況 #105 は消した
+- **段 11-8 は本番に出ていた**(読むだけ): `/code/` 200・ESLint の部品と Path Intellisense のファイルがある。#130 は消した
+- **Web の画面での確かめ**(保留だった 4 つ。#107 は消した):
+  - ログインしたまま配備してログインが残るか: 本番は再起動のあとに入り直したセッションしか無く判定できない → **検証機で web のコンテナを作り直し(`up -d --force-recreate web`)、同じ Cookie のセッション(CSRF の札)が残る**のを確かめた。本番も同じボリューム `km_web_sessions` を `/var/lib/km-sessions` に付けている(www-data・700)
+  - 色分けの塗り: 本番の地図に塗りが出ている(Chrome)。検証機の管理画面「地図の色分け」で 1F を作り直せた(区画 77・5・3、見本が出る)。17 階とも「アプリの絵・11-07」で塗ってある
+  - 英語の名前・読み: 管理画面「地点の読み・別名・URL」に入っている(検証機は本番の 11-08 の写し)。本番の地図を English にすると名前が英語になり、「Stairs」で英語の名前が探せる。表示は日本語に戻した
+  - 札・QR のカメラ: Web にカメラの読み取りは無い(アプリの項目。11-07 に実機で確かめ済み)
+- **見つけて直した(配備待ち。#131)**:
+  - 英語の地図で建物の札がどれも「Buildi…」になり見分けられない(札は 7 文字以上を 6 文字 + … に縮める決まり)→ 半角は 0.5 文字と数える(`Main/app.js` の `shortPoiName`。「Building 1」はそのまま・全角の名前は今までどおり)
+  - 英語の画面に日本語のまま残っていた文を辞書に足した(`Main/i18n.js`): 案内の例 2 つと「いちばん確実」・「苦手な質問」とその中身・テスト用アカウントの札の説明・操作方法の既定の 6 行。i18n.test.js が「案内の例・苦手な質問・操作方法の既定の文は全部訳がある」を見る
+  - 試験: check.php 3202 件・i18n.test.js 43 件が通過。検証機の Chrome で英語の札が「Facility D03…」(半角 12 文字)まで出るのを確かめた(案内とテストの札は検証機のアカウントでは出ないので、辞書の試験で見た)
+- **案内AIのつなぎを ngrok から Cloudflare Tunnel へ**(利用者の案): 勧めた(返事に理由と形)。まだ作っていない
+- **11-12 夕方: 利用者が cloudflared 2026.10.7 を入れ、login・create(kosenmap-guide)・route dns(llm.ito4.jp)・配備まで済ませた。** こちらで `guide-llm.env` に UUID と名前を入れ、LLM を起こさずに cloudflared だけ 12 秒起こして確かめた: 設定ファイルは `ingress validate` が OK・**QUIC で 4 本つながった(成田。Norton は邪魔しない)**・この PC からは 403(WAF が止める)・**本番の web からは 502(トンネルまで届き、門番が居ないだけ)**。本番の `KM_GUIDE_LLM_URL` は `https://llm.ito4.jp`・User-Agent と英語の札の直しも出ている。**残り**: 利用者が Unsloth を起こして `start-guide-llm.ps1` を動かしたときに、本番から 200 と管理画面「届くか確かめる」を見る → 問題なければ ngrok の分岐を消す
+- **11-12 夜: 通しで届いた**(利用者が Unsloth と台本を起こし、管理画面「届くか確かめる」が 0.1 秒で OK)。**ngrok の分岐を消した**: 台本の分岐と `NGROK_DOMAIN`・見本の行・PHP の `ngrok-skip-browser-warning`・注記。check.php は「ngrok を呼ばない」を見る(3205 件が通過)。利用者の `guide-llm.env` の `NGROK_DOMAIN` の行は残っているが、もう読まない。PHP のヘッダを外した分は次の配備で出る(急がない)。プロジェクト状況 #132 は消した
+### 2026-11-09 — 段 11-8 /code/ に拡張機能を足した(利用者「HTMLHint、Auto Rename Tag、Path Intellisense、IntelliSense for CSS class names in HTML、Bracket Pair Colorization、HTML CSS Support、ESLint、を追加できますか？」。検証機だけ・**配備待ち**)
+
+- **調べたこと**: 7 つのうち Web 版の入口(`browser`)があるのは Path Intellisense だけ。HTMLHint・Auto Rename Tag・CSS class names(Zignd)・HTML CSS Support・ESLint は Node 専用。Bracket Pair Colorizer は作者が廃止(VS Code に入った)。利用者が 4 つの案をすべて選んだ
+- **Path Intellisense 2.8.0**: Open VSX の sha256 と一致・認証済みの発行者・ライセンスは LICENSE.txt の MIT。Web 版の入口(1 ファイル)に外への通信・eval・動的な読み込みなし。ロック(`extensions.lock.json`)と `VSIX_KEEP` に足した
+- **VS Code の設定**: `editor.linkedEditing`(開きタグを直すと閉じタグも)・`editor.bracketPairColorization.enabled`・`editor.guides.bracketPairs: active`
+- **自作の拡張機能「Web の検査」**(`code-src/src/webChecks.js`・純粋な部分は `webChecksCore.js`。拡張機能の欄でオフ・設定 `kmWebChecks.*` で 1 つずつ切れる):
+  - HTMLHint 1.9.2: .html を検査。規則は既定 + プロジェクト直下の `.htmlhintrc.json`(`.htmlhintrc` は拡張子が無くプロジェクトに置けないため)
+  - ESLint 10.14.0 の Linter: .js・.mjs・.cjs を `@eslint/js` の推奨の規則 + ブラウザの大域変数(globals 17.14.0)で。**利用者の eslint.config.js は実行しない**。使っていない変数は注意に・script の一番外は見ない(onclick から呼ぶため)・ほかの script の .js の一番外の名前は no-undef にしない。規則の名前から ESLint の説明へリンク
+  - CSS のクラス名・id: プロジェクトの .css と `<style>` から集めて class="…"・id="…" で補完。どの CSS にも無いクラス名に注意(ほかのサイトの CSS を読む HTML・CSS が 1 つも無いプロジェクトでは出さない)
+  - 部品は初めて要るときに読む(ESLint は 1.2MB)
+- **ESLint をブラウザで動かすための手当て**(`vite.config.js` の `km-eslint-browser`。形が変われば組み立てを止める): 規則の設定の確かめ(ajv の compile が new Function を使う。CSP に 'unsafe-eval' が無い)を「いつも通す」に替えた(規則はこちらが決めた推奨のものだけ)・`process.env.TIMING` を外した・`node:path` を `src/shims/path.js` へ・esquery は CJS の版を読む(ESM の版は default だけで「r.parse is not a function」になった)。組み立てた ESLint に new Function が無いことを check.php が見る
+- **Chrome で見つけて直した**: 起動の直後は `workspace.findFiles` が「Search provider not initialized」で落ちる → ファイルの一覧は `workspace.fs` で自分でたどる・失敗した集めは覚えない
+- **確かめた(検証機の Chrome)**: HTMLHint(id の重複)・無いクラス名の注意・class="ca" で card・card-title が出る・`<p>` を `<pre>` に直すと閉じタグも・`src="./` で同じフォルダのファイルが出る・ESLint(no-undef・no-debugger・構文の誤り。lib.js の関数は no-undef にならない)が「問題」と Error Lens に出る・括弧の色・拡張機能の欄に「Path Intellisense」「Web の検査」・CSP と eval の誤りなし。試しのフォルダは消した
+- 「このエディタについて」に Path Intellisense・ESLint・@eslint/js・globals・HTMLHint(権利者は LICENSE で確かめた)を足した
+- 試験: check.php 3202 件・editor.test.js 283 件が通過。npm audit 0 件
+- 検証機の自己検査(コンテナの中)の FAIL は、案内AIの compose・自宅 PC の台本・assetlinks などコンテナに無いファイルを見る項目で、今回の変更とは関係なし
+### 2026-11-09 — 段 11-7 VS Code 型のエディタを本番へ(利用者が配備・**完了**)
+
+- 利用者が配備。読むだけで確かめた: `/code/` と `preview.php` は 200・webview の 4 つのファイルは 200 でほかは 404・殻の中のスクリプトの sha256 がヘッダと一致(Cloudflare が書き換えていない)・CORS・規約の新しい文面。利用者も「全部OK」。プロジェクト状況 #125〜#129 は消した
+### 2026-11-09 — 段 11-7 の準備: 本番にも /code/ を配る形にした(配備は利用者)
+
+- `scripts/deploy-to-host.ps1`: 本番だけ `./src/code` を除外していたのをやめた。配る中身の見張り(mustContain)に `src/code/index.php`・`preview.php`・`.vite/manifest.json` を足した
+- **/code/ の古い組み立ての退避**を足した(`retired/code-assets/`。前の 1 世代だけ残す。拡張機能の下のフォルダ `*.vsix/` も見て、空になったフォルダは消す)。/editor/ と同じ考え。**検証機では退避が無かったため 19 世代・367MB 溜まっていた** → この配備で 110 個を退避して `src/code` は 68MB
+- nginx・compose・証明書は 11-09 の配備(`-Action up`)と `host-cert.sh issue` で済んでいるので、今回の配備は `-Backup -Yes` だけでよい
+- 配備のあと利用者がすること: 管理画面「QR のリンク集」に `https://ito4.jp/code/` を足す
+- 規約 第8条の3 の新しい文面(11-6)も、この配備で本番に出る
+### 2026-11-09 — 段 11-6 VS Code 型のエディタの仕上げ(入口・ライセンスの表示・規約)(検証機だけ。**本番へは送らない**。11-7 で配備)
+
+- **/editor/ の入口**: 帯に「VS Code 型で開く」(打ちかけを保存してから `/code/?p=<いまのプロジェクト>` を別のタブで)。殻は `/code/` を組み立てて置いてあるときだけ出す(本番は 11-7 まで無いので出ない)。狭い画面では出さない
+- **QR のリンク集**: 管理画面「QR のリンク集」(DB)で管理しているので、**11-7 で /code/ を出したあと利用者が足す**(`https://ito4.jp/code/`)
+- **このエディタについて**(`code-src/src/about.js`): 下の帯の右の ⓘ・コマンド「このエディタについて(ライセンス)」。読むだけの文書(`km-about:`)を Markdown のプレビューで見せる。部品(VS Code 1.145.2・monaco-vscode-api 39.0.3・日本語パック・Prettier の拡張機能 12.4.0 と Prettier 本体・Error Lens 3.30.0)・版・ライセンス(どれも MIT)・権利者と MIT の本文・「Microsoft の製品ではありません」。権利者は vsix の LICENSE で確かめた(npm の部品は LICENSE を同梱していないので年は書かない)。check.php が VS Code の版とロックの版を突き合わせる
+- **規約 第8条の3**(利用者が 11-09 に文面を確かめた): 冒頭に「かんたんな画面 /editor/ と、VS Code 型の画面 /code/」・2 つは同じプロジェクトを扱う、を足し、「VS Code 型の画面は … Microsoft の製品ではありません。拡張機能は同梱したものだけ … 「このエディタについて」に示します」の項目を足し、プレビューの項目に「VS Code 型の画面の拡張機能」も別のアドレスの枠で動く、を足した。改定日は 2026-11-09。プライバシーポリシーは変えない(「Web Code Editor」が /code/ も含む)。**この文面は次の配備で本番に出る**ので、11-7(/code/ を出す配備)と一緒に出すのがよい
+- **確かめた(検証機の Chrome)**: 「このエディタについて」の表示・/editor/ の「VS Code 型で開く」から同じプロジェクトの /code/ が開く・規約のページの文面と改定日
+- 試験: check.php 3193 件(組 `code` 50 件)・editor.test.js 272 件が通過
+### 2026-11-09 — 段 11-5 Open VSX の拡張機能を版と sha256 で固定・Prettier を絞る(検証機だけ。**本番へは送らない**。11-7 で配備)
+
+- **固定**: `code-src/extensions/extensions.lock.json` に Prettier 12.4.0・Error Lens 3.30.0 の版・入手先・sha256・ライセンス(どちらも MIT)・確かめたことを書いた。11-09 に Open VSX が公表する sha256 ともう一度照合して一致。check.php が vsix の sha256・一覧・入手先をロックと突き合わせる(差し替えたら止まる)
+- **Prettier を絞った(配る大きさ 14.4MB → 5.4MB)**: vsix の取り込み部品は Web 版の入口がある拡張機能のファイルを全部出す。Prettier の Web 版の入口 `dist/web-extension.cjs` は Prettier 本体と言語の部品を抱えた 1 ファイルで、ほかのファイルを読まない(動的な import・fetch・node_modules の参照なし)ので、`vite.config.js` の `trimVsix` で `node_modules/prettier`(8.5MB)・Node 用の `dist/extension.js`・試験・`.claude` などの登録と出力を外した。vsix そのものは変えない。Prettier 本体のライセンスの表示(`node_modules/prettier` の LICENSE と THIRD-PARTY-NOTICES)は残した
+- **確かめた(検証機の Chrome)**: CSS を Shift+Alt+F で Prettier が整形(右下に Prettier)・Error Lens の表示。整形は元に戻した
+- **Code Spell Checker**: Open VSX で「spell checker」の上位 25 件を調べ直したが、Web 版の入口(`browser`)を持つ綴りの検査は無かった(Code Spell Checker・Harper・typos・LTeX・Spell Right はどれも Node か別のプログラムが要る)。**利用者が「入れない」と決めた**(11-09。自作もしない)
+- 試験: check.php 3189 件(組 `code` 46 件)・editor.test.js 272 件が通過
+### 2026-11-09 — 段 11-4 同期を syncManager.js に切り出して /editor/ と /code/ で共通に(検証機だけ。**本番へは送らない**。11-7 で配備)
+
+- **切り出し**: 段 10-B で `editor-src/src/main.js` に書いた同期(送る・読む・突き合わせる・ぶつかりを選ぶ・消す)を、画面から離して `editor-src/src/project/syncManager.js` にした。口とのやり取りと純粋関数は `sync.js` のまま。画面ごとに違うところ(開いているもの・打ちかけの保存・記録の書き換え・読み込んだあと)は `host` で受ける。main.js から約 260 行が抜けた
+- **/editor/**: 部品を使う形に置き換えただけで、動きは変えていない(帯の印・一覧の印・サーバーにだけあるもの・ぶつかりの 3 つの選び方・消す)
+- **/code/**(`code-src/src/codeSync.js`):
+  - 殻が /editor/ と同じくサインインのセッションを見て(fail open・DB は読まない)、CSRF の札とサインインしているかを meta で渡す。口は同じ `api/editor.php`
+  - 下の帯に状態(/editor/ と同じ文言)。押すと、ぶつかっていれば選ぶ画面(VS Code のダイアログ)、そうでなければメニュー(使っている量・いま送る・突き合わせる・サーバーにだけあるものを読む)
+  - サインインしていなければ帯は「サインイン」(戻り先は `/code/`。sign-in.php は `?` を通さない)
+  - 書いたら 3 秒待って送る・手で保存(Ctrl+S)したら待たずに送る・タブを隠したら送る・戻ったら突き合わせる
+  - 「プロジェクトを開く…」の一覧に同期の印と、サーバーにだけあるもの(選ぶとこの端末へ読み込んで開く)
+  - ファイルの口(projectFs.js)は記録の読み書きを 1 列に並べる(書き込みと、同期が server を書くのが入れ違うと、古い写しで server を消すため)
+- **確かめた(検証機の Chrome・サインインしたまま)**: /code/ で打つ → 3 秒で送って版 4→5・/editor/ で打つ → 送って版 6 が /code/ にも届く・ぶつかり(記録の版を 1 つ戻して作った)で「サーバーのものを読む」「この端末のもので上書き」・メニューと一覧の印。サインインしていない殻は `km-signed-in` 0。試しに打った分は元に戻して送り直した(版 7)
+- 試験: editor.test.js 272 件(`[project/syncManager]` 14 件を足した)・check.php 3185 件(組 `code` 42 件)が通過
+### 2026-11-09 — 段 11-3 VS Code 型のエディタのプレビューと webview(検証機だけ。**本番へは送らない**。11-7 で配備)
+
+- **枠のオリジン `webview.<ドメイン>`**(拡張機能ホストと webview の枠を本体から離す):
+  - 部品の `iframeAlternateDomain`(拡張機能ホスト)と `getWorkbenchServiceOverride` の第 2 引数(webview)に、殻の meta `km-webview-origin`(`lib/site.php` の `km_site_webview_origin()`)を渡す。部品は URL のホストだけを差し替えるので、名前は 1 つでよい
+  - nginx: 新しい server `${KM_WEBVIEW_DOMAIN}` は 4 つのファイル(index・fake・service-worker・webWorkerExtensionHostIframe)だけを GET で返し、ほかは 404。枠の親は本体だけ(`frame-ancestors`)。拡張機能ホストの枠の CSP には中のインラインの台本の sha256 を書く(check.php が組み立てた HTML と比べる)
+  - 本体の `/code/assets/` は CORS を webview のオリジンだけに許し、枠の HTML は返さない(本体のオリジンで開かせない)
+  - CSP `'code'` の frame-src から `'self'` を外し、webview と html のオリジンだけにした
+  - compose に `KM_WEBVIEW_DOMAIN`(reverse-proxy)・`KM_WEBVIEW_URL`(web)。検証機の証明書は `host-local.sh certs`(新しい口。.env を触らない)で webview の名前を足した。本番の `host-cert.sh status` は名前が無いと「注意」を出す(11-7 まで)
+  - 試作の仮の口 `nginx/km/code-proto-iframe.conf` は `Old/removed-2026-11-08-code-proto/` へ退避
+- **見つけて直したもの**:
+  - worker の URL が `/code/assets/…` のままだと、別のオリジンの枠の中で解決できない → `new URL(…, location.href)` で完全な URL に
+  - Markdown のプレビューが白い: `fake.html` の `frame-ancestors` が `'self'` だけだった(祖先をすべて見る)→ 本体も足した
+  - Chrome のキャッシュに CORS の無い古い応答が残り、拡張機能ホストが Code 81 で止まった(検証機の Chrome だけ。本番は初めて配るので起きない)
+- **動いたもの(検証機の Chrome)**: 枠はすべて `webview.192-168-3-31.sslip.io`・Error Lens・Markdown のプレビュー・.ipynb のセル(信頼の確認は残す)
+- **プロジェクトのプレビュー = 別の窓 `/code/preview.php?p=<id>`**:
+  - VS Code の webview の中に見せる側の枠を重ねると、webview のオリジンの CSP に html のオリジンを足すことになるので、本体のオリジンの別の窓にした(CSP は `'editor'`)
+  - /editor/ の組み立て(`projectBuilder.js`)と見せ方(`preview.js`・html のオリジンの `editor-run.html`)をそのまま使う。/code/ の自動保存(0.8 秒)の知らせ(BroadcastChannel)で組み直す
+  - コンソールの「ファイル:行」を押すと、/code/ がそのファイルのその行を開く(BroadcastChannel `km-code-reveal`。同じプロジェクトの決まりどおりのパスだけ。`paths.js` の `revealTarget`)
+  - 入口: 下の帯の「プレビュー」・エディタの右上のボタン(HTML・CSS・JS)・コマンド「プレビューを別の窓で開く」(Ctrl+Shift+Alt+V)
+  - 窓は名前で使い回す。`noopener` を付けると毎回新しいタブになった(Chrome で確かめた)ので、窓の側が読み込んだ直後に `window.opener = null` で自分から切る(開く側で切っても読み込み直しで戻っていた)
+- **本番の DNS**(利用者が 11-08 に Cloudflare で足した。読むだけで確かめた): `webview.ito4.jp` は ito4.jp・html.ito4.jp と同じ Cloudflare の番地(橙)。いまは HTTPS が 526(本番の証明書に名前が無い)→ 証明書に足す
+- **証明書の発行の下見が橙の名前を断った**(11-09、利用者が本番で `host-cert.sh issue … --also webview.ito4.jp`): 手順 1 が「DNS がこのホストの IP か」だけを見ており、段 8 で Cloudflare を通るようにした名前(ito4・auth・html・share・webview)がすべて ★ になった(発行は試していない)。→ **Cloudflare の番地(nginx の realip と同じ一覧 `nginx/km/cloudflare-real-ip.conf`)も認める**ように直した。本当に届くかは今までどおり手順 2(80 番の `/.well-known/acme-challenge/` を外から取る)が確かめる。検証機の sh で判定を試した(Cloudflare の 番地(104.21.・172.67. で始まるもの) は認め、このホスト・範囲の外・形の違うものは認めない)
+- 試験: editor.test.js 258 件(`revealTarget` 3 件を足した)・check.php 3181 件(組 `code` 39 件)が通過
+
+### 2026-11-08 — 段 11-2 VS Code 型のエディタの拡張機能(検証機だけ。**本番へは送らない**。11-7 で配備)
+
+- **拡張機能の欄**:
+  - 部品 `@codingame/monaco-vscode-extension-gallery-service-override` 39.0.3 を足した(npm audit 0)。入手先の URL は渡さないので、検索して入れる口は働かない
+  - 空の検索だと「インストール済み」(いつも 0 個)になるので、開いたときに `@builtin` を入れて同梱のものを並べる
+  - 歯車から「無効にする」「有効にする」だけ使える。アンインストールと別の版は灰色
+- **自作の日本語の用法**(`code-src/src/jaHelp.js` は純粋関数、`jaExtension.js` は拡張機能の形。データは /editor/ の `editor-src/src/data/*` を使い回す):
+  - VS Code 付属の HTML・CSS の言語サーバーは、英語の標準データを必ず使い、切る設定が無い。同じデータを足すと候補が 2 つずつ並ぶ
+  - そのため日本語は **指を合わせたときの説明**(英語の説明の下に、日本語の説明と例)と **雛形**(HTML の `<` の後の「img 画像」など・JS の雛形)で足した
+  - 拡張機能の欄に「日本語の用法(Web Code Editor)」として出て、オフにできる。起動の前に登録しないと欄に出ないので、そうした
+- **言語の色分けを確かめた**: Python・Java・PowerShell・バッチ・SQL・YAML・XML・シェル・PHP・TypeScript(どれもアイコン付き)。配色テーマは追加の 8 つが選べる
+- **.ipynb**:
+  - ノートブックの部品が遅れて作られ、テキストのまま開いていた → 起動の直後に一度使うようにして、「Jupyter Notebook」の画面が既定になった
+  - 開くと「このノートブックの作成者を信頼しますか?」が出る(VS Code の守り。そのまま残す)
+  - **中身はまだ出ない**: 出力の枠(webview)がサイト既定の CSP で止まるため。11-3 の `webview.<ドメイン>` で直す
+- **見つけて直したもの**: ホバーの `<a>` が markdown の中で HTML として消えていた(「rel( の属性)」)→ コードの形にした
+- 試験: editor.test.js 255 件(`[code/jaHelp]` 8 件)・check.php 3165 件(組 `code` 23 件)が通過
+
+### 2026-11-08 — 段 11-1 VS Code 型のエディタの基盤(検証機だけ。**本番へは送らない**。11-7 で配備)
+
+- **作ったもの**(`code-src/src/`):
+  - `projectFs.js`: ファイルの口。名前・種類・上限(20MB・500)の確かめは `/editor/` と同じ決まり
+  - `commands.js`: コマンド 5 つ(プロジェクトを開く・新しいプロジェクト・ZIP/ファイル/フォルダを読み込む・ZIP で書き出す・かんたんなエディタで開く)。エクスプローラーの右クリックと、下の帯のプロジェクト名
+  - `main.js`: 狭い画面では /editor/ を勧める
+- **/editor/ 側**:
+  - `db.js` の BroadcastChannel `km-editor-changes` で、ほかのタブの変更を読み直す
+  - `?p=` で開くプロジェクトを選べる
+  - 種類を広げた: .ts・.py・.ipynb・.php・.ps1・.bat など 25 個。サーバーは `KM_EDITOR_EXTRA_TYPES`。HTML 展開の型の表は広げない
+- **CSP の 'code' を確定**:
+  - 'editor' に足すのは `'wasm-unsafe-eval'`・`worker-src blob:`・`frame-src 'self'` だけ
+  - worker を同じオリジンのファイルから直に起こす形も試したが、その worker にサイト既定の CSP が付いて WASM が止まった → blob のまま
+  - 11-0 の測定の台本は外した
+- **見つけて直したもの**:
+  - **プロジェクトを切り替えても、前のプロジェクトのタブが残った**(「ファイルが見つかりません」)。どのプロジェクトも `/workspace` で、画面の状態の鍵(workspace の id)が同じだった → id をプロジェクトごとにした
+  - 10-B の check.php が `.php` を断る前提だった → `.exe` で見る
+- **検証機の Chrome で確かめた**:
+  - CSP の違反なし・コンソールのエラーなし
+  - プロジェクトの切り替え(ページを開き直す)と、プロジェクトごとのタブ
+  - `/editor/?p=` で同じプロジェクト。/editor/ で打つと /code/ に、/code/ で打つと /editor/ に届く
+- **まだ見ていないもの**:
+  - 狭い画面の案内(Chrome の窓の大きさを変えるので見送り)
+  - 読み込み・書き出し(ファイルを選ぶ画面・ダウンロードになるため。11-7 の前に利用者と一緒に)
+- 試験: editor.test.js 247 件・check.php 3161 件(新しい組 `code` 19 件)が通過
+
+### 2026-11-08 — 段 11-0 VS Code 型のエディタの試作と測定(検証機だけ。**本番へは送らない**。続けるかは利用者が決める)
+
+- **元**: `server/code-src/`(Vite 8.3.5・`@codingame/monaco-vscode-api` 39.0.3 と同じ版の部品 74 個)。出力は `src/code/`、殻は `code-src/public/index.php`。プロジェクトは /editor/ と同じ IndexedDB `km-editor` を `file:///workspace` として見せる(`code-src/src/projectFs.js`)
+- **測った値**:
+  - 組み立ては Windows で約 5 秒。配る大きさは 73.8MB(拡張機能の source map 59MB は配らない)
+  - 初めて開いたときの転送は 4.6MB、起動まで 1.7 秒(2 回目は 0.6〜0.8 秒)
+  - 本体のページのメモリは 70MB
+- **CSP**: /editor/ と同じ厳しさを Report-Only で送って数えた。本体のページで足りなかったのは次の 3 つだけで、**本体に `'unsafe-eval'` は要らない**:
+  - 拡張機能ホストの枠(`frame-src`)
+  - 色分けの WASM(`'wasm-unsafe-eval'`)
+  - blob の worker 3 つ(`worker-src blob:`)
+- **cross-origin isolation(COOP/COEP)は無くても動いた**(JS/TS の補完・型の説明)
+- **動いたもの**:
+  - 日本語の画面・エクスプローラー(新しいファイル)・HTML/CSS/JS の色分け
+  - JS/TS の補完・CSS の検査(日本語の文)
+  - Open VSX の **Prettier 12.4.0**(既定の整形に選んで整形)・**Error Lens 3.30.0**(行の右に「不明なプロパティ: 'colr'」)。どちらも Open VSX の sha256 と一致・認証済みの発行者・Web 用の入口に外への通信も eval も無し
+- **動かなかったもの(予想どおり。11-3 で直す)**: Markdown のプレビューなどの webview。枠の HTML にサイト既定の CSP が付き、中で Service Worker も登録するので、**`webview.<ドメイン>` の別オリジンが要る**
+- **仮の口**: 拡張機能ホストの枠は同じ理由で起動しなかった。検証機だけ `nginx/km/code-proto-iframe.conf`(枠の HTML にだけ中の meta と同じ CSP)で動かした。部品には `iframeAlternateDomain`(別オリジンへ出す設定)があるので、11-3 で移して消す
+- **本番へ出さない守り**: `deploy-to-host.ps1` は本番のときだけ `./src/code` と `code-proto-iframe.conf` を除く(手元の tar で確かめた)
+- **見つけたこと**:
+  - vsix のファイルは `/code/assets/…` のままだと拡張機能ホストで読めない(Failed to fetch)→ Vite の `renderBuiltUrl` で完全な URL にした
+  - Code Spell Checker は Web 版が無い(GPL-3.0)
+  - npm audit は KaTeX の low 4 件(11-1 で overrides)
+- check.php 全体 3139 件が通過
 
 ### 2026-11-08 — 段 10-B Web Code Editor のプロジェクトをサーバーへ同期(サインインした人。**11-08 に本番へ配備済み・完了**。nginx は 21:50 に起こし直した)
 

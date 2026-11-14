@@ -66,7 +66,7 @@ services:
   postgres:
     # 2026-09-15 に動いていた中身。**タグも残す**(`名前:タグ@digest`)—— 動くのは digest で、
     # タグは scripts/check-updates.sh が「固定した digest より新しい修正版が出たか」を読むため
-    image: postgres:17-alpine@sha256:3540c0362c809df084ffac0ae69fe794515f9de92692f02178bcdce0ef0302ac
+    image: postgres:17-alpine@sha256:d3244e8ce3f165ee3c93d9c4a4b1d0fe48b3a89e2287b717fdcbbde92d405065
     container_name: km-postgres
     restart: unless-stopped
     security_opt:
@@ -199,7 +199,7 @@ services:
 
   mariadb:
     # 2026-09-15 に動いていた中身(タグを残す理由は postgres と同じ)
-    image: mariadb:11.4@sha256:d1891ede5a559f1086f55053bb8cc1569b0298338c4d72d71725a7f74f6ba620
+    image: mariadb:11.4@sha256:5e73baf8179b29f115101bb102763a47a017361f3e9792daccba6646c3ab1532
     container_name: km-mariadb
     restart: unless-stopped
     security_opt:
@@ -283,7 +283,7 @@ services:
   # (docs/05-containers の §5-2。デスクトップの「トンネル開通SSH.cmd」がこれを行う)
   phpmyadmin:
     # 2026-09-15 に動いていた中身(タグを残す理由は postgres と同じ)
-    image: phpmyadmin:5.2.3-apache@sha256:f54a37b908b26caa7032c4eb0c7f3495fdd90208a06eed9c4b2c8e691dd1662c
+    image: phpmyadmin:5.2.3-apache@sha256:e4b3eb5305cd42d21512bb55def2bab52625d56df927ad4ee1864a9354c84d40
     container_name: km-phpmyadmin
     restart: unless-stopped
     security_opt:
@@ -424,7 +424,7 @@ services:
       # 空なら上の LOGTO_M2M_* に落ちる。片方だけ入れると例外で止まる。
       LOGTO_M2M_READONLY_APP_ID: ${LOGTO_M2M_READONLY_APP_ID:-}
       LOGTO_M2M_READONLY_APP_SECRET: ${LOGTO_M2M_READONLY_APP_SECRET:-}
-      # 案内チャットの LLM(2026-10-24、企画書。lib/guide-chat.php)。自宅 PC の server/guide-llm/server.py を ngrok で出した https の URL と、
+      # 案内チャットの LLM(2026-10-24、企画書。lib/guide-chat.php)。自宅 PC の server/guide-llm/server.py を Cloudflare Tunnel で出した https の URL と、
       # その Bearer の鍵(server.py と同じ値)。**鍵は秘密**(ブラウザには出さない)。空なら LLM なしで、言葉で探した結果だけを返す
       KM_GUIDE_LLM_URL: ${KM_GUIDE_LLM_URL:-}
       KM_GUIDE_LLM_KEY: ${KM_GUIDE_LLM_KEY:-}
@@ -595,7 +595,7 @@ services:
     # **タグだけに戻さないこと**(digest は必ず付ける)。
     # タグ 1-alpine(1 系の Alpine。2026-11-06 に付けた)。タグが無いと update-containers.ps1 が上げられない(どれが新しいか分からない)。
     # それまでの固定は 1.31.6-alpine の digest だけで、初回の Trivy で CRITICAL 1・HIGH 10(brotli・expat・pcre2)が出た
-    image: nginx:1-alpine@sha256:713fc2ebfd92e8217db451477182ee91944b123d2b1ee9fd5a8c6e91ca6c3a11
+    image: nginx:1-alpine@sha256:fed7e14be83cbd2661a75cdc5b872d936cf155d46c327084d30b8df19ae88d72
     container_name: km-nginx-proxy
     restart: unless-stopped
     security_opt:
@@ -651,6 +651,9 @@ services:
       KM_HTML_DOMAIN: ${KM_HTML_DOMAIN:-html.${KM_DOMAIN:-192.168.3.29}}
       # HTML 展開サイトの共有リンクの名前(2026-11-05。html の server に一緒に並べる)。**いつも定義する**。web の KM_SHARE_URL と同じ名前
       KM_SHARE_DOMAIN: ${KM_SHARE_DOMAIN:-share.${KM_DOMAIN:-192.168.3.29}}
+      # VS Code 型のエディタ(/code/)の枠の名前(段 11-3。2026-11-08。nginx の webview の server)。**いつも定義する**(空だと server_name が壊れる)。
+      # web の KM_WEBVIEW_URL と同じ名前にすること
+      KM_WEBVIEW_DOMAIN: ${KM_WEBVIEW_DOMAIN:-webview.${KM_DOMAIN:-192.168.3.29}}
     ports:
       - "192.168.3.29:8080:80"
       - "192.168.3.29:9443:443"

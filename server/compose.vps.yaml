@@ -21,6 +21,7 @@
 #   KM_AUTH_DOMAIN(nginx)  auth.${KM_DOMAIN}(443 番の Logto の入口の名前。証明書と DNS が要る)
 #   KM_HTML_DOMAIN(nginx)・KM_HTML_URL(web)  html.${KM_DOMAIN}(HTML 展開サイトの見せる側。2026-11-05。証明書と DNS が要る)
 #   KM_SHARE_DOMAIN(nginx)・KM_SHARE_URL(web)  share.${KM_DOMAIN}(HTML 展開サイトの共有リンク。2026-11-05。証明書と DNS が要る)
+#   KM_WEBVIEW_DOMAIN(nginx)・KM_WEBVIEW_URL(web)  webview.${KM_DOMAIN}(/code/ の枠。2026-11-08 段 11-3。証明書と DNS が要る)
 #   LOGTO_ADMIN_ENDPOINT   http://localhost:3002(2026-11-02 から。Console は SSH のトンネルで開く。compose.yaml の logto)
 #   MAIL_HOST / MAIL_PORT  mailserver / 587
 #   MAIL_FROM              noreply@${KM_DOMAIN}
@@ -130,6 +131,8 @@ services:
       KM_HTML_URL: ${KM_HTML_URL:-https://${KM_HTML_DOMAIN:-html.${KM_DOMAIN}}}
       # 共有リンク(2026-11-05。src/lib/site.php の km_site_share_origin)。reverse-proxy の KM_SHARE_DOMAIN と同じ導き方
       KM_SHARE_URL: ${KM_SHARE_URL:-https://${KM_SHARE_DOMAIN:-share.${KM_DOMAIN}}}
+      # VS Code 型のエディタの枠(段 11-3。src/lib/site.php の km_site_webview_origin)。reverse-proxy の KM_WEBVIEW_DOMAIN と同じ導き方
+      KM_WEBVIEW_URL: ${KM_WEBVIEW_URL:-https://${KM_WEBVIEW_DOMAIN:-webview.${KM_DOMAIN}}}
       # アクセストークンの audience(compose.yaml の web の注記を参照)。
       # 導いた値はドメインを変えた瞬間に変わってしまうので、**移すときは host-domain.sh apply が
       # KM_API_RESOURCE を .env に書く**(据え置くなら旧の値、--api-resource なら新しい値。Logto の登録と揃える)。
@@ -232,6 +235,8 @@ services:
       KM_HTML_DOMAIN: ${KM_HTML_DOMAIN:-html.${KM_DOMAIN}}
       # 共有リンクの名前(2026-11-05。html の server に一緒に並べる)。web の KM_SHARE_URL と同じ導き方。証明書と DNS が要る
       KM_SHARE_DOMAIN: ${KM_SHARE_DOMAIN:-share.${KM_DOMAIN}}
+      # VS Code 型のエディタ(/code/)の枠の名前(段 11-3。2026-11-08)。web の KM_WEBVIEW_URL と同じ導き方。証明書と DNS が要る
+      KM_WEBVIEW_DOMAIN: ${KM_WEBVIEW_DOMAIN:-webview.${KM_DOMAIN}}
     # **`!override` が要る。** compose の `volumes:` は上書きではなく**併合**される
     # (対象パスの違う項目は基底のものが残る)。基底には mkcert の
     #     ./certs/192.168.3.29.pem:/etc/nginx/certs/192.168.3.29.pem
@@ -293,7 +298,7 @@ services:
     #
     # 上げるときは scripts/check-updates.sh --pins が出す行で置き換える
     # タグ latest(2026-11-06 に付けた。それまでは v5.7.0 の digest だけで、update-containers.ps1 が上げられなかった)
-    image: certbot/certbot:latest@sha256:bc93cb710b413e6b456d622f9b0133b3e109c0a78c2ed9976af43d209b0a1805
+    image: certbot/certbot:latest@sha256:c5698da859429ccee0fcc299a8000368198222d1f9e789ab6e388b491e8ce06d
     container_name: km-certbot
     restart: unless-stopped
     # 上限の考え方は compose.yaml の services: の注記(2026-09-14)

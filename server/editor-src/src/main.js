@@ -15,10 +15,11 @@ import { monaco, tsService } from './editor/monaco.js';
 import { registerLanguageFeatures, setLanguageData } from './editor/languages.js';
 import { createPreview } from './preview/preview.js';
 import { buildProjectDocument } from './preview/projectBuilder.js';
-import { openStore } from './project/db.js';
+import { onExternalChange, openStore } from './project/db.js';
 import { legacySettings, migrateLegacy } from './project/migrate.js';
 import { prepareEntries, projectZip, readDataTransfer, readFileList, toStored } from './project/import.js';
-import { createSyncClient, needsPush, remoteState, syncable } from './project/sync.js';
+import { syncable } from './project/sync.js';
+import { createSyncManager } from './project/syncManager.js';
 import {
   buildTree, byteLength, cleanFolder, cleanName, cleanPath, fileType, isHtml, isImage, movePrefix, newProjectRecord,
   overLimit, pickEntry, uniquePath,
@@ -965,37 +966,29 @@ async function renderProjects() {
   });
   // サインインしていれば、使っている量と、サーバーにだけあるもの
   const usage = $('wce-projects-usage');
-  usage.hidden = !canSync;
-  if (canSync && remoteUsage.limits) {
+  usage.hidden = !sync.canSync;
+  if (sync.canSync && sync.usage.limits) {
     usage.textContent = t(lang, 'project.usage', {
-      used: formatBytes(remoteUsage.used, lang), max: formatBytes(remoteUsage.limits.ownerBytes, lang), n: remoteById.size, maxN: remoteUsage.limits.projects,
+      used: formatBytes(sync.usage.used, lang), max: formatBytes(sync.usage.limits.ownerBytes, lang), n: sync.remoteById.size, maxN: sync.usage.limits.projects,
     });
   }
-  $('wce-projects-help').textContent = tr(canSync ? 'project.helpSync' : 'project.help');
-  const linked = new Set(all.filter((p) => p.server && p.server.account === account).map((p) => p.server.id));
-  const serverOnly = canSync ? [...remoteById.values()].filter((r) => !linked.has(r.id)) : [];
+  $('wce-projects-help').textContent = tr(sync.canSync ? 'project.helpSync' : 'project.help');
+  const serverOnly = await sync.serverOnly();
   list.replaceChildren(...all.map((p) => {
     const current = p.id === project?.id;
-    let state = remoteState(p, canSync ? account : '', remoteById);
-    if (conflicts.has(p.id)) {
-      state = 'conflict';
-    }
-    const badge = el('span', { className: `wce-badge wce-badge-${state}`, text: t(lang, `badge.${state}`), attrs: { title: syncErrors.get(p.id) ?? '' } });
+    const state = sync.stateOf(p);
+    const badge = el('span', { className: `wce-badge wce-badge-${state}`, text: t(lang, `badge.${state}`), attrs: { title: sync.errorOf(p.id) ?? '' } });
     const extra = [];
     if (state === 'conflict') {
       extra.push(act(tr('conflict.choose'), () => {
         projectsDialog.close();
         resolveConflict(p.id);
       }));
-    } else if (state === 'gone' && canSync) {
-      extra.push(act(tr('project.resend'), () => queueSync(async () => {
-        await updateRecord(p.id, (r) => {
-          r.syncOff = false;
-          r.syncDirty = true;
-        });
-        await pushProject(p.id);
+    } else if (state === 'gone' && sync.canSync) {
+      extra.push(act(tr('project.resend'), async () => {
+        await sync.resend(p.id);
         await renderProjects();
-      })));
+      }));
     }
     return el('li', { className: `wce-project-row${current ? ' is-current' : ''}` }, [
       el('button', {
@@ -1032,15 +1025,12 @@ async function renderProjects() {
       el('span', { className: 'wce-project-acts' }, [
         act(tr('project.download'), () => queueSync(async () => {
           projectsDialog.close();
-          await openProject(await pullNew(r.id));
+          await openProject(await sync.pullNew(r.id));
         })),
         act(tr('project.delete'), async () => {
           projectsDialog.close();
           if (await confirmDialog(t(lang, 'confirm.deleteServerOnly', { name: r.name }), tr('project.delete'))) {
-            await queueSync(async () => {
-              await syncClient.remove(r.id);
-              remoteById.delete(r.id);
-            });
+            await sync.removeServer(r.id);
           }
           await openProjects();
         }, true),
@@ -1062,8 +1052,8 @@ async function openProjects() {
     projectsDialog.showModal();
   }
   // サーバーの一覧を読み直して描き直す(待たずに開く)
-  if (signedIn && Date.now() - lastRefresh > 5000) {
-    queueSync(refreshRemote).then(() => projectsDialog.open && renderProjects());
+  if (signedIn && Date.now() - sync.lastRefresh > 5000) {
+    sync.refresh().then(() => projectsDialog.open && renderProjects());
   }
 }
 
@@ -1083,8 +1073,8 @@ async function renameProject(p) {
       await saveNow();
     } else {
       await store.putProject({ ...p, name: cleanName(name), updatedAt: Date.now(), syncDirty: true });
-      if (canSync) {
-        queueSync(() => pushProject(p.id));
+      if (sync.canSync) {
+        sync.push(p.id);
       }
     }
   }
@@ -1097,34 +1087,25 @@ async function duplicateProject(p) {
   const { project: record } = newProjectRecord(t(lang, 'project.copyName', { name: p.name }), {});
   Object.assign(record, { entry: p.entry, folders: [...(p.folders ?? [])], open: [...(p.open ?? [])], active: p.active });
   await store.writeFiles(record.id, list.map((f) => ({ path: f.path, text: f.text, blob: f.blob, size: f.size })), [], record);
-  if (canSync) {
-    queueSync(() => pushProject(record.id));
+  if (sync.canSync) {
+    sync.push(record.id);
   }
   await renderProjects();
 }
 
 async function deleteProject(p) {
   projectsDialog.close();
-  const onServer = canSync && p.server && syncable(p, account);
+  const onServer = sync.canSync && p.server && syncable(p, sync.account);
   if (await confirmDialog(t(lang, onServer ? 'confirm.deleteProjectServer' : 'confirm.deleteProject', { name: p.name }), tr('project.delete'))) {
     if (onServer) {
       // サーバーのものを先に消す(消せなければ、この端末のものも残す)
-      try {
-        await queueSync(async () => {
-          await syncClient.remove(p.server.id);
-          remoteById.delete(p.server.id);
-        });
-      } catch {
-        // queueSync が拾う
-      }
-      if (remoteById.has(p.server.id)) {
+      if (!(await sync.removeServer(p.server.id))) {
         await messageDialog(tr('sync.deleteFailed'));
         await openProjects();
         return;
       }
     }
-    conflicts.delete(p.id);
-    syncErrors.delete(p.id);
+    sync.forget(p.id);
     const wasCurrent = p.id === project?.id;
     if (wasCurrent) {
       saveTimer.cancel();
@@ -1372,42 +1353,40 @@ $('wce-download-single').addEventListener('click', async () => {
   downloadBlob(`${safeFileName(project.name)}.html`, new Blob([built.text], { type: 'text/html;charset=utf-8' }));
 });
 
-// ---- サーバーとの同期(段 10-B。サインインした人だけ。project/sync.js・api/editor.php・規約第8条の3) ----
-const SYNC_DELAY = 3000;
-const REFRESH_EVERY = 30000;
-const syncClient = createSyncClient({ csrf });
-let account = '';
-let canSync = false;
-let blockedMessage = '';
-let remoteById = new Map();
-let remoteUsage = { used: 0, limits: null };
-let syncProblem = ''; // 'offline' | 'failed' | ''
-let syncProblemText = '';
-let sending = false;
-let lastRefresh = 0;
-const conflicts = new Set(); // この端末のプロジェクトの id
-const syncErrors = new Map(); // id → 送れなかった理由(上限など)
-let syncChain = Promise.resolve();
-
-function queueSync(task) {
-  syncChain = syncChain.then(task).catch((error) => {
-    syncProblem = error?.status === 0 ? 'offline' : 'failed';
-    syncProblemText = error?.message ?? '';
-  }).finally(updateSyncChip);
-  return syncChain;
-}
-
-const syncTimer = createDebouncer(() => {
-  if (project && canSync) {
-    queueSync(() => pushProject(project.id));
-  }
-}, () => SYNC_DELAY);
-function scheduleSync() {
-  if (canSync) {
-    syncTimer.schedule();
-    updateSyncChip();
-  }
-}
+// ---- サーバーとの同期(段 10-B。サインインした人だけ。api/editor.php・規約第8条の3) ----
+// 進め方は project/syncManager.js(段 11-4 で切り出した。/code/ も同じものを使う)。ここは画面との受け渡しだけ
+const sync = createSyncManager({
+  store: () => store,
+  csrf,
+  signedIn,
+  host: {
+    current: () => project,
+    flush: () => saveNow(),
+    currentFiles: () => [...files].map(([path, f]) => ({ path, text: textOf(path), blob: f.blob })),
+    stamp: () => changeStamp,
+    updateRecord: (id, fn) => updateRecord(id, fn),
+    beforePull: () => {
+      saveTimer.cancel();
+      dirty.clear();
+      deleted.clear();
+    },
+    afterPull: async (id) => {
+      project = null;
+      await openProject(id);
+    },
+    afterRename: (id) => {
+      if (project?.id === id) {
+        $('wce-project').textContent = project.name;
+        lastMetaSig = JSON.stringify([project.name, project.entry ?? '', project.folders ?? []]);
+      }
+    },
+    localName: (name) => t(lang, 'conflict.localName', { name }),
+    untitled: () => tr('project.untitled'),
+    onChange: () => updateSyncChip(),
+  },
+});
+const queueSync = (task) => sync.queue(task);
+const scheduleSync = () => sync.schedule();
 
 function updateSyncChip() {
   const chip = $('wce-sync');
@@ -1420,30 +1399,13 @@ function updateSyncChip() {
   if (!signedIn) {
     return;
   }
-  let state = 'synced';
-  if (blockedMessage) {
-    state = 'blocked';
-  } else if (!account) {
-    state = syncProblem || 'idle';
-  } else if (project && conflicts.has(project.id)) {
-    state = 'conflict';
-  } else if (sending) {
-    state = 'sending';
-  } else if (project && syncErrors.has(project.id)) {
-    state = 'failed';
-  } else if (syncProblem) {
-    state = syncProblem;
-  } else if (project && !syncable(project, account)) {
-    state = project.syncOff === 'gone' ? 'gone' : 'off';
-  } else if (project && (needsPush(project, account) || syncTimer.pending())) {
-    state = 'pending';
-  }
+  const { state, title } = sync.status();
   chip.dataset.state = state;
   chip.textContent = t(lang, `sync.${state}`);
-  chip.title = state === 'blocked' ? blockedMessage : (state === 'failed' ? (syncErrors.get(project?.id) ?? syncProblemText) : t(lang, 'sync.title'));
+  chip.title = title ?? t(lang, 'sync.title');
 }
 $('wce-sync').addEventListener('click', () => {
-  if (project && conflicts.has(project.id)) {
+  if (project && sync.hasConflict(project.id)) {
     resolveConflict(project.id);
   } else {
     openProjects();
@@ -1465,148 +1427,10 @@ async function updateRecord(id, fn) {
   }
 }
 
-async function pushProject(id, { force = false } = {}) {
-  if (!canSync) {
-    return;
-  }
-  const isCurrent = project?.id === id;
-  if (isCurrent) {
-    await saveNow();
-  }
-  const record = isCurrent ? project : await store.getProject(id);
-  if (!record || !syncable(record, account) || (!force && !needsPush(record, account)) || (conflicts.has(id) && !force)) {
-    return;
-  }
-  const stamp = changeStamp;
-  const list = isCurrent
-    ? [...files].map(([path, f]) => ({ path, text: textOf(path), blob: f.blob }))
-    : (await store.getFiles(id)).map((f) => ({ path: f.path, text: f.text, blob: f.blob }));
-  const meta = { name: record.name, entry: record.entry ?? '', folders: record.folders ?? [] };
-  sending = true;
-  updateSyncChip();
-  try {
-    const remoteRevision = force && record.server ? (remoteById.get(record.server.id)?.revision ?? null) : null;
-    const result = await syncClient.push(list, meta, record.server, account, { force, remoteRevision });
-    if (!result.ok) {
-      conflicts.add(id);
-      // 「この端末のもので上書き」は、このとき知ったサーバーの版を土台に送る(覚えていないと古い版で送って、またぶつかる)
-      if (record.server && Number.isInteger(result.revision)) {
-        remoteById.set(record.server.id, { ...(remoteById.get(record.server.id) ?? { id: record.server.id, name: record.name }), revision: result.revision });
-      }
-      return;
-    }
-    conflicts.delete(id);
-    syncErrors.delete(id);
-    syncProblem = '';
-    remoteById.set(result.server.id, { id: result.server.id, name: meta.name, revision: result.server.revision, updatedAt: new Date().toISOString() });
-    await updateRecord(id, (r) => {
-      r.server = result.server;
-      r.syncOff = false;
-      // 送っている間にまた打っていたら、まだ送っていないまま(次の回で送る)
-      if (!(isCurrent && project?.id === id && changeStamp !== stamp)) {
-        r.syncDirty = false;
-      }
-    });
-    if (isCurrent && project?.syncDirty) {
-      scheduleSync();
-    }
-  } catch (error) {
-    if (error?.status === 400 || error?.status === 413) {
-      syncErrors.set(id, error.message);
-    } else {
-      throw error;
-    }
-  } finally {
-    sending = false;
-  }
-}
-
-/** サーバーのものを、この端末のプロジェクト id に読み込む(この端末の中身は置き換わる) */
-async function pullInto(id, serverId) {
-  const pulled = await syncClient.pull(serverId, account);
-  const isCurrent = project?.id === id;
-  if (isCurrent) {
-    saveTimer.cancel();
-    dirty.clear();
-    deleted.clear();
-  }
-  const before = (await store.getFiles(id)).map((f) => f.path);
-  const keep = new Set(pulled.files.map((f) => f.path));
-  const record = (isCurrent ? structuredClone(project) : await store.getProject(id)) ?? newProjectRecord(pulled.server.name, {}).project;
-  Object.assign(record, {
-    id,
-    name: pulled.server.name,
-    entry: pulled.server.entry,
-    folders: pulled.server.folders,
-    server: pulled.server,
-    syncDirty: false,
-    syncOff: false,
-    updatedAt: Date.now(),
-  });
-  record.open = (record.open ?? []).filter((p) => keep.has(p));
-  await store.writeFiles(id, pulled.files, before.filter((p) => !keep.has(p)), record);
-  conflicts.delete(id);
-  remoteById.set(pulled.server.id, { ...(remoteById.get(pulled.server.id) ?? {}), revision: pulled.server.revision });
-  if (isCurrent) {
-    project = null;
-    await openProject(id);
-  }
-}
-
-/** サーバーにだけあるものを、この端末の新しいプロジェクトとして読み込む */
-async function pullNew(serverId) {
-  const { project: record } = newProjectRecord(remoteById.get(serverId)?.name ?? tr('project.untitled'), {});
-  await store.putProject(record);
-  await pullInto(record.id, serverId);
-  return record.id;
-}
-
-/** サーバーの一覧と突き合わせる(開いたとき・戻ってきたとき・一覧を開いたとき) */
-async function refreshRemote() {
-  if (!signedIn || !store) {
-    updateSyncChip();
-    return;
-  }
-  lastRefresh = Date.now();
-  await saveNow(); // 打ちかけを「まだ送っていない」に数えてから突き合わせる
-  const state = await syncClient.state();
-  if (!state.signedIn) {
-    account = '';
-    canSync = false;
-    updateSyncChip();
-    return;
-  }
-  account = state.account ?? '';
-  canSync = state.canSave === true && account !== '';
-  blockedMessage = state.blocked ?? '';
-  remoteById = new Map((state.projects ?? []).map((p) => [p.id, p]));
-  remoteUsage = { used: state.usedBytes ?? 0, limits: state.limits ?? null, count: (state.projects ?? []).length };
-  syncProblem = '';
-  if (!canSync) {
-    return;
-  }
-  for (const record of await store.listProjects()) {
-    const st = remoteState(record, account, remoteById);
-    if (st === 'gone' && record.server) {
-      await updateRecord(record.id, (r) => {
-        r.server = null;
-        r.syncOff = 'gone';
-      });
-    } else if (st === 'remote') {
-      await pullInto(record.id, record.server.id);
-    } else if (st === 'conflict') {
-      conflicts.add(record.id);
-    } else if (st === 'pending' && !syncErrors.has(record.id)) {
-      await pushProject(record.id);
-    }
-  }
-}
-
 async function resolveConflict(id) {
   const record = project?.id === id ? project : await store.getProject(id);
   if (!record?.server) {
-    conflicts.delete(id);
-    updateSyncChip();
+    await sync.resolve(id, null);
     return;
   }
   const choice = await chooseDialog(t(lang, 'conflict.text', { name: record.name }), [
@@ -1614,32 +1438,9 @@ async function resolveConflict(id) {
     { value: 'theirs', label: tr('conflict.theirs') },
     { value: 'mine', label: tr('conflict.mine'), primary: true },
   ]);
-  if (!choice) {
-    return;
+  if (choice) {
+    await sync.resolve(id, choice);
   }
-  const serverId = record.server.id;
-  await queueSync(async () => {
-    if (choice === 'theirs') {
-      await pullInto(id, serverId);
-    } else if (choice === 'mine') {
-      conflicts.delete(id);
-      await pushProject(id, { force: true });
-    } else {
-      // この端末のものは別のプロジェクトとして残し(新しくサーバーへ送る)、サーバーのものを読み直す
-      conflicts.delete(id);
-      await updateRecord(id, (r) => {
-        r.server = null;
-        r.syncDirty = true;
-        r.name = cleanName(t(lang, 'conflict.localName', { name: r.name }));
-      });
-      if (project?.id === id) {
-        $('wce-project').textContent = project.name;
-        lastMetaSig = JSON.stringify([project.name, project.entry ?? '', project.folders ?? []]);
-      }
-      await pushProject(id);
-      await pullNew(serverId);
-    }
-  });
 }
 
 // ---- ファイルを探して開く(Ctrl+P) ----
@@ -1720,10 +1521,7 @@ const ACTION_RUN = {
   },
   save: async () => {
     await saveNow();
-    if (project && needsPush(project, account)) {
-      syncTimer.cancel();
-      queueSync(() => pushProject(project.id));
-    }
+    sync.pushNow();
   },
   newFile: () => newFileFlow(project?.active?.includes('/') ? project.active.slice(0, project.active.lastIndexOf('/')) : ''),
   quickOpen: () => openQuickOpen(),
@@ -1867,6 +1665,14 @@ async function showStorage() {
     node.textContent = '';
   }
 }
+// VS Code 型のエディタ(/code/。段 11-6)で同じプロジェクトを開く。打ちかけを保存してから、別のタブで
+// (ボタンは /code/ を組み立てて置いてあるときだけ殻が出す)
+$('wce-open-code')?.addEventListener('click', async () => {
+  await saveNow();
+  const url = project ? `/code/?p=${encodeURIComponent(project.id)}` : '/code/';
+  window.open(url, '_blank', 'noopener');
+});
+
 $('wce-settings').addEventListener('click', () => {
   autoBox.checked = settings.autoRun;
   syncDelayInputs(settings.delay);
@@ -2007,13 +1813,10 @@ document.addEventListener('visibilitychange', () => {
       saveNow();
     }
     // 隠れたら待たずに送る(閉じられる前に)
-    if (canSync && project && (syncTimer.pending() || needsPush(project, account))) {
-      syncTimer.cancel();
-      queueSync(() => pushProject(project.id));
-    }
-  } else if (signedIn && Date.now() - lastRefresh > REFRESH_EVERY) {
+    sync.pushNow();
+  } else {
     // 戻ってきたら、ほかの端末での変更を見る
-    queueSync(refreshRemote);
+    sync.refreshIfStale();
   }
 });
 
@@ -2048,12 +1851,50 @@ async function start() {
     await createProject(templateName(DEFAULT_TEMPLATE, lang), buildTemplateFiles(DEFAULT_TEMPLATE, lang));
     list = await store.listProjects();
   }
-  const target = list.find((p) => p.id === settings.lastProject) ?? list[0];
+  // ?p=<id> は VS Code 型のエディタ(/code/)の「かんたんなエディタで開く」から来る(段 11)
+  const wanted = new URLSearchParams(location.search).get('p');
+  const target = list.find((p) => p.id === wanted) ?? list.find((p) => p.id === settings.lastProject) ?? list[0];
   await openProject(target.id);
   updateSyncChip();
+  watchOtherTabs();
   if (signedIn) {
-    queueSync(refreshRemote);
+    sync.refresh();
   }
+}
+
+/**
+ * ほかのタブ(/code/ や別の /editor/)が同じプロジェクトを書いたら読み直す(段 11。db.js の BroadcastChannel)。
+ * この画面に保存前の打ちかけがあるときは読み直さない(打ちかけが次の保存で勝つ。消さない)
+ */
+function watchOtherTabs() {
+  onExternalChange((msg) => {
+    if (!project || msg.projectId !== project.id || msg.kind === 'deleted') {
+      return;
+    }
+    if (msg.kind === 'project') {
+      queueSync(async () => {
+        const record = await store.getProject(project.id);
+        if (record && project?.id === record.id) {
+          project.server = record.server;
+          project.syncDirty = record.syncDirty;
+          project.syncOff = record.syncOff;
+          updateSyncChip();
+        }
+      });
+      return;
+    }
+    if (dirty.size > 0 || deleted.size > 0) {
+      return;
+    }
+    const id = project.id;
+    queueSync(async () => {
+      if (project?.id === id && dirty.size === 0 && deleted.size === 0) {
+        rememberView();
+        project = null;
+        await openProject(id);
+      }
+    });
+  });
 }
 start().catch((error) => {
   addConsole({ level: 'error', text: `${tr('start.failed')} ${error?.message ?? ''}` });

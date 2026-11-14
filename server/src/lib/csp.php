@@ -67,7 +67,7 @@ function km_csp_nonce_attr(): string
 /**
  * プロファイルごとのディレクティブを組む。
  *
- * @param string $profile 'admin' | 'admin-geo' | 'public' | 'contact' | 'html-host' | 'editor'
+ * @param string $profile 'admin' | 'admin-geo' | 'public' | 'contact' | 'html-host' | 'editor' | 'code'
  */
 function km_csp_policy(string $profile): string
 {
@@ -151,6 +151,25 @@ function km_csp_policy(string $profile): string
         $frame = [km_site_html_origin()];
         $font[] = 'data:';
         $worker = ["'self'"];
+    }
+
+    if ($profile === 'code') {
+        /*
+         * VS Code 型のエディタ(code/index.php。段 11。2026-11-08)。11-0 で 'editor' と同じ厳しさを Report-Only で
+         * 送って数え、足りなかったものだけを足した(status.md の 11-08「段 11-0」):
+         *
+         * - **'unsafe-eval' は足さない**(本体のページでは要らなかった)。'wasm-unsafe-eval' は TextMate の色分け(oniguruma の WASM)
+         * - worker は VS Code の既定どおり blob の起動の台本から読む(翻訳を渡すため。直にファイルから起こすと、
+         *   その worker にサイト既定の CSP が付いて WASM が止まる)→ worker-src に blob:
+         * - style は 'editor' と同じ理由で 'unsafe-inline'(VS Code も style="…" を組む)
+         * - 枠: 拡張機能ホストと webview は別のオリジン webview.<ドメイン>(11-3。km_site_webview_origin)。
+         *   本体のオリジン('self')の枠は許さない。html.<ドメイン> はプレビュー(editor-run.html)
+         */
+        $script[] = "'wasm-unsafe-eval'";
+        $style = ["'self'", "'unsafe-inline'"];
+        $frame = [km_site_webview_origin(), km_site_html_origin()];
+        $font[] = 'data:';
+        $worker = ["'self'", 'blob:'];
     }
 
     $directives = [

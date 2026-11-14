@@ -2,7 +2,7 @@
 #
 # Cloudflare の分析(WAF で止めた記録・時間ごとの通信量)を取ってきて、web に DB へ入れさせる(2026-11-08)。
 #
-#   sh scripts/host-cloudflare-import.sh --path /opt/kosenmap      (root の cron が 1 時間ごとに。host-updates-setup.sh の版 14)
+#   sh scripts/host-cloudflare-import.sh --path /opt/kosenmap      (root の cron が 1 時間ごとに。host-updates-setup.sh の版 14 で足し、版 15 で直した)
 #
 # ## 流れ(lib/cloudflare-analytics.php の先頭にも書いてある)
 #

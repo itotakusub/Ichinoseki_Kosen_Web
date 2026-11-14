@@ -1,0 +1,390 @@
+{
+  "version": 1,
+  "html": {
+    "ja": [
+      {
+        "tag": "a",
+        "label": "リンク",
+        "body": "a href=\"${1:URLを入力}\">${2:リンクの文字}</a>"
+      },
+      {
+        "tag": "a",
+        "label": "新しいタブで開くリンク",
+        "body": "a href=\"${1:URLを入力}\" target=\"_blank\" rel=\"noopener\">${2:リンクの文字}</a>"
+      },
+      {
+        "tag": "img",
+        "label": "画像",
+        "body": "img src=\"${1:画像のURL}\" alt=\"${2:画像の説明}\">"
+      },
+      {
+        "tag": "button",
+        "label": "ボタン",
+        "body": "button type=\"button\" id=\"${1:btn}\">${2:押す}</button>"
+      },
+      {
+        "tag": "input",
+        "label": "文字の入力欄",
+        "body": "input type=\"text\" id=\"${1:name}\" name=\"${1:name}\" placeholder=\"${2:例の文}\">"
+      },
+      {
+        "tag": "input",
+        "label": "チェックボックス",
+        "body": "label><input type=\"checkbox\" name=\"${1:agree}\"> ${2:同意する}</label>"
+      },
+      {
+        "tag": "input",
+        "label": "ラジオボタン",
+        "body": "label><input type=\"radio\" name=\"${1:group}\" value=\"${2:a}\"> ${3:選択肢}</label>"
+      },
+      {
+        "tag": "input",
+        "label": "スライダー",
+        "body": "input type=\"range\" min=\"${1:0}\" max=\"${2:100}\" value=\"${3:50}\">"
+      },
+      {
+        "tag": "label",
+        "label": "名前付きの入力欄",
+        "body": "label for=\"${1:name}\">${2:名前}</label>\n<input id=\"${1:name}\" name=\"${1:name}\">"
+      },
+      {
+        "tag": "form",
+        "label": "送信のフォーム",
+        "body": "form id=\"${1:form}\">\n  <input name=\"${2:q}\" required>\n  <button type=\"submit\">${3:送信}</button>\n</form>"
+      },
+      {
+        "tag": "ul",
+        "label": "箇条書き",
+        "body": "ul>\n  <li>${1:項目 1}</li>\n  <li>${2:項目 2}</li>\n</ul>"
+      },
+      {
+        "tag": "ol",
+        "label": "番号付きの箇条書き",
+        "body": "ol>\n  <li>${1:項目 1}</li>\n  <li>${2:項目 2}</li>\n</ol>"
+      },
+      {
+        "tag": "table",
+        "label": "表",
+        "body": "table>\n  <thead>\n    <tr><th>${1:見出し}</th><th>${2:見出し}</th></tr>\n  </thead>\n  <tbody>\n    <tr><td>${3:中身}</td><td>${4:中身}</td></tr>\n  </tbody>\n</table>"
+      },
+      {
+        "tag": "select",
+        "label": "選択肢",
+        "body": "select name=\"${1:choice}\">\n  <option value=\"${2:a}\">${3:選択肢 A}</option>\n  <option value=\"${4:b}\">${5:選択肢 B}</option>\n</select>"
+      },
+      {
+        "tag": "textarea",
+        "label": "複数行の入力欄",
+        "body": "textarea name=\"${1:memo}\" rows=\"${2:4}\"></textarea>"
+      },
+      {
+        "tag": "details",
+        "label": "開け閉めできる欄",
+        "body": "details>\n  <summary>${1:見出し}</summary>\n  <p>${2:中身}</p>\n</details>"
+      },
+      {
+        "tag": "video",
+        "label": "動画",
+        "body": "video src=\"${1:動画のURL}\" controls width=\"${2:400}\"></video>"
+      },
+      {
+        "tag": "audio",
+        "label": "音声",
+        "body": "audio src=\"${1:音声のURL}\" controls></audio>"
+      },
+      {
+        "tag": "iframe",
+        "label": "ページの埋め込み",
+        "body": "iframe src=\"${1:URLを入力}\" title=\"${2:説明}\" width=\"${3:400}\" height=\"${4:300}\"></iframe>"
+      },
+      {
+        "tag": "div",
+        "label": "class 付きの入れ物",
+        "body": "div class=\"${1:box}\">${2}</div>"
+      },
+      {
+        "tag": "section",
+        "label": "見出し付きのまとまり",
+        "body": "section>\n  <h2>${1:見出し}</h2>\n  <p>${2:中身}</p>\n</section>"
+      },
+      {
+        "tag": "link",
+        "label": "CSS の読み込み",
+        "body": "link rel=\"stylesheet\" href=\"${1:style.css}\">"
+      },
+      {
+        "tag": "script",
+        "label": "JavaScript の読み込み",
+        "body": "script src=\"${1:script.js}\"></script>"
+      },
+      {
+        "tag": "meta",
+        "label": "画面の幅に合わせる",
+        "body": "meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+      },
+      {
+        "tag": "html",
+        "label": "HTML の文書のひな形",
+        "body": "!DOCTYPE html>\n<html lang=\"${1:ja}\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n  <title>${2:題名}</title>\n</head>\n<body>\n  $0\n</body>\n</html>"
+      },
+      {
+        "tag": "dialog",
+        "label": "ダイアログ",
+        "body": "dialog id=\"${1:dialog}\">\n  <p>${2:中身}</p>\n  <form method=\"dialog\"><button>${3:閉じる}</button></form>\n</dialog>"
+      },
+      {
+        "tag": "canvas",
+        "label": "絵を描く場所",
+        "body": "canvas id=\"${1:canvas}\" width=\"${2:300}\" height=\"${3:150}\"></canvas>"
+      }
+    ],
+    "en": [
+      {
+        "tag": "a",
+        "label": "link",
+        "body": "a href=\"${1:URL}\">${2:link text}</a>"
+      },
+      {
+        "tag": "a",
+        "label": "link opening in a new tab",
+        "body": "a href=\"${1:URL}\" target=\"_blank\" rel=\"noopener\">${2:link text}</a>"
+      },
+      {
+        "tag": "img",
+        "label": "image",
+        "body": "img src=\"${1:image URL}\" alt=\"${2:description}\">"
+      },
+      {
+        "tag": "button",
+        "label": "button",
+        "body": "button type=\"button\" id=\"${1:btn}\">${2:Click}</button>"
+      },
+      {
+        "tag": "input",
+        "label": "text field",
+        "body": "input type=\"text\" id=\"${1:name}\" name=\"${1:name}\" placeholder=\"${2:example}\">"
+      },
+      {
+        "tag": "input",
+        "label": "checkbox",
+        "body": "label><input type=\"checkbox\" name=\"${1:agree}\"> ${2:I agree}</label>"
+      },
+      {
+        "tag": "input",
+        "label": "radio button",
+        "body": "label><input type=\"radio\" name=\"${1:group}\" value=\"${2:a}\"> ${3:Option}</label>"
+      },
+      {
+        "tag": "input",
+        "label": "slider",
+        "body": "input type=\"range\" min=\"${1:0}\" max=\"${2:100}\" value=\"${3:50}\">"
+      },
+      {
+        "tag": "label",
+        "label": "labelled field",
+        "body": "label for=\"${1:name}\">${2:Name}</label>\n<input id=\"${1:name}\" name=\"${1:name}\">"
+      },
+      {
+        "tag": "form",
+        "label": "form with submit",
+        "body": "form id=\"${1:form}\">\n  <input name=\"${2:q}\" required>\n  <button type=\"submit\">${3:Send}</button>\n</form>"
+      },
+      {
+        "tag": "ul",
+        "label": "bulleted list",
+        "body": "ul>\n  <li>${1:Item 1}</li>\n  <li>${2:Item 2}</li>\n</ul>"
+      },
+      {
+        "tag": "ol",
+        "label": "numbered list",
+        "body": "ol>\n  <li>${1:Item 1}</li>\n  <li>${2:Item 2}</li>\n</ol>"
+      },
+      {
+        "tag": "table",
+        "label": "table",
+        "body": "table>\n  <thead>\n    <tr><th>${1:Heading}</th><th>${2:Heading}</th></tr>\n  </thead>\n  <tbody>\n    <tr><td>${3:Cell}</td><td>${4:Cell}</td></tr>\n  </tbody>\n</table>"
+      },
+      {
+        "tag": "select",
+        "label": "drop-down",
+        "body": "select name=\"${1:choice}\">\n  <option value=\"${2:a}\">${3:Option A}</option>\n  <option value=\"${4:b}\">${5:Option B}</option>\n</select>"
+      },
+      {
+        "tag": "textarea",
+        "label": "multi-line field",
+        "body": "textarea name=\"${1:memo}\" rows=\"${2:4}\"></textarea>"
+      },
+      {
+        "tag": "details",
+        "label": "collapsible section",
+        "body": "details>\n  <summary>${1:Heading}</summary>\n  <p>${2:Content}</p>\n</details>"
+      },
+      {
+        "tag": "video",
+        "label": "video",
+        "body": "video src=\"${1:video URL}\" controls width=\"${2:400}\"></video>"
+      },
+      {
+        "tag": "audio",
+        "label": "audio",
+        "body": "audio src=\"${1:audio URL}\" controls></audio>"
+      },
+      {
+        "tag": "iframe",
+        "label": "embedded page",
+        "body": "iframe src=\"${1:URL}\" title=\"${2:description}\" width=\"${3:400}\" height=\"${4:300}\"></iframe>"
+      },
+      {
+        "tag": "div",
+        "label": "container with class",
+        "body": "div class=\"${1:box}\">${2}</div>"
+      },
+      {
+        "tag": "section",
+        "label": "section with heading",
+        "body": "section>\n  <h2>${1:Heading}</h2>\n  <p>${2:Content}</p>\n</section>"
+      },
+      {
+        "tag": "link",
+        "label": "load a stylesheet",
+        "body": "link rel=\"stylesheet\" href=\"${1:style.css}\">"
+      },
+      {
+        "tag": "script",
+        "label": "load a script",
+        "body": "script src=\"${1:script.js}\"></script>"
+      },
+      {
+        "tag": "meta",
+        "label": "fit the screen width",
+        "body": "meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+      },
+      {
+        "tag": "html",
+        "label": "HTML document skeleton",
+        "body": "!DOCTYPE html>\n<html lang=\"${1:en}\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n  <title>${2:Title}</title>\n</head>\n<body>\n  $0\n</body>\n</html>"
+      },
+      {
+        "tag": "dialog",
+        "label": "dialog",
+        "body": "dialog id=\"${1:dialog}\">\n  <p>${2:Content}</p>\n  <form method=\"dialog\"><button>${3:Close}</button></form>\n</dialog>"
+      },
+      {
+        "tag": "canvas",
+        "label": "drawing area",
+        "body": "canvas id=\"${1:canvas}\" width=\"${2:300}\" height=\"${3:150}\"></canvas>"
+      }
+    ]
+  },
+  "css": [],
+  "js": [
+    {
+      "label": "if",
+      "body": "if (${1:condition}) {\n\t$0\n}",
+      "ja": "もし…なら。条件が true のときだけ中を動かす。",
+      "en": "Runs the block only if the condition is true."
+    },
+    {
+      "label": "if else",
+      "body": "if (${1:condition}) {\n\t$2\n} else {\n\t$0\n}",
+      "ja": "もし…なら、そうでなければ。",
+      "en": "If / otherwise."
+    },
+    {
+      "label": "for",
+      "body": "for (let ${1:i} = 0; ${1:i} < ${2:10}; ${1:i}++) {\n\t$0\n}",
+      "ja": "決めた回数だけ繰り返す。",
+      "en": "Repeats a fixed number of times."
+    },
+    {
+      "label": "for of",
+      "body": "for (const ${1:item} of ${2:items}) {\n\t$0\n}",
+      "ja": "配列などの一つずつを取り出して繰り返す。",
+      "en": "Loops over each item of an iterable."
+    },
+    {
+      "label": "for in",
+      "body": "for (const ${1:key} in ${2:object}) {\n\t$0\n}",
+      "ja": "オブジェクトの名前(キー)を一つずつ取り出す。",
+      "en": "Loops over the keys of an object."
+    },
+    {
+      "label": "while",
+      "body": "while (${1:condition}) {\n\t$0\n}",
+      "ja": "条件が true の間ずっと繰り返す。",
+      "en": "Repeats while the condition is true."
+    },
+    {
+      "label": "switch",
+      "body": "switch (${1:value}) {\n\tcase ${2:'a'}:\n\t\t$0\n\t\tbreak;\n\tdefault:\n\t\tbreak;\n}",
+      "ja": "値によって動きを分ける。break を忘れない。",
+      "en": "Branches on a value. Do not forget break."
+    },
+    {
+      "label": "function",
+      "body": "function ${1:name}(${2}) {\n\t$0\n}",
+      "ja": "関数(名前を付けた動きのまとまり)を作る。",
+      "en": "Declares a named function."
+    },
+    {
+      "label": "arrow function",
+      "body": "const ${1:name} = (${2}) => {\n\t$0\n};",
+      "ja": "アロー関数(短く書ける関数)。",
+      "en": "An arrow function."
+    },
+    {
+      "label": "async function",
+      "body": "async function ${1:name}(${2}) {\n\t$0\n}",
+      "ja": "中で await が使える関数。",
+      "en": "A function that can use await."
+    },
+    {
+      "label": "try catch",
+      "body": "try {\n\t$1\n} catch (error) {\n\tconsole.error(error);\n}",
+      "ja": "エラーが起きても止まらず、catch で受け止める。",
+      "en": "Catches errors instead of stopping."
+    },
+    {
+      "label": "class",
+      "body": "class ${1:Name} {\n\tconstructor(${2}) {\n\t\t$0\n\t}\n}",
+      "ja": "クラス(同じ形のオブジェクトを作る型)。",
+      "en": "A class."
+    },
+    {
+      "label": "const",
+      "body": "const ${1:name} = ${2:value};",
+      "ja": "変えない値に名前を付ける。",
+      "en": "Declares a constant."
+    },
+    {
+      "label": "let",
+      "body": "let ${1:name} = ${2:value};",
+      "ja": "あとで変える値に名前を付ける。",
+      "en": "Declares a variable."
+    },
+    {
+      "label": "click",
+      "body": "document.querySelector('${1:#btn}').addEventListener('click', () => {\n\t$0\n});",
+      "ja": "ボタンを押したときに動かす(よく使う形)。",
+      "en": "Run code when a button is clicked."
+    },
+    {
+      "label": "fetch json",
+      "body": "fetch('${1:URL}')\n\t.then((res) => res.json())\n\t.then((data) => {\n\t\tconsole.log(data);\n\t\t$0\n\t});",
+      "ja": "ネットから JSON を取ってくる(よく使う形)。",
+      "en": "Fetch JSON from a URL."
+    },
+    {
+      "label": "timer",
+      "body": "setTimeout(() => {\n\t$0\n}, ${1:1000});",
+      "ja": "決めた時間のあとに動かす。",
+      "en": "Run code after a delay."
+    },
+    {
+      "label": "template string",
+      "body": "`${1:text} \\${${2:value}}`",
+      "ja": "テンプレート文字列(`…${値}…` で値を埋め込む)。",
+      "en": "A template literal (embed values with ${…})."
+    }
+  ]
+}

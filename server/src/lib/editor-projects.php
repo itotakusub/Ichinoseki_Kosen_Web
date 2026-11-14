@@ -31,6 +31,26 @@ const KM_EDITOR_MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 const KM_EDITOR_MAX_FOLDERS = 200;
 const KM_EDITOR_NAME_MAX = 100;
 
+/**
+ * エディタだけで使える拡張子(段 11。2026-11-08。VS Code 型のエディタ /code/ で書く言語)。
+ * **保存して返すだけで、どこでも実行しない**(中身は blobs/<sha256> に拡張子なしで置き、返すときは
+ * octet-stream・attachment・CSP sandbox)。HTML 展開の型の表(KM_HTML_TYPES)には足さない
+ * (向こうは上げたものを見せるので、php・py・sh などを決して入れない。check.php が見張る)。
+ * 画面の表は editor-src/src/project/model.js の TYPES(同じ並び)
+ */
+const KM_EDITOR_EXTRA_TYPES = [
+    'ts', 'tsx', 'jsx', 'cjs', 'mts', 'cts',
+    'py', 'ipynb', 'java', 'php', 'sql',
+    'ps1', 'psm1', 'psd1', 'bat', 'cmd', 'sh', 'bash',
+    'yaml', 'yml', 'toml', 'ini', 'scss', 'less', 'log',
+];
+
+/** エディタのプロジェクトに置ける拡張子か(HTML 展開の表 + エディタだけの表) */
+function km_editor_type_allowed(string $extension): bool
+{
+    return isset(KM_HTML_TYPES[$extension]) || in_array($extension, KM_EDITOR_EXTRA_TYPES, true);
+}
+
 /** 409 で返す誤り(足りない中身・版のぶつかり)。api/editor.php が形を作る */
 final class KmEditorConflict extends RuntimeException
 {
@@ -75,7 +95,7 @@ function km_editor_clean_manifest(mixed $raw): array
     foreach ($raw as $path => $item) {
         $path = km_html_clean_path((string) $path);
         $extension = strtolower(pathinfo($path, PATHINFO_EXTENSION));
-        if (!isset(KM_HTML_TYPES[$extension])) {
+        if (!km_editor_type_allowed($extension)) {
             throw new InvalidArgumentException('使えない拡張子のファイルがあります(' . mb_substr($path, 0, 80) . ')。');
         }
         $key = mb_strtolower($path);

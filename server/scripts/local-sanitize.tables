@@ -126,5 +126,8 @@ km_html_temp                 wipe
 km_html_tickets              wipe
 km_html_viewers              wipe
 km_editor_projects           wipe   # Web Code Editor の同期(段 10-B。2026-11-08)。人の書いたもの。uploads/editor は写さない
+km_embed_sites     keep   # 地図を埋め込むサイト(段 15。2026-11-14。札とオリジン。created_by は決まりで dummy に)
+km_embed_views_daily keep # 埋め込みの表示の回数(日ごと)
+km_editor_snippets keep   # エディタの雛形の JSON(管理画面で取り込む。公開の中身。updated_by は決まりで dummy に)
 # ---- 使われていない
 kmt_database                 wipe   # コードのどこからも使われていない(2026-11-07 に確かめた)

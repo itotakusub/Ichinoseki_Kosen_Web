@@ -483,6 +483,10 @@ $excludes = @(
     # タスクマネージャーに入れる IP(2026-10-05)。**ホスト側が正本**(見本は nginx/km/taskmgr-allow.local.conf.example)
     './nginx/km/taskmgr-allow.local.conf'
 )
+<#
+  段 11(VS Code 型のエディタ /code/)は 11-6 まで検証機だけに送っていた(本番は ./src/code を除外)。
+  **11-7(2026-11-09)から本番にも送る。** 枠のオリジン webview.<ドメイン> の DNS・証明書・nginx は 11-09 に本番で済んでいる
+#>
 
 # アーカイブが正しいことを組み立て直後に確かめる。パターンの解釈違いで
 # 「必要なファイルが入っていない」「秘密が混入した」を黙って通さないための保険。
@@ -598,6 +602,10 @@ $mustContain = @(
     # 段 10-B(2026-11-08): サインインした人のプロジェクトの同期(lib/editor-projects.php)
     './src/api/editor.php'
     './src/lib/editor-projects.php'
+    # 段 11-7(2026-11-09): VS Code 型のエディタ。src/code/ は code-src で `npm run build` した出力(殻 index.php・プレビューの窓 preview.php も build が写す)
+    './src/code/index.php'
+    './src/code/preview.php'
+    './src/code/.vite/manifest.json'
 )
 $mustNotContain = @(
     './src/config/db.local.php'
@@ -608,7 +616,8 @@ $mustNotContain = @(
     './src/admin/_dev-session.php'
 )
 # editor-src/ はエディタの元と node_modules(配備しない。2026-11-08)
-$mustNotStartWith = @('./src/vendor/', './src/uploads/', './editor-src/')
+# code-src/ は VS Code 型のエディタの元と node_modules(配備しない。段 11。2026-11-08)
+$mustNotStartWith = @('./src/vendor/', './src/uploads/', './editor-src/', './code-src/')
 
 if ($WhatIfOnly) {
     Write-Host '=== 転送するもの ==='
@@ -941,6 +950,43 @@ if [ "$moved" -gt 0 ]; then
 fi
 '@ -replace '__KM_REMOTE_PATH__', $RemotePath -replace '__KM_KEEP__', ($editorAssets -join ' ')
     Invoke-KmSshStdin -Script $editorScript -TimeoutSec 60 | ForEach-Object { Write-Host $_ }
+}
+
+<#
+  **VS Code 型のエディタ(/code/)の古い組み立ても同じく退避する**(段 11-7。2026-11-09)。1 回の組み立ては約 66MB で、
+  退避しないと配備のたびに溜まる(検証機では 19 世代・367MB になっていた)。/editor/ と違い、同梱の拡張機能の
+  ファイルが 1 段下のフォルダ(`esbenp.prettier-vscode-12.4.0.vsix/` など)にあるので、そこまで見る。
+  今回のアーカイブに無いものを retired/code-assets/ へ移し(前の 1 世代だけ残す)、空になったフォルダは消す
+#>
+$codeAssets = @($entries | Where-Object { $_ -match '^\./src/code/assets/([A-Za-z0-9._-]+/)?[A-Za-z0-9._-]+$' } | ForEach-Object { $_.Substring('./src/code/assets/'.Length) })
+if ((Get-RemoteShell) -eq 'sh' -and $codeAssets.Count -gt 0) {
+    $codeScript = @'
+set -u
+cd '__KM_REMOTE_PATH__' || exit 1
+[ -d src/code/assets ] || exit 0
+keep=' __KM_KEEP__ '
+moved=0
+for f in src/code/assets/* src/code/assets/*/*; do
+    [ -f "$f" ] || continue
+    rel=${f#src/code/assets/}
+    case "$keep" in *" $rel "*) continue ;; esac
+    if [ "$moved" -eq 0 ]; then
+        rm -rf retired/code-assets.new && mkdir -p retired/code-assets.new || { echo "★ retired/code-assets.new を作れませんでした" >&2; exit 1; }
+    fi
+    case "$rel" in */*) mkdir -p "retired/code-assets.new/${rel%/*}" || exit 1 ;; esac
+    mv "$f" "retired/code-assets.new/$rel" || exit 1
+    moved=$((moved + 1))
+done
+for d in src/code/assets/*/; do
+    [ -d "$d" ] && rmdir "$d" 2>/dev/null
+done
+if [ "$moved" -gt 0 ]; then
+    rm -rf retired/code-assets && mv retired/code-assets.new retired/code-assets
+    echo "      VS Code 型のエディタの古い組み立て: $moved 個を retired/code-assets/ へ(前の 1 世代だけ残す)"
+fi
+exit 0
+'@ -replace '__KM_REMOTE_PATH__', $RemotePath -replace '__KM_KEEP__', ($codeAssets -join ' ')
+    Invoke-KmSshStdin -Script $codeScript -TimeoutSec 120 | ForEach-Object { Write-Host $_ }
 }
 
 <#

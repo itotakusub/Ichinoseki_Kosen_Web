@@ -3130,10 +3130,23 @@ document.addEventListener('DOMContentLoaded', async () => {
         };
     }
 
-    /** 札の名前。**7 文字以上なら 6 文字 + …**(文字は見た目の 1 文字で数える。絵文字や合成文字を割らない) */
+    /**
+     * 札の名前。**7 文字以上なら 6 文字 + …**(文字は見た目の 1 文字で数える。絵文字や合成文字を割らない)。
+     * 半角(英数字・記号・半角カナ)は 0.5 文字と数える(2026-11-11。英語の名前「Building 1」〜「Building 7」が
+     * どれも「Buildi…」になり、見分けられなかった。幅は全角 6 文字と同じ)
+     */
     function shortPoiName(name) {
         const chars = Array.from(String(name || ''));
-        return chars.length >= 7 ? chars.slice(0, 6).join('') + '…' : chars.join('');
+        const width = (ch) => (/^[\u0000-\u00ff\uff61-\uff9f]$/.test(ch) ? 0.5 : 1);
+        if (chars.reduce((sum, ch) => sum + width(ch), 0) <= 6) return chars.join('');
+        let used = 0;
+        let out = '';
+        for (const ch of chars) {
+            if (used + width(ch) > 6) break;
+            used += width(ch);
+            out += ch;
+        }
+        return out.replace(/\s+$/, '') + '…';
     }
     window.kmShortPoiName = shortPoiName;
 

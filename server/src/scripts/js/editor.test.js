@@ -219,6 +219,10 @@ const load = (rel) => import(pathToFileURL(path.join(SRC, rel)).href);
     const imp = await load('project/import.js');
 
     console.log('[project/model]');
+    check('段 11: エディタだけの拡張子(.py)はテキスト・色分けなし', { mime: 'text/plain', text: true, lang: 'plaintext' }, model.fileType('a/main.py'));
+    check('段 11: .ts は typescript・.ipynb は JSON', ['typescript', 'json'], [model.fileType('a.ts').lang, model.fileType('n.ipynb').lang]);
+    ok('段 11: エディタだけの拡張子はすべて表にある(テキスト)', model.EDITOR_ONLY_EXTENSIONS.every((e) => model.fileType(`x.${e}`)?.text === true));
+    check('段 11: 表に無いもの(.exe)は使えない', null, model.fileType('a.exe'));
     check('パスを整える', 'css/style.css', model.cleanPath('css\\style.css'));
     const pathCode = (v, opt) => { try { model.cleanPath(v, opt); return 'ok'; } catch (e) { return e.code; } };
     check('.. は断る', 'parent', pathCode('a/../b.html'));
@@ -226,7 +230,7 @@ const load = (rel) => import(pathToFileURL(path.join(SRC, rel)).href);
     check('ドライブ名は断る', 'absolute', pathCode('C:/x.html'));
     check('空の段は断る', 'segment', pathCode('a//b.css'));
     check('制御文字は断る', 'control', pathCode('a\u0001.css'));
-    check('使えない拡張子は断る', 'type', pathCode('run.php'));
+    check('使えない拡張子は断る(段 11 から .php はエディタで書けるので .exe で見る)', 'type', pathCode('run.exe'));
     check('フォルダは拡張子を見ない', 'ok', pathCode('images', { requireType: false }));
     check('深すぎるものは断る', 'deep', pathCode(Array(17).fill('a').join('/') + '.css'));
     ok('隠しファイルは除く', model.ignoredPath('.git/config') && model.ignoredPath('__MACOSX/a.png') && !model.ignoredPath('a/b.png'));
@@ -364,11 +368,11 @@ const load = (rel) => import(pathToFileURL(path.join(SRC, rel)).href);
             { path: 'site/css/a.css', data: enc.encode('p{}') },
             { path: 'site/.DS_Store', data: enc.encode('x') },
             { path: '__MACOSX/site/._index.html', data: enc.encode('x') },
-            { path: 'site/run.php', data: enc.encode('<?php') },
+            { path: 'site/run.exe', data: enc.encode('MZ') },
         ];
         const r = imp.prepareEntries(raw);
         check('読み込み: 共通のフォルダを外す', ['index.html', 'css/a.css'], r.files.map((f) => f.path));
-        check('読み込み: 使えない拡張子は数える', [{ path: 'site/run.php', code: 'type' }], r.rejected);
+        check('読み込み: 使えない拡張子は数える', [{ path: 'site/run.exe', code: 'type' }], r.rejected);
         check('読み込み: 上限の内', null, r.limit);
         const stored = imp.toStored('a.css', enc.encode('\ufeffp{}'));
         check('読み込み: BOM を外す', 'p{}', stored.text);
@@ -433,6 +437,72 @@ const load = (rel) => import(pathToFileURL(path.join(SRC, rel)).href);
         const r2 = await client.push(files, { name: 'P', entry: 'a.html', folders: [] }, r1.server, 'A');
         check('送る: 変わっていない中身は送らない(zip なし)', undefined, calls[2].fields.zip);
         check('送る: 版がぶつかれば知らせる', { ok: false, conflict: true, revision: 5 }, r2);
+    }
+
+    console.log('[project/syncManager]');
+    {
+        const sm = await load('project/syncManager.js');
+        const { MemoryStore } = await load('project/db.js');
+        const base = { blocked: '', account: 'A', problem: '', record: { server: { account: 'A' } }, conflict: false, sending: false, error: false, timerPending: false };
+        check('印: 止められた・未確認・ぶつかり・送信中・失敗', ['blocked', 'idle', 'offline', 'conflict', 'sending', 'failed'], [
+            sm.chipState({ ...base, blocked: 'x' }), sm.chipState({ ...base, account: '' }), sm.chipState({ ...base, account: '', problem: 'offline' }),
+            sm.chipState({ ...base, conflict: true }), sm.chipState({ ...base, sending: true }), sm.chipState({ ...base, error: true }),
+        ]);
+        check('印: 消された・ほかのアカウント・まだ送っていない・待ち時間中・そろった', ['gone', 'off', 'pending', 'pending', 'synced'], [
+            sm.chipState({ ...base, record: { server: null, syncOff: 'gone' } }), sm.chipState({ ...base, record: { server: { account: 'B' } } }),
+            sm.chipState({ ...base, record: { server: { account: 'A' }, syncDirty: true } }), sm.chipState({ ...base, timerPending: true }), sm.chipState(base),
+        ]);
+
+        // 偽物の口とメモリの置き場で、突き合わせ(送る・読む・消された・ぶつかり)と片付け
+        const store = new MemoryStore();
+        const put = (id, extra, files) => store.writeFiles(id, files.map(([path, text]) => ({ path, text, size: text.length })), [], { id, name: id, entry: 'index.html', folders: [], ...extra });
+        await put('new', { server: null, syncDirty: true }, [['index.html', 'n']]);
+        await put('gone', { server: { id: 's-gone', revision: 1, account: 'A' } }, [['index.html', 'g']]);
+        await put('old', { server: { id: 's-old', revision: 1, account: 'A' } }, [['index.html', 'o'], ['x.css', 'x']]);
+        await put('both', { server: { id: 's-both', revision: 1, account: 'A' }, syncDirty: true }, [['index.html', 'b']]);
+        const pushes = [];
+        let rev = 10;
+        const client = {
+            state: async () => ({ signedIn: true, account: 'A', canSave: true, projects: [{ id: 's-old', name: 'old', revision: 2 }, { id: 's-both', name: 'both', revision: 3 }, { id: 's-srv', name: 'srv', revision: 1 }], usedBytes: 5, limits: { projects: 30 } }),
+            push: async (files, meta, server, account, opts) => {
+                pushes.push({ name: meta.name, paths: files.map((f) => f.path), force: opts.force, remoteRevision: opts.remoteRevision });
+                if (server?.id === 's-both' && !opts.force) {
+                    return { ok: false, conflict: true, revision: 3 };
+                }
+                rev += 1;
+                return { ok: true, server: { id: server?.id ?? `s-${meta.name}`, revision: rev, account, manifest: {}, name: meta.name, entry: meta.entry, folders: [] } };
+            },
+            pull: async (id, account) => ({ files: [{ path: 'index.html', text: `from ${id}`, size: 1 }], server: { id, revision: 2, account, manifest: {}, name: id === 's-old' ? 'old' : 'srv', entry: 'index.html', folders: [] } }),
+            remove: async () => ({ status: 200 }),
+        };
+        let changes = 0;
+        const sync = sm.createSyncManager({
+            store, csrf: 't', signedIn: true, client,
+            host: {
+                current: () => null, flush: async () => {}, currentFiles: () => null, stamp: () => 0,
+                updateRecord: async (id, fn) => { const r = await store.getProject(id); if (r) { fn(r); await store.putProject(r); } },
+                localName: (n) => `${n} (この端末)`, untitled: () => '名前なし', onChange: () => { changes++; },
+            },
+        });
+        await sync.refresh();
+        const rec = async (id) => store.getProject(id);
+        check('突き合わせ: 新しいものを送り、サーバーの形を覚えて「送った」にする', ['s-new', false], [(await rec('new')).server?.id, (await rec('new')).syncDirty]);
+        check('突き合わせ: サーバーで消されたものは同期をやめる', ['gone', null], [(await rec('gone')).syncOff, (await rec('gone')).server]);
+        check('突き合わせ: ほかの端末で変わったものは読み込む(無くなったファイルは消す)', ['from s-old', ['index.html'], 2], [(await store.getFiles('old'))[0].text, (await store.getFiles('old')).map((f) => f.path), (await rec('old')).server.revision]);
+        check('突き合わせ: 両方で変わったものはぶつかり(送らない)', ['conflict', true], [sync.stateOf(await rec('both')), sync.hasConflict('both')]);
+        check('サーバーにだけあるもの', ['s-srv'], (await sync.serverOnly()).map((r) => r.id));
+        check('使っている量', 5, sync.usage.used);
+        ok('状態が変わるたびに知らせる', changes > 0);
+        await sync.resolve('both', 'mine');
+        check('ぶつかり: この端末のもので上書きは、サーバーの版を土台に強く送る', { force: true, remoteRevision: 3 }, (({ force, remoteRevision }) => ({ force, remoteRevision }))(pushes[pushes.length - 1]));
+        check('ぶつかり: 片付いた', [false, 'synced'], [sync.hasConflict('both'), sync.stateOf(await rec('both'))]);
+        const madeId = await sync.pullNew('s-srv');
+        check('サーバーにだけあるものを新しいプロジェクトとして読む', ['srv', 'from s-srv', []], [(await rec(madeId)).name, (await store.getFiles(madeId))[0].text, (await sync.serverOnly()).map((r) => r.id)]);
+        ok('サーバーのものを消す', await sync.removeServer('s-srv'));
+
+        const offline = sm.createSyncManager({ store, csrf: 't', signedIn: false, client, host: { current: () => null, flush: async () => {}, onChange: () => {} } });
+        await offline.refresh();
+        check('サインインしていなければ突き合わせない', [false, 'idle'], [offline.canSync, offline.status().state]);
     }
 
     console.log('[settings v2]');
@@ -527,6 +597,164 @@ const load = (rel) => import(pathToFileURL(path.join(SRC, rel)).href);
         ok('display: flex が日本語', display.values.find((v) => v.name === 'flex').description.value.includes('一列'));
         check('標準のプロパティの数を落とさない', cssData.properties.length, mergedCss.properties.length);
         ok(':hover が日本語', mergedCss.pseudoClasses.find((p) => p.name === ':hover').description.value.includes('合わせて'));
+    }
+
+    // ---- 段 11: VS Code 型のエディタ(code-src/src/paths.js)----
+    const CODE_SRC = path.join(__dirname, '..', '..', '..', 'code-src', 'src');
+    if (fs.existsSync(path.join(CODE_SRC, 'paths.js'))) {
+        console.log('[code/paths]');
+        const cp = await import(pathToFileURL(path.join(CODE_SRC, 'paths.js')).href);
+        check('ワークスペースの中のパス', ['', 'a/b.html', 'css', null, null], [cp.relPath('/workspace'), cp.relPath('/workspace/a/b.html'), cp.relPath('/workspace/css/'), cp.relPath('/user/settings.json'), cp.relPath('/workspaceX/a')]);
+        check('パス → 場所', ['/workspace', '/workspace/a/b.html'], [cp.absPath(''), cp.absPath('a/b.html')]);
+        const enc = new TextEncoder();
+        check('中身の形: 表のテキスト・画像・表に無い UTF-8', ['<p>', null, null], [cp.textOrNull('a.html', enc.encode('<p>')), cp.textOrNull('a.png', enc.encode('x')), cp.textOrNull('Makefile', new Uint8Array([0xff, 0xfe, 0x00]))]);
+        check('フォルダ: ファイルの親と空のフォルダ', ['', 'a', 'a/b', 'e', 'e/f'], [...cp.allDirs(['a/b/c.html', 'x.css'], ['e/f'])].sort());
+        check('フォルダの直下(名前の順・フォルダとファイル)', [['a', 'dir'], ['e', 'dir'], ['x.css', 'file']], cp.listDir('', ['a/b/c.html', 'x.css'], cp.allDirs(['a/b/c.html', 'x.css'], ['e'])));
+        check('書ける名前: よい・型が無い・.vscode の設定(置ける)・.. ・フォルダは型を見ない', [null, 'type', null, 'parent', null], [cp.writeProblem('src/main.py'), cp.writeProblem('a.exe'), cp.writeProblem('.vscode/settings.json'), cp.writeProblem('a/../b.html'), cp.writeProblem('lib', { folder: true })].map((v) => (v === 'changed' ? 'parent' : v)));
+        check('上限: 20MB を超える・500 個を超える・上書きは数を増やさない', ['bytes', 'files', null], [
+            cp.limitProblem(new Map([['a', 20 * 1024 * 1024]]), 'b', 1),
+            cp.limitProblem(new Map(Array.from({ length: 500 }, (_, i) => [`f${i}`, 0])), 'new', 0),
+            cp.limitProblem(new Map(Array.from({ length: 500 }, (_, i) => [`f${i}`, 0])), 'f1', 10),
+        ]);
+        check('プレビューの窓から開く: 同じプロジェクト・行と桁', { path: 'js/app.js', line: 3, col: 5 }, cp.revealTarget({ type: 'reveal', projectId: 'p1', path: 'js/app.js', line: 3, col: 5 }, 'p1'));
+        check('プレビューの窓から開く: 断るもの(別のプロジェクト・.. ・型・空・形)', [null, null, null, null, null, null], [
+            cp.revealTarget({ type: 'reveal', projectId: 'p2', path: 'a.html' }, 'p1'),
+            cp.revealTarget({ type: 'reveal', projectId: 'p1', path: '../a.html' }, 'p1'),
+            cp.revealTarget({ type: 'reveal', projectId: 'p1', path: 'a.exe' }, 'p1'),
+            cp.revealTarget({ type: 'reveal', projectId: 'p1', path: '' }, 'p1'),
+            cp.revealTarget({ type: 'other', projectId: 'p1', path: 'a.html' }, 'p1'),
+            cp.revealTarget('reveal', 'p1'),
+        ]);
+        check('プレビューの窓から開く: 行が数でなければ 0', { path: 'a.html', line: 0, col: 0 }, cp.revealTarget({ type: 'reveal', projectId: 'p1', path: 'a.html', line: '3', col: -1 }, 'p1'));
+
+        console.log('[code/jaHelp]');
+        const jh = await import(pathToFileURL(path.join(CODE_SRC, 'jaHelp.js')).href);
+        const { indexJsApi: indexForCode } = await import(pathToFileURL(path.join(__dirname, '..', '..', '..', 'editor-src', 'src', 'data', 'merge.js')).href);
+        // | の位置で引く
+        const at = (fn, src, data) => fn(src.replace('|', ''), src.indexOf('|'), data);
+        const head = (r) => (r ? r.markdown.split('\n')[0] : null);
+        // タグはコードの形(`<a>`)。そのままだと markdown の中で HTML として消える(11-2 に Chrome で見つけた)
+        check('HTML: タグの名前(開き・閉じ)', ['**`<a>`**', '**`<div>`**'], [head(at(jh.htmlHelp, '<|a href="x">', HTML_JA)), head(at(jh.htmlHelp, '<div></di|v>', HTML_JA))]);
+        check('HTML: 属性(タグごと・どのタグでも・data-*)', ['**href**(`<a>` の属性)', '**class**(`<p>` の属性)', '**data-id**(`<p>` の属性)'], [
+            head(at(jh.htmlHelp, '<a hr|ef="x">', HTML_JA)), head(at(jh.htmlHelp, '<p cla|ss="x">', HTML_JA)), head(at(jh.htmlHelp, '<p data-i|d="1">', HTML_JA)),
+        ]);
+        check('HTML: 引用符の中・本文・タグの外は出さない', [null, null, null], [at(jh.htmlHelp, '<a title="cla|ss">', HTML_JA), at(jh.htmlHelp, '<p>cla|ss</p>', HTML_JA), at(jh.htmlHelp, 'hre|f', HTML_JA)]);
+        check('HTML: 説明は日本語で例が付く', true, /リンク/.test(at(jh.htmlHelp, '<|a>', HTML_JA).markdown) && at(jh.htmlHelp, '<|a>', HTML_JA).markdown.includes('```html'));
+        check('CSS: プロパティ・値・どれでも使える値', ['**display**', '**flex**(display の値)', '**inherit**(color の値)'], [
+            head(at(jh.cssHelp, 'a { disp|lay: flex; }', CSS_JA)), head(at(jh.cssHelp, 'a { display: fl|ex; }', CSS_JA)), CSS_JA.values['*.inherit'] ? head(at(jh.cssHelp, 'a{color:inh|erit}', CSS_JA)) : '**inherit**(color の値)',
+        ]);
+        check('CSS: @ 規則・疑似クラス・疑似要素(範囲は記号から)', ['**@media**', '**:hover**', '**::before**', 'a { } p'.length], [
+            head(at(jh.cssHelp, '@med|ia (x) {}', CSS_JA)), head(at(jh.cssHelp, 'a:hov|er { }', CSS_JA)), head(at(jh.cssHelp, 'p::bef|ore { }', CSS_JA)), at(jh.cssHelp, 'a { } p::bef|ore { }', CSS_JA)?.start,
+        ]);
+        check('CSS: セレクタの名前・知らない値は出さない', [null, null], [at(jh.cssHelp, 'disp|lay { }', CSS_JA), at(jh.cssHelp, 'a { color: zz|zz; }', CSS_JA)]);
+        const jsIndexCode = indexForCode(JS_API, 'ja');
+        const docItem = JS_API.find(([owner]) => owner === 'document');
+        const globalItem = JS_API.find(([owner]) => owner === '');
+        check('JS: document.… と大域の関数は /editor/ と同じ説明', [true, true, null], [
+            String(jh.jsHelp('const x = document.', docItem[1], jsIndexCode)).includes(docItem[3]),
+            String(jh.jsHelp('  ', globalItem[1], jsIndexCode)).includes(globalItem[3]),
+            jh.jsHelp('  ', 'noSuchThing', jsIndexCode),
+        ]);
+
+        // ---- 段 11-8: 自作の Web の検査(code-src/src/webChecksCore.js)----
+        console.log('[code/webChecks]');
+        const wc = await import(pathToFileURL(path.join(CODE_SRC, 'webChecksCore.js')).href);
+        const sorted = (set) => [...set].sort();
+        const css1 = wc.collectCssNames('/* .gone { } */ .btn, .btn-primary:hover > a.link { color: red; background: url(x.y.png); }\n'
+            + '@media (max-width: 600px) { .nav .nav-item { content: ".fake"; } }\n#main{} @font-face { src: url(a.woff2); }\n.a\\:b, .日本 {}');
+        check('CSS の名前: セレクタのクラス・id(コメント・文字列・url()・宣言は見ない)', [['btn', 'btn-primary', 'link', 'nav', 'nav-item', '日本'], ['main']], [sorted(css1.classes).filter((n) => n !== 'a'), sorted(css1.ids)]);
+        check('CSS の名前: 入れ子の CSS は外側だけ', ['card'], sorted(wc.collectCssNames('.card { color: red; .inner { color: blue; } }').classes));
+        check('<style> の中身', ['.a{}', 'p{}'], wc.styleBlocks('<style>.a{}</style><p></p><STYLE media="x">p{}</style >'));
+        check('ほかのサイトの CSS を読んでいるか', [true, true, false, true, false], [
+            wc.hasExternalStylesheet('<link rel="stylesheet" href="https://cdn.example/bootstrap.css">'),
+            wc.hasExternalStylesheet('<link href="//cdn.example/x.css" rel=stylesheet>'),
+            wc.hasExternalStylesheet('<link rel="stylesheet" href="style.css"><link rel="icon" href="https://x/y.png">'),
+            wc.hasExternalStylesheet('<style>@import url("https://fonts.example/css");</style>'),
+            wc.hasExternalStylesheet('<style>@import "local.css";</style>'),
+        ]);
+        check('class="…"・id="…" の中か(打ちかけの名前)', [{ kind: 'class', prefix: 'bt' }, { kind: 'class', prefix: '' }, { kind: 'id', prefix: 'ma' }, null, null], [
+            wc.attrContext('<a class="nav bt'), wc.attrContext("<div class='x "), wc.attrContext('<p ID="ma'), wc.attrContext('<a class="x">'), wc.attrContext('<a data-class="x'),
+        ]);
+        const htmlU = '<div class="btn ghost">\n<!-- <p class="hidden-c"> -->\n<script>x.className = "<b class=\'js\'>"</script>\n<p class="{{ tpl }}" ID="x" class=\'nav zz\'></p>';
+        const unknown = wc.unknownClasses(htmlU, new Set(['btn', 'nav']));
+        check('無いクラス名(コメント・script・テンプレートは見ない。場所も)', [['ghost', 'zz'], ['ghost', 'zz']], [unknown.map((u) => u.name), unknown.map((u) => htmlU.substr(u.offset, u.name.length))]);
+        const defaults = { 'tagname-lowercase': true, 'title-require': true };
+        check('HTMLHint の規則: 既定に .htmlhintrc.json を重ねる(false で外す)', { rules: { 'tagname-lowercase': true, 'id-class-value': 'dash' }, error: null }, wc.htmlhintRules(defaults, '{"title-require": false, "id-class-value": "dash", "Bad Key": true}'));
+        check('HTMLHint の規則: 無い・壊れた・配列', [null, 'json', 'object'], [wc.htmlhintRules(defaults, null).error, wc.htmlhintRules(defaults, '{x').error, wc.htmlhintRules(defaults, '[1]').error]);
+        check('HTMLHint の規則: 既定は変えない', true, defaults['title-require'] === true);
+        // 2026-11-13: 打ちかけの「<a」に出る spec-char-escape は既定で外す(.htmlhintrc.json で戻せる)
+        check('HTMLHint の規則: spec-char-escape は既定で外す・設定で戻せる', [false, true, true], [
+            'spec-char-escape' in wc.htmlhintRules({ 'spec-char-escape': true, 'title-require': true }, null).rules,
+            wc.htmlhintRules({ 'spec-char-escape': true }, '{"spec-char-escape": true}').rules['spec-char-escape'],
+            wc.htmlhintRules({ 'spec-char-escape': true, 'title-require': true }, null).rules['title-require'],
+        ]);
+        check('ESLint の読み方(script・module・commonjs)', ['script', 'module', 'module', 'module', 'commonjs', 'script'], [
+            wc.sourceTypeOf('/a.js', 'let a = 1;'), wc.sourceTypeOf('/a.js', "import x from './x.js';"), wc.sourceTypeOf('/a.js', 'export const y = 1;'),
+            wc.sourceTypeOf('/a.mjs', ''), wc.sourceTypeOf('/a.cjs', 'export const z = 1;'), wc.sourceTypeOf('/a.js', '// import x from "y"\nconst importx = 1;'),
+        ]);
+        // ---- 段 14-4: 雛形の JSON(editor-src/src/data/snippets.js)----
+        console.log('[snippets]');
+        const sn = await import(pathToFileURL(path.join(__dirname, '..', '..', '..', 'editor-src', 'src', 'data', 'snippets.js')).href);
+        const snDefault = sn.defaultSnippetJson();
+        const snFile = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'lib', 'editor-snippets.default.json'), 'utf8'));
+        check('同梱の雛形の JSON(src/lib/editor-snippets.default.json)は data/html.js・js.js と同じ中身', true, JSON.stringify(snFile) === JSON.stringify(snDefault));
+        check('同梱の雛形は形の確かめを通り、表に戻すと元と同じ', [true, true], [sn.normalizeSnippetJson(snDefault).ok, JSON.stringify(sn.snippetTables(snDefault).js) === JSON.stringify(sn.snippets.js)]);
+        const snBase = (over) => ({ version: 1, html: { ja: [], en: [], ...(over.html ?? {}) }, js: over.js ?? [] });
+        check('形の違うものは断る(版・形・タグ・改行入りの名前・空の body・多すぎ)', ['version', 'shape', 'html.ja', 'js', 'html.en', 'too-many', 'object'], [
+            sn.normalizeSnippetJson({ version: 2, html: { ja: [], en: [] }, js: [] }).error,
+            sn.normalizeSnippetJson({ version: 1, html: { ja: [] }, js: [] }).error,
+            sn.normalizeSnippetJson(snBase({ html: { ja: [{ tag: 'A b', label: 'x', body: 'y' }] } })).error,
+            sn.normalizeSnippetJson(snBase({ js: [{ label: 'a\nb', body: 'x' }] })).error,
+            sn.normalizeSnippetJson(snBase({ html: { en: [{ tag: 'a', label: 'x', body: '' }] } })).error,
+            sn.normalizeSnippetJson(snBase({ js: Array.from({ length: sn.SNIPPET_LIMITS.items + 1 }, () => ({ label: 'x', body: 'y' })) })).error,
+            sn.normalizeSnippetJson([1]).error,
+        ]);
+        const snTarget = { htmlJa: [['old', 'old', 'old']], htmlEn: [], js: [], source: 'bundled' };
+        const snCustom = snBase({ html: { ja: [{ tag: 'a', label: '学校のリンク', body: 'a href="https://example.test/">${1}</a>', extra: 1 }] }, js: [{ label: 'hello', body: 'console.log(1);' }] });
+        check('口の答えを当てはめる(取り込んだものだけ・知らない項目は捨てる・説明が無ければ空)', [true, [['a', '学校のリンク', 'a href="https://example.test/">${1}</a>']], [['hello', 'console.log(1);', '', '']], 'server'], [
+            sn.applySnippetResponse({ success: true, custom: true, data: snCustom }, snTarget), snTarget.htmlJa, snTarget.js, snTarget.source,
+        ]);
+        const snKeep = { htmlJa: [['keep', 'k', 'k']], htmlEn: [], js: [], source: 'bundled' };
+        check('取り込んでいない・形が違う・失敗の答えでは変えない', [false, false, false, false, 'keep'], [
+            sn.applySnippetResponse({ success: true, custom: false, data: null }, snKeep), sn.applySnippetResponse({ success: true, custom: true, data: { version: 9 } }, snKeep),
+            sn.applySnippetResponse({ success: false }, snKeep), sn.applySnippetResponse(null, snKeep), snKeep.htmlJa[0][0],
+        ]);
+        check('読み込み: 届かない・404・壊れた答えは同梱のまま(投げない)', ['bundled', 'bundled', 'bundled'], [
+            await sn.loadServerSnippets(async () => { throw new Error('offline'); }),
+            await sn.loadServerSnippets(async () => ({ ok: false, json: async () => ({}) })),
+            await sn.loadServerSnippets(async () => ({ ok: true, json: async () => { throw new Error('bad json'); } })),
+        ]);
+        // ---- 段 14-5(11-14): 先頭の < を外す・css を受ける・CSS の雛形を出す所 ----
+        const snLt = sn.normalizeSnippetJson(snBase({ html: { ja: [{ tag: 'a', label: 'x', body: '<a href="">${1}</a>' }, { tag: 'b', label: 'y', body: 'b>$0</b>' }] } }));
+        check('HTML の body の先頭の < は 1 つだけ外す(< を打ったあとに入るので、残すと <<a になる)', ['a href="">${1}</a>', 'b>$0</b>'], snLt.value.html.ja.map((x) => x.body));
+        check('< だけの body は外すと空になるので断る', 'html.ja', sn.normalizeSnippetJson(snBase({ html: { ja: [{ tag: 'a', label: 'x', body: '<' }] } })).error);
+        const snCss = { ...snBase({}), css: [{ label: 'display flex', body: 'display: flex;\ngap: ${1:1rem};', ja: '横に並べる。', en: 'Lays out in a row.' }] };
+        const snCssTarget = { htmlJa: [], htmlEn: [], css: [], js: [], source: 'bundled' };
+        check('css を受けて表にする・css が無くても通る(前の形のまま)', [true, [['display flex', 'display: flex;\ngap: ${1:1rem};', '横に並べる。', 'Lays out in a row.']], true, []], [
+            sn.applySnippetResponse({ success: true, custom: true, data: snCss }, snCssTarget), snCssTarget.css,
+            sn.normalizeSnippetJson(snBase({})).ok, sn.normalizeSnippetJson(snBase({})).value.css,
+        ]);
+        check('CSS は 1,000 個まで(ほかは 300 個)・css が並びでなければ断る', [true, 'too-many', 'shape', 'css'], [
+            sn.normalizeSnippetJson({ ...snBase({}), css: Array.from({ length: sn.SNIPPET_LIMITS.cssItems }, () => ({ label: 'x', body: 'y' })) }).ok,
+            sn.normalizeSnippetJson({ ...snBase({}), css: Array.from({ length: sn.SNIPPET_LIMITS.cssItems + 1 }, () => ({ label: 'x', body: 'y' })) }).error,
+            sn.normalizeSnippetJson({ ...snBase({}), css: { a: 1 } }).error,
+            sn.normalizeSnippetJson({ ...snBase({}), css: [{ label: 'x', body: '' }] }).error,
+        ]);
+        check('CSS の雛形を出す所: 頭・{ } ; の後だけ(値の途中・並びの途中・注釈の中は出さない)', ['', 'disp', '@me', '.box', 'fl', null, null, null, 'x'], [
+            sn.cssSnippetTyped(''), sn.cssSnippetTyped('a {\n  disp'), sn.cssSnippetTyped('@me'), sn.cssSnippetTyped('}\n.box'), sn.cssSnippetTyped('a { color: red;\n  fl'),
+            sn.cssSnippetTyped('a { color: re'), sn.cssSnippetTyped('a, b'), sn.cssSnippetTyped('/* disp'), sn.cssSnippetTyped('/* a */ x'),
+        ]);
+        check('<style> の中だけ CSS を出す', ['\n  a { ', null, null, null], [
+            sn.htmlStyleBefore('<p>x</p><style>\n  a { '), sn.htmlStyleBefore('<style>a{}</style><p>'), sn.htmlStyleBefore('<p>'), sn.htmlStyleBefore('<style'),
+        ]);
+        const cssMore = await load('data/css-more.js');
+        const cssMoreBad = Object.entries(cssMore.CSS_JA_MORE_PROPS).filter(([k, v]) => !Array.isArray(v) || v.length !== 2 || !v[0].endsWith('。') || !v[1].startsWith(`${k}:`) || !v[1].endsWith(';'));
+        check('段 14-5: 雛形から外したプロパティの説明(css-more.js)は [説明。, 「名前: 値;」] の形・css.js にも入る・css.js の手書きと重ならない', [[], true, []], [
+            cssMoreBad.map((x) => x[0]), Object.keys(cssMore.CSS_JA_MORE_PROPS).every((k) => k in CSS_JA.props),
+            Object.keys(cssMore.CSS_JA_MORE_PROPS).filter((k) => CSS_JA.props[k] !== cssMore.CSS_JA_MORE_PROPS[k]),
+        ]);
+        const sp = await import(pathToFileURL(path.join(CODE_SRC, 'shims', 'path.js')).href);
+        check('ESLint 用の node:path の代わり', ['.js', '', 'a/c.js', 'b.js', '/x', '../b'], [sp.extname('/a/b.js'), sp.extname('/a/.htmlhintrc'), sp.join('a', 'b', '..', 'c.js'), sp.basename('/a/b.js'), sp.dirname('/x/y'), sp.relative('/a/c', '/a/b')]);
     }
 
     console.log('');

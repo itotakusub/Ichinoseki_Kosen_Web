@@ -8,9 +8,14 @@
  *   values   'プロパティ.値' → 説明。'*.値' はどのプロパティでも使える値
  *   pseudo   ':hover' などの疑似クラス・'::before' などの疑似要素 → 説明
  *   at       '@media' などの @ 規則 → 説明
+ *
+ * 11-14(段 14-5): 利用者の雛形 JSON から外したプロパティの説明 281 個を css-more.js に足した(ここに書いたものが勝つ)
  */
+import { CSS_JA_MORE_PROPS } from './css-more.js';
+
 export const CSS_JA = {
   props: {
+    ...CSS_JA_MORE_PROPS,
     color: ['文字の色。', 'color: #333;'],
     background: ['背景をまとめて指定する(色・画像・位置・繰り返し)。', 'background: #f5f5f5;'],
     'background-color': ['背景の色。', 'background-color: lightblue;'],

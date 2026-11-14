@@ -18,7 +18,7 @@
 #   控え(host-backup.sh)              cron の行                                控えの鍵が無い・HDD を食う・本番の控えと紛れる
 #   イメージの検査(Trivy)            cron の行                                週 1 回 DB を外から取る(遅い回線と HDD に重い)
 #   外へのメール                       mailserver を止める・25/465/587 を断る   compose.local.yaml と testhost-bootstrap.sh が既に止める。ここは確かめるだけ
-#   案内 AI(自宅 PC の LLM)          .env の KM_GUIDE_LLM_URL・KEY を空に     本番の ngrok の先(利用者の PC)へ問い合わせてしまう
+#   案内 AI(自宅 PC の LLM)          .env の KM_GUIDE_LLM_URL・KEY を空に     本番のトンネルの先(利用者の PC)へ問い合わせてしまう
 #   reCAPTCHA(Google)                .env の RECAPTCHA_* を空に              本番の鍵で Google に問い合わせてしまう(検証機では持たない)
 #
 #   残すもの(本番と同じに振る舞わせる): 天気(気象庁の公開の JSON を読むだけ)・使用率・セキュリティ確認・更新の確認

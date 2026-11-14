@@ -4,6 +4,8 @@
 #
 #   ./host-local.sh init --domain D [--admin-domain A] [--ip IP] [--lan CIDR]
 #                                   自作 CA と証明書を作り、.env をローカル環境に切り替える
+#   ./host-local.sh certs --domain D [--admin-domain A] [--ip IP]
+#                                   証明書だけを作り直す(名前を足したとき。.env に触らず、.env の控えも作らない)
 #   ./host-local.sh status          いまの状態を見る(何も変えない)
 #
 #   --domain       ローカルで使う名前(例 km.test、192-168-1-50.sslip.io)。**点を含む名前**
@@ -78,14 +80,14 @@ while [ $# -gt 0 ]; do
     --ip) IP="$2"; shift 2 ;;
     --lan) LAN="$2"; shift 2 ;;
     --fresh-secrets) FRESH=1; shift ;;
-    init|status) CMD="$1"; shift ;;
+    init|status|certs) CMD="$1"; shift ;;
     -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
     *) echo "知らない引数: $1" >&2; exit 2 ;;
   esac
 done
 
 if [ -z "$CMD" ]; then
-  echo "init / status のどれかを指定してください(--help で説明)" >&2
+  echo "init / certs / status のどれかを指定してください(--help で説明)" >&2
   exit 2
 fi
 
@@ -258,7 +260,7 @@ fresh_secrets() {
 # ---------------------------------------------------------------------------
 # init
 # ---------------------------------------------------------------------------
-do_init() {
+guard_local() {
   head_ '1. 本番ではないことを確かめる'
   if [ -z "$DOMAIN" ] || ! is_domain "$DOMAIN"; then
     echo "--domain に点を含む名前を指定してください(例 km.test)。localhost や IP は Android のビルドが受け付けません。" >&2
@@ -330,7 +332,10 @@ do_init() {
     echo "  消さずに nginx/km/Old/ へ移してから、もう一度実行してください。" >&2
     return 1
   fi
+}
 
+# 2. 自作 CA と証明書。init と certs(証明書だけ。.env に触らず控えも作らない。2026-11-08)の両方から呼ぶ
+issue_certs() {
   head_ '2. 自作 CA と証明書(certs/)'
   if ! command -v openssl >/dev/null 2>&1; then
     echo "openssl がありません(sudo apt install openssl)。" >&2
@@ -384,6 +389,10 @@ DNS:auth.$DOMAIN"
 DNS:html.$DOMAIN
 DNS:share.$DOMAIN"
   _ext="$_ext,DNS:html.$DOMAIN,DNS:share.$DOMAIN"
+  # VS Code 型のエディタの枠(段 11-3。2026-11-08。compose が webview.<ドメイン> の server を必ず作る)
+  _want="$_want
+DNS:webview.$DOMAIN"
+  _ext="$_ext,DNS:webview.$DOMAIN"
   if [ -n "$ADMIN" ] && [ "$ADMIN" != "$DOMAIN" ]; then
     _want="$_want
 DNS:$ADMIN"
@@ -400,6 +409,11 @@ DNS:$ADMIN"
   if [ -d "$ARCHIVE" ]; then
     note "古い証明書は $ARCHIVE へ退避しました"
   fi
+}
+
+do_init() {
+  guard_local || return $?
+  issue_certs || return $?
 
   head_ '3. .env をローカル環境に切り替える'
   if [ -f .env ]; then
@@ -512,7 +526,7 @@ do_status() {
       fi
     done
     if [ -f "$CERTS/local-server.pem" ]; then
-      for _name in "$_domain" $_admin ${_domain:+auth.$_domain html.$_domain share.$_domain}; do
+      for _name in "$_domain" $_admin ${_domain:+auth.$_domain html.$_domain share.$_domain webview.$_domain}; do
         if [ -z "$_name" ]; then
           continue
         fi
@@ -547,5 +561,6 @@ do_status() {
 
 case "$CMD" in
   init) do_init ;;
+  certs) guard_local && issue_certs ;;
   status) do_status ;;
 esac

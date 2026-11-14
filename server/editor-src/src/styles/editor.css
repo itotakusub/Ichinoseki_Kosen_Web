@@ -1190,6 +1190,11 @@ select {
     max-width: 50vw;
   }
 
+  /* VS Code 型のエディタは PC 向け(段 11-6)。狭い画面では入口を出さない */
+  .wce-open-code {
+    display: none;
+  }
+
   .wce-entry {
     max-width: 45%;
   }

@@ -49,7 +49,37 @@ const TYPES = {
   pdf: ['application/pdf', false, null],
   glb: ['model/gltf-binary', false, null],
   gltf: ['model/gltf+json', true, 'json'],
+  // 段 11(2026-11-08): VS Code 型のエディタ /code/ で書く言語。**保存するだけ**(プレビューでは使わない)。
+  // サーバーの表は lib/editor-projects.php の KM_EDITOR_EXTRA_TYPES(同じ並び)。/editor/ では色分けの無いテキスト
+  ts: ['text/plain', true, 'typescript'],
+  tsx: ['text/plain', true, 'typescript'],
+  jsx: ['text/javascript', true, 'javascript'],
+  cjs: ['text/javascript', true, 'javascript'],
+  mts: ['text/plain', true, 'typescript'],
+  cts: ['text/plain', true, 'typescript'],
+  py: ['text/plain', true, 'plaintext'],
+  ipynb: ['application/json', true, 'json'],
+  java: ['text/plain', true, 'plaintext'],
+  php: ['text/plain', true, 'plaintext'],
+  sql: ['text/plain', true, 'plaintext'],
+  ps1: ['text/plain', true, 'plaintext'],
+  psm1: ['text/plain', true, 'plaintext'],
+  psd1: ['text/plain', true, 'plaintext'],
+  bat: ['text/plain', true, 'plaintext'],
+  cmd: ['text/plain', true, 'plaintext'],
+  sh: ['text/plain', true, 'plaintext'],
+  bash: ['text/plain', true, 'plaintext'],
+  yaml: ['text/plain', true, 'plaintext'],
+  yml: ['text/plain', true, 'plaintext'],
+  toml: ['text/plain', true, 'plaintext'],
+  ini: ['text/plain', true, 'plaintext'],
+  scss: ['text/plain', true, 'plaintext'],
+  less: ['text/plain', true, 'plaintext'],
+  log: ['text/plain', true, 'plaintext'],
 };
+
+/** VS Code 型のエディタだけで使う(保存するだけの)拡張子。サーバーの KM_EDITOR_EXTRA_TYPES と同じ並び */
+export const EDITOR_ONLY_EXTENSIONS = ['ts', 'tsx', 'jsx', 'cjs', 'mts', 'cts', 'py', 'ipynb', 'java', 'php', 'sql', 'ps1', 'psm1', 'psd1', 'bat', 'cmd', 'sh', 'bash', 'yaml', 'yml', 'toml', 'ini', 'scss', 'less', 'log'];
 
 export function extensionOf(path) {
   const m = /\.([A-Za-z0-9]+)$/.exec(String(path));

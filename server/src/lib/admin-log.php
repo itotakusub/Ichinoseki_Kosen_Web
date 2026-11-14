@@ -146,6 +146,14 @@ const KM_ADMIN_LOG_ACTION_LABELS = [
     'map.switches' => 'が地図を開いたときに出すもの(チュートリアル・お知らせ)を切り替えました',
     'guide.settings' => 'が案内チャットの設定を変えました',
     'guide.log_clear' => 'が案内チャットの質問と答えをまとめて消しました',
+    // エディタの雛形の取り込み(段 14-4。2026-11-13。admin/editor-snippets.php)
+    'editor-snippets.import' => 'がエディタの雛形を JSON で取り込みました',
+    'editor-snippets.reset' => 'がエディタの雛形を同梱のものに戻しました',
+    // 地図の埋め込み(段 15。2026-11-14。admin/embed-sites.php)
+    'embed-site.create' => 'が地図を埋め込むサイトを登録しました',
+    'embed-site.update' => 'が地図を埋め込むサイトを直しました',
+    'embed-site.enable' => 'が地図を埋め込むサイトを使えるようにしました',
+    'embed-site.disable' => 'が地図を埋め込むサイトを止めました',
     'qr_link.create' => 'が QR のリンク集にリンクを足しました',
     'qr_link.update' => 'が QR のリンク集のリンクを直しました',
     'qr_link.delete' => 'が QR のリンク集からリンクを消しました',

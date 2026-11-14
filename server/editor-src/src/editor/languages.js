@@ -9,9 +9,11 @@
  * - すべてブラウザの中(worker を含む)で動く。サーバーへは何も聞かない
  */
 import { monaco, htmlService, cssService } from './monaco.js';
-import { HTML_JA, HTML_SNIPPETS_EN } from '../data/html.js';
+import { HTML_JA } from '../data/html.js';
 import { CSS_JA } from '../data/css.js';
-import { JS_API, JS_SNIPPETS } from '../data/js.js';
+import { JS_API } from '../data/js.js';
+// 雛形は snippets から(管理画面で取り込んだ JSON に、起動のあとで差し替わる。段 14-4)
+import { cssSnippetTyped, htmlStyleBefore, loadServerSnippets, snippets } from '../data/snippets.js';
 import { mergeHtmlData, mergeCssData, indexJsApi, lookupJs, jsDocMarkdown, plainSnippet } from '../data/merge.js';
 
 let lang = 'ja';
@@ -64,6 +66,8 @@ function lineBefore(model, position, column = position.column) {
 let registered = false;
 
 export function registerLanguageFeatures() {
+  // サーバーに取り込んだ雛形があれば差し替える(待たない。届かなければ同梱のまま。段 14-4)
+  loadServerSnippets();
   if (registered) {
     return;
   }
@@ -85,7 +89,7 @@ export function registerLanguageFeatures() {
         startColumn: position.column - typed.length,
         endColumn: position.column,
       };
-      const list = lang === 'en' ? HTML_SNIPPETS_EN : HTML_JA.snippets;
+      const list = lang === 'en' ? snippets.htmlEn : snippets.htmlJa;
       return {
         suggestions: list.map(([tag, label, body], i) => ({
           label: { label: tag, description: label },
@@ -102,6 +106,42 @@ export function registerLanguageFeatures() {
     },
   });
 
+  // CSS の雛形(管理画面で取り込んだもの。段 14-5)。CSS のファイルと、HTML の <style> の中
+  const cssSuggestions = (model, position, cssBefore) => {
+    const typed = cssBefore === null ? null : cssSnippetTyped(cssBefore);
+    if (typed === null || snippets.css.length === 0) {
+      return { suggestions: [] };
+    }
+    const range = {
+      startLineNumber: position.lineNumber,
+      endLineNumber: position.lineNumber,
+      startColumn: position.column - typed.length,
+      endColumn: position.column,
+    };
+    return {
+      suggestions: snippets.css.map(([label, body, jaText, enText], i) => {
+        const doc = lang === 'en' ? enText : jaText;
+        return {
+          label: { label, description: shortDoc(doc) },
+          kind: CompletionItemKind.Snippet,
+          insertText: body,
+          insertTextRules: CompletionItemInsertTextRule.InsertAsSnippet,
+          filterText: label,
+          sortText: `~${label} ${String(i).padStart(4, '0')}`,
+          detail: doc,
+          documentation: { value: `${doc}\n\n\`\`\`css\n${plainSnippet(body)}\n\`\`\`` },
+          range,
+        };
+      }),
+    };
+  };
+  const textBefore = (model, position) => model.getValueInRange({ startLineNumber: 1, startColumn: 1, endLineNumber: position.lineNumber, endColumn: position.column });
+  monaco.languages.registerCompletionItemProvider('css', {
+    provideCompletionItems: (model, position) => cssSuggestions(model, position, textBefore(model, position)),
+  });
+  monaco.languages.registerCompletionItemProvider('html', {
+    provideCompletionItems: (model, position) => cssSuggestions(model, position, htmlStyleBefore(textBefore(model, position))),
+  });
   // JS: 日本語の説明が付いた候補
   monaco.languages.registerCompletionItemProvider('javascript', {
     triggerCharacters: ['.'],
@@ -146,7 +186,7 @@ export function registerLanguageFeatures() {
           suggestions.push(make(item, full + (item.args.startsWith('(') ? '()' : ''), full + item.args, full));
         }
       }
-      for (const [label, body, jaText, enText] of JS_SNIPPETS) {
+      for (const [label, body, jaText, enText] of snippets.js) {
         const doc = lang === 'en' ? enText : jaText;
         suggestions.push({
           label: { label, description: shortDoc(doc) },

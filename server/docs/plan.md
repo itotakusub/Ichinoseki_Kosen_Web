@@ -232,7 +232,173 @@ status.md の「残っていること」を利用者と見直して決めた(202
 | 10-A の状況 | **11-08 に本番へ配備済み・完了**(スマホの幅も利用者が確認。status.md の 11-08 の記録) |
 | 10-B 同期 | `api/editor.php`(手本は `api/html-host.php`。CSRF・持ち主はセッションの sub だけ・止められた/テスト用のアカウントは断る)・`lib/editor-projects.php`(表 `km_editor_projects`・`uploads/editor/<id>/blobs`)。変わったファイルだけ送り、版のぶつかりは利用者に選ばせる。上限は 1 人 30 プロジェクト・200MB。規約に第8条の3(文面は利用者が確かめてから) |
 | 10-B の状況 | **11-08 に本番へ配備済み・完了**(検証機の Chrome で確認・規約の文面は利用者が確認。status.md の 11-08 の記録) |
----
+
+### 段 11 —— VS Code 型のエディタ(`https://ito4.jp/code/`。ブラウザの中だけで動く。11-08 にプラン)
+
+利用者(11-08)「VSCode みたい(Web で VSCode を動かす感じ)はできますか? できるならプランを」。
+
+**できる。** ただし「ブラウザの中だけで動く VS Code の画面」として作る。
+
+使う部品:
+- `@codingame/monaco-vscode-api`(MIT・**39.0.3**。11-06 公開)。VS Code の OSS の本体を npm の部品に分けたもの。
+- 画面の部品・日本語の言語パック・VS Code 付属の拡張機能(言語・テーマ・アイコン)は、どれも npm に同じ版(39.0.3)で揃っている(11-08 に確かめた)。
+
+**やらないこと**:
+- **code-server 型**(サーバーで VS Code を動かす)は使わない。
+  - 公開すると、誰でもサーバーのシェルに触れてしまう。
+  - 1 人に 1 つの入れ物が要り、メモリ 1.9GiB には収まらない。
+- そのため、次のものは無い:
+  - ターミナル
+  - デバッガ
+  - Git の push
+  - Node で動く拡張機能(Python の実行・Java のコンパイルなど)
+- 「Visual Studio Code」は Microsoft の商標なので、**名前には使わない**。画面の名前は「Web Code Editor(ワークベンチ)」とする。
+
+#### 利用者が決めたこと(11-08)
+
+| 項目 | 決めたこと |
+|---|---|
+| 置き場所 | **別ページで並べる。** `/editor/`(軽い・スマホでも動く)は残し、`/code/` を足す。プロジェクト(IndexedDB `km-editor`)・同期(10-B)・プレビューは両方で共通。`/code/` は重いので PC 向け。狭い画面では `/editor/` へ案内する |
+| 拡張機能 | **決めたものだけ同梱する。** 利用者は新しく入れられない。左の「拡張機能」の欄は、**一覧とオン・オフだけ**(検索・入れる口は閉じる。マーケットプレイスの URL は持たない) |
+| 言語(VS Code 付属) | HTML・CSS・JSON(必ず)・**JS/TS の本格的な補完**(TypeScript の Web 版)・**Emmet**・**Markdown**(プレビュー付き)・**Jupyter**(.ipynb)・**整形**(Pretty-print。HTML・CSS・JS・JSON の付属の整形 + Prettier)・**色分け**: Python・PHP・SQL・YAML・XML・シェル・**Java・PowerShell・Windows のバッチ** |
+| 見た目 | 日本語の画面・標準の配色(必ず)・**ファイルのアイコン**(Seti)・**追加の配色テーマ**(Monokai・Solarized 明暗・Abyss・Quiet Light・Kimbie・Tomorrow Night Blue・Red)・**自作の日本語の補完**(段 9 のデータ。`editor-src/src/data/*`) |
+| Open VSX から同梱 | 利用者は **Prettier・Code Spell Checker・Error Lens** を選んだ。11-08 に Open VSX の manifest を読んだ結果は下のとおり |
+
+Open VSX の 3 つ(11-08 に manifest で確かめた):
+
+| 拡張機能 | 版・ライセンス | Web で動く入口 | 扱い |
+|---|---|---|---|
+| Prettier | 12.4.0・MIT | `browser: ./dist/web-extension.cjs` あり | 入れる |
+| Error Lens | 3.30.0・MIT | `browser` あり | 入れる |
+| Code Spell Checker | 4.10.0・**GPL-3.0** | **`browser` が無い**(Node でしか動かない) | **入れない**(11-09 に利用者が決めた。Open VSX にブラウザで動く代わりも無い) |
+
+#### 形
+
+- **元**: `server/code-src/`(新しい Vite のプロジェクト)。組み立ての出力は `src/code/`。
+  - `editor-src` とは npm を分ける。monaco-vscode-api は `monaco-editor` を自分の版に差し替えるため。
+  - 共通の部品は `editor-src/src/` から import して使い回す(写しは作らない):
+    - `project/db.js`・`model.js`・`sync.js`・`import.js`
+    - `preview/projectBuilder.js`・`preview.js`
+    - `data/*`(日本語の補完)
+- **ファイル**: VS Code のファイルシステムの口(FileSystemProvider)を IndexedDB `km-editor` の上に作る。
+  - 1 つのプロジェクトを 1 つのワークスペースとして開く。
+  - 切り替えはページを開き直す(`?p=<id>`)。VS Code の本体は、1 つのページで 1 回しか起こせないため。
+  - 別のタブ(`/editor/` も)で変えたら BroadcastChannel で知らせ、VS Code のファイルの見張りに流す。
+- **使えるファイルの種類を広げる**:
+  - 今は HTML 展開の `KM_HTML_TYPES` と `model.js` の `TYPES` に縛られている(Web のファイルだけ)。
+  - エディタ用に `KM_EDITOR_TYPES`(サーバー)と `TYPES`(クライアント)を分けて足す: `md`・`ipynb`・`py`・`java`・`ps1`・`bat`・`cmd`・`php`・`sql`・`yaml`・`yml`・`xml`・`ts`・`tsx`・`jsx`・`txt` など。
+  - どれもサーバーでは**保存するだけ**(実行しない。blob は今までどおり octet-stream・attachment・CSP sandbox で返す)。
+  - `/editor/` では、増えた種類を「色分けなしのテキスト」で開けるようにする。
+- **プレビュー**:
+  - 今の仕組み(`projectBuilder.js` と `html.ito4.jp/editor-run.html`)を、VS Code の画面の中の「プレビュー」欄に出す。
+  - コンソール・エラーの行から開く動きは、パネルに出す。
+- **webview**(Markdown のプレビュー・Jupyter の出力):
+  - VS Code は、これらを別オリジンの枠で出す。
+  - `html.ito4.jp` は利用者の HTML を出すオリジンなので相乗りしない。**専用のオリジン `webview.ito4.jp` を足す**:
+    - DNS: Cloudflare で橙
+    - 証明書の名前に足す
+    - nginx の server を足す
+  - 拡張機能の実行(Web Worker の拡張機能ホスト)も、できればこのオリジンへ出す。ito4.jp の Cookie・IndexedDB・CSRF に、外の拡張機能(Prettier・Error Lens)が手を届かせないため。
+  - 出せなければ、11-0 で利用者と決める(外の拡張機能を外す、など)。
+- **Jupyter**:
+  - .ipynb を開く・書く・保存する・保存済みの出力を見る、まで。
+  - **セルの実行は入れない**(カーネルが無い)。Pyodide(ブラウザの中の Python)で動かすのは、別の段として後で決める。
+- **同期**:
+  - 10-B の流れ(`main.js` の `pushProject`・`pullInto`・`refreshRemote`・`resolveConflict`)を `editor-src/src/project/syncManager.js` へ切り出し、`/editor/` と `/code/` で共通にする。
+  - 状態は下の帯(ステータスバー)に出す。ぶつかったときの 3 つの選び方は、VS Code のクイックピックで聞く。
+- **殻**: `code-src/public/index.php`。`/editor/` と同じく、サインインは fail open・meta `km-csrf`・`km-signed-in`。
+  - CSP は新しい profile `'code'`。中身は 11-0 で**測ってから**決める。見込み:
+    - TextMate の色分けの WASM に `'wasm-unsafe-eval'` が要る
+    - worker の出所
+    - `frame-src` に `html.ito4.jp`・`webview.ito4.jp`
+  - `'unsafe-eval'` が要るなら、利用者に報告して決めてもらう。
+- **ライセンス**: VS Code の OSS(MIT)・monaco-vscode-api(MIT)・Prettier(MIT)・Error Lens(MIT)の表示を `/code/` の「このエディタについて」に出す。
+
+#### 11-0 の結果(11-08。検証機。詳しくは status.md の 11-08 の記録)
+
+| 項目 | 結果 |
+|---|---|
+| 大きさ・時間 | 配る大きさ 73.8MB。初回の転送 4.6MB・起動 1.7 秒(2 回目 0.6〜0.8 秒)。本体のメモリ 70MB。Windows で組み立てられる(約 5 秒) |
+| CSP | 本体に `'unsafe-eval'` は要らない。足すのは `'wasm-unsafe-eval'`・`worker-src blob:`・拡張機能ホストの枠だけ(11-1 で確定。blob をやめると worker にサイト既定の CSP が付いて WASM が止まる) |
+| COOP/COEP | 無くても JS/TS の補完が動いた(付けない) |
+| 拡張機能ホスト・webview | 本体のオリジンでは既定の CSP で止まる → **11-3 で `webview.<ドメイン>` へ移した**(部品の `iframeAlternateDomain`。仮の口は退避) |
+| Prettier・Error Lens | Web で動いた(版を固定・sha256 一致・通信も eval も無し) |
+| Code Spell Checker | **Web 版が無い**(GPL-3.0)→ 入れない(代わりも入れない。11-09 に利用者が決めた) |
+
+#### 進め方(プロジェクト状況 #122〜#129)
+
+| 段 | 中身 | 誰が |
+|---|---|---|
+| 11-0 試作と測定(検証機) | 最小のワークベンチ(日本語・エクスプローラー・IndexedDB のファイル)を `/code/` に出し、次のものを**実物で測る**。結果を利用者に報告し、続けるかを決めてもらう。<br>・組み立ての大きさ<br>・初めて開くまでの時間<br>・CSP に要るもの<br>・メモリ<br>・拡張機能ホストを別オリジンに出せるか<br>・Prettier・Error Lens が Web で動くか<br>・Windows で組み立てられるか | こちら |
+| 11-1 基盤(**11-08 済み・検証機**) | `code-src/`・殻・CSP `'code'`・ファイルの口と BroadcastChannel・プロジェクトを開く・切り替える<br>ZIP の読み込み・書き出し(コマンドとエクスプローラーの右クリック)・ファイルの種類を広げる(サーバーと `/editor/` も)・狭い画面の案内 | こちら |
+| 11-2 拡張機能(**11-08 済み・検証機**) | 上の表の言語・テーマ・アイコン・日本語パック・自作の日本語の補完・拡張機能の欄(一覧とオン・オフだけ)<br>自作の日本語は、付属の言語サーバーの標準データ(英語)を切れないため、**ホバーの説明と雛形**で足した(候補の一覧の説明は英語のまま) | こちら |
+| 11-3 プレビューと webview(**11-09 済み・検証機**) | 枠のオリジン `webview.<ドメイン>`(nginx の server・CORS・証明書の名前)で拡張機能ホスト・Markdown のプレビュー・Jupyter の出力が動く<br>プロジェクトのプレビューは**別の窓** `/code/preview.php`(/editor/ の組み立てと見せ方の部品を使い回す。保存のたび組み直す・コンソールの「ファイル:行」で /code/ のその行を開く)<br>本番の DNS(橙・11-08)と証明書(11-09)は利用者が済ませた | こちら + 利用者(証明書・11-7) |
+| 11-4 同期(**11-09 済み・検証機**) | `editor-src/src/project/syncManager.js` へ切り出し、`/editor/` で前と同じに動くことを確かめた。/code/ はステータスバー(状態・メニュー・ぶつかりの選び方)・クイックピック(一覧の印・サーバーにだけあるもの) | こちら |
+| 11-5 Open VSX(**11-09 済み・検証機**) | Prettier・Error Lens の vsix を版と sha256 で固定(`code-src/extensions/extensions.lock.json`。check.php が突き合わせる)。Prettier はブラウザで読まないファイルを組み立てで外した(14.4MB → 5.4MB)。綴りの検査は入れない | こちら |
+| 11-6 仕上げ(**11-09 済み・検証機**) | `/editor/` の帯に「VS Code 型で開く」(/code/ があるときだけ)・「このエディタについて」(部品・版・MIT)・規約 第8条の3 に `/code/`(利用者が文面を確かめた)・docs。QR のリンク集は 11-7 のあと利用者が管理画面で足す | こちら + 利用者(文面) |
+| 11-7 配備(**11-09 本番で完了**) | 検証機の Chrome で確かめる → 利用者が配備 → 本番を読むだけで確かめる<br>証明書と `-Action up` の配備は 11-09 に済み。`deploy-to-host.ps1` の本番の除外 `./src/code` を外すのもこのとき | 利用者 |
+| 11-8 拡張機能を足す(**11-09 済み・検証機**。プロジェクト状況 #130) | 利用者の希望 7 つ(HTMLHint・Auto Rename Tag・Path Intellisense・IntelliSense for CSS class names・Bracket Pair Colorization・HTML CSS Support・ESLint)。Web 版の入口があるのは **Path Intellisense だけ**なので、利用者が 4 つとも選んだ形にした:<br>・Path Intellisense 2.8.0 を同梱(Open VSX・MIT・sha256 をロックに)<br>・Auto Rename Tag → VS Code の「リンクされた編集」・Bracket Pair Colorization → VS Code に入っている括弧の色と対の縦線(設定で ON)<br>・HTMLHint・ESLint → 自作の拡張機能「Web の検査」(`code-src/src/webChecks.js`)。部品の htmlhint 1.9.2・ESLint 10.14.0 の Linter(どちらも MIT)をブラウザで動かす。規則は推奨のもの・利用者の eslint.config.js は実行しない・HTMLHint は `.htmlhintrc.json` で変えられる<br>・CSS のクラス名 → 同じ拡張機能で class="…"・id="…" を補完し、どの CSS にも無いクラス名に注意を出す | こちら → 利用者(配備) |
+
+**確かめ方**:
+- `node` の試験(ファイルの口の純粋な部分・種類の表・syncManager)・check.php の組 `code` を作る。
+  - 組 `code` で見るもの: 殻・CSP・外への URL が無い・マーケットプレイスの口が閉じている・口は `/api/editor.php` だけ。
+- **検証機の Chrome で**:
+  - 日本語の画面・エクスプローラー・タブの分割・Ctrl+P・Ctrl+Shift+P・検索と置換
+  - JS/TS の補完と型の検査・Emmet・整形
+  - Markdown と Jupyter の表示・テーマとアイコン・拡張機能のオン・オフ
+  - プレビュー
+  - `/editor/` と同じプロジェクトが開けること・同期とぶつかり
+
+**危ないところ**:
+- 大きさ: 初めて開くとき、十数〜数十 MB 読むと見込む(11-0 で測る)。
+- VS Code の本体の版が上がると壊れることがある。版は固定し、上げるときは段を立てる。
+- 本番のディスクは 40% 使用。組み立ての前の世代は `retired/` に 1 つだけ残す(`/editor/` と同じ)。
+
+### 段 12 —— 案内AIのつなぎを ngrok から Cloudflare Tunnel へ(**2026-11-12 完了**。通しで届くのを確かめ、ngrok の分岐も消した)
+
+利用者(11-11)「LLM の接続は Cloudflare のトンネルを使おうと思っていますがどうでしょう?」→ 勧めた →「トンネルを経由する方針で行きましょう」。
+
+```
+VPS の PHP ─ https ─ Cloudflare(llm.ito4.jp。WAF で本番サーバーの IP だけ)
+           ─ トンネル ─ cloudflared(自宅 PC)─ 門番 server.py(127.0.0.1)─ Unsloth / Bionic
+```
+
+**なぜ**: ngrok のエンドポイントの期限切れで止まった(11-07)・ito4.jp はすでに Cloudflare を通っている(質問と答えを見られる会社が 1 つ減る)・WAF で送り元を本番サーバーの IP だけに絞れる(門番の鍵と二重)。
+
+**形**:
+- 自分で管理するトンネル(locally-managed)。Zero Trust の画面を使わない。鍵は自宅 PC の `%USERPROFILE%\.cloudflared\<UUID>.json`
+- 使うときだけ起こす(`guide-llm/start-guide-llm.ps1`。サービスにしない)
+- トンネルの行き先は 1 つの名前 → 門番と、それ以外は 404
+- Website 側は `.env` の `KM_GUIDE_LLM_URL` を替えるだけ(PHP の呼び出しに User-Agent を足した)
+- **ngrok の分岐は残す**(cloudflared がこの PC でつながると確かめるまでの戻り道。Norton の TLS 検査の前例)。確かめが済んだら消す
+
+**確かめた前提**(読むだけ): 待ち時間は PHP 55 秒・nginx 90 秒で、Cloudflare の上限 100 秒に収まる・ホストの国の拒否は外へつないだ通信の戻りを通す・Bot Fight Mode と Browser Integrity Check は切ってある・門番に ngrok に頼った処理は無い・cloudflared の手順は公式資料で確かめた。
+
+**利用者がすること**(手順の正本は [17-cloudflare](17-cloudflare.ipynb) §7): cloudflared を入れる → `tunnel login` → `tunnel create kosenmap-guide` → `tunnel route dns … llm.ito4.jp` → `guide-llm.env` に UUID と名前 → WAF のルール 2 つ → 本番の `.env` を替えて `-Action up` で配備。
+
+**まだ確かめていないこと**: cloudflared をこの PC で動かしていない(入れるのは利用者)。つながるか・Norton が間に入るか・設定ファイルを cloudflared が受けるかは、利用者が入れたあとに見る。
+
+### 段 13 —— 学内の 3D(点群+画像)を使う: AR・360°・Wi-Fi の精度(2026-11-12 に計画へ。プロジェクト状況 #104・#133)
+
+利用者(11-12)「AR の画像などは学内全域の点群データ(3D データ)+画像でもらえそうなので、学内 3D で Wi-Fi 精度向上も計画に入れてください」「360° カメラは Insta360 X5 を使用する予定」。
+それまで保留にしていた「AR の実測」(元は段 3-4)と、段 6 の「ストリートビューの撮影」をここへまとめた。**Wi-Fi 測位の比べ(元は段 3-3)は打ち切り**(十分な精度を得られた)。
+
+**まだ手元にデータが無い。** 形式・大きさ・座標が分かってから中身を決める。いまは「何に使うか」と「先に決めること」だけを書く。
+
+| 使い道 | 考えていること | 誰が |
+|---|---|---|
+| 13-1 データを受け取って調べる | 点群の形式(E57・LAS/LAZ・PLY など)・点の数と容量・色の有無・画像の形式と撮った位置(姿勢)が付いているか・座標の原点と向き・階の分かれ方。**この PC とサーバーのどちらで扱える大きさか**を先に測る | 利用者(受け取り)→ こちら |
+| 13-2 地図と合わせる | 点群の座標を、いまの地図(階ごとの平面図の px・北と距離の補正)へ写す式を決める。合わせる点は、建物の角・階段・入口など平面図で分かる所を各階で数点。ずれを数字で出す | こちら + 利用者(合わせる点の確認) |
+| 13-3 AR の素材 | 現地で 4 地点以上に印を付けて撮る代わりに、点群+画像から AR の位置合わせの素材を作れるか。顔・掲示の写り込みは今までどおり消す(deface) | こちら |
+| 13-4 360°(ストリートビュー) | Insta360 X5 で撮る(正距円筒図法の画像)。Website の見る画面・地図編集・公開の設定(既定 OFF)は 11-07 に作ってある。撮る位置を地図の地点に結ぶ手間を、13-2 の式で減らせるか | 利用者(撮影)+ こちら |
+| 13-5 Wi-Fi の精度 | 3D から壁・床・階の境を取り、(a) 学習地点の間の電波の強さを「壁の枚数・距離・階」で埋める(指紋の補間)、(b) AP の位置の見立てを直す、(c) 粒子フィルタの「通れない所」を平面図の線より正確にする。**効くかどうかは、いまの評価の画面と CSV(誤差の中央値・90%)で前後を比べて決める** | こちら + 利用者(歩いて評価) |
+
+**先に決めること(利用者)**:
+- データの受け取り方と置き場(大きいので git と公開の控えには入れない。サーバーへ上げるかも未定)
+- 使ってよい範囲(学内の 3D・画像を公開のページに出してよいか。360° は「撮りそろうまで管理者だけ」のまま)
+- Wi-Fi は「十分な精度を得られた」ので、13-5 はどこまで求めるか(目標の誤差)
+
+**RTT は使わない**: 学内の AP(AP305C)は 802.11mc に応じない。アプリの表示は版 58 で外した(測る仕組みは残してある)。---
 
 ## 優先順位の軸
 
@@ -249,8 +415,140 @@ status.md の「残っていること」を利用者と見直して決めた(202
 | ~~**第5段**~~ | ~~Play ストアの準備~~ | **実装完了**(2026-09-03)。公開申請は**抹消**(2026-11-07、利用者) |
 | ~~**第6段**~~ | ~~アカウント削除 / User-Agent の記録~~ | **実装完了**(2026-09-03)。**Logto 側を開けるのは利用者** |
 
----
+### 段 14 —— VS Code 型エディタの候補を整える(2026-11-13。14-1〜14-4 すべて本番で済み)
 
+利用者(11-13)「HTML の `<a` を入力したときのいらないコメント(Mozilla のコメント)は削除できませんか」「できると分かったら本番向けのプランを」「予測変換は JSON で管理できませんか」。
+
+**分かったこと**: 候補の一覧の横に出る英語の説明(MDN の文と「MDN Reference」のリンク)は、VS Code 付属の HTML の言語サーバーが出している。カーソルを合わせたときの説明は設定(`html.hover.*`)で消せるが、**候補の説明は設定を見ずに作る**ので、設定では消せない。説明を作る関数は 1 つで、候補からは設定なしで呼ばれる → 組み立てのときにその関数を「設定が無ければ作らない」に書き換えれば消える。**検証機の Chrome で消えるのを確かめた**(付属の候補 a・abbr… は今までどおり出る・説明の欄だけ出ない)。
+
+| 段 | 中身 | 状態 |
+|---|---|---|
+| 14-1 HTML の候補の説明(MDN)を外す | `code-src/vite.config.js` の `km-html-no-completion-docs`: 出来合いの `htmlServerMain.js` の 1 か所を書き換え、中身のハッシュで名前を付け直して出す(古い中身がブラウザに残らない)。形が変わって見つからなければ組み立てを止める。check.php が組み立てた部品を見る | **11-13 本番で済み**(利用者が配備・読んで確かめた) |
+| 14-1 のついで | 打ちかけの `<a` に出る赤い文(HTMLHint の spec-char-escape)を既定で外した(`.htmlhintrc.json` で戻せる)・はじめのプロジェクトの雛形に `<title>` | 同上 |
+| 14-2 CSS の候補の説明(MDN) | 利用者「CSS の候補も外す」。同じ部品で、CSS の言語サーバー(`cssServerMain.js`)と、HTML の言語サーバーの中の CSS(`<style>` の中)の説明の入口を書き換える | **11-13 本番で済み**(利用者が配備・読んで確かめた) |
+| 14-3 カーソルを合わせたときの英語の説明 | 利用者「設定だけで消す」。`html`・`css`・`scss`・`less` の `hover.documentation`・`hover.references` を false に。**日本語の画面だけ**(自作の日本語の説明が残る。英語の画面で消すと説明が 1 つも出なくなるので残した) | 同上 |
+| 14-4 雛形を JSON で取り込む | 利用者「管理画面の取り込みだけ作る」。管理画面「エディタの雛形」(`admin/editor-snippets.php`): 同梱・いまの雛形を書き出す → 手元で直す → 取り込む(形を確かめ、違えば何も変えない)・同梱に戻す。編集の画面は作らない。置き場は新しい表 `km_editor_snippets`(前の中身は 20 行まで残す)。公開の口 `api/editor-snippets.php`(GET だけ・何も受け取らない・1 分使い回す)。/editor/ と /code/ は起動のときに読み、届かない・形が違えば同梱のまま。範囲は雛形(HTML 日本語・英語、JS)だけ。日本語の説明は対象外 | 同上 |
+
+**本番へ出す手順(14-1)**:
+1. 利用者が配備する(nginx・compose は変えていない):
+   ```
+   pwsh -File C:\Users\itota\Documents\Website\server\scripts\deploy-to-host.ps1 -Backup -Yes
+   ```
+2. こちらが本番を読むだけで確かめる:
+   - `/code/` が 200・`src/code/assets/htmlServerMain-*.js` が 1 つで、書き換えた形になっている・`workbench-*.js` がその名前を指している
+   - 前の組み立ては `retired/code-assets/` へ退避されている(1 世代)
+   - 本番の `/code/` を開き、`<a` と打って候補の横に英語の説明が出ないこと・付属の候補(a・abbr…)は出ること・赤い文が出ないこと
+3. 使う人の側: 部品の名前が変わるので、開き直せば新しい部品を読む(古いタブは開き直すまで前のまま)
+
+**戻し方**: `vite.config.js` の plugins から `htmlNoCompletionDocs()` を外して組み立て直し、配備する(元の部品に戻る)。急ぐときは `retired/code-assets/` の 1 世代前へは戻さず、組み立て直すのが確実。
+
+**危ないところ**:
+- 付属の部品(`@codingame/monaco-vscode-html-language-features-default-extension` 39.0.3)の版を上げると関数の形が変わりうる → 組み立てが止まるので気づく。そのとき形を調べ直す
+- 候補の説明が全部消える(英語の画面でも)。英語で使う人には説明が 1 つ減る。雛形(自作)の説明と見本は残る
+
+### 段 14-5 —— 利用者の雛形 JSON(v2)を直して取り込めるようにする(2026-11-14。手元で済み・配備待ち)
+
+利用者(11-14)「スニペット集の JSON を作成したので、不足分や説明不足などの場所を確認・修正してください」。ファイルは `Downloads\v2.json`(262,023 バイト。HTML 日本語 169・英語 169・JS 270・**CSS 641**)。
+
+**調べて分かったこと**(機械で全件を見た):
+
+| # | 見つけたこと | 害 | 直し方(案) |
+|---|---|---|---|
+| 1 | **HTML の body が 338 件すべて `<` で始まる**(`<a href=…`) | 取り込みの確かめは通るが、`<a` と打って選ぶと **`<<a href=…` になる**(差し替えるのは `<` のあとの文字だけ) | 取り込むときに先頭の `<` を 1 つ自動で外す(サーバーとエディタの両方。人は `<` を書きたくなるので、断るより外す)。ファイルも直す |
+| 2 | **`css` の 641 件は今の取り込みでは黙って捨てられる**(形の決まりに css が無い) | 取り込んでも CSS の雛形は 1 つも出ない。「取り込みました」とだけ出るので気づけない | CSS の雛形を足す(形 `css: [{label, body, ja, en}]`。`/editor/` と `/code/` の CSS と `<style>` の中で出す)。知らない項目があれば取り込み画面に「無視した」と出す |
+| 3 | 上限すれすれ | ファイル 262,023 / 262,144 バイト(残り 121 バイト)。CSS 641 件は 1 つの欄の上限 300 を超える | ファイルの上限を 1MB に・CSS は 1,000 件まで(gzip で配るので、エディタの起動で読む量は 50KB ほど) |
+| 4 | **CSS の説明 459 件が「○○ の値を指定する。」**(英語 506 件が「Sets the ○○ CSS property.」)。ラベルも 506 件が `property: ○○` | 説明になっていない。`flex` と打っても `property: flex-wrap` は先頭が合わず並びが後ろになる。付属の CSS の候補(プロパティ名)と 506 件が二重に出る | 下の「決めてほしいこと」1 |
+| 5 | HTML の **廃止タグ 27 件**(`[非推奨]` の acronym・applet・blink・center・font・frame・marquee など) | 初めての人が候補から選んでしまう | 下の「決めてほしいこと」2 |
+| 6 | `comment`・`doctype` の body が `<!-- `・`<!DOCTYPE`(#1 と同じ二重) | 同上 | #1 で直る |
+| 7 | CSS の 34 件が `&::selection {…}` のように `&` で始まる | ルールの外に置くと `&` が `:scope` になり、初めての人には分かりにくい | ルールの中で使うものは説明に「ルールの中に書く」と足す / ルールの外でよいものは `&` を外す |
+| 8 | JS の説明が短いもの 13 件(「エラーとして表示する。」など) | 足りなくはないが、ほかより薄い | 何を渡すか・何が返るかを 1 文足す |
+| 9 | 同梱にあって v2 に無い: HTML `html`(名前が「HTML 文書のひな形」に変わっただけ)・JS `fetch json`・`timer` | 実害なし(`fetch get`・`setTimeout` などが代わりにある) | そのまま(報告だけ) |
+
+**問題が無かったもの**: `${1:…}` の閉じ忘れ 0 件・重複 0 件・HTML の日本語と英語の並び(169 件の tag が同じ順)・英語の側に日本語が混ざったもの 0 件・JS 270 件は上限内。
+
+**作るもの**:
+- 14-5a 取り込みを広げる: `lib/editor-snippets.php` と `editor-src/src/data/snippets.js`(先頭の `<` を外す・`css` を受ける・上限・知らない項目の知らせ)。**表は変えない**(json の列に入れるだけ。ALTER なし)。CSS の候補は `languages.js`(/editor/)と `jaExtension.js`(/code/)に足す
+- 14-5b JSON を直した版 `Downloads\v3.json`(**v2 は触らない**)。直したところの一覧も付ける
+- 試験: check.php(形の決まり・`<` を外す・上限がサーバーとエディタで同じ)・editor.test.js。検証機の Chrome で v3 を取り込み、`<a` が二重にならない・CSS の雛形が出るのを確かめる
+
+**決めたこと(利用者、11-14)**:
+1. CSS の「プロパティ 1 つだけ」の 506 件は**雛形から外す**。説明は付属の候補(プロパティ名)の日本語の説明に回す(113 件は同梱の `CSS_JA` から・残りはこちらが書く)。雛形に残すのは 2 行以上かよく使う組み合わせの 135 件
+2. 廃止タグ 27 件は**外す**
+3. 説明の書き直しは**こちらに任せる**(自分の言葉で。MDN などの文は写さない)。直したところの一覧を付けて `Downloads\v3.json` に
+
+**状態(11-14)**: **手元で済み・検証機で確かめた・配備待ち**。
+- 取り込み: 先頭の `<` を外す(読むときも外すので、**本番にすでに入っている v2 も配備だけで `<<a` が直る**)・`css` を受ける・知らない項目を知らせる・1MB / CSS 1,000 個。CSS の雛形は /editor/ と /code/ の CSS と `<style>` の中(`cssSnippetTyped`・`htmlStyleBefore`)
+- 説明: `editor-src/src/data/css-more.js` に 281 個(付属の標準データに無い 66 個は出る所が無いので書かない)。`CSS_JA` は 448 個に
+- `Downloads\v3.json`(HTML 144・144・CSS 132・JS 270・147KB)と `v3-changes.txt`。v2 で見つけた追加: `${1(…)}` の壊れた入力欄 5 個・`::before`/`::after` の重なり・`wbr` が入力欄から始まる・`&` で始まる 32 個はふつうのセレクタへ
+
+### 段 15 —— 地図を別のサイトに埋め込む(2026-11-14。手元で済み・検証機で確かめた・配備待ち)
+
+利用者(11-14)「マップの API を作成してください。別のサイトで表示されるような埋め込み方を想定してください」。
+
+**形(推奨)**: Google マップの「地図を埋め込む」と同じく **iframe で出す地図**と、それを操る小さな JS を作る。
+
+```html
+<!-- 埋め込む側のサイトに貼るもの(管理画面で作った札 site を入れて写す) -->
+<div id="campus-map"></div>
+<script src="https://ito4.jp/embed/v1.js"></script>
+<script>
+  const map = KosenMap.embed('#campus-map', { site: 'xxxx', floor: '1F', focus: '<地点の ID>', lang: 'ja', height: 480 });
+  map.on('select', (place) => console.log(place.name));   // 地点を押したとき
+  map.focus('<別の地点の ID>');                             // 外のボタンから動かす
+</script>
+```
+JS を使わずに `<iframe src="https://ito4.jp/embed/?site=xxxx&floor=1F&focus=…">` だけでも出る。
+
+| 段 | 中身 |
+|---|---|
+| 15-1 調べる | `Main/app.js`(284KB・1 つの大きな台本)から、地図を描く部分(Leaflet・`map-style.js`・`label-layout.js`・階の切り替え)を埋め込みでそのまま使えるか。**公開ページ(index.php)には手を入れない**のが前提。だめなら埋め込み用の小さな `Main/embed.js` を作り、同じ部品を読む |
+| 15-2 埋め込みの画面 `/embed/` | 地図を見る・階の切り替え・拡大縮小・地点を押すと名前と種類・`focus` で指した地点を目立たせる・右下に「KosenMap で開く」(本体へのリンク)。**出さないもの**: 教職員の氏名・スタッフだけの地点・案内チャット・サインイン・履歴・チュートリアル・現在地。データは**サインインしていない来場者と同じもの**(`km_map_data` をセッションなしで呼ぶ。Cookie を作らない)。地図を「パスワードが必要」にしているときは「地図は非公開です」とだけ出す(錠を迂回しない) |
+| 15-3 操る JS `/embed/v1.js` | `KosenMap.embed()` が iframe を作る。親と枠は `postMessage` で話す(**相手のオリジンを必ず確かめる**)。v1 は `focus`・`setFloor`・`setLang` と、`ready`・`select` の知らせ |
+| 15-4 どのサイトに許すか | 管理画面「地図の埋め込み」: サイトを登録(名前・オリジン(例 `https://www.example.ac.jp`)・使う/止める)→ 札(site)ができ、貼るコードを写せる。`/embed/` は札から**登録したオリジンだけ**を `frame-ancestors` に出す(知らない札・止めた札は `'none'`)。札は秘密ではない(ページに載る)。実際に止めるのはブラウザの `frame-ancestors` |
+| 15-5 入口と見張り | nginx に `/embed/` の location(**X-Frame-Options を付けない**・回数を絞る)。CSP は nonce・インラインの属性なし。埋め込みの表示回数を札ごと・日ごとに数えて管理画面に出す |
+| 15-6 確かめ | check.php・node の試験。**検証機の Chrome で、別のオリジン(検証機の HTML 展開サイト)に貼って**出ること・登録していないオリジンでは出ないこと・氏名が出ないことを見る |
+
+**新しい表**(ALTER なし・`local-sanitize.tables` にも足す): `km_embed_sites`(札・名前・オリジン・使う/止める・作った人・時刻)・`km_embed_views_daily`(札・日・回数)。
+
+**配備**: nginx を変えるので `-Action restart -Services reverse-proxy` が要る。compose・.env は変えない。
+
+**気をつけること**:
+- Cloudflare の WAF は日本以外を止めている。埋め込んだサイトを日本の外から見ると地図も出ない(本体と同じ)
+- 埋め込む側のページが http だと、https の枠は出るが `postMessage` のオリジンが `http://…` になる → 登録は https だけにする
+- 見取り図の画像(`api/floor-image.php`)も枠の中から読む。同じオリジンなので今のままで足りるはず(15-1 で確かめる)
+
+**決めたこと(利用者、11-14)**:
+1. 埋め込める先は**管理画面で登録したサイトだけ**
+2. v1 は 15-2 のとおり(**見る・階・地点を指す・押すと名前**)。検索と道案内は次の版
+3. **地図のデータを JSON で配る口も今回作る**(下の 15-7)
+4. 最初の埋め込み先は**利用者の HTML 展開サイト**(本番の html.ito4.jp / share.ito4.jp に置いたページ)。確かめは検証機の HTML 展開サイトで
+
+| 段 | 中身 |
+|---|---|
+| 15-7 JSON の口 `/api/embed/v1/places.php` | 登録したサイトのオリジンにだけ CORS で返す(`Access-Control-Allow-Origin` はそのオリジン 1 つ・`Vary: Origin`)。中身は来場者に見せてよいものだけ: 地点の ID・名前(日本語・英語)・種類・階・位置(平面図の px と、北と距離の補正があれば緯度経度)・階の一覧と見取り図の URL。**教職員の氏名・メモ・スタッフだけの地点・経路の重みは出さない**。GET だけ・札(site)が要る・回数を絞る・1 分使い回す |
+| 15-1 で一緒に調べる | HTML 展開サイトのページの CSP(`frame-src`・`connect-src`)が、ito4.jp の枠と口を許しているか。許していなければ、登録した埋め込みに限って開ける形を考える(展開サイトの守りを弱めない) |
+
+**状態(11-14)**: **手元で済み・検証機の Chrome で確かめた・配備待ち**(nginx を変えたので `-Action restart -Services reverse-proxy`)。
+
+| 作ったもの | 中身 |
+|---|---|
+| `lib/map-embed.php` | 表 2 つ(`km_embed_sites`・`km_embed_views_daily`。ALTER なし)・オリジンの確かめ(https だけ・パス / `*` / 利用者名は断る・5 個まで)・`frame-ancestors` と CORS の決め方・**出してよいものだけに絞る** `km_embed_public_data`(階と、名前のある部屋・施設・階段・出入口。氏名・メモ・リンク・道・隠した地点・経路は出さない)・セッションがあれば止まる `km_embed_load_public` |
+| `/embed/`(`embed/index.php`・`Main/embed.js`・`Main/embed.css`) | Leaflet で描く(公開ページの `app.js` は使わない・見た目は `map-style.js`)。階のボタン・拡大縮小・押すと名前(`textContent`)・`focus` で赤い輪。名前は 1 段拡大してから常に出す(引いているときは触れた印だけ)。CSP は公開ページのものの `frame-ancestors` だけを札のオリジンに替える。知らない札・止めた札は 404 で `'none'` |
+| `/embed/v1.js` | `KosenMap.embed()`・`on`/`off`・`focus`・`setFloor`・`setLang`・`destroy`。`ready` より前の頼みは並べて待つ。受けるのは地図のオリジンで同じ枠からだけ |
+| 15-7 JSON の口 | **`/api/embed-places.php?site=…`**(計画の `/api/embed/v1/places.php` から名前を変えた)。登録したオリジンにだけ `Access-Control-Allow-Origin`・`Vary: Origin`・Cookie は許さない・画像は絶対 URL・1 分使い回す。**緯度経度は v1 では出さない**(平面図の px だけ) |
+| 管理画面「地図の埋め込み」 | 登録・直す・止める / 戻す(消す口は無い)・貼るコード 2 種類・30 日の回数。記録は `embed-site.*` |
+| nginx | `location ^~ /embed/` は X-Frame-Options を出さない(枠の可否は PHP の frame-ancestors)・nosniff・HSTS・`km_api` で回数を絞る |
+
+**15-1 の答え**: HTML 展開サイトの利用者のページ(`/s/…`・share)は CSP `default-src *` なので、ito4.jp の枠も JSON も読める。展開サイトの側は変えていない。
+
+**検証機で確かめたこと**(11-14・Chrome。HTML 展開サイトは reCAPTCHA が要るので、html.<検証機> の CSP の無い `robots.txt` の上に試しのページを組んだ = 本物の html.* のオリジン):
+- 登録したオリジンから: 地図が出る・`ready` → 先に頼んだ `focus` で 2F へ移り赤い輪・印を押すと `select`(名前・種類・階)・4F のボタンで `floor`・階を替えると輪が消え、指し直すと戻る・JSON を fetch で読める(426 地点・17 階)
+- 登録から外したオリジンから: **枠はブラウザが止める**(壊れたページの印)・JSON は読めない(CORS)
+- 地点の名前に教職員の氏名・研究室は無い(426 件を機械で見た)。`lang=en` で英語。回数と記録が残る
+- 試験: check.php 3239 件すべて通過(段 15 の 13 項目を足した)・editor.test.js 297 件
+
+**配備のあと(利用者)**: 管理画面「地図の埋め込み」で `https://html.ito4.jp` と `https://share.ito4.jp` を登録 → 貼るコードを展開サイトのページに貼る。
+---
 ## 第1段 —— Note を occupantName へ移す(**実装完了 / 2026-09-02**)
 
 > **コードは入った。**`MAP_DATA_VERSION` 10、読み込み時に移行。
