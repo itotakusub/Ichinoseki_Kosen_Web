@@ -1,0 +1,15 @@
+/* Web Code Editor のプレビューを走らせる側(editor-run.html)。枠いっぱいに利用者の文書を出すだけ */
+html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #fff;
+}
+
+iframe {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border: 0;
+}

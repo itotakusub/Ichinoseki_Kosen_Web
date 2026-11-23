@@ -20,9 +20,9 @@ declare(strict_types=1);
  * 管理画面「案内チャット」で ON にし、テスト用アカウント(km_test_accounts)を 1 つ選ぶ。公開ページがそのアカウントで
  * 開かれたとき(セッションのテストモードの印。lib/test-mode.php)だけ使える。ほかの人には画面にも出さない。
  *
- * ## LLM(企画書: 自宅 PC の LLM + ngrok。2026-10-25 に Unsloth から Bionic へ替えた。利用者「Unsloth にバグが報告されていて使えない」)
+ * ## LLM(企画書: 自宅 PC の LLM + トンネル。初めは ngrok、2026-11-12 から Cloudflare Tunnel(段 12)。2026-10-25 に Unsloth から Bionic へ替えた。利用者「Unsloth にバグが報告されていて使えない」)
  * 自宅 PC で利用者が動かしている Bionic の API(/v1/chat/completions の形)の前に、門番 server/guide-llm/server.py
- * (鍵を確かめて渡すだけ。2026-10-25 に WSL をやめてこの形にした)を置き、ngrok で出す。ここから Bearer の鍵を付けて呼ぶ。URL と鍵は環境変数 KM_GUIDE_LLM_URL / KM_GUIDE_LLM_KEY(.env → compose.yaml)。
+ * (鍵を確かめて渡すだけ。2026-10-25 に WSL をやめてこの形にした)を置き、トンネルで出す。ここから Bearer の鍵を付けて呼ぶ。URL と鍵は環境変数 KM_GUIDE_LLM_URL / KM_GUIDE_LLM_KEY(.env → compose.yaml)。
  * **鍵はブラウザに出さない**(ブラウザは api/guide-chat.php しか呼ばない)。止まっていても、言葉で探した結果は出す(企画書 §8)。
  *
  * ## 残すもの・残さないもの(企画書 §8「ログに不要な個人情報や秘密情報を記録しない」)
@@ -550,7 +550,14 @@ function km_guide_catalog(array $mapData): array
         return $item;
     };
 
-    $floorLabel = static fn (string $floor): string => $floor === 'outside' ? '外' : (ctype_digit($floor) ? $floor . 'F' : $floor);
+    // 建物の階は階の表の名前で(2026-11-07、カードに「bldg_hagitomo_2f」と出ていた。地図のデータの floors に名前がある)
+    $floorNames = [];
+    foreach (is_array($mapData['floors'] ?? null) ? $mapData['floors'] : [] as $floorRow) {
+        if (is_array($floorRow) && isset($floorRow['id'], $floorRow['label']) && trim((string) $floorRow['label']) !== '') {
+            $floorNames[(string) $floorRow['id']] = trim((string) $floorRow['label']);
+        }
+    }
+    $floorLabel = static fn (string $floor): string => $floor === 'outside' ? '外' : (ctype_digit($floor) ? $floor . 'F' : ($floorNames[$floor] ?? $floor));
 
     $shops = [];
     $places = [];
@@ -1304,7 +1311,7 @@ function km_guide_plan(array $catalog, array $classification, ?callable $resolve
     ];
 }
 
-// ---------------------------------------------------------------- LLM を呼ぶ(自宅 PC の Bionic を ngrok 越しに)
+// ---------------------------------------------------------------- LLM を呼ぶ(自宅 PC の Unsloth / Bionic をトンネル越しに)
 
 /**
  * 模型の鍵の形(門番の一覧の「unsloth:<id>」「bionic:<id>」)。**純粋関数**。空は「自宅 PC の既定」
@@ -1373,9 +1380,9 @@ function km_guide_llm_request(array $config, string $path, ?array $body, int $ti
         CURLOPT_HTTPHEADER => [
             'Content-Type: application/json',
             'Authorization: Bearer ' . $config['key'],
-            // ngrok の無料の口は、ブラウザ向けの確かめ画面を挟むことがある。API には要らない
-            'ngrok-skip-browser-warning: 1',
         ],
+        // PHP の curl は既定で User-Agent を付けない。Cloudflare(Browser Integrity Check)は User-Agent の無い要求を断るので付ける(段 12)
+        CURLOPT_USERAGENT => 'KosenMap-Guide/1',
         CURLOPT_CONNECTTIMEOUT => 5,
         CURLOPT_TIMEOUT => $timeoutSeconds,
         CURLOPT_FOLLOWLOCATION => false,

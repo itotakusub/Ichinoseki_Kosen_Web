@@ -29,6 +29,8 @@ export LC_ALL
 PATH_ROOT="/opt/kosenmap"
 APPLY=0
 BUILD_CACHE_DAYS=14
+# ビルドの控えの合計の上限(2026-11-08)。1 回の web の作り直しで約 1GB 増える(11-08 の実測)。直近 3 回ぶんを残す
+BUILD_CACHE_MAX=3gb
 # スクリプトが docker run で使う道具(host-setup.sh・host-local.sh の alpine、composer の install)
 KEEP_REFS="alpine:latest composer:2"
 
@@ -182,8 +184,19 @@ docker image prune -f >/dev/null 2>&1 || true
 echo ""
 echo "== ビルドのキャッシュ(${BUILD_CACHE_DAYS} 日より古いもの)=="
 CACHE_FAILED=0
-if ! docker builder prune -f --filter "until=$((BUILD_CACHE_DAYS * 24))h"; then
+# **-a(--all)が要る**(2026-11-08)。付けないと「どこからも指されていない(dangling)」控えしか消さず、
+# ビルドの段の控えは何日たっても残る(11-08 の初回: 14 日より古いものが 0B・2 か月前のものも 10.66GB のまま)。
+# -a でも消すのは「使われていない・最後に使ってから 14 日より古い」ものだけ。直近のビルドの控えは残るので、次の作り直しは速いまま
+if ! docker builder prune -a -f --filter "until=$((BUILD_CACHE_DAYS * 24))h"; then
   echo "  ビルドのキャッシュを片付けられませんでした。" >&2
+  CACHE_FAILED=1
+fi
+# **日数だけでは消えない**(2026-11-08。-a を付けても、8 月に作った「消してよい」控えが 93B しか消えなかった。Docker 29.9)。
+# そこで合計の上限でも削る —— 上限を超えたぶんを、最後に使ったのが古い順に消す。直近の作り直しの控えは残る
+echo ""
+echo "== ビルドのキャッシュ(合計 ${BUILD_CACHE_MAX} まで)=="
+if ! docker builder prune -a -f --max-used-space "$BUILD_CACHE_MAX"; then
+  echo "  ビルドのキャッシュを上限まで減らせませんでした。" >&2
   CACHE_FAILED=1
 fi
 

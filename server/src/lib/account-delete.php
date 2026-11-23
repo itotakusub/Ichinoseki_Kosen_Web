@@ -223,6 +223,15 @@ function km_account_delete_data(PDO $pdo, string $userId): array
         error_log('km_account_delete_data: html sites cleanup failed: ' . $exception->getMessage());
     }
 
+    // Web Code Editor でサーバーに保存したプロジェクト(段 10-B。2026-11-08。lib/editor-projects.php・規約第8条の3)。同じく取引の外で
+    $editorProjects = 0;
+    try {
+        require_once __DIR__ . '/editor-projects.php';
+        $editorProjects = km_editor_projects_delete_owner($pdo, $userId);
+    } catch (Throwable $exception) {
+        error_log('km_account_delete_data: editor projects cleanup failed: ' . $exception->getMessage());
+    }
+
     return [
         'tables' => $deleted,
         'auditAnonymized' => $anonymized,
@@ -230,6 +239,7 @@ function km_account_delete_data(PDO $pdo, string $userId): array
         'chatAnonymized' => $chatAnonymized,
         'avatarRemoved' => $avatarRemoved,
         'htmlSites' => $htmlSites,
+        'editorProjects' => $editorProjects,
     ];
 }
 
@@ -289,6 +299,9 @@ function km_account_delete_summary(array $result): string
     }
     if ((int) ($result['htmlSites'] ?? 0) > 0) {
         $parts[] = 'html=' . $result['htmlSites'];
+    }
+    if ((int) ($result['editorProjects'] ?? 0) > 0) {
+        $parts[] = 'editor=' . $result['editorProjects'];
     }
 
     return $parts === [] ? '対象なし' : implode(' ', $parts);

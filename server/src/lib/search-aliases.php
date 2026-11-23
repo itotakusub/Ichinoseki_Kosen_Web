@@ -55,7 +55,9 @@ function km_search_alias_list(string $text): array
             continue;
         }
         $word = mb_substr($word, 0, KM_SEARCH_ALIAS_MAX_LENGTH);
-        $key = mb_strtolower(class_exists('Normalizer') ? (string) Normalizer::normalize($word, Normalizer::FORM_KC) : $word);
+        // 本番の web コンテナには intl が無い(Normalizer が無い。2026-11-14 に検証機のコンテナの check.php で分かった)。
+        // そのときは mbstring で近いものにする: 全角の英数字・記号・空白 → 半角(a・s)、半角カナ → 全角(K)、濁点を 1 字に(V)
+        $key = mb_strtolower(class_exists('Normalizer') ? (string) Normalizer::normalize($word, Normalizer::FORM_KC) : mb_convert_kana($word, 'asKV', 'UTF-8'));
         if (isset($seen[$key])) {
             continue;
         }

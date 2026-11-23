@@ -44,7 +44,10 @@ if (-not (Test-Path (Join-Path $Source 'src\index.php'))) {
 # 元の側で**丸ごと**写さないフォルダ(元の側の絶対パスで指す —— 名前だけだと src\admin\vendor まで巻き込む)
 $excludeDirs = @(
     'Downloaded', 'Old', 'backups', 'out', 'certs', 'node_modules', '.git',
-    'src\vendor', 'src\uploads'
+    'src\vendor', 'src\uploads',
+    # /code/(VS Code 型のエディタ)の組み立ての出力(2026-11-14)。67MB・633 ファイルで、code-src から npm run build で作り直せる。
+    # 圧縮した部品の中に password: "…" の形があり秘密の検査に当たって、11-08 から push が止まっていた。殻の index.php・preview.php は写す
+    'src\code\assets', 'src\code\.vite'
 ) | ForEach-Object { Join-Path $Source $_ }
 # 名前だけで指すフォルダ(どこにあっても写さない)。Python が試験のたびに作るキャッシュ(2026-10-09、scripts/tests を足したとき入ってしまった)
 $excludeDirs += @('__pycache__')

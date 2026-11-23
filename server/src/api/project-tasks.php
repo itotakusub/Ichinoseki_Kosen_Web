@@ -11,7 +11,7 @@ declare(strict_types=1);
  *   GET    /api/project-tasks.php?id=12                1 件
  *   POST   /api/project-tasks.php                      足す   {"title":"…","status":"todo","progress":0,"topic":"web","planRef":"段7-1","note":"…"}
  *                                                      まとめて足す {"tasks":[{…},{…}]}(50 件まで・全部か無しか)
- *   PATCH  /api/project-tasks.php?id=12                直す(送った項目だけ)。PUT も同じ
+ *   PATCH  /api/project-tasks.php?id=12                直す(送った項目だけ)。PUT も同じ。{"id":5} で番号(#)を 5 に付け替える(使い済みは 400)
  *   DELETE /api/project-tasks.php?id=12                消す
  *
  * - 状態は done / progress / decision / todo。省いたら todo(done なら進捗の既定は 100)
@@ -193,6 +193,19 @@ try {
     if ($input === []) {
         throw new InvalidArgumentException('直す項目を送ってください。');
     }
+    // 番号(#)の付け替え(2026-11-08)。本文の "id" が新しい番号。ほかの項目を書く前に確かめる
+    $newId = $id;
+    if (array_key_exists('id', $input)) {
+        if (!is_int($input['id'])) {
+            throw new InvalidArgumentException('id(新しい番号)は整数で送ってください。');
+        }
+        $newId = $input['id'];
+        km_tasks_validate_new_id($newId);
+        if ($newId !== $id && km_tasks_find($pdo, $newId) !== null) {
+            throw new InvalidArgumentException("番号 {$newId} はほかのタスクが使っています。");
+        }
+        unset($input['id']);
+    }
     $current = [
         'title' => (string) $row['title'], 'status' => (string) $row['status'], 'progress' => (int) $row['progress'],
         'topic' => (string) $row['topic'], 'planRef' => (string) $row['planRef'], 'note' => (string) $row['note'],
@@ -201,8 +214,9 @@ try {
     km_task_details_validate(trim($next['planRef']), trim($next['note']));
     km_tasks_update($pdo, $id, $next['title'], $next['status'], $next['progress'], $next['topic']);
     km_task_details_set($pdo, $id, $next['planRef'], $next['note']);
-    km_admin_log_record('content', 'task.update', trim($next['planRef'] . ' ' . $next['title']));
-    respond(['success' => true, 'task' => km_proj_task_out((array) km_tasks_find($pdo, $id))]);
+    km_tasks_renumber($pdo, $id, $newId);
+    km_admin_log_record('content', 'task.update', trim(($newId !== $id ? "#{$id} → #{$newId} " : '') . $next['planRef'] . ' ' . $next['title']));
+    respond(['success' => true, 'task' => km_proj_task_out((array) km_tasks_find($pdo, $newId))]);
 } catch (InvalidArgumentException $exception) {
     respond(['success' => false, 'message' => $exception->getMessage()], 400);
 } catch (Throwable $exception) {

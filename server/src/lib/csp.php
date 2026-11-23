@@ -67,7 +67,7 @@ function km_csp_nonce_attr(): string
 /**
  * プロファイルごとのディレクティブを組む。
  *
- * @param string $profile 'admin' | 'admin-geo' | 'public' | 'contact' | 'html-host'
+ * @param string $profile 'admin' | 'admin-geo' | 'public' | 'contact' | 'html-host' | 'editor' | 'code'
  */
 function km_csp_policy(string $profile): string
 {
@@ -132,12 +132,52 @@ function km_csp_policy(string $profile): string
         $frame[] = km_site_html_origin();
     }
 
+    $font = ["'self'"];
+    $worker = null;
+    if ($profile === 'editor') {
+        /*
+         * Web Code Editor(editor/index.php。2026-11-08)。
+         *
+         * - **style だけ 'unsafe-inline'(nonce を外す)。** Monaco は行・行番号・選択の帯を
+         *   `<div style="top:…">` の文字列で組んで innerHTML に入れる(viewLine.js・lineNumbers.js など 19 か所。
+         *   0.57.0 で確かめた)。style 属性は nonce では通せないので、属性ごと許すしかない。
+         *   **nonce と 'unsafe-inline' は一緒に書くと 'unsafe-inline' が無視される**ので、style-src から nonce を外す。
+         *   このページに他人の書いたものは出ない(書いた本人の端末の中だけ)。**台本は nonce のまま**(eval も無し)
+         * - worker は同じオリジンのファイル(Vite の ?worker)。blob: は許さない
+         * - プレビューは見せる側(html.<ドメイン>/editor-run.html)の枠だけ
+         * - フォントは Monaco の codicon(同じオリジン)
+         */
+        $style = ["'self'", "'unsafe-inline'"];
+        $frame = [km_site_html_origin()];
+        $font[] = 'data:';
+        $worker = ["'self'"];
+    }
+
+    if ($profile === 'code') {
+        /*
+         * VS Code 型のエディタ(code/index.php。段 11。2026-11-08)。11-0 で 'editor' と同じ厳しさを Report-Only で
+         * 送って数え、足りなかったものだけを足した(status.md の 11-08「段 11-0」):
+         *
+         * - **'unsafe-eval' は足さない**(本体のページでは要らなかった)。'wasm-unsafe-eval' は TextMate の色分け(oniguruma の WASM)
+         * - worker は VS Code の既定どおり blob の起動の台本から読む(翻訳を渡すため。直にファイルから起こすと、
+         *   その worker にサイト既定の CSP が付いて WASM が止まる)→ worker-src に blob:
+         * - style は 'editor' と同じ理由で 'unsafe-inline'(VS Code も style="…" を組む)
+         * - 枠: 拡張機能ホストと webview は別のオリジン webview.<ドメイン>(11-3。km_site_webview_origin)。
+         *   本体のオリジン('self')の枠は許さない。html.<ドメイン> はプレビュー(editor-run.html)
+         */
+        $script[] = "'wasm-unsafe-eval'";
+        $style = ["'self'", "'unsafe-inline'"];
+        $frame = [km_site_webview_origin(), km_site_html_origin()];
+        $font[] = 'data:';
+        $worker = ["'self'", 'blob:'];
+    }
+
     $directives = [
         "default-src 'self'",
         'script-src ' . implode(' ', $script),
         'style-src ' . implode(' ', $style),
         'img-src ' . implode(' ', $img),
-        "font-src 'self'",
+        'font-src ' . implode(' ', $font),
         'connect-src ' . implode(' ', $connect),
         'frame-src ' . implode(' ', $frame),
         "object-src 'none'",
@@ -145,6 +185,9 @@ function km_csp_policy(string $profile): string
         "form-action 'self'",
         "frame-ancestors 'self'",
     ];
+    if ($worker !== null) {
+        $directives[] = 'worker-src ' . implode(' ', $worker);
+    }
 
     return implode('; ', $directives);
 }

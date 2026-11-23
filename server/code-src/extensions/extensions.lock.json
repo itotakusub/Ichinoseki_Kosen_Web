@@ -1,0 +1,35 @@
+{
+  "_comment": "VS Code 型のエディタ(/code/)に同梱する Open VSX の拡張機能(段 11-5)。版を固定し、Open VSX が公表する sha256 と照合してから置いた。check.php の組 code がこのファイルと extensions/*.vsix の sha256 を突き合わせる。上げるときは: 新しい版を Open VSX から取り、sha256 を照合し、Web 版の入口(package.json の browser)に外への通信・eval・動的な読み込みが無いことを確かめてから、ここと vite.config.js の VSIX_KEEP を直す",
+  "extensions": [
+    {
+      "file": "christian-kohler.path-intellisense-2.8.0.vsix",
+      "id": "christian-kohler.path-intellisense",
+      "version": "2.8.0",
+      "license": "MIT",
+      "source": "https://open-vsx.org/api/christian-kohler/path-intellisense/2.8.0/file/christian-kohler.path-intellisense-2.8.0.vsix",
+      "sha256": "a856e4436f4d9b4b03d581ec10f826fe79eeb6cb34f5eb9d5b013fd817aeb940",
+      "browser": "./dist/web/extension.js",
+      "checked": "2026-11-09: Open VSX の sha256 と一致・認証済みの発行者・ライセンスは LICENSE.txt の MIT(package.json の license は空)・Web 版の入口(json5・minimatch を抱えた 1 ファイル)に外への通信・eval・動的な読み込みなし。ファイルは workspace.fs と findFiles で読む"
+    },
+    {
+      "file": "esbenp.prettier-vscode-12.4.0.vsix",
+      "id": "esbenp.prettier-vscode",
+      "version": "12.4.0",
+      "license": "MIT",
+      "source": "https://open-vsx.org/api/esbenp/prettier-vscode/12.4.0/file/esbenp.prettier-vscode-12.4.0.vsix",
+      "sha256": "fb730ea4306d09cdc0a3aaa9e9baae28058cc97a4fbfce8b056b377a0639a9fe",
+      "browser": "./dist/web-extension.cjs",
+      "checked": "2026-11-08: Open VSX の sha256 と一致・認証済みの発行者・Web 版の入口に外への通信と eval なし。2026-11-09: Web 版の入口はほかのファイルを読まない(node_modules・dist/extension.js などは組み立てで外す)"
+    },
+    {
+      "file": "usernamehw.errorlens-3.30.0.vsix",
+      "id": "usernamehw.errorlens",
+      "version": "3.30.0",
+      "license": "MIT",
+      "source": "https://open-vsx.org/api/usernamehw/errorlens/3.30.0/file/usernamehw.errorlens-3.30.0.vsix",
+      "sha256": "b236000f50998b992289b2d354dcbd4fc99b64c75850eebcbb986f7a210c34f4",
+      "browser": "./dist/extension.js",
+      "checked": "2026-11-08: Open VSX の sha256 と一致・認証済みの発行者・Web 版の入口に外への通信と eval なし"
+    }
+  ]
+}

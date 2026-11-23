@@ -1269,6 +1269,8 @@ $kmUserMapKey = ($loggedIn && $kmTestMode === null && isset($claims->sub) && (st
     <?php endif; ?>
     <?php /* 一関の天気(2026-11-05)。**app.js より先に**読む(「雨の日」の自動。予定の見出しも使う) */ ?>
     <script defer src="<?= km_home_e(km_public_asset('Main/weather.js')) ?>"></script>
+    <?php /* ストリートビュー(360°)を見る(2026-11-07、段 6)。**app.js より先に**読む(地点の詳細の「360°」は KmPanorama があるときだけ出す) */ ?>
+    <script defer src="<?= km_home_e(km_public_asset('Main/panorama-viewer.js')) ?>"></script>
     <script defer src="<?= km_home_e(km_public_asset('Main/app.js')) ?>"></script>
     <?php /* 全画面のボタンと、全画面・横画面で上の帯を隠す(2026-10-30、振り返りのフェーズ 2)。**app.js の後に**読む(地図の右下にボタンを置く) */ ?>
     <script defer src="<?= km_home_e(km_public_asset('Main/top-bar.js')) ?>"></script>

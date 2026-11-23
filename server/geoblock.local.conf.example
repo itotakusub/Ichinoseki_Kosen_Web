@@ -33,3 +33,10 @@ EXEMPT_PORTS=22
 # Google 全体(goog.json)から Google Cloud の利用者の分(cloud.json)を除いたものを通す。変えたら update → apply
 ALLOW_GOOGLE=no
 GOOGLE_PORTS=443
+
+# Cloudflare の中継の送り元を CLOUDFLARE_PORTS(既定 80 443)だけ通す(2026-11-08。docs/17)。
+# 名前を橙(中継)にすると、80・443 に来る送り元は全部 Cloudflare の IP になる。その多くは日本の割り当てではないので、
+# 反転(日本だけ通す)のまま橙にすると**公開ページが丸ごと落ちる。橙にする前に yes にして update → apply。**
+# 国で絞るのは Cloudflare の WAF へ移す。灰の名前(SSH・管理画面)に直に来る相手には今までどおり国の拒否が効く
+ALLOW_CLOUDFLARE=no
+CLOUDFLARE_PORTS=80 443

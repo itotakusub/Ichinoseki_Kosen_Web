@@ -136,9 +136,11 @@ if command -v nft >/dev/null 2>&1 && nft list table inet km_geoblock >/dev/null 
   GB_ACTIVE=true
   # counter packets N bytes M。管理用ポートの行は「!= @admin」、ほかは拒否する国。
   # **accept の行(ALLOW_GOOGLE で Google を通した数。2026-11-07)は落とした数に混ぜない**
+  # ALLOW_CLOUDFLARE で Cloudflare の中継を通した行(2026-11-08)は、落とした数にも Google にも数えない
   GB_COUNTS="$(nft list chain inet km_geoblock pre 2>/dev/null | awk '/counter packets/ {
       p = 0; b = 0
       for (i = 1; i < NF; i++) { if ($i == "packets") p = $(i + 1); if ($i == "bytes") b = $(i + 1) }
+      if ($0 ~ /Cloudflare/) { next }
       if ($0 ~ / accept/) { gp += p } else if ($0 ~ /!= @admin/) { ap += p; ab += b } else { dp += p; db += b }
     } END { printf "%.0f %.0f %.0f %.0f %.0f", dp, db, ap, ab, gp }')"
 fi

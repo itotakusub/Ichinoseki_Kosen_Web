@@ -7,6 +7,7 @@ require __DIR__ . '/_inc/guard.php';
 require_once dirname(__DIR__) . '/lib/db.php';
 require_once dirname(__DIR__) . '/lib/map-access.php';
 require_once dirname(__DIR__) . '/lib/admin-log.php';
+require_once dirname(__DIR__) . '/lib/panorama.php';
 
 $errors = [];
 $saved = false;
@@ -14,6 +15,21 @@ $saved = false;
 if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && !km_csrf_verify()) {
     // 副作用を起こす前に弾く
     $errors[] = 'セッションの有効期限が切れています。ページを再読み込みしてからやり直してください。';
+} elseif (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && ($_POST['form'] ?? '') === 'panorama') {
+    /*
+     * ストリートビュー(360°)を公開の地図にも出すか(2026-11-07、段 6。利用者の答え「撮りそろうまで管理者だけ」)。
+     * 下の公開設定(ファイル)とは別の置き場(DB の km_settings)なので、別のフォームにしてある
+     */
+    $panoramaOn = ($_POST['panorama_public'] ?? '') === '1';
+    try {
+        require_once dirname(__DIR__) . '/lib/settings.php';
+        km_setting_set(km_db(), KM_PANORAMA_PUBLIC_SETTING, $panoramaOn ? '1' : '0');
+        $saved = true;
+        km_admin_log_record('settings', 'map.panorama_public', '来場者にも出す=' . ($panoramaOn ? 'はい' : 'いいえ'));
+    } catch (Throwable $exception) {
+        error_log('map-settings.php panorama save failed: ' . $exception->getMessage());
+        $errors[] = km_admin_error_message($exception, '保存できませんでした。');
+    }
 } elseif (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
     $mode = (string) ($_POST['mode'] ?? '');
     $mapMode = (string) ($_POST['map_mode'] ?? '');
@@ -89,10 +105,14 @@ $configWritable = is_file($configPath)
 $nodeCount = 0;
 $occupantCount = 0;
 $dbError = null;
+$panoramaPublic = false;
+$panoramaCounts = ['photos' => 0, 'nodes' => 0];
 try {
     $pdo = km_db();
     $nodeCount = (int) $pdo->query('SELECT COUNT(*) FROM km_map_nodes')->fetchColumn();
     $occupantCount = (int) $pdo->query('SELECT COUNT(*) FROM km_map_nodes WHERE occupant_name IS NOT NULL')->fetchColumn();
+    $panoramaPublic = km_panorama_public_enabled($pdo);
+    $panoramaCounts = km_panorama_counts($pdo);
 } catch (Throwable $exception) {
     $dbError = $exception->getMessage();
 }
@@ -381,6 +401,39 @@ docker compose exec -u root web chmod 640 config/<?= km_e(basename($configPath))
               </div>
             </div>
             <!--end::Row-->
+
+            <?php // ストリートビュー(2026-11-07、段 6。lib/panorama.php・Main/panorama-viewer.js) ?>
+            <div class="row">
+              <div class="col-12 col-xl-6">
+                <div class="card mb-4">
+                  <div class="card-header">
+                    <h3 class="card-title">ストリートビュー(360° の写真)</h3>
+                  </div>
+                  <div class="card-body">
+                    <p class="mb-2">
+                      写真 <strong><?= (int) $panoramaCounts['photos'] ?></strong> 枚(地点 <?= (int) $panoramaCounts['nodes'] ?> か所)。
+                      写真を足す・外すのはアプリの管理版から。管理画面の「地図編集」では、地点の窓の「360° 写真を見る」でいつでも見られます。
+                    </p>
+                    <form method="post">
+                      <?= km_csrf_field() ?>
+                      <input type="hidden" name="form" value="panorama" />
+                      <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" name="panorama_public" value="1" id="km-panorama-public"
+                               <?= $panoramaPublic ? 'checked' : '' ?> />
+                        <label class="form-check-label" for="km-panorama-public">
+                          <strong>来場者にも出す(公開の地図の地点の詳細に「360° 写真」)</strong>
+                          <div class="text-body-secondary fs-7">
+                            撮りそろうまでは外しておきます。出すのは地図に出している地点の分だけです(教員室・研究室など、出さない地点の写真は載せません)。
+                            撮るときは人の顔・名札が写らない時間(開場前)に。教員室・研究室は撮りません。
+                          </div>
+                        </label>
+                      </div>
+                      <button type="submit" class="btn btn-primary" data-i18n="common.save">保存</button>
+                    </form>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
           <!--end::Container-->
         </div>

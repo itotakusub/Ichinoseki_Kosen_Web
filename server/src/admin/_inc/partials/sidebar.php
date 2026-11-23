@@ -60,6 +60,8 @@ $groups = [
         ['guestLinks', './guest-links.php', 'bi-link-45deg', 'side.guestLinks', 'お試しの閲覧リンク'],
         ['testMode', './test-mode.php', 'bi-clipboard2-data', 'side.testMode', 'テスト用アカウント'],
         ['qrLinks', './qr-links.php', 'bi-qr-code-scan', 'side.qrLinks', 'QR のリンク集'],
+        ['editorSnippets', './editor-snippets.php', 'bi-braces', 'side.editorSnippets', 'エディタの雛形'],
+        ['embedSites', './embed-sites.php', 'bi-window-stack', 'side.embedSites', '地図の埋め込み'],
         ['faq', './faq.php', 'bi-question-circle', 'side.faq', 'FAQ'],
         ['legal', './legal.php', 'bi-file-earmark-text', 'side.legal', '規約とポリシー'],
     ]],

@@ -1,6 +1,6 @@
 # 設計プラン —— これから何をするか
 
-最終更新: 2026-11-07(先頭に「次のプラン」。**プランはこの文書に書く**。2026-11-07、利用者の指示)
+最終更新: 2026-11-08(段 8 Cloudflare を足した。先頭に「次のプラン」。**プランはこの文書に書く**。2026-11-07、利用者の指示)
 
 **文書は3本組。** どれを読めばよいかを先に決めてある。
 
@@ -59,10 +59,10 @@ status.md の「残っていること」を利用者と見直して決めた(202
 
 | # | 何 | どうする | 誰が |
 |---|---|---|---|
-| 4-1 | 本番の Web 地図の速さ | `scripts/perf-probe.js` で 10-30 と同じ手順で測り直し、前の値と比べる。**地図の錠を一時的に解いてもらう**(パスワードはこちらで入れない) | 利用者(錠)・こちら(測る) |
-| 4-2 | 案内チャットの確かめ | テストユーザーで答えとカードが出るか・ほかの人は 403 か・自宅 PC を止めて言葉の結果だけ出るか・無い店でカードが出ないか。**門番(AI)は利用者が起こす** | 利用者・こちら |
+| 4-1 | 本番の Web 地図の速さ | `scripts/perf-probe.js` で 10-30 と同じ手順で測り直し、前の値と比べる。**地図の錠を一時的に解いてもらう**(パスワードはこちらで入れない)。**11-07 完了**(PC Chrome と Pixel 7a。大きさの測り 1709 → 172 回) | 利用者(錠)・こちら(測る) |
+| 4-2 | 案内チャットの確かめ | テストユーザーで答えとカードが出るか・ほかの人は 403 か・自宅 PC を止めて言葉の結果だけ出るか・無い店でカードが出ないか。**門番(AI)は利用者が起こす**。**11-07 完了**(4 つとも ○。例のボタンの崩れ・カードの階も直した) | 利用者・こちら |
 
-### 段 5 —— 検証環境を作り直す(設計から)
+### 段 5 —— 検証環境を作り直す(設計から)(**2026-11-08 に完了**。192.168.3.31 を本番と同じ形に。記録は status.md の 11-08「検証機を起こし、本番と並べた」)
 
 10-06 から LAN の検証機(107)が応答しない。**作り直せるが、作り方から見直す**(利用者、11-07)。決めてから作る。
 
@@ -74,16 +74,331 @@ status.md の「残っていること」を利用者と見直して決めた(202
   - C: 検証は手元の写し(試し場のサーバー)と `check.php` に寄せ、VM は Logto の移行のときだけ立てる
 - **決めること(利用者)**: A・B・C のどれか(組み合わせも可)、VM の置き場(今の PC か別の PC か)
 
+**11-07 利用者の答え**: **A を別の PC(192.168.3.29)で**。できる限り本番の写しに近づけ、機密は「誤って読んでも分からないダミー」に置き換える(自動で上書きする台本)。
+参考に持ってきた計画書(`Downloads\writing-block (1).md`。Docker Desktop・Git・7 段の一般論)は**参考程度**。下は前提を確かめてから書いたもの(**まだ作らない**)。
+
+#### 5-0. 確かめた前提(11-07。読むだけ)
+
+| 見たもの | 分かったこと | 計画への効き |
+|---|---|---|
+| 検証機 192.168.3.29 | Windows 11 **Pro for Workstations** 26100・dynabook T75/BB・i7-6500U(2 コア 4 スレッド)・メモリ 7.9GB(**空きは 2GB 前後**)・HDD 500GB(空き 417GB)・BitLocker なし | VM に回せるのは 2〜3GB。HDD なので VM の円盤は**固定サイズ**にする |
+| 同 | **Hyper-V は有効**(`Microsoft-Hyper-V-All`・管理の PowerShell・`HypervisorPresent`)。VM は 0 台・スイッチは Default Switch だけ。WSL2 と Ubuntu も入っている(止まっている) | 案 A は追加のインストールなしで作れる。この PC の「WSL は使わない」は検証機には掛からない |
+| 同 | 有線 I219-V が **100 Mbps でつながっている**(1 Gbps の口)。IP は手で 192.168.3.29・DNS は IPv6 のルーターだけ | イメージを引くのは遅い(数 GB で十数分)。ケーブルか口を利用者が見る(任意) |
+| 同 | SSH は Microsoft の OpenSSH(`PasswordAuthentication no`・鍵だけ)。利用者名は **`ito`**(管理者)。鍵は `~/.ssh/Local/id_ed25519` | Windows 側の読み取りはこちらでできる。Hyper-V の操作も届くが、**スイッチを作ると数秒切れる**ので利用者の手元で |
+| 同 | 常駐: JQuake(Java)・Chrome リモート デスクトップ・Defender のリアルタイム保護・Windows Update(TiWorker が動いていた)・スリープしない設定 | メモリを食うものは利用者の判断で止める。Defender の除外(VM の置き場)は**セキュリティの設定なので利用者が** |
+| 本番 | 2 コア・2GB+スワップ 2GB(495MB 使用)。8 つのコンテナの使用は合わせて約 0.6GB(上限は合わせて 2.3GB)。MariaDB 174MB・Postgres 82MB・`uploads/` 962MB(**うち 904MB が配る APK 32 個**) | VM は**本番と同じ 2GB+スワップ 2GB**で窮屈さまで写せる。APK は写さない |
+| 本番の表 | **99 表**。今の `local-sanitize.sh` が空にするのは 25 表だけで、利用者の識別子・氏名を持つ表が抜けている(`km_test_accounts`・`km_test_events`・`km_guide_chat_log`・`km_map_backups`(user_name)・`km_html_sites`(owner_name)・`km_learning_samples`(uploaded_by)・`km_staff_node_consents`・`km_user_map_data`・`km_bench_runs` ほか)。`kmt_database` はコードのどこからも使われていない | 抜き取りを**表ごとの台帳**にし、台帳に無い表は止める(下の 5-3) |
+| 本番の設定(`km_settings` 36 件) | 秘密に当たるのは `test_mode_signout_pin_hash`・`guide_chat_sub`、外へつながるのは `*_survey_url` | ダミーと `example.test` に置き換える |
+| 今の道具 | `host-local.sh init --fresh-secrets`・`local-sanitize.sh`(`--check`)・`compose.local.yaml`(certbot・mailserver を外し mailpit)・docs/13 §4-2。どれも Linux のホスト前提 | VM の中の Ubuntu でそのまま使える(作り直しは要らない。足す) |
+
+**11-07 の答えと、手元で作ったもの(未配備・検証機はまだ無い)**: 決めることは全部勧めどおり(名前は sslip.io)・ダウンロード可・JQuake は止めない。
+その後 **「UbuntuServer は私が作成します。ブリッジ接続で行きます」** —— VM と OS は利用者が作る(29 には利用者が外部スイッチ「新しい仮想スイッチ」と VM「Ubuntu」を作ってあった)。
+台本で VM を作る `testhost-vm.ps1` は `Old/scripts/` へ退避し、入れたあとの土台を揃える `scripts/testhost-bootstrap.sh` に替えた。
+**192.168.3.30 は別の機械(MAC 30-6D-F9-AF-86-45)が使っていた** → 空いている **192.168.3.31** を勧める(名前は `192-168-3-31.sslip.io`)。
+作ったもの: `local-sanitize.sh`(台帳で作り直し)・`local-sanitize.tables`(99 表)・`local-import.sh`・`local-logto-seed.php/.sh`・`local-dummy-files.php`・`local-refresh.ps1`・
+`local-disable.sh`(VM の外へ出る cron と設定を止める)・`testhost-windows.ps1`(29 の Windows の要らない機能を止める)。手順は docs/13 §0。下の 5-1〜5-4 は計画のときの文(名前は実際と少し違う: `local-dummy.sh` → `local-sanitize.sh` に広げた・台帳は `local-sanitize.tables`・rehash は列の名前の決まりに含めた)。
+
+#### 5-1. 形(勧めるもの)
+
+```
+192.168.3.29 Windows(Hyper-V) ── 外部スイッチ(I219-V)── LAN 192.168.3.0/24
+   └ VM km-test: Ubuntu Server 24.04・2 vCPU・2GB+スワップ 2GB・固定 60GB・IP 192.168.3.30(固定)
+        └ /opt/kosenmap: compose.yaml + compose.local.yaml(本番と同じ上限・同じイメージの digest)
+          名前: 192-168-3-30.sslip.io(または LAN の DNS で km.test)
+```
+
+- **なぜ VM か**: 本番と同じ Ubuntu・ufw・sshd・`km`/`kmops`・cron・`host-*.sh` がそのまま動き、`deploy-to-host.ps1` の練習になる。Docker Desktop や WSL2 は網の形(NAT)とファイルの持ち主が本番と違う
+- **作り方は台本**(`scripts/testhost-vm.ps1`。Windows で利用者が管理者で流す): Ubuntu の**クラウドイメージ**(Hyper-V で動く Azure 向けの VHD)を固定サイズの VHDX にし、cloud-init の種(`CIDATA` の小さい円盤)で `km` の鍵・固定 IP・スワップ・時刻を入れて起動する。**画面での OS の手入れは無し**。壊れたら VM を消して流し直す
+- VM の中は 09 の手順どおり(`host-setup.sh` → `kmops` → `host-local.sh init --fresh-secrets`)。ufw は **LAN からだけ** 22・80・443・8025。**外向きの 25・465・587 は閉じる**(メールを外へ出さない)
+- Console(3002)・phpMyAdmin は本番と同じく 127.0.0.1 だけ(SSH のトンネル)
+
+#### 5-2. 持ち込むもの・持ち込まないもの
+
+| 種類 | どうする |
+|---|---|
+| MariaDB | 控えの `km-mariadb.sql` だけを使う。**生のまま VM の円盤に置かない**: PC で開いた控えから SSH で流し込み、VM の中の**使い捨ての MariaDB(網なし・データは tmpfs=メモリの上)**に入れて抜き取り → 抜いた後のダンプだけを本物の DB へ入れる。InnoDB の古いページや binlog に生の行が残らない |
+| `.env`・`config/*.local.php` | 本番からは何も写さない。全部の鍵を新しく作る(`--fresh-secrets` を全部のキーに広げる)。reCAPTCHA は Google が公開している試験用の鍵か OFF。案内 AI の URL は空 |
+| Logto(Postgres) | 写さない。空から立て、**台本で本番と同じ形に組む**(下の 5-4) |
+| `uploads/` | 写すのは中身に人の情報が無いもの(`area_*`・`floor_*`)だけ。ほかは**ダミーを作る**: ポスター・360° 写真・アバターは DB の大きさに合わせた「DUMMY」入りの画像、配る APK・AR の写真・地図の控え・HTML サイトは無し(行も消す)。配信の地図は抜いた DB から管理画面で発行し直す |
+| メール | mailpit だけ。ダミーの宛先は全部 `@example.test` |
+
+#### 5-3. 自動でダミーに上書きする台本(`scripts/local-dummy.sh`。今の `local-sanitize.sh` を広げる)
+
+- **止まる条件(先に見る)**: `KM_ENV=local` でない・名前が本番(`ito4.jp`・旧 `ito8795.com` とその下)・ホストに印(`/etc/kosenmap-test-host`)が無い → 何もせず止まる
+- **表の台帳 `scripts/local-dummy.tables`**: 99 表を全部 `keep`(残す)/ `scrub`(列を置き換える)/ `wipe`(空にする)/ `rehash`(件数を残して識別子だけ混ぜ直す)に分ける。**台帳に無い表があれば空にして警告**し、`check.php` は「`CREATE TABLE` があるのに台帳に無い」を FAIL にする(新しい表を足したときの抜けを防ぐ)
+- **列の名前でも拾う**: `*sub`・`user_id`・`*_by`・`*_name`(人)・`actor_name`・`owner_name`・`user_name` は表にかかわらず `dummy-user-NN` / 「ダミー利用者NN」に置き換える
+- **中身の作り方**(誤って読んでも分からない・見ればダミーと分かる):
+  - 地点の教職員名 → 「教員A001」、部屋の名前 → 「教員室 D012」(今のまま)。**同じ地点の英語の名前・読み・別名(`km_english_names`・`km_search_aliases`)も合わせて置き換える**(今は抜けている。読みから氏名が分かる)
+  - 予定の主催(`organizer`)・ポスターの題と説明 → 「企画 P018」の連番(番号の対応は残すので地図と予定のつながりは本番どおり)
+  - いいね(`km_node_likes`・`km_poster_likes`)→ 件数は残し、`voter_hash`・`source_hash` を乱数の塩で混ぜ直す
+  - 試験モードの PIN → 決まった試験用の値のハッシュ(値は VM の中のファイルにだけ置く)、アンケートの URL → `https://example.test/survey`
+  - プロジェクト状況 → 空にしてダミーのタスクを 3 件
+- **最後に確かめる(`--check`。件数だけ出す)**: 手元の氏名一覧と突き合わせ 0 件・`@example.test` 以外のメールアドレス 0 件・本番の名前を含む URL の数・台帳に無い表 0
+- **流し直しても同じ結果**(何度でも)。PC からは `scripts/local-refresh.ps1`(新規): 最新の控えを開く → 流し込み → 抜き取り → `--check` → web を起動、までを 1 本で
+
+#### 5-4. Logto を本番の形に組む(`scripts/local-logto-seed.php`。新規)
+
+- 利用者が Console(SSH のトンネル)で**管理者を作り、m2m のアプリ 1 つに Management API の権限を付ける**ところまで(パスワードは利用者が入れる)
+- あとは台本が Management API で作る: サイトのアプリ(**自社用**)・Android のネイティブアプリ(戻り先 2 つ)・API リソース `https://<名前>/api`・管理者のロール・組織と組織ロール `staff:normal:access`・メールのテンプレート(`docs/logto-email-templates.json`)・SMTP は mailpit
+- **ダミーの利用者**: 管理者 1・教職員 2(組織に入れる)・一般 3・試験モード 2。パスワードは乱数で作って VM の `/opt/kosenmap/run/dummy-accounts.txt`(km だけ読める)にだけ置く。画面には出さない
+- ID と秘密は台本が VM の `.env` と `config/logto-m2m.local.php` に書く
+- サインインの体験(MFA・パスワード方針)は本番の読むだけの m2m で**設定の形だけ**を読んで合わせる(利用者の情報は読まない)
+
+#### 5-5. 受け入れの確かめ(参考の計画書の「受け入れテスト」を、この構成に合わせたもの)
+
+1. **本番の秘密と 1 つも一致しない**: PC で、開いた控えの `.env` の値と VM の `.env`・config の値をハッシュどうしで比べる(値は出さない)→ 一致 0
+2. 5-3 の `--check` が全部 0
+3. 本番と同じ順で起動し、公開の地図・管理画面・地図編集・予定・ストリートビュー・案内チャット(AI なし)が開く。PC の Chrome と Pixel 7a(debug 版を検証機の名前で作る)でダミーの教職員がサインインできる
+4. メールは mailpit に届き、外へは出ない(外向き 25 が閉じている)
+5. LAN の外から届かない(ufw は LAN だけ・ルーターに転送なし)
+6. `deploy-to-host.ps1 -Backup -Yes` を検証機に向けて通る(配備の練習)。`host-backup.sh` も通る
+7. 作り直し: VM を消して `testhost-vm.ps1` → `local-refresh.ps1` で同じところまで戻る(時間を記録)
+8. ベンチマーク(タスクマネージャー)を 1 回測り、本番との差を記録(HDD の遅さを数字で持っておく)
+
+#### 5-6. 決めること(利用者)
+
+| # | 何 | 勧め |
+|---|---|---|
+| 1 | 置き方: Hyper-V の VM / WSL2 の Ubuntu に Docker Engine / Docker Desktop | **Hyper-V の VM** |
+| 2 | VM の網: 外部スイッチで VM に別の固定 IP(例 192.168.3.30)/ VM は内向きの網にして 29 で受けて転送 | **外部スイッチ・別の IP**(29 は Windows のまま) |
+| 3 | VM のメモリ: 本番と同じ 2GB+スワップ 2GB / 3GB | **2GB**(本番の窮屈さを写す)。JQuake などを止めるかは利用者 |
+| 4 | 名前: `192-168-3-30.sslip.io` / LAN の DNS(ルーター)に `km.test` | sslip.io(登録が要らない。ルーターの rebinding 保護で引けなければ DNS) |
+| 5 | ダウンロードの許可: Ubuntu 24.04 のクラウドイメージ(cloud-images.ubuntu.com・約 0.6GB)を検証機へ | — |
+| 6 | Windows 側で利用者がやること: 台本を管理者で流す(スイッチを作ると数秒切れる)・Defender の除外(VM の置き場)・Windows Update の再起動の時間 | — |
+
 ### 段 7 —— 実機で見つけたものの続き(11-07。中身はプロジェクト状況 #109・#110)
 
 - ~~7-1 来場者の画面の英語化の残り~~ **11-07 完了**(利用者の答え「全て英語に」。版 56。設定の画面は `SettingsEnglish.kt` の表、ほかは `ui("日本語", "English")`)
-- 7-2 ジャンル「教室」からトイレを外す(利用者の答え)。**アプリは版 56 で公開・Web は配備待ち**(`Main/app.js` の KM_GENRES の `room.exclude`)
+- 7-2 ジャンル「教室」からトイレを外す(利用者の答え)。**アプリは版 56 で公開・Web も 11-07 に配備済み**(`Main/app.js` の KM_GENRES の `room.exclude`)
 
 ### 段 6 —— ストリートビュー(360°)を Website へ
 
 下の「ストリートビュー(360°)を Website に広げる下地」をそのまま使う。**始める前に利用者が決めること**: 見せ方 A(横ドラッグ)か B(WebGL)か / 来場者にも出すか / 撮る人と時期。
 決まったら、地図のデータに出している地点の分だけ写真の一覧を載せ、地点の詳細に「360°」(押すまで取らない)を足す。
----
+
+**11-07 利用者の答え**: 見せ方は **B(WebGL。外の部品は使わず自分で書く・WebGL が無い端末は A に落とす)** / **撮りそろうまで管理者だけ**(来場者に出すのは管理画面の設定 1 つで後から) / **撮るのは利用者が後日**(上げるのは今のアプリの管理版から)。
+**11-07 手元で作った(配備待ち)**: `Main/panorama-viewer.js`(見る画面)・地図のデータに `panoramas`(地図編集にはいつも・公開は設定が ON のときだけ・出している地点の分だけ)・
+地点の詳細の「🔭 360° 写真」・地図編集の地点の窓の「360° 写真を見る」・管理画面「地図データ公開設定」の「来場者にも出す」(既定 OFF)。
+**残り**: 利用者が撮って上げる(本番の写真は 11-07 時点で 0 枚)→ 地図編集で見て確かめる → 撮りそろったら「来場者にも出す」を ON。向き(heading)を Web の管理画面で直す口は作っていない(アプリで上げるときに入れる)
+
+### 段 8 —— ito4.jp を Cloudflare に載せる(**2026-11-08 完了**。ito4・auth・share・html は橙・admin・ssh・mail は灰。手順の正本は [17-cloudflare](17-cloudflare.ipynb)。進み具合はプロジェクト状況)
+
+利用者(11-08)「ito4.jp を Cloudflare に移行します」「1〜3 と docs/17 の書き直しを用意してください」。
+**ポートの壁はもう無い**(外は 22・80・443 だけ。11-08 実測)。橙(中継)にする前に止まるものが 3 つあり、**手元で用意した(未配備)**:
+
+| # | 何 | 用意したもの | 誰が |
+|---|---|---|---|
+| 8-1 | SSH(Cloudflare は 22 番を中継しない) | `scripts/ssh-host-alias.ps1`: この PC の `~\.ssh\config` で `ito4.jp` → 灰の `ssh.ito4.jp`(HostKeyAlias で known_hosts はそのまま)。スクリプト・タスク・cmd は変えない | DNS の `ssh` の A(灰)は利用者・-Apply は利用者 |
+| 8-2 | 国の拒否(日本だけ通す反転のままだと公開ページが丸ごと落ちる) | `host-geoblock.sh` の `ALLOW_CLOUDFLARE`(既定 no)・`CLOUDFLARE_PORTS`(80 443)。国は Cloudflare の WAF で絞る | 配備のあと km で update → apply |
+| 8-3 | 本当の送り元(回数の制限・IP の許可・訪問者の記録) | `nginx/km/cloudflare-real-ip.conf`(Cloudflare の範囲だけ信じる `CF-Connecting-IP`)を http の段で include。PHP は直さない(`X-Real-IP` = `$remote_addr`) | 配備は利用者 |
+| 8-4 | DNS の取り込み・ネームサーバー・Cloudflare の画面(Full (strict)・Always Use HTTPS 切・Bot Fight Mode 切・WAF の国) | docs/17 §2-4・§3 | 利用者 |
+| 8-5 | `ito4.jp` を橙 → 確かめ → `auth`・`share`・HTML 展開を 1 つずつ | docs/17 §3 の 7・8(admin・ssh・mail は灰のまま) | 利用者・確かめはこちら(読むだけ) |
+| 8-6 | **完了(11-08)** Cloudflare の分析を訪問者の画面に(11-08 追加。WAF で止めた記録・時間ごとの通信量・訪問者の位置を DB に・消さない) | `scripts/host-cloudflare-import.sh`(cron 版 14・毎時)・`lib/cloudflare-analytics.php`・`lib/visitor-geo.php`・docs/17 §6 | トークンと配備は利用者・確かめはこちら |
+
+### 段 9 —— Web Code Editor(`https://ito4.jp/editor/`。名前は web-code-editor。**2026-11-08 完了**)
+
+利用者(11-08)が渡した開発計画書 1.1(`Downloads\writing-block.md`)の**優先度 1〜3**(基本・保存と操作性・補完とエラーとテンプレートとダウンロード)。優先度 4(複数ファイル・ZIP など)は次のプラン。
+利用者の答え:「ito4.jp で公開」「補完は HTML・CSS・JS すべて日本語で(`<a` で `href="URLを入力"` の候補と用法)」「画面は日英」「処理はできるだけクライアントで」。
+
+**形**: サーバーは殻と静的ファイルを配るだけ(DB・API・サインインなし)。編集・プレビューの組み立て・補完・保存(localStorage)・ダウンロード(Blob)はすべてブラウザ。
+
+| 部分 | 場所 | 考え |
+|---|---|---|
+| 作る元 | `server/editor-src/`(Vite 8.3.5 + Monaco 0.57.0。版は固定・lock あり。**配備しない**・node_modules は GitHub にも出さない) | `npm run build` が `src/editor/` を作り直す。殻 `index.php` も `public/` から写す(**`src/editor/` を直接直さない**) |
+| 殻 | `src/editor/index.php` | CSP `'editor'`: **style だけ `'unsafe-inline'`**(Monaco が `style="…"` を innerHTML で組む。nonce と一緒に書くと無視されるので style-src から nonce を外す)・script は nonce のまま・`worker-src 'self'`・`frame-src` は html. だけ。入口は `.vite/manifest.json` から |
+| プレビュー | `https://html.<ドメイン>/editor-run.html`(`html-view.php`) | **srcdoc は親の CSP を受け継ぐ**ので別のオリジンで動かす。本体 →(sandbox="allow-scripts"・オリジンなし)走らせる側 →(さらに sandbox の srcdoc)利用者の文書。frame-ancestors は本体だけ。知らせは `event.source` と形と長さで確かめる |
+| 補完 | `editor-src/src/data/`(html・css・js。**文はすべて自分で書いた**) | Monaco の標準データ(英語)を土台に日本語の説明と例を重ね、標準に無いもの(search・popover など)は足す。HTML の雛形(`<a` → `href="URLを入力"`)・JS は日本語の候補とホバーを足す(TypeScript の補完はそのまま) |
+
+| # | 何 | 誰が | いま |
+|---|---|---|---|
+| 9-1 | 基本・操作性・補完・テンプレート 5 つ・ダウンロード・日英・暗い見た目 | こちら | 11-08 に作り、検証機と Chrome で確かめた(補完・プレビューの守り・エラーの行番号・設定の丸め・英語) |
+| 9-2 | 試験 | こちら | `src/scripts/js/editor.test.js`(110 件)・check.php の組 `editor`(32 件) |
+| 9-3 | 本番へ配備(nginx を変えたので reverse-proxy を起こし直す) | 利用者 | **11-08 に配備済み**(応答と CSP を読むだけで確かめた) |
+| 9-4 | 入口: 管理画面「QR のリンク集」に `https://ito4.jp/editor/` を足す | 利用者 | **11-08 済み** |
+| 9-5 | スマホの幅(760px 未満は「編集 / プレビュー」の切り替え)を実機で | 利用者 | **11-08 確認 OK** |
+
+### 段 10 —— Web Code Editor 優先度 4(複数ファイル・プロジェクト・ZIP・インポート・ショートカット。11-08〜。進み具合はプロジェクト状況 #117〜#121)
+
+利用者(11-08)「続けてください」。決めたこと: **保存はサインインしてサーバーにも**・ショートカットは**付け直せる**・HTML 展開へ直接の公開は付けない・配色テーマとタブの追加削除も入れる。
+
+**形**: 作業の正本はブラウザ(IndexedDB `km-editor`)。サインインしていれば裏でサーバーへ同期する(サインインしなくても今までどおり使える)。2 回に分けて配備する。
+
+| 部分 | 考え |
+|---|---|
+| 10-A 保存の形 | プロジェクト = 目録(パス → ハッシュ)+ ファイル(テキストは文字列・画像は Blob)。今の `km-editor-v1` は「はじめのプロジェクト」へ移す(`index.html` を `<link>`・`<script src>` 付きの完全な文書に。古い鍵は残す) |
+| 10-A 画面 | 左にファイルの木・開いたファイルのタブ(× で閉じる)・プロジェクトの一覧・配色 4 つ + 自動・ショートカットの付け直し(ブラウザのキーと重なりは断る) |
+| 10-A プレビュー | 入口の HTML から、プロジェクトの中を指す CSS・JS・画像・ES モジュールを中身(`data:`)に置き換えて組む。実行中の `fetch('相対パス')` は台本が答え、`<a href="about.html">` は入口を替える。走らせる側の上限は 32,000,000 字 |
+| 10-A ZIP | `Main/html-zip.js`(HTML 展開の部品)を使い回す。書き出し・読み込み(ZIP・フォルダ・ファイル・ドラッグ) |
+| 10-A の状況 | **11-08 に本番へ配備済み・完了**(スマホの幅も利用者が確認。status.md の 11-08 の記録) |
+| 10-B 同期 | `api/editor.php`(手本は `api/html-host.php`。CSRF・持ち主はセッションの sub だけ・止められた/テスト用のアカウントは断る)・`lib/editor-projects.php`(表 `km_editor_projects`・`uploads/editor/<id>/blobs`)。変わったファイルだけ送り、版のぶつかりは利用者に選ばせる。上限は 1 人 30 プロジェクト・200MB。規約に第8条の3(文面は利用者が確かめてから) |
+| 10-B の状況 | **11-08 に本番へ配備済み・完了**(検証機の Chrome で確認・規約の文面は利用者が確認。status.md の 11-08 の記録) |
+
+### 段 11 —— VS Code 型のエディタ(`https://ito4.jp/code/`。ブラウザの中だけで動く。11-08 にプラン)
+
+利用者(11-08)「VSCode みたい(Web で VSCode を動かす感じ)はできますか? できるならプランを」。
+
+**できる。** ただし「ブラウザの中だけで動く VS Code の画面」として作る。
+
+使う部品:
+- `@codingame/monaco-vscode-api`(MIT・**39.0.3**。11-06 公開)。VS Code の OSS の本体を npm の部品に分けたもの。
+- 画面の部品・日本語の言語パック・VS Code 付属の拡張機能(言語・テーマ・アイコン)は、どれも npm に同じ版(39.0.3)で揃っている(11-08 に確かめた)。
+
+**やらないこと**:
+- **code-server 型**(サーバーで VS Code を動かす)は使わない。
+  - 公開すると、誰でもサーバーのシェルに触れてしまう。
+  - 1 人に 1 つの入れ物が要り、メモリ 1.9GiB には収まらない。
+- そのため、次のものは無い:
+  - ターミナル
+  - デバッガ
+  - Git の push
+  - Node で動く拡張機能(Python の実行・Java のコンパイルなど)
+- 「Visual Studio Code」は Microsoft の商標なので、**名前には使わない**。画面の名前は「Web Code Editor(ワークベンチ)」とする。
+
+#### 利用者が決めたこと(11-08)
+
+| 項目 | 決めたこと |
+|---|---|
+| 置き場所 | **別ページで並べる。** `/editor/`(軽い・スマホでも動く)は残し、`/code/` を足す。プロジェクト(IndexedDB `km-editor`)・同期(10-B)・プレビューは両方で共通。`/code/` は重いので PC 向け。狭い画面では `/editor/` へ案内する |
+| 拡張機能 | **決めたものだけ同梱する。** 利用者は新しく入れられない。左の「拡張機能」の欄は、**一覧とオン・オフだけ**(検索・入れる口は閉じる。マーケットプレイスの URL は持たない) |
+| 言語(VS Code 付属) | HTML・CSS・JSON(必ず)・**JS/TS の本格的な補完**(TypeScript の Web 版)・**Emmet**・**Markdown**(プレビュー付き)・**Jupyter**(.ipynb)・**整形**(Pretty-print。HTML・CSS・JS・JSON の付属の整形 + Prettier)・**色分け**: Python・PHP・SQL・YAML・XML・シェル・**Java・PowerShell・Windows のバッチ** |
+| 見た目 | 日本語の画面・標準の配色(必ず)・**ファイルのアイコン**(Seti)・**追加の配色テーマ**(Monokai・Solarized 明暗・Abyss・Quiet Light・Kimbie・Tomorrow Night Blue・Red)・**自作の日本語の補完**(段 9 のデータ。`editor-src/src/data/*`) |
+| Open VSX から同梱 | 利用者は **Prettier・Code Spell Checker・Error Lens** を選んだ。11-08 に Open VSX の manifest を読んだ結果は下のとおり |
+
+Open VSX の 3 つ(11-08 に manifest で確かめた):
+
+| 拡張機能 | 版・ライセンス | Web で動く入口 | 扱い |
+|---|---|---|---|
+| Prettier | 12.4.0・MIT | `browser: ./dist/web-extension.cjs` あり | 入れる |
+| Error Lens | 3.30.0・MIT | `browser` あり | 入れる |
+| Code Spell Checker | 4.10.0・**GPL-3.0** | **`browser` が無い**(Node でしか動かない) | **入れない**(11-09 に利用者が決めた。Open VSX にブラウザで動く代わりも無い) |
+
+#### 形
+
+- **元**: `server/code-src/`(新しい Vite のプロジェクト)。組み立ての出力は `src/code/`。
+  - `editor-src` とは npm を分ける。monaco-vscode-api は `monaco-editor` を自分の版に差し替えるため。
+  - 共通の部品は `editor-src/src/` から import して使い回す(写しは作らない):
+    - `project/db.js`・`model.js`・`sync.js`・`import.js`
+    - `preview/projectBuilder.js`・`preview.js`
+    - `data/*`(日本語の補完)
+- **ファイル**: VS Code のファイルシステムの口(FileSystemProvider)を IndexedDB `km-editor` の上に作る。
+  - 1 つのプロジェクトを 1 つのワークスペースとして開く。
+  - 切り替えはページを開き直す(`?p=<id>`)。VS Code の本体は、1 つのページで 1 回しか起こせないため。
+  - 別のタブ(`/editor/` も)で変えたら BroadcastChannel で知らせ、VS Code のファイルの見張りに流す。
+- **使えるファイルの種類を広げる**:
+  - 今は HTML 展開の `KM_HTML_TYPES` と `model.js` の `TYPES` に縛られている(Web のファイルだけ)。
+  - エディタ用に `KM_EDITOR_TYPES`(サーバー)と `TYPES`(クライアント)を分けて足す: `md`・`ipynb`・`py`・`java`・`ps1`・`bat`・`cmd`・`php`・`sql`・`yaml`・`yml`・`xml`・`ts`・`tsx`・`jsx`・`txt` など。
+  - どれもサーバーでは**保存するだけ**(実行しない。blob は今までどおり octet-stream・attachment・CSP sandbox で返す)。
+  - `/editor/` では、増えた種類を「色分けなしのテキスト」で開けるようにする。
+- **プレビュー**:
+  - 今の仕組み(`projectBuilder.js` と `html.ito4.jp/editor-run.html`)を、VS Code の画面の中の「プレビュー」欄に出す。
+  - コンソール・エラーの行から開く動きは、パネルに出す。
+- **webview**(Markdown のプレビュー・Jupyter の出力):
+  - VS Code は、これらを別オリジンの枠で出す。
+  - `html.ito4.jp` は利用者の HTML を出すオリジンなので相乗りしない。**専用のオリジン `webview.ito4.jp` を足す**:
+    - DNS: Cloudflare で橙
+    - 証明書の名前に足す
+    - nginx の server を足す
+  - 拡張機能の実行(Web Worker の拡張機能ホスト)も、できればこのオリジンへ出す。ito4.jp の Cookie・IndexedDB・CSRF に、外の拡張機能(Prettier・Error Lens)が手を届かせないため。
+  - 出せなければ、11-0 で利用者と決める(外の拡張機能を外す、など)。
+- **Jupyter**:
+  - .ipynb を開く・書く・保存する・保存済みの出力を見る、まで。
+  - **セルの実行は入れない**(カーネルが無い)。Pyodide(ブラウザの中の Python)で動かすのは、別の段として後で決める。
+- **同期**:
+  - 10-B の流れ(`main.js` の `pushProject`・`pullInto`・`refreshRemote`・`resolveConflict`)を `editor-src/src/project/syncManager.js` へ切り出し、`/editor/` と `/code/` で共通にする。
+  - 状態は下の帯(ステータスバー)に出す。ぶつかったときの 3 つの選び方は、VS Code のクイックピックで聞く。
+- **殻**: `code-src/public/index.php`。`/editor/` と同じく、サインインは fail open・meta `km-csrf`・`km-signed-in`。
+  - CSP は新しい profile `'code'`。中身は 11-0 で**測ってから**決める。見込み:
+    - TextMate の色分けの WASM に `'wasm-unsafe-eval'` が要る
+    - worker の出所
+    - `frame-src` に `html.ito4.jp`・`webview.ito4.jp`
+  - `'unsafe-eval'` が要るなら、利用者に報告して決めてもらう。
+- **ライセンス**: VS Code の OSS(MIT)・monaco-vscode-api(MIT)・Prettier(MIT)・Error Lens(MIT)の表示を `/code/` の「このエディタについて」に出す。
+
+#### 11-0 の結果(11-08。検証機。詳しくは status.md の 11-08 の記録)
+
+| 項目 | 結果 |
+|---|---|
+| 大きさ・時間 | 配る大きさ 73.8MB。初回の転送 4.6MB・起動 1.7 秒(2 回目 0.6〜0.8 秒)。本体のメモリ 70MB。Windows で組み立てられる(約 5 秒) |
+| CSP | 本体に `'unsafe-eval'` は要らない。足すのは `'wasm-unsafe-eval'`・`worker-src blob:`・拡張機能ホストの枠だけ(11-1 で確定。blob をやめると worker にサイト既定の CSP が付いて WASM が止まる) |
+| COOP/COEP | 無くても JS/TS の補完が動いた(付けない) |
+| 拡張機能ホスト・webview | 本体のオリジンでは既定の CSP で止まる → **11-3 で `webview.<ドメイン>` へ移した**(部品の `iframeAlternateDomain`。仮の口は退避) |
+| Prettier・Error Lens | Web で動いた(版を固定・sha256 一致・通信も eval も無し) |
+| Code Spell Checker | **Web 版が無い**(GPL-3.0)→ 入れない(代わりも入れない。11-09 に利用者が決めた) |
+
+#### 進め方(プロジェクト状況 #122〜#129)
+
+| 段 | 中身 | 誰が |
+|---|---|---|
+| 11-0 試作と測定(検証機) | 最小のワークベンチ(日本語・エクスプローラー・IndexedDB のファイル)を `/code/` に出し、次のものを**実物で測る**。結果を利用者に報告し、続けるかを決めてもらう。<br>・組み立ての大きさ<br>・初めて開くまでの時間<br>・CSP に要るもの<br>・メモリ<br>・拡張機能ホストを別オリジンに出せるか<br>・Prettier・Error Lens が Web で動くか<br>・Windows で組み立てられるか | こちら |
+| 11-1 基盤(**11-08 済み・検証機**) | `code-src/`・殻・CSP `'code'`・ファイルの口と BroadcastChannel・プロジェクトを開く・切り替える<br>ZIP の読み込み・書き出し(コマンドとエクスプローラーの右クリック)・ファイルの種類を広げる(サーバーと `/editor/` も)・狭い画面の案内 | こちら |
+| 11-2 拡張機能(**11-08 済み・検証機**) | 上の表の言語・テーマ・アイコン・日本語パック・自作の日本語の補完・拡張機能の欄(一覧とオン・オフだけ)<br>自作の日本語は、付属の言語サーバーの標準データ(英語)を切れないため、**ホバーの説明と雛形**で足した(候補の一覧の説明は英語のまま) | こちら |
+| 11-3 プレビューと webview(**11-09 済み・検証機**) | 枠のオリジン `webview.<ドメイン>`(nginx の server・CORS・証明書の名前)で拡張機能ホスト・Markdown のプレビュー・Jupyter の出力が動く<br>プロジェクトのプレビューは**別の窓** `/code/preview.php`(/editor/ の組み立てと見せ方の部品を使い回す。保存のたび組み直す・コンソールの「ファイル:行」で /code/ のその行を開く)<br>本番の DNS(橙・11-08)と証明書(11-09)は利用者が済ませた | こちら + 利用者(証明書・11-7) |
+| 11-4 同期(**11-09 済み・検証機**) | `editor-src/src/project/syncManager.js` へ切り出し、`/editor/` で前と同じに動くことを確かめた。/code/ はステータスバー(状態・メニュー・ぶつかりの選び方)・クイックピック(一覧の印・サーバーにだけあるもの) | こちら |
+| 11-5 Open VSX(**11-09 済み・検証機**) | Prettier・Error Lens の vsix を版と sha256 で固定(`code-src/extensions/extensions.lock.json`。check.php が突き合わせる)。Prettier はブラウザで読まないファイルを組み立てで外した(14.4MB → 5.4MB)。綴りの検査は入れない | こちら |
+| 11-6 仕上げ(**11-09 済み・検証機**) | `/editor/` の帯に「VS Code 型で開く」(/code/ があるときだけ)・「このエディタについて」(部品・版・MIT)・規約 第8条の3 に `/code/`(利用者が文面を確かめた)・docs。QR のリンク集は 11-7 のあと利用者が管理画面で足す | こちら + 利用者(文面) |
+| 11-7 配備(**11-09 本番で完了**) | 検証機の Chrome で確かめる → 利用者が配備 → 本番を読むだけで確かめる<br>証明書と `-Action up` の配備は 11-09 に済み。`deploy-to-host.ps1` の本番の除外 `./src/code` を外すのもこのとき | 利用者 |
+| 11-8 拡張機能を足す(**11-09 済み・検証機**。プロジェクト状況 #130) | 利用者の希望 7 つ(HTMLHint・Auto Rename Tag・Path Intellisense・IntelliSense for CSS class names・Bracket Pair Colorization・HTML CSS Support・ESLint)。Web 版の入口があるのは **Path Intellisense だけ**なので、利用者が 4 つとも選んだ形にした:<br>・Path Intellisense 2.8.0 を同梱(Open VSX・MIT・sha256 をロックに)<br>・Auto Rename Tag → VS Code の「リンクされた編集」・Bracket Pair Colorization → VS Code に入っている括弧の色と対の縦線(設定で ON)<br>・HTMLHint・ESLint → 自作の拡張機能「Web の検査」(`code-src/src/webChecks.js`)。部品の htmlhint 1.9.2・ESLint 10.14.0 の Linter(どちらも MIT)をブラウザで動かす。規則は推奨のもの・利用者の eslint.config.js は実行しない・HTMLHint は `.htmlhintrc.json` で変えられる<br>・CSS のクラス名 → 同じ拡張機能で class="…"・id="…" を補完し、どの CSS にも無いクラス名に注意を出す | こちら → 利用者(配備) |
+
+**確かめ方**:
+- `node` の試験(ファイルの口の純粋な部分・種類の表・syncManager)・check.php の組 `code` を作る。
+  - 組 `code` で見るもの: 殻・CSP・外への URL が無い・マーケットプレイスの口が閉じている・口は `/api/editor.php` だけ。
+- **検証機の Chrome で**:
+  - 日本語の画面・エクスプローラー・タブの分割・Ctrl+P・Ctrl+Shift+P・検索と置換
+  - JS/TS の補完と型の検査・Emmet・整形
+  - Markdown と Jupyter の表示・テーマとアイコン・拡張機能のオン・オフ
+  - プレビュー
+  - `/editor/` と同じプロジェクトが開けること・同期とぶつかり
+
+**危ないところ**:
+- 大きさ: 初めて開くとき、十数〜数十 MB 読むと見込む(11-0 で測る)。
+- VS Code の本体の版が上がると壊れることがある。版は固定し、上げるときは段を立てる。
+- 本番のディスクは 40% 使用。組み立ての前の世代は `retired/` に 1 つだけ残す(`/editor/` と同じ)。
+
+### 段 12 —— 案内AIのつなぎを ngrok から Cloudflare Tunnel へ(**2026-11-12 完了**。通しで届くのを確かめ、ngrok の分岐も消した)
+
+利用者(11-11)「LLM の接続は Cloudflare のトンネルを使おうと思っていますがどうでしょう?」→ 勧めた →「トンネルを経由する方針で行きましょう」。
+
+```
+VPS の PHP ─ https ─ Cloudflare(llm.ito4.jp。WAF で本番サーバーの IP だけ)
+           ─ トンネル ─ cloudflared(自宅 PC)─ 門番 server.py(127.0.0.1)─ Unsloth / Bionic
+```
+
+**なぜ**: ngrok のエンドポイントの期限切れで止まった(11-07)・ito4.jp はすでに Cloudflare を通っている(質問と答えを見られる会社が 1 つ減る)・WAF で送り元を本番サーバーの IP だけに絞れる(門番の鍵と二重)。
+
+**形**:
+- 自分で管理するトンネル(locally-managed)。Zero Trust の画面を使わない。鍵は自宅 PC の `%USERPROFILE%\.cloudflared\<UUID>.json`
+- 使うときだけ起こす(`guide-llm/start-guide-llm.ps1`。サービスにしない)
+- トンネルの行き先は 1 つの名前 → 門番と、それ以外は 404
+- Website 側は `.env` の `KM_GUIDE_LLM_URL` を替えるだけ(PHP の呼び出しに User-Agent を足した)
+- **ngrok の分岐は残す**(cloudflared がこの PC でつながると確かめるまでの戻り道。Norton の TLS 検査の前例)。確かめが済んだら消す
+
+**確かめた前提**(読むだけ): 待ち時間は PHP 55 秒・nginx 90 秒で、Cloudflare の上限 100 秒に収まる・ホストの国の拒否は外へつないだ通信の戻りを通す・Bot Fight Mode と Browser Integrity Check は切ってある・門番に ngrok に頼った処理は無い・cloudflared の手順は公式資料で確かめた。
+
+**利用者がすること**(手順の正本は [17-cloudflare](17-cloudflare.ipynb) §7): cloudflared を入れる → `tunnel login` → `tunnel create kosenmap-guide` → `tunnel route dns … llm.ito4.jp` → `guide-llm.env` に UUID と名前 → WAF のルール 2 つ → 本番の `.env` を替えて `-Action up` で配備。
+
+**まだ確かめていないこと**: cloudflared をこの PC で動かしていない(入れるのは利用者)。つながるか・Norton が間に入るか・設定ファイルを cloudflared が受けるかは、利用者が入れたあとに見る。
+
+### 段 13 —— 学内の 3D(点群+画像)を使う: AR・360°・Wi-Fi の精度(2026-11-12 に計画へ。プロジェクト状況 #104・#133)
+
+利用者(11-12)「AR の画像などは学内全域の点群データ(3D データ)+画像でもらえそうなので、学内 3D で Wi-Fi 精度向上も計画に入れてください」「360° カメラは Insta360 X5 を使用する予定」。
+それまで保留にしていた「AR の実測」(元は段 3-4)と、段 6 の「ストリートビューの撮影」をここへまとめた。**Wi-Fi 測位の比べ(元は段 3-3)は打ち切り**(十分な精度を得られた)。
+
+**まだ手元にデータが無い。** 形式・大きさ・座標が分かってから中身を決める。いまは「何に使うか」と「先に決めること」だけを書く。
+
+| 使い道 | 考えていること | 誰が |
+|---|---|---|
+| 13-1 データを受け取って調べる | 点群の形式(E57・LAS/LAZ・PLY など)・点の数と容量・色の有無・画像の形式と撮った位置(姿勢)が付いているか・座標の原点と向き・階の分かれ方。**この PC とサーバーのどちらで扱える大きさか**を先に測る | 利用者(受け取り)→ こちら |
+| 13-2 地図と合わせる | 点群の座標を、いまの地図(階ごとの平面図の px・北と距離の補正)へ写す式を決める。合わせる点は、建物の角・階段・入口など平面図で分かる所を各階で数点。ずれを数字で出す | こちら + 利用者(合わせる点の確認) |
+| 13-3 AR の素材 | 現地で 4 地点以上に印を付けて撮る代わりに、点群+画像から AR の位置合わせの素材を作れるか。顔・掲示の写り込みは今までどおり消す(deface) | こちら |
+| 13-4 360°(ストリートビュー) | Insta360 X5 で撮る(正距円筒図法の画像)。Website の見る画面・地図編集・公開の設定(既定 OFF)は 11-07 に作ってある。撮る位置を地図の地点に結ぶ手間を、13-2 の式で減らせるか | 利用者(撮影)+ こちら |
+| 13-5 Wi-Fi の精度 | 3D から壁・床・階の境を取り、(a) 学習地点の間の電波の強さを「壁の枚数・距離・階」で埋める(指紋の補間)、(b) AP の位置の見立てを直す、(c) 粒子フィルタの「通れない所」を平面図の線より正確にする。**効くかどうかは、いまの評価の画面と CSV(誤差の中央値・90%)で前後を比べて決める** | こちら + 利用者(歩いて評価) |
+
+**先に決めること(利用者)**:
+- データの受け取り方と置き場(大きいので git と公開の控えには入れない。サーバーへ上げるかも未定)
+- 使ってよい範囲(学内の 3D・画像を公開のページに出してよいか。360° は「撮りそろうまで管理者だけ」のまま)
+- Wi-Fi は「十分な精度を得られた」ので、13-5 はどこまで求めるか(目標の誤差)
+
+**RTT は使わない**: 学内の AP(AP305C)は 802.11mc に応じない。アプリの表示は版 58 で外した(測る仕組みは残してある)。---
 
 ## 優先順位の軸
 
@@ -100,8 +415,140 @@ status.md の「残っていること」を利用者と見直して決めた(202
 | ~~**第5段**~~ | ~~Play ストアの準備~~ | **実装完了**(2026-09-03)。公開申請は**抹消**(2026-11-07、利用者) |
 | ~~**第6段**~~ | ~~アカウント削除 / User-Agent の記録~~ | **実装完了**(2026-09-03)。**Logto 側を開けるのは利用者** |
 
----
+### 段 14 —— VS Code 型エディタの候補を整える(2026-11-13。14-1〜14-4 すべて本番で済み)
 
+利用者(11-13)「HTML の `<a` を入力したときのいらないコメント(Mozilla のコメント)は削除できませんか」「できると分かったら本番向けのプランを」「予測変換は JSON で管理できませんか」。
+
+**分かったこと**: 候補の一覧の横に出る英語の説明(MDN の文と「MDN Reference」のリンク)は、VS Code 付属の HTML の言語サーバーが出している。カーソルを合わせたときの説明は設定(`html.hover.*`)で消せるが、**候補の説明は設定を見ずに作る**ので、設定では消せない。説明を作る関数は 1 つで、候補からは設定なしで呼ばれる → 組み立てのときにその関数を「設定が無ければ作らない」に書き換えれば消える。**検証機の Chrome で消えるのを確かめた**(付属の候補 a・abbr… は今までどおり出る・説明の欄だけ出ない)。
+
+| 段 | 中身 | 状態 |
+|---|---|---|
+| 14-1 HTML の候補の説明(MDN)を外す | `code-src/vite.config.js` の `km-html-no-completion-docs`: 出来合いの `htmlServerMain.js` の 1 か所を書き換え、中身のハッシュで名前を付け直して出す(古い中身がブラウザに残らない)。形が変わって見つからなければ組み立てを止める。check.php が組み立てた部品を見る | **11-13 本番で済み**(利用者が配備・読んで確かめた) |
+| 14-1 のついで | 打ちかけの `<a` に出る赤い文(HTMLHint の spec-char-escape)を既定で外した(`.htmlhintrc.json` で戻せる)・はじめのプロジェクトの雛形に `<title>` | 同上 |
+| 14-2 CSS の候補の説明(MDN) | 利用者「CSS の候補も外す」。同じ部品で、CSS の言語サーバー(`cssServerMain.js`)と、HTML の言語サーバーの中の CSS(`<style>` の中)の説明の入口を書き換える | **11-13 本番で済み**(利用者が配備・読んで確かめた) |
+| 14-3 カーソルを合わせたときの英語の説明 | 利用者「設定だけで消す」。`html`・`css`・`scss`・`less` の `hover.documentation`・`hover.references` を false に。**日本語の画面だけ**(自作の日本語の説明が残る。英語の画面で消すと説明が 1 つも出なくなるので残した) | 同上 |
+| 14-4 雛形を JSON で取り込む | 利用者「管理画面の取り込みだけ作る」。管理画面「エディタの雛形」(`admin/editor-snippets.php`): 同梱・いまの雛形を書き出す → 手元で直す → 取り込む(形を確かめ、違えば何も変えない)・同梱に戻す。編集の画面は作らない。置き場は新しい表 `km_editor_snippets`(前の中身は 20 行まで残す)。公開の口 `api/editor-snippets.php`(GET だけ・何も受け取らない・1 分使い回す)。/editor/ と /code/ は起動のときに読み、届かない・形が違えば同梱のまま。範囲は雛形(HTML 日本語・英語、JS)だけ。日本語の説明は対象外 | 同上 |
+
+**本番へ出す手順(14-1)**:
+1. 利用者が配備する(nginx・compose は変えていない):
+   ```
+   pwsh -File C:\Users\itota\Documents\Website\server\scripts\deploy-to-host.ps1 -Backup -Yes
+   ```
+2. こちらが本番を読むだけで確かめる:
+   - `/code/` が 200・`src/code/assets/htmlServerMain-*.js` が 1 つで、書き換えた形になっている・`workbench-*.js` がその名前を指している
+   - 前の組み立ては `retired/code-assets/` へ退避されている(1 世代)
+   - 本番の `/code/` を開き、`<a` と打って候補の横に英語の説明が出ないこと・付属の候補(a・abbr…)は出ること・赤い文が出ないこと
+3. 使う人の側: 部品の名前が変わるので、開き直せば新しい部品を読む(古いタブは開き直すまで前のまま)
+
+**戻し方**: `vite.config.js` の plugins から `htmlNoCompletionDocs()` を外して組み立て直し、配備する(元の部品に戻る)。急ぐときは `retired/code-assets/` の 1 世代前へは戻さず、組み立て直すのが確実。
+
+**危ないところ**:
+- 付属の部品(`@codingame/monaco-vscode-html-language-features-default-extension` 39.0.3)の版を上げると関数の形が変わりうる → 組み立てが止まるので気づく。そのとき形を調べ直す
+- 候補の説明が全部消える(英語の画面でも)。英語で使う人には説明が 1 つ減る。雛形(自作)の説明と見本は残る
+
+### 段 14-5 —— 利用者の雛形 JSON(v2)を直して取り込めるようにする(2026-11-14。手元で済み・配備待ち)
+
+利用者(11-14)「スニペット集の JSON を作成したので、不足分や説明不足などの場所を確認・修正してください」。ファイルは `Downloads\v2.json`(262,023 バイト。HTML 日本語 169・英語 169・JS 270・**CSS 641**)。
+
+**調べて分かったこと**(機械で全件を見た):
+
+| # | 見つけたこと | 害 | 直し方(案) |
+|---|---|---|---|
+| 1 | **HTML の body が 338 件すべて `<` で始まる**(`<a href=…`) | 取り込みの確かめは通るが、`<a` と打って選ぶと **`<<a href=…` になる**(差し替えるのは `<` のあとの文字だけ) | 取り込むときに先頭の `<` を 1 つ自動で外す(サーバーとエディタの両方。人は `<` を書きたくなるので、断るより外す)。ファイルも直す |
+| 2 | **`css` の 641 件は今の取り込みでは黙って捨てられる**(形の決まりに css が無い) | 取り込んでも CSS の雛形は 1 つも出ない。「取り込みました」とだけ出るので気づけない | CSS の雛形を足す(形 `css: [{label, body, ja, en}]`。`/editor/` と `/code/` の CSS と `<style>` の中で出す)。知らない項目があれば取り込み画面に「無視した」と出す |
+| 3 | 上限すれすれ | ファイル 262,023 / 262,144 バイト(残り 121 バイト)。CSS 641 件は 1 つの欄の上限 300 を超える | ファイルの上限を 1MB に・CSS は 1,000 件まで(gzip で配るので、エディタの起動で読む量は 50KB ほど) |
+| 4 | **CSS の説明 459 件が「○○ の値を指定する。」**(英語 506 件が「Sets the ○○ CSS property.」)。ラベルも 506 件が `property: ○○` | 説明になっていない。`flex` と打っても `property: flex-wrap` は先頭が合わず並びが後ろになる。付属の CSS の候補(プロパティ名)と 506 件が二重に出る | 下の「決めてほしいこと」1 |
+| 5 | HTML の **廃止タグ 27 件**(`[非推奨]` の acronym・applet・blink・center・font・frame・marquee など) | 初めての人が候補から選んでしまう | 下の「決めてほしいこと」2 |
+| 6 | `comment`・`doctype` の body が `<!-- `・`<!DOCTYPE`(#1 と同じ二重) | 同上 | #1 で直る |
+| 7 | CSS の 34 件が `&::selection {…}` のように `&` で始まる | ルールの外に置くと `&` が `:scope` になり、初めての人には分かりにくい | ルールの中で使うものは説明に「ルールの中に書く」と足す / ルールの外でよいものは `&` を外す |
+| 8 | JS の説明が短いもの 13 件(「エラーとして表示する。」など) | 足りなくはないが、ほかより薄い | 何を渡すか・何が返るかを 1 文足す |
+| 9 | 同梱にあって v2 に無い: HTML `html`(名前が「HTML 文書のひな形」に変わっただけ)・JS `fetch json`・`timer` | 実害なし(`fetch get`・`setTimeout` などが代わりにある) | そのまま(報告だけ) |
+
+**問題が無かったもの**: `${1:…}` の閉じ忘れ 0 件・重複 0 件・HTML の日本語と英語の並び(169 件の tag が同じ順)・英語の側に日本語が混ざったもの 0 件・JS 270 件は上限内。
+
+**作るもの**:
+- 14-5a 取り込みを広げる: `lib/editor-snippets.php` と `editor-src/src/data/snippets.js`(先頭の `<` を外す・`css` を受ける・上限・知らない項目の知らせ)。**表は変えない**(json の列に入れるだけ。ALTER なし)。CSS の候補は `languages.js`(/editor/)と `jaExtension.js`(/code/)に足す
+- 14-5b JSON を直した版 `Downloads\v3.json`(**v2 は触らない**)。直したところの一覧も付ける
+- 試験: check.php(形の決まり・`<` を外す・上限がサーバーとエディタで同じ)・editor.test.js。検証機の Chrome で v3 を取り込み、`<a` が二重にならない・CSS の雛形が出るのを確かめる
+
+**決めたこと(利用者、11-14)**:
+1. CSS の「プロパティ 1 つだけ」の 506 件は**雛形から外す**。説明は付属の候補(プロパティ名)の日本語の説明に回す(113 件は同梱の `CSS_JA` から・残りはこちらが書く)。雛形に残すのは 2 行以上かよく使う組み合わせの 135 件
+2. 廃止タグ 27 件は**外す**
+3. 説明の書き直しは**こちらに任せる**(自分の言葉で。MDN などの文は写さない)。直したところの一覧を付けて `Downloads\v3.json` に
+
+**状態(11-14)**: **手元で済み・検証機で確かめた・配備待ち**。
+- 取り込み: 先頭の `<` を外す(読むときも外すので、**本番にすでに入っている v2 も配備だけで `<<a` が直る**)・`css` を受ける・知らない項目を知らせる・1MB / CSS 1,000 個。CSS の雛形は /editor/ と /code/ の CSS と `<style>` の中(`cssSnippetTyped`・`htmlStyleBefore`)
+- 説明: `editor-src/src/data/css-more.js` に 281 個(付属の標準データに無い 66 個は出る所が無いので書かない)。`CSS_JA` は 448 個に
+- `Downloads\v3.json`(HTML 144・144・CSS 132・JS 270・147KB)と `v3-changes.txt`。v2 で見つけた追加: `${1(…)}` の壊れた入力欄 5 個・`::before`/`::after` の重なり・`wbr` が入力欄から始まる・`&` で始まる 32 個はふつうのセレクタへ
+
+### 段 15 —— 地図を別のサイトに埋め込む(2026-11-14。手元で済み・検証機で確かめた・配備待ち)
+
+利用者(11-14)「マップの API を作成してください。別のサイトで表示されるような埋め込み方を想定してください」。
+
+**形(推奨)**: Google マップの「地図を埋め込む」と同じく **iframe で出す地図**と、それを操る小さな JS を作る。
+
+```html
+<!-- 埋め込む側のサイトに貼るもの(管理画面で作った札 site を入れて写す) -->
+<div id="campus-map"></div>
+<script src="https://ito4.jp/embed/v1.js"></script>
+<script>
+  const map = KosenMap.embed('#campus-map', { site: 'xxxx', floor: '1F', focus: '<地点の ID>', lang: 'ja', height: 480 });
+  map.on('select', (place) => console.log(place.name));   // 地点を押したとき
+  map.focus('<別の地点の ID>');                             // 外のボタンから動かす
+</script>
+```
+JS を使わずに `<iframe src="https://ito4.jp/embed/?site=xxxx&floor=1F&focus=…">` だけでも出る。
+
+| 段 | 中身 |
+|---|---|
+| 15-1 調べる | `Main/app.js`(284KB・1 つの大きな台本)から、地図を描く部分(Leaflet・`map-style.js`・`label-layout.js`・階の切り替え)を埋め込みでそのまま使えるか。**公開ページ(index.php)には手を入れない**のが前提。だめなら埋め込み用の小さな `Main/embed.js` を作り、同じ部品を読む |
+| 15-2 埋め込みの画面 `/embed/` | 地図を見る・階の切り替え・拡大縮小・地点を押すと名前と種類・`focus` で指した地点を目立たせる・右下に「KosenMap で開く」(本体へのリンク)。**出さないもの**: 教職員の氏名・スタッフだけの地点・案内チャット・サインイン・履歴・チュートリアル・現在地。データは**サインインしていない来場者と同じもの**(`km_map_data` をセッションなしで呼ぶ。Cookie を作らない)。地図を「パスワードが必要」にしているときは「地図は非公開です」とだけ出す(錠を迂回しない) |
+| 15-3 操る JS `/embed/v1.js` | `KosenMap.embed()` が iframe を作る。親と枠は `postMessage` で話す(**相手のオリジンを必ず確かめる**)。v1 は `focus`・`setFloor`・`setLang` と、`ready`・`select` の知らせ |
+| 15-4 どのサイトに許すか | 管理画面「地図の埋め込み」: サイトを登録(名前・オリジン(例 `https://www.example.ac.jp`)・使う/止める)→ 札(site)ができ、貼るコードを写せる。`/embed/` は札から**登録したオリジンだけ**を `frame-ancestors` に出す(知らない札・止めた札は `'none'`)。札は秘密ではない(ページに載る)。実際に止めるのはブラウザの `frame-ancestors` |
+| 15-5 入口と見張り | nginx に `/embed/` の location(**X-Frame-Options を付けない**・回数を絞る)。CSP は nonce・インラインの属性なし。埋め込みの表示回数を札ごと・日ごとに数えて管理画面に出す |
+| 15-6 確かめ | check.php・node の試験。**検証機の Chrome で、別のオリジン(検証機の HTML 展開サイト)に貼って**出ること・登録していないオリジンでは出ないこと・氏名が出ないことを見る |
+
+**新しい表**(ALTER なし・`local-sanitize.tables` にも足す): `km_embed_sites`(札・名前・オリジン・使う/止める・作った人・時刻)・`km_embed_views_daily`(札・日・回数)。
+
+**配備**: nginx を変えるので `-Action restart -Services reverse-proxy` が要る。compose・.env は変えない。
+
+**気をつけること**:
+- Cloudflare の WAF は日本以外を止めている。埋め込んだサイトを日本の外から見ると地図も出ない(本体と同じ)
+- 埋め込む側のページが http だと、https の枠は出るが `postMessage` のオリジンが `http://…` になる → 登録は https だけにする
+- 見取り図の画像(`api/floor-image.php`)も枠の中から読む。同じオリジンなので今のままで足りるはず(15-1 で確かめる)
+
+**決めたこと(利用者、11-14)**:
+1. 埋め込める先は**管理画面で登録したサイトだけ**
+2. v1 は 15-2 のとおり(**見る・階・地点を指す・押すと名前**)。検索と道案内は次の版
+3. **地図のデータを JSON で配る口も今回作る**(下の 15-7)
+4. 最初の埋め込み先は**利用者の HTML 展開サイト**(本番の html.ito4.jp / share.ito4.jp に置いたページ)。確かめは検証機の HTML 展開サイトで
+
+| 段 | 中身 |
+|---|---|
+| 15-7 JSON の口 `/api/embed/v1/places.php` | 登録したサイトのオリジンにだけ CORS で返す(`Access-Control-Allow-Origin` はそのオリジン 1 つ・`Vary: Origin`)。中身は来場者に見せてよいものだけ: 地点の ID・名前(日本語・英語)・種類・階・位置(平面図の px と、北と距離の補正があれば緯度経度)・階の一覧と見取り図の URL。**教職員の氏名・メモ・スタッフだけの地点・経路の重みは出さない**。GET だけ・札(site)が要る・回数を絞る・1 分使い回す |
+| 15-1 で一緒に調べる | HTML 展開サイトのページの CSP(`frame-src`・`connect-src`)が、ito4.jp の枠と口を許しているか。許していなければ、登録した埋め込みに限って開ける形を考える(展開サイトの守りを弱めない) |
+
+**状態(11-14)**: **手元で済み・検証機の Chrome で確かめた・配備待ち**(nginx を変えたので `-Action restart -Services reverse-proxy`)。
+
+| 作ったもの | 中身 |
+|---|---|
+| `lib/map-embed.php` | 表 2 つ(`km_embed_sites`・`km_embed_views_daily`。ALTER なし)・オリジンの確かめ(https だけ・パス / `*` / 利用者名は断る・5 個まで)・`frame-ancestors` と CORS の決め方・**出してよいものだけに絞る** `km_embed_public_data`(階と、名前のある部屋・施設・階段・出入口。氏名・メモ・リンク・道・隠した地点・経路は出さない)・セッションがあれば止まる `km_embed_load_public` |
+| `/embed/`(`embed/index.php`・`Main/embed.js`・`Main/embed.css`) | Leaflet で描く(公開ページの `app.js` は使わない・見た目は `map-style.js`)。階のボタン・拡大縮小・押すと名前(`textContent`)・`focus` で赤い輪。名前は 1 段拡大してから常に出す(引いているときは触れた印だけ)。CSP は公開ページのものの `frame-ancestors` だけを札のオリジンに替える。知らない札・止めた札は 404 で `'none'` |
+| `/embed/v1.js` | `KosenMap.embed()`・`on`/`off`・`focus`・`setFloor`・`setLang`・`destroy`。`ready` より前の頼みは並べて待つ。受けるのは地図のオリジンで同じ枠からだけ |
+| 15-7 JSON の口 | **`/api/embed-places.php?site=…`**(計画の `/api/embed/v1/places.php` から名前を変えた)。登録したオリジンにだけ `Access-Control-Allow-Origin`・`Vary: Origin`・Cookie は許さない・画像は絶対 URL・1 分使い回す。**緯度経度は v1 では出さない**(平面図の px だけ) |
+| 管理画面「地図の埋め込み」 | 登録・直す・止める / 戻す(消す口は無い)・貼るコード 2 種類・30 日の回数。記録は `embed-site.*` |
+| nginx | `location ^~ /embed/` は X-Frame-Options を出さない(枠の可否は PHP の frame-ancestors)・nosniff・HSTS・`km_api` で回数を絞る |
+
+**15-1 の答え**: HTML 展開サイトの利用者のページ(`/s/…`・share)は CSP `default-src *` なので、ito4.jp の枠も JSON も読める。展開サイトの側は変えていない。
+
+**検証機で確かめたこと**(11-14・Chrome。HTML 展開サイトは reCAPTCHA が要るので、html.<検証機> の CSP の無い `robots.txt` の上に試しのページを組んだ = 本物の html.* のオリジン):
+- 登録したオリジンから: 地図が出る・`ready` → 先に頼んだ `focus` で 2F へ移り赤い輪・印を押すと `select`(名前・種類・階)・4F のボタンで `floor`・階を替えると輪が消え、指し直すと戻る・JSON を fetch で読める(426 地点・17 階)
+- 登録から外したオリジンから: **枠はブラウザが止める**(壊れたページの印)・JSON は読めない(CORS)
+- 地点の名前に教職員の氏名・研究室は無い(426 件を機械で見た)。`lang=en` で英語。回数と記録が残る
+- 試験: check.php 3239 件すべて通過(段 15 の 13 項目を足した)・editor.test.js 297 件
+
+**配備のあと(利用者)**: 管理画面「地図の埋め込み」で `https://html.ito4.jp` と `https://share.ito4.jp` を登録 → 貼るコードを展開サイトのページに貼る。
+---
 ## 第1段 —— Note を occupantName へ移す(**実装完了 / 2026-09-02**)
 
 > **コードは入った。**`MAP_DATA_VERSION` 10、読み込み時に移行。
@@ -2031,7 +2478,7 @@ Website は今、現在地を測らない。校内の QR(`/?here=`。フェー�
 | **P2P による地図の配布** | 有効期限と失効が効かず、`staffOnly` の除去も成立しない。真正性の根拠も無い |
 | **Play ストアへの公開申請** | **抹消**(2026-11-07、利用者)。配布は Website と受け箱(apk-push)で足りている。中身の対応(第5段)は残っているが、申請はしない |
 | **教職員の申請を Teams に知らせる** | **抹消**(2026-11-07、利用者)。09-18 に「後の段」としたもの。申請はメールと管理画面の一覧で受ける |
-| **Cloudflare 対応** | `km_map_rate_limit_ip()` は `X-Real-IP` を見る。Cloudflare 越しでは `CF-Connecting-IP` になるが、**いまは直結なので実害なし**。挟む日に直す |
+| **DB の教職員名の暗号化** | **抹消**(2026-11-07、利用者)。プロジェクト状況にあった「暗号化するか」の読み取りの項目は消した。検証機では暗号化ではなくダミーへの置き換え(段 5-3)で守る |
 
 ### 覆した判断(かつて「やらない」と書いていたもの)
 
@@ -2041,6 +2488,7 @@ Website は今、現在地を測らない。校内の QR(`/?here=`。フェー�
 | **minSdk を 33 から下げる** | **実装済み**(2026-08-30)。**29**。分岐は1箇所だけだった。Photo Picker のフォールバックは androidx が持っており、**手当ては要らなかった** |
 | **Website UI の全面再構築** | **第4段として実施**(2026-09-02、利用者の判断)。地図の正本がアプリへ移り、**Web 側の編集機能が宙に浮いた**のが理由 |
 | **User-Agent を記録しない** | **第6段として実施**(2026-09-02)。`ALTER` を配備利用者に頼めるなら、素直に列で持つ |
+| **Cloudflare 対応は挟む日に直す** | **段 8 として用意**(2026-11-08、利用者「ito4.jp を Cloudflare に移行します」)。`km_map_rate_limit_ip()` などの `X-Real-IP` は nginx の realip で本当の送り元になるので、**PHP は直さない**([17](17-cloudflare.ipynb) §2-3) |
 | **Play ストアの中身の対応** | **第5段として実施**。**公開そのものは 2026-11-07 に抹消**(上の表) |
 
 ### 誤解されがちなもの

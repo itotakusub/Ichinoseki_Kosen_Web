@@ -152,6 +152,29 @@ if ($uriPath === '/bridge.js') {
 if ($uriPath === '/sw.js') {
     km_html_view_send_static('sw.js', 'text/javascript; charset=utf-8', "default-src 'none'");
 }
+/*
+ * Web Code Editor(ito4.jp/editor/)のプレビューを走らせる側(2026-11-08)。本体のページの
+ * <iframe sandbox="allow-scripts">(オリジンを持たない)の中で開き、利用者の文書をさらに sandbox の srcdoc に入れる。
+ * **srcdoc は親の CSP を受け継ぐ**ので、ここは利用者の JS・CSS・外の画像が動くように展開の中身(KM_HTML_CONTENT_CSP)と同じくゆるくする。
+ * ただし枠に入れてよいのは本体のオリジンだけ(frame-ancestors)。保存も Cookie も使わない(オリジンが無いので触れない)
+ */
+if ($uriPath === '/editor-run.html') {
+    header('Content-Type: text/html; charset=utf-8');
+    header('X-Content-Type-Options: nosniff');
+    header("Content-Security-Policy: default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; frame-ancestors " . $appOrigin);
+    header('Cache-Control: no-cache');
+    header('Referrer-Policy: no-referrer');
+    header('X-Robots-Tag: noindex, nofollow');
+    echo str_replace('{{KM_PARENT}}', htmlspecialchars($appOrigin, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'),
+        (string) file_get_contents(__DIR__ . '/html-host/editor-run.html'));
+    exit;
+}
+if ($uriPath === '/editor-run.js') {
+    km_html_view_send_static('editor-run.js', 'text/javascript; charset=utf-8', "default-src 'none'");
+}
+if ($uriPath === '/editor-run.css') {
+    km_html_view_send_static('editor-run.css', 'text/css; charset=utf-8', "default-src 'none'");
+}
 
 if ($uriPath === '/auth') {
     /*

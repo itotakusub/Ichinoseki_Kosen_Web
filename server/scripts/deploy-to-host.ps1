@@ -181,6 +181,19 @@ if ($HostName -eq '') { $HostName = $preset.HostName }
 #>
 if ($HostName -notin $prodHostNames) {
     $preset.Label = "**$HostName(本番ではないホスト)**"
+    <#
+      **本番以外へは、控えを取らない・GitHub へ出さない**(2026-11-08、利用者の指示
+      「検証機ではバックアップなんて絶対に作らないでください」「GitHub にも送らないでください」)。
+      検証機の中身は本番の控えから作る写しなので、取っても意味がなく、GitHub の控えは本番に置けたものと揃えるためのもの。
+      付け忘れで出ないよう、引数に関係なくここで止める・外す。
+    #>
+    if ($Backup -or $BackupOnly -or $OpenBackup) {
+        throw "本番ではないホスト($HostName)では控えを取りません(-Backup・-BackupOnly・-OpenBackup を外してください)。"
+    }
+    if ($GitHub -ne 'none') {
+        Write-Host "本番ではないホスト($HostName)なので、GitHub の控えへは出しません。" -ForegroundColor DarkGray
+        $GitHub = 'none'
+    }
 }
 if ($User -eq '') { $User = $preset.User }
 if ($KeyPath -eq '') { $KeyPath = $preset.KeyPath }
@@ -410,6 +423,13 @@ $include = @(
     './scripts/host-local.sh'
     # 機密なしのコピー: 控えから戻した MariaDB から氏名・記録・鍵を抜く。**KM_ENV=local でなければ止まる**(docs/13)
     './scripts/local-sanitize.sh'
+    # その台帳(全部の表を keep / scrub / wipe に分けたもの。2026-11-07 段 5-3)と、控えの DB を使い捨ての MariaDB で抜いてから入れる口
+    './scripts/local-sanitize.tables'
+    './scripts/local-import.sh'
+    # 空の Logto を本番の形に組む包み(中身は src/scripts/local-logto-seed.php)
+    './scripts/local-logto-seed.sh'
+    # 検証機で外へ出る・本番の代わりに動く cron と設定を止める(受け箱・国の拒否・証明書・控え・検査・案内 AI・reCAPTCHA)
+    './scripts/local-disable.sh'
     # タスクマネージャーと使用率のメール(2026-10-05)。root の cron が呼ぶ(host-updates-setup.sh の版 7)
     './scripts/host-stats.sh'
     './scripts/host-resource-alert.sh'
@@ -424,6 +444,9 @@ $include = @(
     # 使っていないイメージとビルドのキャッシュの片付け(2026-11-06)。root の cron が毎週日曜に呼ぶ(版 11)
     './scripts/host-docker-prune.sh'
     './scripts/host-pma-window.sh'
+    # Cloudflare の分析の取り込み(2026-11-08)。root の cron が 1 時間ごとに呼ぶ(版 14)。設定 cloudflare.local.conf はホストにだけ置く
+    './scripts/host-cloudflare-import.sh'
+    './cloudflare.local.conf.example'
     <#
       SSH ログインの知らせと、切る・BAN する道具(2026-09-25)。
       **ここに置くのは原本だけ。** PAM と sudo から root で走るのは、ssh-login-notify-setup.sh --fix が
@@ -460,6 +483,10 @@ $excludes = @(
     # タスクマネージャーに入れる IP(2026-10-05)。**ホスト側が正本**(見本は nginx/km/taskmgr-allow.local.conf.example)
     './nginx/km/taskmgr-allow.local.conf'
 )
+<#
+  段 11(VS Code 型のエディタ /code/)は 11-6 まで検証機だけに送っていた(本番は ./src/code を除外)。
+  **11-7(2026-11-09)から本番にも送る。** 枠のオリジン webview.<ドメイン> の DNS・証明書・nginx は 11-09 に本番で済んでいる
+#>
 
 # アーカイブが正しいことを組み立て直後に確かめる。パターンの解釈違いで
 # 「必要なファイルが入っていない」「秘密が混入した」を黙って通さないための保険。
@@ -481,6 +508,8 @@ $mustContain = @(
     # メンテナンス中の画面(2026-10-21)。conf が無いと nginx が起動しない(include の名前に * が無いため)
     './nginx/km/maintenance.conf'
     './nginx/km/maintenance.html'
+    # Cloudflare 越しの本当の送り元(2026-11-08)。include の名前に * が無いので、無いと nginx が起動しない
+    './nginx/km/cloudflare-real-ip.conf'
     # 更新の確認と通知。**この2つは対**で、片方だけだと cron が空振りする
     './scripts/check-updates.sh'
     './src/scripts/notify-update.php'
@@ -491,6 +520,9 @@ $mustContain = @(
     './scripts/host-image-scan.sh'
     './scripts/host-docker-prune.sh'
     './scripts/host-pma-window.sh'
+    # Cloudflare の分析の取り込み(2026-11-08)。web 側の口と**対**(片方だけだと cron が空振りする)
+    './scripts/host-cloudflare-import.sh'
+    './src/scripts/cloudflare-import.php'
     # バックアップと通知。こちらも**対**
     './scripts/host-backup.sh'
     './scripts/ssh-backup-gate.sh'
@@ -559,6 +591,21 @@ $mustContain = @(
     # ランキング。
     './src/api/app-ranking.php'
     './src/lib/app-ranking.php'
+    <#
+      Web Code Editor(2026-11-08)。src/editor/ は editor-src で `npm run build` した出力(殻の index.php も
+      build が写す)。manifest が無いと殻は 503 を返す。プレビューは見せる側の editor-run.* と**対**
+    #>
+    './src/editor/index.php'
+    './src/editor/.vite/manifest.json'
+    './src/html-host/editor-run.html'
+    './src/html-host/editor-run.js'
+    # 段 10-B(2026-11-08): サインインした人のプロジェクトの同期(lib/editor-projects.php)
+    './src/api/editor.php'
+    './src/lib/editor-projects.php'
+    # 段 11-7(2026-11-09): VS Code 型のエディタ。src/code/ は code-src で `npm run build` した出力(殻 index.php・プレビューの窓 preview.php も build が写す)
+    './src/code/index.php'
+    './src/code/preview.php'
+    './src/code/.vite/manifest.json'
 )
 $mustNotContain = @(
     './src/config/db.local.php'
@@ -568,7 +615,9 @@ $mustNotContain = @(
     './src/config/recaptcha.local.php'
     './src/admin/_dev-session.php'
 )
-$mustNotStartWith = @('./src/vendor/', './src/uploads/')
+# editor-src/ はエディタの元と node_modules(配備しない。2026-11-08)
+# code-src/ は VS Code 型のエディタの元と node_modules(配備しない。段 11。2026-11-08)
+$mustNotStartWith = @('./src/vendor/', './src/uploads/', './editor-src/', './code-src/')
 
 if ($WhatIfOnly) {
     Write-Host '=== 転送するもの ==='
@@ -871,6 +920,76 @@ done
 }
 
 <#
+  **エディタの古い組み立てを退避する**(2026-11-08)。src/editor/assets/ の名前にはハッシュが入り、
+  組み立て直すたびに名前が変わる。tar は消さないので、放っておくと配備のたびに 15MB ずつ溜まる。
+  今回のアーカイブに無いものを retired/editor-assets/ へ移す。**前の 1 世代だけ残す**
+  (配備の直前に開いていたタブが、あとから古い部品を読みに来ても retired からは配らないが、
+  切り戻すときに mv で戻せる)。名前は Vite の形(英数 . _ -)だけを扱う。
+#>
+$editorAssets = @($entries | Where-Object { $_ -match '^\./src/editor/assets/[A-Za-z0-9._-]+$' } | ForEach-Object { $_.Substring('./src/editor/assets/'.Length) })
+if ((Get-RemoteShell) -eq 'sh' -and $editorAssets.Count -gt 0) {
+    $editorScript = @'
+set -u
+cd '__KM_REMOTE_PATH__' || exit 1
+[ -d src/editor/assets ] || exit 0
+keep=' __KM_KEEP__ '
+moved=0
+for f in src/editor/assets/*; do
+    [ -f "$f" ] || continue
+    name=${f##*/}
+    case "$keep" in *" $name "*) continue ;; esac
+    if [ "$moved" -eq 0 ]; then
+        rm -rf retired/editor-assets.new && mkdir -p retired/editor-assets.new || { echo "★ retired/editor-assets.new を作れませんでした" >&2; exit 1; }
+    fi
+    mv "$f" "retired/editor-assets.new/$name" || exit 1
+    moved=$((moved + 1))
+done
+if [ "$moved" -gt 0 ]; then
+    rm -rf retired/editor-assets && mv retired/editor-assets.new retired/editor-assets
+    echo "      エディタの古い組み立て: $moved 個を retired/editor-assets/ へ(前の 1 世代だけ残す)"
+fi
+'@ -replace '__KM_REMOTE_PATH__', $RemotePath -replace '__KM_KEEP__', ($editorAssets -join ' ')
+    Invoke-KmSshStdin -Script $editorScript -TimeoutSec 60 | ForEach-Object { Write-Host $_ }
+}
+
+<#
+  **VS Code 型のエディタ(/code/)の古い組み立ても同じく退避する**(段 11-7。2026-11-09)。1 回の組み立ては約 66MB で、
+  退避しないと配備のたびに溜まる(検証機では 19 世代・367MB になっていた)。/editor/ と違い、同梱の拡張機能の
+  ファイルが 1 段下のフォルダ(`esbenp.prettier-vscode-12.4.0.vsix/` など)にあるので、そこまで見る。
+  今回のアーカイブに無いものを retired/code-assets/ へ移し(前の 1 世代だけ残す)、空になったフォルダは消す
+#>
+$codeAssets = @($entries | Where-Object { $_ -match '^\./src/code/assets/([A-Za-z0-9._-]+/)?[A-Za-z0-9._-]+$' } | ForEach-Object { $_.Substring('./src/code/assets/'.Length) })
+if ((Get-RemoteShell) -eq 'sh' -and $codeAssets.Count -gt 0) {
+    $codeScript = @'
+set -u
+cd '__KM_REMOTE_PATH__' || exit 1
+[ -d src/code/assets ] || exit 0
+keep=' __KM_KEEP__ '
+moved=0
+for f in src/code/assets/* src/code/assets/*/*; do
+    [ -f "$f" ] || continue
+    rel=${f#src/code/assets/}
+    case "$keep" in *" $rel "*) continue ;; esac
+    if [ "$moved" -eq 0 ]; then
+        rm -rf retired/code-assets.new && mkdir -p retired/code-assets.new || { echo "★ retired/code-assets.new を作れませんでした" >&2; exit 1; }
+    fi
+    case "$rel" in */*) mkdir -p "retired/code-assets.new/${rel%/*}" || exit 1 ;; esac
+    mv "$f" "retired/code-assets.new/$rel" || exit 1
+    moved=$((moved + 1))
+done
+for d in src/code/assets/*/; do
+    [ -d "$d" ] && rmdir "$d" 2>/dev/null
+done
+if [ "$moved" -gt 0 ]; then
+    rm -rf retired/code-assets && mv retired/code-assets.new retired/code-assets
+    echo "      VS Code 型のエディタの古い組み立て: $moved 個を retired/code-assets/ へ(前の 1 世代だけ残す)"
+fi
+exit 0
+'@ -replace '__KM_REMOTE_PATH__', $RemotePath -replace '__KM_KEEP__', ($codeAssets -join ' ')
+    Invoke-KmSshStdin -Script $codeScript -TimeoutSec 120 | ForEach-Object { Write-Host $_ }
+}
+
+<#
   フロア画像(src/Main/Picture/１階.png など)はファイル名に全角文字を含む。両端とも
   同じ Windows のコードページなら往復するはずだが、ここが崩れると地図の画像だけが
   404 になり、しかもページ自体は表示されるので気づきにくい。展開後に実数を数えておく。
@@ -1008,16 +1127,42 @@ if ($NoSetup) {
       毎回走らせない —— vendor/ を作り直す作業で、途中で失敗すると
       **サイトが動かない状態で残る**。配備のたびに賭ける類のものではない。
       逆に、変わったのに入れ直さないと「ホストだけ古い依存」が静かに残るので、
-      **lock の中身を突き合わせて判断する。**
+      **lock と、ホストに入っているもの(vendor/composer/installed.json)を突き合わせて判断する。**
+
+      **ホストの composer.lock と比べてはいけない(2026-11-08 に直した)。** ここに来る時点で
+      lock は**もう送ってある**ので、必ず同じになり、一度も入れ直さなかった。
+      本番の vendor/ は 08-28 のまま、11-02 に外した pusher・psr/log が残っていた
+      (検証機と本番を並べて見つけた)。入っている名前と版の組で比べれば、送った順に左右されない。
     #>
     $composerChanged = $false
     $localLock = Join-Path $Root 'src/composer.lock'
     if ((Get-RemoteShell) -eq 'sh' -and (Test-Path $localLock)) {
-        $localHash = (Get-FileHash -Algorithm SHA256 -Path $localLock).Hash.ToLowerInvariant()
-        $remoteHash = "$(Invoke-Remote "sha256sum '$RemotePath/src/composer.lock' 2>/dev/null | cut -d' ' -f1" -AllowFailure)".Trim()
-        if ($remoteHash -ne '' -and $remoteHash -ne $localHash) {
-            $composerChanged = $true
-            Write-Host '  composer.lock が変わっています。vendor/ を入れ直します。' -ForegroundColor Yellow
+        $packageSet = {
+            param($list)
+            @($list | Where-Object { $_ -and $_.name } | ForEach-Object { "$($_.name)=$($_.version)" } | Sort-Object -Unique) -join "`n"
+        }
+        try {
+            $lockJson = [IO.File]::ReadAllText($localLock) | ConvertFrom-Json
+            $want = & $packageSet $lockJson.packages
+            $installedRaw = (@(Invoke-Remote "cat '$RemotePath/src/vendor/composer/installed.json' 2>/dev/null" -AllowFailure) -join "`n").Trim()
+            if ($installedRaw -eq '') {
+                $composerChanged = $true
+                Write-Host '  ホストに vendor/ がありません。入れます。' -ForegroundColor Yellow
+            } else {
+                $installedJson = $installedRaw | ConvertFrom-Json
+                # composer 2 は {"packages": [...]}・composer 1 は配列そのもの
+                $have = & $packageSet $(if ($installedJson.PSObject.Properties.Name -contains 'packages') { $installedJson.packages } else { $installedJson })
+                if ($have -ne $want) {
+                    $composerChanged = $true
+                    $diff = Compare-Object @($want -split "`n") @($have -split "`n") | ForEach-Object {
+                        if ($_.SideIndicator -eq '<=') { "+ $($_.InputObject)" } else { "- $($_.InputObject)" }
+                    }
+                    Write-Host '  ホストの vendor/ が composer.lock と違います。入れ直します:' -ForegroundColor Yellow
+                    $diff | Select-Object -First 20 | ForEach-Object { Write-Host "    $_" }
+                }
+            }
+        } catch {
+            Write-Host "  vendor/ と composer.lock を比べられませんでした($($_.Exception.Message))。入れ直しは行いません。" -ForegroundColor Yellow
         }
     }
 

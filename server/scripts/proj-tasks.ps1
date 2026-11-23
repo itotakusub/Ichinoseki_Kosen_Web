@@ -7,10 +7,10 @@
   本番に鍵を置くのは scripts/proj-passkey-sync.ps1。
 
   コマンド:
-    list    一覧(-Topic・-Status・-PlanRef で絞る。-PlanRef は前方一致。例: -PlanRef 段7)
+    list    一覧(-Topic・-Status・-PlanRef で絞る。-PlanRef は前方一致。例: -PlanRef 段7)。-Sort id で番号順・plan で段の番号順(管理画面の「並び」と同じ)
     get     1 件(-Id)
     add     足す(-Title は必須。-Status・-Progress・-Topic・-PlanRef・-Note)。-File に JSON の配列を渡すとまとめて足す(50 件まで・全部か無しか)
-    update  直す(-Id と、変える項目だけ)。-Note '' で消す
+    update  直す(-Id と、変える項目だけ)。-Note '' で消す。-NewId で番号(#)を付け替える(使い済みの番号は断る)
     remove  消す(-Id。確かめてから。-Yes で確かめを省く)
     topics  分類と状態の一覧
 
@@ -33,6 +33,8 @@
 .EXAMPLE
   pwsh -File scripts\proj-tasks.ps1 update -Id 42 -Status done
 .EXAMPLE
+  pwsh -File scripts\proj-tasks.ps1 update -Id 113 -NewId 8
+.EXAMPLE
   pwsh -File scripts\proj-tasks.ps1 add -File C:\temp\stage7.json
 #>
 [CmdletBinding()]
@@ -42,6 +44,8 @@ param(
     [string]$Command = 'list',
     # get・update・remove の対象
     [int]$Id = 0,
+    # update で番号(#)を付け替える先(2026-11-08)。1〜999999・ほかのタスクが使っていない番号
+    [int]$NewId = 0,
     [string]$Title,
     # done / progress / decision / todo
     [string]$Status,
@@ -55,6 +59,9 @@ param(
     [string]$Note,
     [string]$File = '',
     [switch]$Json,
+    # list の並び。空 = 並べた順・id = 番号順・idDesc = 番号の大きい順・plan = 段の番号順(2026-11-07)
+    [ValidateSet('', 'id', 'idDesc', 'plan')]
+    [string]$Sort = '',
     # remove の確かめを省く
     [switch]$Yes,
     [string]$BaseUrl = 'https://ito4.jp',
@@ -130,6 +137,7 @@ function Get-KmFields {
     if ($bound.ContainsKey('Topic')) { $body.topic = $Topic }
     if ($bound.ContainsKey('PlanRef')) { $body.planRef = $PlanRef }
     if ($bound.ContainsKey('Note')) { $body.note = $Note }
+    if ($bound.ContainsKey('NewId')) { $body.id = $NewId }
     return $body
 }
 
@@ -140,6 +148,14 @@ switch ($Command) {
         if ($PSBoundParameters.ContainsKey('Status')) { $q += 'status=' + [uri]::EscapeDataString($Status) }
         if ($PSBoundParameters.ContainsKey('PlanRef')) { $q += 'plan=' + [uri]::EscapeDataString($PlanRef) }
         $res = Invoke-KmProj -Method GET -Query ($(if ($q) { '?' + ($q -join '&') } else { '' }))
+        $tasks = @($res.tasks)
+        if ($Sort -eq 'id') { $tasks = $tasks | Sort-Object { [int]$_.id } }
+        elseif ($Sort -eq 'idDesc') { $tasks = $tasks | Sort-Object { [int]$_.id } -Descending }
+        elseif ($Sort -eq 'plan') {
+            # 段の番号の数を数として比べる(段10 は段7-1 の後)。数の無いもの(保留など)は後ろ
+            $tasks = $tasks | Sort-Object { $n = [regex]::Matches([string]$_.planRef, '\d+') | ForEach-Object { '{0:D6}' -f [int]$_.Value }; if ($n) { $n -join '.' } else { '999999' } }, { [int]$_.id }
+        }
+        $res.tasks = $tasks
         if ($Json) { $res.tasks | ConvertTo-Json -Depth 4; break }
         Show-KmTasks $res.tasks
         Write-Host "$(@($res.tasks).Count) 件"
@@ -177,7 +193,7 @@ switch ($Command) {
     'update' {
         if ($Id -le 0) { throw '-Id が要ります。' }
         $body = Get-KmFields
-        if ($body.Count -eq 0) { throw '変える項目(-Title・-Status・-Progress・-Topic・-PlanRef・-Note)を 1 つ以上渡してください。' }
+        if ($body.Count -eq 0) { throw '変える項目(-Title・-Status・-Progress・-Topic・-PlanRef・-Note・-NewId)を 1 つ以上渡してください。' }
         $res = Invoke-KmProj -Method PATCH -Query "?id=$Id" -Body $body
         if ($Json) { $res.task | ConvertTo-Json -Depth 4; break }
         Show-KmTasks @($res.task)
